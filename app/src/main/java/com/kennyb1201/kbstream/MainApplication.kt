@@ -191,6 +191,27 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
      * Crash reporting via Sentry. Only initializes when a DSN was baked into
      * the build (SENTRY_DSN in local.properties or the CI environment);
      * without one the app behaves exactly as before.
+     *
+     * Native (NDK) crashes are covered by this same call, and deliberately so:
+     * `io.sentry:sentry-android` depends on `io.sentry:sentry-android-ndk`,
+     * which bundles sentry-native as libsentry.so for all four ABIs, and
+     * SentryAndroid.init installs io.sentry.android.core.NdkIntegration as
+     * soon as it finds io.sentry.android.ndk.SentryNdk on the classpath. That
+     * is the half that matters on the devices this ships to — libmpv, the
+     * software FFmpeg decoder, the MediaCodec shim and the Dolby Vision
+     * compat layer all run native code, and a native abort (SIGSEGV/SIGABRT)
+     * never becomes a Java exception for CrashReporter to see.
+     *
+     * Two edits would silently take it away again, so they are written down
+     * here: an `exclude group: "io.sentry"` (the kind added to drop a
+     * transitive module such as sentry-android-replay) or a switch to
+     * `sentry-android-core` removes the native half with no build or runtime
+     * signal, and the manifest meta-data `io.sentry.ndk.enable = false`
+     * disables it outright. Native frames come back symbolicated only when the
+     * Sentry Gradle plugin uploads the native debug symbols (uploadNativeSymbols
+     * in the sentry block of app/build.gradle.kts, off by default) — without
+     * them the crash is still reported, with addresses instead of function
+     * names.
      */
     private fun initCrashReporting() {
         if (BuildConfig.SENTRY_DSN.isBlank()) return

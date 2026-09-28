@@ -5,8 +5,13 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  # A push to main runs every gate and builds both APKs, but publishes
+  # nothing: the self-update feed is a separate, deliberate act.
   push:
     branches: [main]
+    # ...which is what a version tag is for. Pushing v0.2.123 (or dispatching
+    # this workflow by hand) is what puts a build in front of every install.
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       # Escape hatch for the rare case where the FFmpeg cross-compile is broken
@@ -76,6 +81,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history, not the default single-commit clone: the publish guard
+          # at the end of the job asks `git merge-base --is-ancestor` whether
+          # the commit that is currently published is already contained in this
+          # one, which a depth-1 clone cannot answer.
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -283,6 +294,33 @@ jobs:
           name: unit-test-report
           path: app/build/reports/tests/testDebugUnitTest/
 
+      # The Android Lint gate. It runs here and not on a developer machine on
+      # purpose: lint's whole-source analysis on a tree this size needs more
+      # memory than the dev container has, where it OOM-kills the Gradle daemon
+      # mid-run, so CI is the only place it can be relied on to have run.
+      #
+      # It follows the tests rather than leading them because the tests are the
+      # stronger signal and take a fraction of the time - and it precedes both
+      # APK builds so an error fails the run before any artifact is produced.
+      # Severity policy is in the lint block of app/build.gradle.kts: errors
+      # fail, warnings are reported and uploaded below.
+      - name: Run Android Lint
+        run: ./gradlew lintDebug --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
+
+      # Lint's report is the whole point of the step above when it fails, and
+      # an artifact is the only way to read it without a local reproduction.
+      - name: Upload lint report (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-lint-report
+          path: |
+            app/build/reports/lint-results-debug.html
+            app/build/reports/lint-results-debug.xml
+          if-no-files-found: ignore
+
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
@@ -330,27 +368,80 @@ jobs:
           name: kbstream-release-signed
           path: app/build/outputs/apk/release/*.apk
 
-      # Self-update feed: every main-branch build is published as the
-      # "latest" GitHub release with the signed APK + metadata.json, which
-      # the app's AppUpdater polls (permissions: contents write). Release
-      # names are the stamped build identity from the version-stamping step.
+      # ─── Self-update feed ────────────────────────────────────────────────
+      # This is the only way a build reaches installs: the "latest" GitHub
+      # release carries the signed APK + metadata.json, which the app's
+      # AppUpdater polls (permissions: contents write). Release names are the
+      # stamped build identity from the version-stamping step.
+      #
+      # It is deliberately NOT published on every push to main any more.
+      # Publishing on push meant the feed moved whenever anyone pushed, so
+      # there was no point at which a release could be said to have been cut,
+      # and no way to hold an experiment back from every install while still
+      # testing it. Everything above still runs on every push to main; the
+      # publish steps below run on a version tag or a manual dispatch.
+      #
+      # The guard exists because the version is the run number, and a run
+      # number is not a commit order: re-running an OLDER commit produces a
+      # HIGHER run number, and the app only compares versionCode (it cannot see
+      # commits), so it would offer that older build to every device as an
+      # upgrade. A publish therefore needs both a higher versionCode AND a
+      # currently published commit that this commit already contains.
+      - name: Guard against publishing a stale build
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          mkdir -p /tmp/published
+          if ! gh release download latest --pattern metadata.json --dir /tmp/published --clobber 2>/dev/null; then
+            echo "No published 'latest' release yet - nothing to compare against."
+            exit 0
+          fi
+          cat /tmp/published/metadata.json
+          PREVIOUS_CODE="$(jq -r '.versionCode // 0' /tmp/published/metadata.json)"
+          if (( ${VERSION_CODE} <= PREVIOUS_CODE )); then
+            echo "::error::this run stamps versionCode ${VERSION_CODE}, which is not above the published ${PREVIOUS_CODE}; installs compare versionCode, so this build would never be offered."
+            exit 1
+          fi
+          # gitSha is absent on a metadata.json written before it was added, in
+          # which case only the versionCode check above applies.
+          PREVIOUS_SHA="$(jq -r '.gitSha // ""' /tmp/published/metadata.json)"
+          if [[ -z "$PREVIOUS_SHA" || "$PREVIOUS_SHA" == "$HEAD_SHA" ]]; then
+            echo "Published build: ${PREVIOUS_SHA:-unknown (predates gitSha)}; versionCode advanced to ${VERSION_CODE}."
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$PREVIOUS_SHA" "$HEAD_SHA"; then
+            echo "Published build $PREVIOUS_SHA is contained in $HEAD_SHA - this is a newer build."
+            exit 0
+          fi
+          echo "::error::this commit ($HEAD_SHA) does not contain the published build ($PREVIOUS_SHA), so publishing would hand every install an older build under a higher versionCode. Dispatch the workflow from a commit that contains $PREVIOUS_SHA."
+          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Prepare metadata
-        if: github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
           # The APK the app will download, excluding any unsigned output.
           APK="$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -1)"
           SHA="$(sha256sum "$APK" | awk '{print $1}')"
-          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"versionName\": \"0.2.${GITHUB_RUN_NUMBER}\", \"sha256\": \"$SHA\"}" > metadata.json
+          # gitSha is for CI, not for the app: AppUpdater reads the fields it
+          # names (versionCode / versionName / sha256) and ignores the rest, so
+          # adding it cannot affect an installed build - and the guard step
+          # above reads it back on the next publish.
+          # git rev-parse HEAD, not GITHUB_SHA: for an annotated tag GITHUB_SHA
+          # is the tag object, which is not a commit for the ancestor check.
+          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"versionName\": \"0.2.${GITHUB_RUN_NUMBER}\", \"sha256\": \"$SHA\", \"gitSha\": \"$(git rev-parse HEAD)\"}" > metadata.json
           cat metadata.json
 
       - name: Delete in-progress release tag
-        if: github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Publish latest release (self-update feed)
-        if: github.ref == 'refs/heads/main'
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
           gh release create latest \
             --title "KBStream 0.2.${GITHUB_RUN_NUMBER} (build ${GITHUB_RUN_NUMBER})" \

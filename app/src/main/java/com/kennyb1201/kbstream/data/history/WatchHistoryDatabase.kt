@@ -22,6 +22,18 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 
+/**
+ * The watch-history schema version.
+ *
+ * A named constant rather than a literal in the annotation, because the
+ * migration chain is only meaningful next to the version it has to reach: the
+ * test in data/history reads this, [WatchHistoryDatabase.migrations] and
+ * [WatchHistoryDatabase.legacyWipeVersions] together and fails if a version
+ * bump arrives without the Migration that carries it — the mistake that would
+ * otherwise only show up as a wipe on a user's device.
+ */
+internal const val WATCH_HISTORY_DB_VERSION = 12
+
 @Database(
     entities = [
         WatchHistoryEntity::class,
@@ -30,8 +42,14 @@ import kotlinx.coroutines.flow.flow
         TmdbJsonCacheEntity::class,
         SyncOutboxEntity::class
     ],
-    version = 12,
-    exportSchema = false
+    version = WATCH_HISTORY_DB_VERSION,
+    // Was false, which is what made the migration list unverifiable after the
+    // fact: nothing recorded what each version's tables actually looked like,
+    // so there was no way to review a Migration (or to notice it was missing)
+    // except by reading the entities at the time. The KSP argument in
+    // app/build.gradle.kts now writes every released version's shape under
+    // app/schemas/, which is committed alongside the Migration it belongs to.
+    exportSchema = true
 )
 abstract class WatchHistoryDatabase : RoomDatabase() {
     abstract fun watchHistoryDao(): WatchHistoryDao
@@ -42,6 +60,39 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
 
     companion object {
         private const val TAG = "WATCH_HISTORY_DB"
+
+        /**
+         * Every real migration, in one place.
+         *
+         * Both builders below used to spell the list out separately, so a
+         * migration added to one and not the other was a silent divergence
+         * between the global and the profile-scoped database: whichever path
+         * the user happened to take met "A migration from N to N+1 was
+         * required but not found".
+         *
+         * A getter rather than a val because the migration objects are
+         * declared further down this companion: a property initializer here
+         * would read them before they exist.
+         */
+        internal val migrations: List<Migration>
+            get() = listOf(
+                MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+                MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
+            )
+
+        /**
+         * The legacy versions that are still wiped once, on open.
+         *
+         * They predate the migration list — they are the versions from before
+         * it existed — and wiping them is how those installs have always
+         * behaved. Everything from the first real migration onwards has to
+         * migrate instead. The guard test asserts that this range never
+         * reaches the oldest migration, because widening it is the one change
+         * that silently drops the user's watch history (resume points and
+         * watched state) together with the durable sync_outbox.
+         */
+        internal val legacyWipeVersions: IntArray
+            get() = intArrayOf(1, 2, 3, 4, 5)
 
         @Volatile
         private var instance: WatchHistoryDatabase? = null
@@ -138,20 +189,21 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     WatchHistoryDatabase::class.java,
                     "kbstream_watch_history"
                 )
-                    .addMigrations(
-                        MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                        MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
-                    )
+                    .addMigrations(*migrations.toTypedArray())
                     // Destructive fallback is scoped to the LEGACY versions
-                    // that predate the migration list (1-5): an install still
-                    // on one of those is wiped once, which is how it has
-                    // always behaved. Upgrades from 6+ MUST have a real
-                    // Migration — a missing one now throws during open (loud,
-                    // caught in testing) instead of silently dropping every
-                    // table, which would take the local watch history and the
-                    // durable sync_outbox with it. Downgrades (an older APK
-                    // installed over a newer DB) still wipe, as they must.
-                    .fallbackToDestructiveMigrationFrom(1, 2, 3, 4, 5)
+                    // (see [legacyWipeVersions]): an install still on one of
+                    // those is wiped once, which is how it has always behaved.
+                    // Upgrades from 6+ MUST have a real Migration — a missing
+                    // one now throws during open (loud, and caught before it
+                    // ships by the chain test in data/history) instead of
+                    // silently dropping every table, which would take the
+                    // local watch history and the durable sync_outbox with it.
+                    // Downgrades (an older APK installed over a newer DB) still
+                    // wipe, as they must: the alternative is an exception on
+                    // every open, i.e. an app that cannot show history at all,
+                    // and the rows come back from the account's cloud copy
+                    // (SupabaseSync) once the newer build is back.
+                    .fallbackToDestructiveMigrationFrom(*legacyWipeVersions)
                     .fallbackToDestructiveMigrationOnDowngrade()
                     // WAL lets readers and the sync writer proceed in
                     // parallel instead of failing with SQLITE_BUSY.
@@ -194,13 +246,10 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 WatchHistoryDatabase::class.java,
                 dbName
             )
-                .addMigrations(
-                    MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                    MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
-                )
-                // Same scoping as getInstance(): wipe only legacy (<=5),
-                // require a real migration from 6+.
-                .fallbackToDestructiveMigrationFrom(1, 2, 3, 4, 5)
+                .addMigrations(*migrations.toTypedArray())
+                // Same scoping as getInstance(): wipe only the legacy versions,
+                // require a real migration from the first one onwards.
+                .fallbackToDestructiveMigrationFrom(*legacyWipeVersions)
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                 .addCallback(RoomBusyTimeout)

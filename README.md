@@ -115,15 +115,45 @@ and the kids catalog invariants:
 ./gradlew testDebugUnitTest
 ```
 
-CI (`.github/workflows/build.yml`) runs the tests, then builds the debug
-and signed release APKs on every push to `main`.
+CI (`.github/workflows/build.yml`) runs `ktlintCheck`, the tests and Android
+Lint, then builds the debug and signed release APKs on every push to `main`.
+Nothing is published by a push to `main` — see Releases below.
+
+## Releases
+
+The self-update feed (Settings → Check for updates) is the GitHub release
+tagged `latest`, which carries the signed APK plus a `metadata.json` the app
+reads for its `versionCode` and the APK's SHA-256. Replacing it replaces what
+every install is offered, so it is only replaced deliberately:
+
+- **push to `main`** — gates and APK artifacts only. Nothing is published.
+- **push a version tag** (`git push origin v0.2.123`) or run the `Build
+  KBStream APK` workflow by hand — this publishes.
+
+`VERSION_CODE` is the workflow run number, which is strictly increasing but is
+*not* a commit order: re-running an older commit produces a higher number. The
+publish steps therefore refuse to run unless the versionCode is above the
+published one **and** the commit that is currently published is already
+contained in the commit being published, so an old build can never be offered
+as an upgrade. The commit check stays inert until a release published by this
+workflow is in place (the guard step says so in the log); the versionCode check
+applies from the first publish.
 
 ## Linting
+
+Two gates with different jobs. Both run in CI, both fail the build on an error:
 
 ```sh
 ./gradlew ktlintCheck    # fails on an import nothing references
 ./gradlew ktlintFormat   # removes them
+./gradlew lintDebug      # Android Lint (CI only, see below)
 ```
+
+Android Lint is configured in the `lint` block of `app/build.gradle.kts`:
+errors fail the run, warnings are reported and uploaded as an artifact. It is
+deliberately not part of a local build loop — the analysis on a tree this size
+needs more memory than the dev container has, where it OOM-kills the Gradle
+daemon — so CI is the only place it can be relied on to have run.
 
 Exactly one ktlint rule is enabled — unused imports (see `.editorconfig`).
 Everything else is off on purpose: this tree predates the formatter, so turning
@@ -142,6 +172,12 @@ app/src/main/java/com/kennyb1201/kbstream/
   ui/              # Compose for Android TV screens (home, detail, player,
                    # search, profiles, settings, addons, IPTV, streams)
   work/            # background workers (EPG refresh, Simkl sync, addons)
+app/schemas/       # exported Room schema JSON, one per released watch-history
+                   # version: the record a Migration is reviewed against.
+                   # Watch history is user data (resume points, watched state),
+                   # so its schema is exported and committed and its versions
+                   # have real migrations; the guide database is a cache and is
+                   # deliberately rebuilt instead.
 scripts/           # TMDB id-verification probes used while curating the
                    # search catalog (read TMDB_API_KEY from the environment),
                    # plus the dev tools behind the rating chips' vector marks

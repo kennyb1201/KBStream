@@ -25,10 +25,18 @@ import java.util.concurrent.TimeUnit
  * In-app self-update for sideloaded installs.
  *
  * KBStream is not distributed through an app store, so updates come from this
- * repo's GitHub releases: CI publishes every main-branch build as a release
- * containing the signed APK plus a metadata.json ({versionCode, versionName}).
+ * repo's GitHub releases: CI publishes a release on a version tag, or on a
+ * hand-run workflow, carrying the signed APK plus a
+ * metadata.json ({versionCode, versionName}).
  * The updater compares that versionCode against the installed one — strictly
  * increasing run numbers, so any newer release wins.
+ *
+ * The publish side is guarded against the trap that makes a run number unsafe
+ * as a version: re-running an OLDER commit still gets a HIGHER run number, so
+ * publishing on every push could have offered an old build to every install as
+ * an upgrade. The workflow refuses to publish unless the run's versionCode is
+ * above the published one AND the published commit is already contained in the
+ * commit being published.
  *
  * Install strategy: a PackageInstaller session first (silently replaces the
  * app when this install owns the package, e.g. after the first in-app

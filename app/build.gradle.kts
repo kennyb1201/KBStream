@@ -18,6 +18,18 @@ ktlint {
     ignoreFailures.set(false)
 }
 
+// Room's exported schemas. Every @Database with exportSchema = true writes its
+// shape here, one JSON per released version, and those files are committed:
+// that is what makes a Migration reviewable against the schema it has to carry
+// a database to, and what lets the guard test in data/history assert that the
+// version the code declares is the version on disk. The watch-history database
+// is USER DATA - resume points, watched state - so its history has to be
+// readable; the guide database keeps exportSchema = false because it is a
+// cache that is deliberately rebuilt when its schema changes.
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 val localProps = Properties()
 val localPropsFile = rootProject.file("local.properties")
 if (localPropsFile.exists()) {
@@ -185,6 +197,40 @@ android {
 
     kotlinOptions {
         jvmTarget = "17"
+    }
+
+    // Android Lint is the gate the audit found missing: nothing else in this
+    // tree flags an API reached above minSdk without a guard, a resource used
+    // as the wrong type, or a component that cannot be instantiated - and the
+    // ktlint configuration above is deliberately one rule wide.
+    //
+    // It runs in CI (.github/workflows/build.yml), never locally on purpose: a
+    // container small enough to need gradle.properties' 3 GiB daemon heap
+    // cannot run lint's whole-source analysis without the daemon being
+    // OOM-killed mid-run.
+    //
+    // Errors fail the build; warnings are reported and uploaded as an artifact.
+    // That split is the point - the issues lint calls errors are the ones that
+    // crash on a TV with no debugger attached, whereas its style opinions (and
+    // its new-dependency-available nudges) must not be what blocks a release.
+    lint {
+        abortOnError = true
+        warningsAsErrors = false
+        // Test sources are not shipped in the APK.
+        checkTestSources = false
+        // Assemble-release already runs lintVitalRelease (the fatal subset) on
+        // every release build; this keeps that in place and adds the full
+        // analysis on the debug variant in CI.
+        checkReleaseBuilds = true
+        // Single-language app by design (res/values/strings.xml holds one entry
+        // and there is no values-<locale>): "this string is not translated" and
+        // "this translation is redundant" describe the intent here, not a bug.
+        // Only these two, and only because they are warnings: a check that can
+        // fail the build stays on.
+        disable += "MissingTranslation"
+        disable += "ExtraTranslation"
+        htmlReport = true
+        xmlReport = true
     }
 
     testOptions {
