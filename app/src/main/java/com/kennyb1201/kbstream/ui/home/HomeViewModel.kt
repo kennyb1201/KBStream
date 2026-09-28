@@ -840,6 +840,27 @@ class HomeViewModel(
     // Caps parallel TMDB artwork lookups for landscape cards.
     private val landscapeArtSemaphore = Semaphore(permits = 6)
 
+    /**
+     * The landscape art the rails on screen already have, keyed by rail
+     * identity.
+     *
+     * Artwork is a per-item fact, but it lived only on the [Rail] object, and
+     * every rebuild replaces those objects wholesale: so a refresh (or an add-on
+     * edit, or a resume) threw away every resolved backdrop and asked TMDB for
+     * all of them again, one lookup per item, for rows whose art was already on
+     * screen a moment earlier. Captured when a build starts and handed to the
+     * rails that take those same keys, a rebuild paints with the art it already
+     * had and resolves only what it has never seen.
+     *
+     * Deliberately not a cache with a lifetime of its own: it is a snapshot of
+     * what is on screen. A profile switch empties the rails before rebuilding,
+     * so nothing is carried across profiles, and nothing here can outlive the
+     * rows it was taken from.
+     */
+    private var previousLandscapeArt:
+        Map<String, Map<String, Pair<String?, String?>>> =
+        emptyMap()
+
     private val watchedRefreshMutex =
         Mutex()
 
@@ -6284,6 +6305,18 @@ private suspend fun calculateEpisodesRemaining(
      * detail screens use, so rails that were filtered already have warm
      * entries.
      */
+    /**
+     * The key one item's artwork is filed under, in a rail's `landscapeArt`
+     * map and in [previousLandscapeArt] alike.
+     *
+     * One function rather than the same string built in three places: a key that
+     * drifts from the one the map is written with reads as "nothing is known
+     * yet", which is exactly the re-resolution [previousLandscapeArt] exists to
+     * stop - and it would fail silently.
+     */
+    private fun landscapeArtKey(meta: MetaPreview): String =
+        "${meta.type}:${meta.id}"
+
     private suspend fun resolveLandscapeArt(
         metas: List<MetaPreview>,
         tmdbOnly: Boolean = false
@@ -6295,7 +6328,7 @@ private suspend fun calculateEpisodesRemaining(
 
                 async {
 
-                    val key = "${meta.type}:${meta.id}"
+                    val key = landscapeArtKey(meta)
 
                     val addonBackdrop =
                         if (tmdbOnly) {
@@ -6477,9 +6510,27 @@ private suspend fun calculateEpisodesRemaining(
         items: List<MetaPreview>,
         buildEpoch: Long
     ) {
+        val known =
+            _rails.value
+                .firstOrNull { rail ->
+                    railKeyOf(rail) == railKey
+                }
+                ?.landscapeArt
+                .orEmpty()
+
+        // Only what is genuinely unknown. A rebuild inherits the art its
+        // predecessor resolved (see previousLandscapeArt) and a page brings its
+        // own new items, so a whole rail arriving here is the ordinary case -
+        // and reducing it to the unseen items is the difference between one
+        // lookup and a rail's worth of them.
+        val missing =
+            items.filter { meta -> landscapeArtKey(meta) !in known }
+
+        if (missing.isEmpty()) return
+
         val art =
             resolveLandscapeArt(
-                metas = items,
+                metas = missing,
                 tmdbOnly = railInfo[railKey]?.pinned == true
             )
 
@@ -6593,6 +6644,12 @@ private suspend fun calculateEpisodesRemaining(
                 exhaustedRails.clear()
                 railSourceOffset.clear()
                 closeCatalogGrid()
+
+                // Snapshot the artwork of what is on screen before this build
+                // starts replacing it: those rails' art is what their
+                // replacements inherit (see previousLandscapeArt).
+                previousLandscapeArt =
+                    _rails.value.associate { rail -> railKeyOf(rail) to rail.landscapeArt }
 
                 val pinned =
                     mutableListOf<Rail>()
@@ -7023,10 +7080,12 @@ private suspend fun calculateEpisodesRemaining(
                 items = filtered,
                 catalogId = pending.catalogId,
                 baseUrl = pending.baseUrl,
-                // Left empty here and filled in once the rail is on screen:
-                // artwork is not what the viewer is waiting for (see
-                // warmLandscapeArt).
-                landscapeArt = emptyMap()
+                // Inherited from the rail this replaces, and filled in behind
+                // the row for whatever is still unknown: see
+                // previousLandscapeArt and warmLandscapeArt.
+                landscapeArt = previousLandscapeArt[
+                    railKeyOf(pending.addonName, pending.catalogId, pending.catalogType)
+                ] ?: emptyMap()
             )
 
         railInfo[railKeyOf(rail)] =
@@ -7078,7 +7137,19 @@ private suspend fun calculateEpisodesRemaining(
      */
     private fun railKeyOf(rail: Rail): String {
 
-        return rail.addonName + "::" + rail.catalogId + "::" + rail.type
+        return railKeyOf(rail.addonName, rail.catalogId, rail.type)
+    }
+
+    /**
+     * The same identity, from its parts.
+     *
+     * Exists so a rail's identity is knowable before the rail is built, which is
+     * what [previousLandscapeArt] needs to hand a rebuilding rail the artwork of
+     * the one it is replacing.
+     */
+    private fun railKeyOf(addonName: String, catalogId: String?, type: String): String {
+
+        return addonName + "::" + catalogId + "::" + type
     }
 
     private fun formatCatalogName(
@@ -7162,8 +7233,13 @@ private suspend fun calculateEpisodesRemaining(
                             items = filtered,
                             catalogId = if (tv) "top_kids_shows" else "top_kids_movies",
                             baseUrl = null,
-                            // Filled in after publication: see warmLandscapeArt.
-                            landscapeArt = emptyMap()
+                            landscapeArt = previousLandscapeArt[
+                                railKeyOf(
+                                    KIDS_ADDON_NAME,
+                                    if (tv) "top_kids_shows" else "top_kids_movies",
+                                    if (tv) "series" else "movie"
+                                )
+                            ] ?: emptyMap()
                         )
 
                         railInfo[railKeyOf(rail)] = RailInfo(
@@ -7259,9 +7335,9 @@ private suspend fun calculateEpisodesRemaining(
                                     items = filteredMetas,
                                     catalogId = catalogId,
                                     baseUrl = baseUrl,
-                                    // Filled in after publication: see
-                                    // warmLandscapeArt.
-                                    landscapeArt = emptyMap()
+                                    landscapeArt = previousLandscapeArt[
+                                        railKeyOf(TOP_TODAY_ADDON_NAME, catalogId, type)
+                                    ] ?: emptyMap()
                                 )
 
                             railInfo[railKeyOf(rail)] =
