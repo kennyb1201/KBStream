@@ -86,7 +86,7 @@ object LocalLibraryStore {
         .put("mediaType", item.mediaType)
         .put("title", item.title)
         .put("year", item.year ?: -1)
-        .put("posterUrl", item.posterUrl ?: "")
+        .put("posterUrl", cleanLibraryPoster(item.posterUrl) ?: "")
         .put("imdbId", item.imdbId ?: "")
         .put("tmdbId", item.tmdbId ?: -1)
 
@@ -101,7 +101,7 @@ object LocalLibraryStore {
             mediaType = mediaType,
             title = title,
             year = obj.optInt("year", -1).takeIf { it > 0 },
-            posterUrl = obj.optString("posterUrl", "").ifBlank { null },
+            posterUrl = cleanLibraryPoster(obj.optString("posterUrl", "")),
             imdbId = imdbId,
             tmdbId = tmdbId
         )
