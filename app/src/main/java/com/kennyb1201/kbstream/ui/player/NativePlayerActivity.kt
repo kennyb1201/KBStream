@@ -79,6 +79,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
@@ -171,8 +172,23 @@ private const val DECODER_RESOURCE_RETRY_DELAY_MS = 6_000L
  * that waited nothing - and the field log shows a session's first failure
  * landing 4ms after the previous player was released, on a plain HDR10 HEVC
  * file the box decodes natively.
+ *
+ * The window is counted from the release, not from the rebuild that asks for
+ * it: a second switch inside it - the viewer picking another source, or the
+ * next-source ladder firing while they do - waits out the remainder instead of
+ * asking for a decoder a second after the last one was handed back.
+ *
+ * It is [DECODER_RESOURCE_RETRY_DELAY_MS]'s 6s rather than the 3s the other
+ * rebuilds use, because 3s is the vendor's own release latency rather than
+ * something on top of it: the request landed exactly as the component was
+ * finishing and the box answered the same 0x80001000. 6s clears it with
+ * margin, which is the timing the field session showed a rebuild succeeding
+ * at. The cost is splash, not black screen - [switchToSource] raises the
+ * backdrop before this runs.
  */
-private const val SOURCE_SWITCH_SETTLE_MS = 3_000L// Shared with the MPV player's panel: same speeds, same labels, one list.
+private const val SOURCE_SWITCH_SETTLE_MS = 6_000L
+
+// Shared with the MPV player's panel: same speeds, same labels, one list.
 internal val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 // Aspect ratio modes. 0-2 map to the Media3 resize modes (see
@@ -926,6 +942,25 @@ class NativePlayerActivity : ComponentActivity() {
     // Player
     private var exoPlayer: ExoPlayer? = null
     private var mediaSession: MediaSession? = null
+
+    /**
+     * Which rebuild the player field belongs to. A rebuild that has to leave
+     * the box alone queues its own [createPlayer]; without this, an earlier
+     * rebuild's queued create could fire *after* a later one had already built
+     * a player, and the field was overwritten while the older instance stayed
+     * alive, unreferenced and decoding — a second video decoder on a box that
+     * hands out one 4K decode per process, which is exactly the resource it
+     * then refuses to the next source.
+     */
+    private var playerGeneration = 0
+
+    /**
+     * Wall clock of the last player release, or 0 for "none in this activity".
+     * The source-switch grace period is counted from here rather than from the
+     * moment a rebuild was asked for, so two switches in quick succession do
+     * not rebuild on top of each other (see [rebuildSettleRemainingMs]).
+     */
+    private var playerReleasedAtMs = 0L
 
     // State
     private val handler = Handler(Looper.getMainLooper())
@@ -2445,6 +2480,18 @@ class NativePlayerActivity : ComponentActivity() {
         // pauses and a multi-second rebuffer stall. Cleared in onStop, with
         // onDestroy as the safety net.
         EpgWriteGate.setPlayerActive(true)
+
+        // This Activity owns the screen, so it owns its video decoder too. The
+        // Home hero's pooled trailer player survives the composition - Home's
+        // ON_STOP handler pauses it rather than stopping it - and a paused
+        // ExoPlayer keeps its decoder allocated. This box hands out one 4K
+        // decode per process (see OMX_ERROR_INSUFFICIENT_RESOURCES), so leaving
+        // that one held is what turned a source switch inside the player into
+        // "out of video decoder resources" while starting the same source with
+        // the pool already quiet played immediately. Stopping it costs nothing
+        // here: Home re-resolves and re-preps its trailer from the pool when it
+        // resumes.
+        TrailerPlayerPool.releaseForReuse()
 
         // Kids Mode: a daily limit or bedtime that lands mid-film has to
         // end the playback it is counting. The lock overlay lives in
@@ -4727,6 +4774,14 @@ class NativePlayerActivity : ComponentActivity() {
             // switchToSource() resets the same latch on its own path.
             languagesAutoSelected = false
 
+            // Belt and braces for [playerGeneration]: an instance that outlived
+            // its rebuild would hold a video decoder this box will not hand out
+            // twice, so let it go before this player takes the field. Reaching
+            // this at all means a rebuild raced another one.
+            exoPlayer?.let { stale ->
+                Log.w("PLAYER_REBUILD", "Releasing a player that outlived its rebuild")
+                runCatching { stale.release() }
+            }
             exoPlayer = player
             if (p5GlesActive) {
                 // The GL view draws decoder buffers directly — Media3's
@@ -4820,6 +4875,13 @@ class NativePlayerActivity : ComponentActivity() {
      * decoder [settleMs] to hand its 4K buffers back (see
      * [SOURCE_SWITCH_SETTLE_MS]). Every other caller keeps the immediate
      * rebuild by passing nothing.
+     *
+     * The wait is measured from the release rather than from this call, so a
+     * second rebuild landing inside the window waits out what is left of it
+     * instead of asking for a decoder while the last one is still going
+     * ([rebuildSettleRemainingMs]). Only the newest rebuild's queued create
+     * runs: an earlier one would build a second player, and the second one is
+     * what the box refuses.
      */
     private fun recreatePlayer(settleMs: Long = 0L) {
         // Counted for the diagnostics report: a rebuild throws away the whole
@@ -4831,23 +4893,44 @@ class NativePlayerActivity : ComponentActivity() {
         stallWatchdogToken++
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
-        val settling = settleMs > 0L && exoPlayer != null
-        if (settling) {
+        // Anything an earlier rebuild queued is stale once this one runs.
+        val generation = ++playerGeneration
+        // The scrub preview runs a video decoder of its own, and it is built
+        // for the source being replaced. Hand it back before asking for the new
+        // one: on this Realtek/TCL stack a second 4K decode in the process
+        // comes back OMX_ErrorInsufficientResources (0x80001000), which is the
+        // "out of video decoder resources" card a source switch was landing on
+        // while starting the same source fresh played fine. The next scrub
+        // rebuilds the pipeline for the new source, which it had to do anyway -
+        // the frames it holds belong to the old one.
+        stopTrickplay()
+        if (settleMs > 0L) {
             // Detach first: otherwise the dying codec is still holding the
             // SurfaceView's Surface when the next codec configures onto it.
             playerView.player = null
         }
-        exoPlayer?.release()
-        exoPlayer = null
-        if (settling) {
+        if (exoPlayer != null) {
+            exoPlayer?.release()
+            exoPlayer = null
+            playerReleasedAtMs = System.currentTimeMillis()
+        }
+        val wait = rebuildSettleRemainingMs(
+            settleMs = settleMs,
+            releasedAtMs = playerReleasedAtMs,
+            nowMs = System.currentTimeMillis()
+        )
+        if (wait > 0L) {
             Log.i(
                 "PLAYER_REBUILD",
-                "Source switch: waiting ${settleMs}ms for the previous decoder to " +
-                    "release its buffers before rebuilding the player"
+                "Waiting ${wait}ms for the previous decoder to release its " +
+                    "buffers before rebuilding the player"
             )
             handler.postDelayed(
-                { if (!isFinishing && !isDestroyed) createPlayer() },
-                settleMs
+                {
+                    if (generation != playerGeneration) return@postDelayed
+                    if (!isFinishing && !isDestroyed) createPlayer()
+                },
+                wait
             )
         } else {
             createPlayer()

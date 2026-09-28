@@ -46,6 +46,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -562,6 +563,12 @@ class MpvPlayerActivity : ComponentActivity() {
         // Released in onStop - the surface is paused there, so there is no
         // playback left to protect.
         EpgWriteGate.setPlayerActive(true)
+
+        // Same decoder accounting as the ExoPlayer path (see
+        // NativePlayerActivity.onCreate): libmpv decodes in this process, and
+        // the Home hero's paused trailer player would otherwise still be
+        // holding one of the decoders it needs.
+        TrailerPlayerPool.releaseForReuse()
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_mpv_player)
@@ -1800,6 +1807,11 @@ class MpvPlayerActivity : ComponentActivity() {
         activeSkipStamp = null
         hideSkipPrompt()
 
+        // The scrub preview decodes the source being replaced, and its pipeline
+        // is bound to that URL: left running it would show the old file's frames
+        // on the next scrub, and on this box a second 4K decode in the process is
+        // what it refuses to the file now loading. The next scrub rebuilds it.
+        stopTrickplay()
         Log.w(TAG, "source switch -> ${stream.sourceLabel()} at ${resumeAt}ms")
         // The note reads out which source is playing, so it has to follow.
         updateControlsInfo()
