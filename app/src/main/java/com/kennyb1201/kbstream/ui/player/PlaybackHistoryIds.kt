@@ -84,6 +84,57 @@ object PlaybackHistoryIds {
     }
 
     /**
+     * The season/episode a Stremio episode id names, or null when the id
+     * carries none.
+     *
+     * A series video id is "<show id>:<season>:<episode>" — the show part is
+     * whatever the addon calls the show ("tt...", "kitsu:..." — anything), so
+     * the pair is the last two colon-separated segments, and only when both of
+     * them are numbers. A movie id, a show-level id, or anything else answers
+     * null, which is why the caller must treat null as "the id does not say"
+     * rather than "the id says nothing is there".
+     *
+     * This exists because the id and the session's own `season`/`episode` are
+     * two independent statements of the same fact and the app never compared
+     * them: the id is what the stream was RESOLVED for, while the fields are
+     * what the session RECORDS itself under — the watch-history row, the
+     * watched marker, the Simkl scrobble, and the arithmetic next episode all
+     * read the fields. When the two disagree, a session plays one episode and
+     * files it as another, which looks like "the binge kept offering an episode
+     * I had already watched, and the ones it played were never marked".
+     */
+    fun episodeFromId(id: String?): Pair<Int, Int>? {
+        val parts = id?.trim()?.split(':') ?: return null
+        if (parts.size < 3) return null
+        val episode = parts[parts.size - 1].toIntOrNull() ?: return null
+        val season = parts[parts.size - 2].toIntOrNull() ?: return null
+        return season to episode
+    }
+
+    /**
+     * One diagnostics line naming a session's identity, and whether the id its
+     * stream was resolved for agrees with the fields it will file itself under.
+     *
+     * Deliberately a report and not a repair: rewriting one from the other would
+     * be guessing which is wrong, and the whole question is which one is.
+     */
+    fun playbackSessionLine(
+        season: Int?,
+        episode: Int?,
+        episodeStreamId: String?,
+        historyId: String
+    ): String {
+        val base = "s=${season ?: "-"} e=${episode ?: "-"} row=$historyId"
+        val fromId = episodeFromId(episodeStreamId) ?: return "$base id=$episodeStreamId"
+        val agrees = fromId.first == season && fromId.second == episode
+        return if (agrees) {
+            "$base id agrees (s=${fromId.first} e=${fromId.second})"
+        } else {
+            "$base id says s=${fromId.first} e=${fromId.second} - MISMATCH"
+        }
+    }
+
+    /**
      * TMDB id for a parent regardless of the raw id flavor (imdb / tmdb: /
      * tvdb: / bare numeric). Simkl and MDBList can only match shows/movies by
      * imdb or tmdb id, so TVDB-sourced titles scrobble via this resolved id

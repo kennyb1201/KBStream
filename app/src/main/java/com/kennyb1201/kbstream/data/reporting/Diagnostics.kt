@@ -78,6 +78,11 @@ object Diagnostics {
         startupLine()?.let { report.appendLine(it) }
         playbackLine()?.let { report.appendLine(it) }
         trickplayLine()?.let { report.appendLine(it) }
+        // Episode identity per playback session and per handoff between them:
+        // the bookkeeping behind "the binge offered an episode I had already
+        // watched". Absent until something has played (see
+        // PlaybackSessionTrace).
+        PlaybackSessionTrace.lines().forEach { report.appendLine("session: $it") }
         // Where the time goes: startup + per-service HTTP + home refresh, with
         // the slowest samples named. Empty on a session that recorded nothing.
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->

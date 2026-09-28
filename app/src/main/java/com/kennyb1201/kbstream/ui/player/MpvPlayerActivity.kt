@@ -573,6 +573,11 @@ class MpvPlayerActivity : ComponentActivity() {
         readIntent(savedInstanceState)
         bindViews()
         historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
+        // The same line the main player writes: what this session files itself
+        // under, next to what the id it plays says (see PlaybackSessionTrace).
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            PlaybackHistoryIds.playbackSessionLine(season, episode, episodeStreamId, historyId)
+        )
 
         // The same per-title memory the main player keeps, under the same key,
         // so a title remembers its languages, A/V offsets and audio track
@@ -2802,6 +2807,32 @@ class MpvPlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Records the episode this session is handing off FROM, before the next
+     * one opens - the same row and the same scrobble the exit path writes, at
+     * the moment the end-of-episode card hands playback over. Mirrors
+     * NativePlayerActivity.fileEpisodeForHandoff().
+     *
+     * [shouldRecordCompletion] is the exit path's own "is it finished?" rule,
+     * so an episode the viewer skipped out of early stays a resume point
+     * instead of being marked watched.
+     */
+    private fun fileEpisodeForHandoff() {
+        val pos = runCatching { surface?.positionMs() ?: 0L }.getOrDefault(0L)
+        val dur = runCatching { surface?.durationMs() ?: 0L }.getOrDefault(0L)
+        val completed = shouldRecordCompletion(
+            playbackEnded = endedHandled,
+            endPanelsShown = endPanelsShown,
+            positionMs = pos,
+            durationMs = dur
+        )
+        saveProgress(reason = "handoff", forceCompleted = completed)
+        scrobble("stop", progressOverride = if (completed) 100.0 else null)
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "filed s=${season ?: "-"} e=${episode ?: "-"} row=$historyId completed=$completed"
+        )
+    }
+
+    /**
      * Next-episode handoff. Same two channels as the main player: the persisted
      * [NextEpisodeResult] (survives MainActivity being killed while the player
      * was up) and the classic result extras for the live callback.
@@ -2816,6 +2847,13 @@ class MpvPlayerActivity : ComponentActivity() {
         // minutes timer is left alone - that intent is about the clock, not
         // about this episode.
         if (SleepTimer.state.value.stopsAtEndOfItem) SleepTimer.cancel()
+        // File THIS episode before the handoff, exactly as the main player
+        // does: a binge leaves every episode but the last through here, and
+        // the row plus the tracker "stop" cannot wait on onStop, which the OS
+        // can hold back behind the next player. Without it the finished
+        // episodes kept no watch marker and their late stop ended the Simkl
+        // session the next episode had just opened.
+        fileEpisodeForHandoff()
         nextUpCountdownHeld = false
         nextUpCountdownRemaining = 0
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
@@ -2828,6 +2866,9 @@ class MpvPlayerActivity : ComponentActivity() {
             bingeGroup = null,
             addonName = null,
             randomEpisodes = false
+        )
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "next: s=$targetSeason e=$targetEpisode from s=${season ?: "-"} e=${episode ?: "-"} id=${pending.streamId}"
         )
         NextEpisodeResult.persist(this, pending)
         setResult(
@@ -3384,7 +3425,9 @@ class MpvPlayerActivity : ComponentActivity() {
         // scrobbles its own "start" and its own "stop"; ours raced the start
         // and ended the Simkl session immediately, so the real stop came back
         // 409 "already ended" and the title was never marked watched.
-        if (!playerSwitchStarted) {
+        // Not when the end-of-episode card already filed this episode and
+        // closed its tracker session ([fileEpisodeForHandoff]).
+        if (!playerSwitchStarted && !nextEpisodeHandoffStarted) {
             saveProgress(reason = "stop")
             scrobble("stop")
         }

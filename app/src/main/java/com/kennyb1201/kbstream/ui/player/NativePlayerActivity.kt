@@ -2853,6 +2853,13 @@ class NativePlayerActivity : ComponentActivity() {
             episode = episode,
             episodeStreamId = episodeStreamId
         )
+        // Into the diagnostics report: what this session will file itself
+        // under, next to what the id it plays says. A binge that chains into
+        // the wrong episode - or files the right ones under the wrong row - is
+        // this line, and nothing else in the app compares the two.
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            PlaybackHistoryIds.playbackSessionLine(season, episode, episodeStreamId, historyId)
+        )
 
         sources.firstOrNull { it.url == currentUrl }?.let { first ->
             currentSourceLabel = first.displayLabel()
@@ -7992,6 +7999,37 @@ class NativePlayerActivity : ComponentActivity() {
         armNextUpAutoAdvance(remainingMs = 0L)
     }
 
+    /**
+     * Records the episode this session is handing off FROM, before the next
+     * one opens. Backing out of the player already files the episode - this is
+     * the same write, moved to the moment the end-of-episode card hands
+     * playback over, because that is how a binge leaves every episode but the
+     * last. See the call in [launchNextEpisode] for what went wrong when the
+     * write waited for onStop.
+     *
+     * [shouldRecordCompletion] is the exit path's own "is it finished?" rule,
+     * so an episode the viewer skipped out of early stays a resume point
+     * instead of being marked watched.
+     */
+    private fun fileEpisodeForHandoff() {
+        if (isLiveChannel) return
+        val player = exoPlayer ?: return
+        val pos = player.currentPosition.coerceAtLeast(0L)
+        val rawDur = player.duration
+        val dur = if (rawDur <= 0L || rawDur == C.TIME_UNSET) 0L else rawDur
+        val completed = shouldRecordCompletion(
+            playbackEnded = playbackEndedHandled,
+            endPanelsShown = endPanelsShown,
+            positionMs = pos,
+            durationMs = dur
+        )
+        saveProgress(reason = "handoff", forceCompleted = completed)
+        scrobbleSimkl("stop", progressOverride = if (completed) 100.0 else null)
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "filed s=${season ?: "-"} e=${episode ?: "-"} row=$historyId completed=$completed"
+        )
+    }
+
     private fun launchNextEpisode(
         targetSeason: Int,
         targetEpisode: Int,
@@ -8008,6 +8046,19 @@ class NativePlayerActivity : ComponentActivity() {
         // minutes timer is left alone - that intent is about the clock, not
         // about this episode.
         if (SleepTimer.state.value.stopsAtEndOfItem) SleepTimer.cancel()
+        // File THIS episode here, not only from onStop. Every episode of a
+        // binge but the last leaves through this call, and on these boxes
+        // onStop can be blocked behind the handoff (the OS brings the next
+        // player up first), so a session whose row and tracker "stop" both
+        // rode on onStop left the finished episode with no watch marker, no
+        // progress row and no completion push to the trackers - and its late
+        // stop then landed AFTER the next episode's "start", which ends the
+        // Simkl session the new episode had just opened, so live scrobbling
+        // went quiet for the rest of the binge. saveProgress is an idempotent
+        // upsert and a second stop is answered 409 (already ended), so the
+        // exit path repeating either is harmless - which is why onStop skips
+        // both once this has run.
+        fileEpisodeForHandoff()
         // The end-of-episode decision is spent: a later countdown tick must not
         // re-fetch a target for a session that is already leaving.
         nextUpHandoffArmed = false
@@ -8028,6 +8079,13 @@ class NativePlayerActivity : ComponentActivity() {
             // Random mode rides along: the handoff starts a NEW player, which
             // would otherwise read its intent as a normal (arithmetic) chain.
             randomEpisodes = randomEpisodes
+        )
+        // The handoff itself, into the same report: which episode this session
+        // was, and which one it is chaining to. Read against the session line
+        // above, a chain that stops advancing is visible as a repeated source
+        // pair.
+        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+            "next: s=$targetSeason e=$targetEpisode from s=${season ?: "-"} e=${episode ?: "-"} id=${pendingNext.streamId}"
         )
         // Persist FIRST: on Fire TV the OS frequently kills the backgrounded
         // MainActivity during 4K playback, so the result callback later runs
@@ -8804,7 +8862,12 @@ class NativePlayerActivity : ComponentActivity() {
         // stop, so the target's real stop (at 100%) then answered 409 "already
         // ended" and the title was never marked watched. One session, one stop
         // - sent by the engine that actually finished it.
-        if (!mpvHandoffStarted && !externalHandoffStarted) {
+        // Not when the end-of-episode card already filed this episode and
+        // closed its tracker session ([fileEpisodeForHandoff]): that write
+        // happened while the player was still alive and before the next
+        // episode's scrobble "start", which is exactly what onStop cannot
+        // promise here.
+        if (!mpvHandoffStarted && !externalHandoffStarted && !nextEpisodeHandoffStarted) {
             val completedOnExit = shouldRecordCompletion(
                 playbackEnded = playbackEndedHandled,
                 endPanelsShown = endPanelsShown,
