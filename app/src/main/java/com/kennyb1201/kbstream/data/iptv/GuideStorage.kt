@@ -271,21 +271,17 @@ internal object GuideStorage {
      * Deletes the programmes [predicate] selects [bound] for, returning how
      * many went.
      *
-     * [bound] is inlined rather than passed as a parameter because the count
-     * has to run first (the report wants rows, and a pool that cannot answer
-     * the count should not start a delete) — and it is this pass's own computed
-     * timestamp, not a value from anywhere that could carry SQL with it.
+     * One statement, with the row count coming back from the delete itself.
+     * Counting first would mean a second pass over a table that holds hundreds
+     * of thousands of rows in a large guide, and neither predicate can use the
+     * table's composite index on its own — on a four-guide device that is a
+     * second of scanning at every launch, for a prune that usually has nothing
+     * to do. [bound] is this pass's own computed timestamp, inlined rather than
+     * bound, so it cannot carry anything with it.
      */
-    private fun prune(sql: Sql, predicate: String, bound: Long): Int {
-        val rows = runCatching {
-            sql.count("SELECT COUNT(*) FROM epg_programs WHERE $predicate $bound")
-        }.getOrDefault(0)
-        if (rows == 0) return 0
-        val deleted = runCatching {
-            sql.exec("DELETE FROM epg_programs WHERE $predicate $bound")
-        }
-        return if (deleted.isSuccess) rows else 0
-    }
+    private fun prune(sql: Sql, predicate: String, bound: Long): Int =
+        runCatching { sql.delete("DELETE FROM epg_programs WHERE $predicate $bound") }
+            .getOrDefault(0)
 
     /** True for a guide database, scoped or legacy — never for any other file. */
     private fun isGuideDb(name: String): Boolean =
@@ -345,7 +341,9 @@ internal object GuideStorage {
     /** The two connections a guide can be reached through, as one surface. */
     private interface Sql {
         fun exec(sql: String, args: Array<Any?> = emptyArray())
-        fun count(statement: String): Int
+
+        /** Runs [sql] and reports how many rows it changed. */
+        fun delete(sql: String): Int
 
         /** Bytes on the freelist, or null when the pragmas will not answer. */
         fun freePageBytes(): Long? {
@@ -361,8 +359,8 @@ internal object GuideStorage {
     private class RoomSql(private val db: SupportSQLiteDatabase) : Sql {
         override fun exec(sql: String, args: Array<Any?>) = db.execSQL(sql, args)
 
-        override fun count(statement: String): Int =
-            db.query(statement).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        override fun delete(sql: String): Int =
+            db.compileStatement(sql).use { it.executeUpdateDelete() }
 
         override fun queryLong(statement: String): Long? =
             db.query(statement).use { if (it.moveToFirst()) it.getLong(0) else null }
@@ -372,8 +370,8 @@ internal object GuideStorage {
     private class RawSql(private val db: SQLiteDatabase) : Sql {
         override fun exec(sql: String, args: Array<Any?>) = db.execSQL(sql, args)
 
-        override fun count(statement: String): Int =
-            db.rawQuery(statement, null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
+        override fun delete(sql: String): Int =
+            db.compileStatement(sql).use { it.executeUpdateDelete() }
 
         override fun queryLong(statement: String): Long? =
             db.rawQuery(statement, null).use { if (it.moveToFirst()) it.getLong(0) else null }
