@@ -2939,15 +2939,6 @@ Log.d(
                     return@launch
                 }
 
-                val newArt =
-                    if (
-                        info.landscapeCards
-                    ) {
-                        resolveLandscapeArt(filtered)
-                    } else {
-                        emptyMap()
-                    }
-
                 val existingIds =
                     _rails.value
                         .firstOrNull { rail ->
@@ -2984,13 +2975,31 @@ Log.d(
                             railKeyOf(rail) == railKey
                         ) {
                             rail.copy(
-                                items = rail.items + deduped,
-                                landscapeArt = rail.landscapeArt + newArt
+                                items = rail.items + deduped
                             )
                         } else {
                             rail
                         }
                     }
+
+                // The page's cards now paint straight away and their artwork
+                // lands behind them, exactly as a whole rail's does (see
+                // applyLandscapeArt). Resolving it first meant the viewer's
+                // scroll sat waiting on TMDB before the new items appeared at
+                // all - the wrong way round, because the items are what the
+                // scroll asked for. Launched, not awaited, so the page's
+                // bookkeeping below still happens on this pass.
+                if (
+                    info.landscapeCards
+                ) {
+                    viewModelScope.launch {
+                        applyLandscapeArt(
+                            railKey = railKey,
+                            items = deduped,
+                            buildEpoch = buildEpochAtStart
+                        )
+                    }
+                }
 
                 // Runaway guard: an addon that ignores `skip` is already
                 // stopped by the identical-page check above (its repeat page
@@ -6439,32 +6448,55 @@ private suspend fun calculateEpisodesRemaining(
         if (rails.isEmpty()) return
         viewModelScope.launch {
             for (rail in rails) {
-                val key =
-                    railKeyOf(rail)
+                applyLandscapeArt(
+                    railKey = railKeyOf(rail),
+                    items = rail.items,
+                    buildEpoch = buildEpoch
+                )
+            }
+        }
+    }
 
-                val art =
-                    resolveLandscapeArt(
-                        metas = rail.items,
-                        tmdbOnly = railInfo[key]?.pinned == true
+    /**
+     * Resolves artwork for [items] and merges it into the rail [railKey], if that
+     * rail is still on screen and still this profile's.
+     *
+     * [items] is deliberately the items whose art is missing rather than the
+     * whole rail: a page needs only its own cards resolved, and the rest are
+     * already done - the first page by the build's warm, earlier pages by
+     * theirs.
+     *
+     * The merge is a union rather than a replacement because more than one of
+     * these can be in flight for the same rail (a page arriving while the
+     * build's warm is still resolving, or two pages in quick succession) and
+     * each holds only its own items' art. Replacing would drop whichever arrived
+     * first.
+     */
+    private suspend fun applyLandscapeArt(
+        railKey: String,
+        items: List<MetaPreview>,
+        buildEpoch: Long
+    ) {
+        val art =
+            resolveLandscapeArt(
+                metas = items,
+                tmdbOnly = railInfo[railKey]?.pinned == true
+            )
+
+        if (art.isEmpty()) return
+
+        // The profile this belonged to has been switched away from, so its art
+        // must not land on the new profile's rail of the same key.
+        if (buildEpoch != railBuildEpoch) return
+
+        _rails.update { current ->
+            current.map { existing ->
+                if (railKeyOf(existing) == railKey) {
+                    existing.copy(
+                        landscapeArt = existing.landscapeArt + art
                     )
-
-                if (art.isEmpty()) continue
-
-                if (buildEpoch != railBuildEpoch) return@launch
-
-                // Union, not replacement: a page fetched while this was
-                // resolving has merged its own art in already, and its items
-                // are not in this map. Replacing would drop that page's art.
-                _rails.update { current ->
-                    current.map { existing ->
-                        if (railKeyOf(existing) == key) {
-                            existing.copy(
-                                landscapeArt = existing.landscapeArt + art
-                            )
-                        } else {
-                            existing
-                        }
-                    }
+                } else {
+                    existing
                 }
             }
         }
