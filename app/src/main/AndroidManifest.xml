@@ -159,12 +159,19 @@
                 android:resource="@xml/searchable" />
         </activity>
 
+        <!-- configChanges is the set the other two engines declare. density and
+             uiMode are the easy ones to leave out and the expensive ones to
+             leave out: a TV switches display mode (resolution / HDR) a second
+             or two into playback, and an UNDECLARED change recreates the
+             activity - the decoder is torn down and a fresh one built
+             mid-title, which reads as a black screen with a spinner flashing
+             and then the film simply carrying on. -->
         <activity
             android:name=".ui.player.NativePlayerActivity"
             android:exported="false"
             android:resizeableActivity="true"
             android:supportsPictureInPicture="true"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden"
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|density|uiMode"
             android:screenOrientation="landscape" />
 
         <!-- Backup engine (MPV). Takes the same launch extras as

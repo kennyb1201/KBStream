@@ -5378,7 +5378,7 @@ class NativePlayerActivity : ComponentActivity() {
                         "retrying once with Dolby Vision stripped to HDR10"
                 )
                 reconnectingContainer.visibility = View.VISIBLE
-                bufferingSpinner.visibility = View.GONE
+                hideBufferingSpinner()
                 reconnectingText.text = "This TV can't play Dolby Vision here — switching to HDR10…"
                 // Not the usual 500ms: this box's DV decoder does not stop
                 // inside ACodec's window — the log shows `forcing the release
@@ -5541,6 +5541,33 @@ class NativePlayerActivity : ComponentActivity() {
 }
 
     // --- UI Updates ---
+
+    /**
+     * A buffering blip must not paint the spinner.
+     *
+     * Mid-playback STATE_BUFFERING is usually over before it is worth an
+     * indicator: a seek, a track re-selection or one frame of starvation
+     * flips the state and the next READY follows a moment later. Showing the
+     * spinner on the transition put a spinner over a video frame that was
+     * blank for that instant - a flash in the middle of playback - so the
+     * spinner is posted rather than assigned. Every place that dismisses the
+     * spinner also drops the pending post (hideBufferingSpinner), so a late
+     * one cannot appear after playback has already resumed.
+     */
+    private val bufferingSpinnerDelayMs = 400L
+    private val showBufferingSpinnerRunnable =
+        Runnable { bufferingSpinner.visibility = View.VISIBLE }
+
+    private fun showBufferingSpinnerSoon() {
+        handler.removeCallbacks(showBufferingSpinnerRunnable)
+        handler.postDelayed(showBufferingSpinnerRunnable, bufferingSpinnerDelayMs)
+    }
+
+    private fun hideBufferingSpinner() {
+        handler.removeCallbacks(showBufferingSpinnerRunnable)
+        bufferingSpinner.visibility = View.GONE
+    }
+
     private fun startPulseAnimation() {
         if (splashClearLogo.animation == null) {
             val pulse = android.view.animation.AnimationUtils.loadAnimation(this, R.anim.clearlogo_pulse)
@@ -5552,7 +5579,7 @@ class NativePlayerActivity : ComponentActivity() {
         splashContainer.visibility = View.VISIBLE
         // The splash is the only load indicator while it is up — never stack
         // the spinner or the reconnecting banner on top of it.
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         reconnectingContainer.visibility = View.GONE
         // If clear logo is already loaded, start pulse immediately.
         // Otherwise, start it once Coil finishes loading.
@@ -5594,12 +5621,14 @@ class NativePlayerActivity : ComponentActivity() {
         } else {
             hideSplash()
             reconnectingContainer.visibility = View.GONE
-            bufferingSpinner.visibility = View.VISIBLE
+            // Posted, not assigned: a blip must not flash the spinner (see
+            // bufferingSpinnerDelayMs).
+            showBufferingSpinnerSoon()
         }
     }
 
     private fun updateUIReady() {
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         reconnectingContainer.visibility = View.GONE
         errorContainer.visibility = View.GONE
         // STATE_READY only means "buffered enough to start" - decoder init
@@ -5679,7 +5708,7 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun updateUIError() {
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         reconnectingContainer.visibility = View.GONE
         errorContainer.visibility = View.VISIBLE
         errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
@@ -5850,7 +5879,7 @@ class NativePlayerActivity : ComponentActivity() {
             )
         }
         reconnectingContainer.visibility = View.GONE
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         // Live: announce the channel the moment its first frame is up, the
         // way a set-top box does — channel identity, what is on now (with its
         // air window and synopsis) and what follows. The overlay's programme
@@ -5980,7 +6009,7 @@ class NativePlayerActivity : ComponentActivity() {
                     "(pos=${positionMs}ms buf=${bufferedMs}ms) — showing timeout notice"
             )
             reconnectingContainer.visibility = View.GONE
-            bufferingSpinner.visibility = View.GONE
+            hideBufferingSpinner()
             errorTitle.text = "Playback is taking too long to start"
             errorMessage.text =
                 "The stream never became ready (buffered ${bufferedMs / 1000}s). This usually means " +
@@ -6064,7 +6093,7 @@ class NativePlayerActivity : ComponentActivity() {
                     "mime=${streamMimeType ?: "?"} — resetting video surface"
             )
             reconnectingContainer.visibility = View.VISIBLE
-            bufferingSpinner.visibility = View.GONE
+            hideBufferingSpinner()
             reconnectingText.text = "Video isn't displaying — resetting video surface…"
             val surfaceView = findVideoSurfaceView(playerView)
             handler.postDelayed(
@@ -6107,7 +6136,7 @@ class NativePlayerActivity : ComponentActivity() {
                 "Black video: no first frame (surface reset tried)$codecInfo — retrying with TextureView"
             )
             reconnectingContainer.visibility = View.VISIBLE
-            bufferingSpinner.visibility = View.GONE
+            hideBufferingSpinner()
             reconnectingText.text = "Video isn't displaying — switching to TextureView…"
             handler.postDelayed(
                 {
@@ -6140,7 +6169,7 @@ class NativePlayerActivity : ComponentActivity() {
                     "retrying once with Dolby Vision stripped to HDR10"
             )
             reconnectingContainer.visibility = View.VISIBLE
-            bufferingSpinner.visibility = View.GONE
+            hideBufferingSpinner()
             reconnectingText.text = "Video isn't displaying — trying Dolby Vision compatibility mode…"
             handler.postDelayed(
                 {
@@ -6197,7 +6226,7 @@ class NativePlayerActivity : ComponentActivity() {
                 "mime=${streamMimeType ?: "?"} playing=${exoPlayer?.isPlaying} state=${exoPlayer?.playbackState}"
         )
         reconnectingContainer.visibility = View.GONE
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         errorTitle.text = "Video isn't displaying"
         errorMessage.text =
             "Playback started but no video frames are rendering$codecInfo. " +
@@ -7050,7 +7079,7 @@ class NativePlayerActivity : ComponentActivity() {
         seekbarRow.visibility = View.GONE
         dismissAllPanels()
         hideInfoPanel()
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         // Same rule as updateUIReady: only drop the splash once the first
         // frame is actually up (or the stream has no video track) - audio
         // can be playing while the decoder is still painting frame 1.
@@ -7546,7 +7575,7 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
         reconnectingContainer.visibility = View.VISIBLE
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         reconnectingText.text = "Reconnecting... (${retryAttempt + 1}/$MAX_RETRY_ATTEMPTS)"
 
         if (retryAttempt >= RAW_EXTRACTOR_PROBE_ATTEMPT) {
@@ -8680,7 +8709,7 @@ class NativePlayerActivity : ComponentActivity() {
         // reconnecting notice takes its place for the handover itself.
         errorContainer.visibility = View.GONE
         reconnectingContainer.visibility = View.VISIBLE
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         reconnectingText.text =
             if (manual) {
                 "Switching to the MPV player…"
@@ -8766,7 +8795,7 @@ class NativePlayerActivity : ComponentActivity() {
         errorMessageStr = null
         errorContainer.visibility = View.GONE
         reconnectingContainer.visibility = View.VISIBLE
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         reconnectingText.text = "Opening in the external player\u2026"
         externalLauncher.launch(launch)
         return true
@@ -9243,7 +9272,7 @@ class NativePlayerActivity : ComponentActivity() {
             "Auto-switching to next source: ${nextStream.displayLabel()} (index=$nextIndex/${sources.size})"
         )
         reconnectingContainer.visibility = View.VISIBLE
-        bufferingSpinner.visibility = View.GONE
+        hideBufferingSpinner()
         reconnectingText.text = statusText ?: "Trying next source: ${nextStream.displayLabel()}…"
         if (delayMs > 0L) {
             handler.postDelayed({
