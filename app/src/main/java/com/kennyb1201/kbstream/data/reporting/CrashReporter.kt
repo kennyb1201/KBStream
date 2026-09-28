@@ -61,6 +61,32 @@ object CrashReporter {
         }
     }
 
+    /**
+     * Retains a one-off EVENT for the diagnostics export, without sending it to
+     * Sentry.
+     *
+     * [recordNonFatal] is for a defensive catch site - something went wrong that
+     * should not have. A stream that will not open is the opposite: sources die
+     * constantly by design, the viewer is shown a card and offered another one,
+     * and shipping every dead link to Sentry would bury the real defects under
+     * routine churn. But the report still has to be able to name it, because on
+     * a TV the card on screen is otherwise the ONLY record that anything
+     * failed - a capture taken while the viewer is looking at "Playback failed"
+     * said "recent errors: none this session", which is exactly the wrong
+     * answer to the question the report exists to answer.
+     */
+    fun recordEvent(source: String, summary: String) {
+        val entry = RecentError(
+            atMs = System.currentTimeMillis(),
+            source = source,
+            summary = Redaction.text(summary).take(160)
+        )
+        synchronized(recentLock) {
+            recent.addLast(entry)
+            while (recent.size > MAX_RECENT) recent.removeFirst()
+        }
+    }
+
     private fun remember(throwable: Throwable, context: Map<String, String>) {
         val summary = throwable::class.java.simpleName +
             (throwable.message?.let { ": ${Redaction.text(it).take(160)}" } ?: "")

@@ -1144,6 +1144,16 @@ class NativePlayerActivity : ComponentActivity() {
     private var containerParseRetried = false
     private var retryExhausted = false
     private var errorMessageStr: String? = null
+
+    /**
+     * The failure behind the card currently on screen, and the one already
+     * written into the diagnostics export. Set from the error listener and read
+     * when the card is shown ([recordShownFailure]) — the card is the moment the
+     * viewer saw it, and identity comparison keeps a retry ladder that fails the
+     * same way six times from filling the export with it.
+     */
+    private var lastPlaybackError: PlaybackException? = null
+    private var recordedPlaybackFailure: PlaybackException? = null
     private var manualRetryToken = 0
     private var rebufferStartedAtMs = 0L
 
@@ -5266,6 +5276,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            lastPlaybackError = error
             var msg = friendlyErrorMessage(error)
             // Resource exhaustion is a different animal from "this box can't
             // decode Dolby Vision", and both the recovery and the persisted
@@ -5725,9 +5736,42 @@ class NativePlayerActivity : ComponentActivity() {
         errorContainer.visibility = View.VISIBLE
         errorTitle.text = if (isLiveChannel) "Channel unavailable" else "Playback failed"
         errorMessage.text = errorMessageStr.orEmpty()
+        recordShownFailure()
         btnChangeSource.visibility = View.VISIBLE
         offerErrorSwitch()
         focusErrorButtons()
+    }
+
+    /**
+     * Names the failure the viewer is now looking at, in the diagnostics
+     * export.
+     *
+     * The export is the only account of a TV session there is, and before this
+     * a failed source appeared nowhere in it: the card said why, on a screen the
+     * user could only photograph. The host is carried because it is the question
+     * the card cannot answer - an expired debrid resolve link and an indexer
+     * refusing an uncached NZB both arrive as "server returned an error", and
+     * only the host says which of them to chase. Host only, never the URL: a
+     * debrid link carries its token in the query string.
+     *
+     * One entry per card, and never the same error twice.
+     */
+    private fun recordShownFailure() {
+        val error = lastPlaybackError ?: return
+        if (error === recordedPlaybackFailure) return
+        recordedPlaybackFailure = error
+        val host = currentUrl
+            ?.let { url -> runCatching { java.net.URI(url).host }.getOrNull() }
+            ?.takeIf { it.isNotBlank() }
+        com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent(
+            source = "playback",
+            summary = buildString {
+                append(error.errorCodeName)
+                httpStatusOf(error)?.let { append(" http=").append(it) }
+                if (host != null) append(" host=").append(host)
+                if (isLiveChannel) append(" (live)")
+            }
+        )
     }
 
     /**
@@ -9296,11 +9340,44 @@ class NativePlayerActivity : ComponentActivity() {
             else -> false
         }
 
+        /**
+         * The HTTP status behind a failed open, or null when the failure carried
+         * no response at all (a dropped connection has no status to report).
+         * Media3 attaches it to the cause chain, not to the
+         * [PlaybackException] itself.
+         */
+        private fun httpStatusOf(error: PlaybackException): Int? {
+            var cause: Throwable? = error
+            var hops = 0
+            while (cause != null && hops < 8) {
+                val code = androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException::class
+                if (code.isInstance(cause)) {
+                    return (cause as androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException)
+                        .responseCode
+                }
+                cause = cause.cause
+                hops++
+            }
+            return null
+        }
+
         private fun friendlyErrorMessage(error: PlaybackException): String = when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
             PlaybackException.ERROR_CODE_TIMEOUT -> "No internet connection."
-            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> "Server returned an error. Stream may be unavailable."
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> {
+                // The status is the diagnosis, and it is the one fact the server
+                // itself handed us: 403 is a refused or expired resolve link,
+                // 404/410 is a file that is gone, 451 is a rights block, 5xx is
+                // the provider failing. "Server returned an error" without it
+                // cannot be acted on.
+                val status = httpStatusOf(error)
+                if (status == null) {
+                    "Server returned an error. Stream may be unavailable."
+                } else {
+                    "Server returned an error (HTTP $status). Stream may be unavailable."
+                }
+            }
             PlaybackException.ERROR_CODE_DECODING_FAILED,
             PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
             PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES -> "Video format not supported."
