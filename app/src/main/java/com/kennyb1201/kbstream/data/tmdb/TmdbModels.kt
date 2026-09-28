@@ -584,12 +584,6 @@ data class TmdbGenreListResponse(
     val genres: List<TmdbGenre> = emptyList()
 )
 
-data class TmdbGenreMatch(
-    val id: Int,
-    val name: String,
-    val mediaType: String
-)
-
 fun TmdbCredits?.director(): TmdbCrewMember? =
     this?.crew?.firstOrNull { it.job == "Director" }
 

@@ -146,8 +146,15 @@ object PrefsPayloadBuilder {
         "preferred_subtitle_language"
     )
 
-    // Decoder/playback prefs that NEVER sync (documented for clarity).
-    private val EXCLUDED_PREF_KEYS = setOf(
+    /**
+     * Decoder/playback prefs that must NEVER sync: they describe what THIS
+     * device can decode, so importing another device's choices would select a
+     * decoder the viewer's TV may not have. Nothing here is consulted at
+     * runtime — [SYNCED_PREF_KEYS] is an allow-list, so a key cannot leave the
+     * device without being on it — and SyncScopeTest walks this list against
+     * that one, which is what gives the exclusions teeth.
+     */
+    internal val EXCLUDED_PREF_KEYS = setOf(
         "default_buffer_mode",
         "auto_select_stream",
         "force_software_decoder",

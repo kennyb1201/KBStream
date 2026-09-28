@@ -25,18 +25,20 @@ class SyncScopeTest {
 
     @Test
     fun `decoder and playback prefs stay per-device`() {
+        // A Fire TV Stick and a projector need different decoders: not one of
+        // these may ride the sync payload. The list lives beside the allow-list
+        // it guards, so a decoder pref added to the payload is caught here
+        // rather than on a device that cannot decode what the other one chose.
         val synced = PrefsPayloadBuilder.SYNCED_PREF_KEYS
-        // A Fire TV Stick and a projector need different decoders: these must
-        // never ride the sync payload.
-        listOf(
-            "force_software_decoder",
-            "enable_tunneling",
-            "dv_compat_mode",
-            "dv_convert_p5_to_81",
-            "default_aspect_ratio",
-            "default_buffer_mode"
-        ).forEach { key ->
+        val excluded = PrefsPayloadBuilder.EXCLUDED_PREF_KEYS
+        assertTrue("the exclusion list must not be empty", excluded.isNotEmpty())
+        excluded.forEach { key ->
             assertFalse("$key must stay local", key in synced)
         }
+        // The sample the old test pinned by hand, kept as a canary.
+        assertTrue(
+            "force_software_decoder must be excluded",
+            "force_software_decoder" in excluded
+        )
     }
 }

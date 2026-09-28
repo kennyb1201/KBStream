@@ -145,7 +145,13 @@ scripts/           # TMDB id-verification probes used while curating the
                    # clip it) and @drawable/tv_banner_plate, the same lockup on
                    # the opaque plate. `--preview
                    # banner|plate|promo|icon|logo|mark|round` prints one as
-                   # ASCII.
+                   # ASCII. patch_source.py applies a verified edit spec (a
+                   # JSON list of anchored find/replace pairs, hard-erroring
+                   # unless every anchor matches exactly) and split_kotlin.py
+                   # moves whole top-level declarations into a sibling file:
+                   # both exist because this tree has declarations past the
+                   # size one editor tool call can reach. Their docstrings
+                   # carry the byte offsets that measured it.
 supabase_profiles.sql  # optional dashboard table for inspecting profiles
 docs/              # Supabase RLS + Realtime SQL reference
                    #   supabase_sync_rls.sql  -- schema + per-user RLS policies

@@ -348,16 +348,6 @@ val BROWSE_COLLECTION_NAMES = listOf(
  * runtime (see SearchViewModel), so their [BrowseCategory.entries] stay
  * empty here.
  */
-fun browseCategoryEntries(key: String): List<BrowseEntry> = when (key) {
-    "genres" -> BROWSE_GENRES
-    "keywords" -> emptyList() // runtime-resolved
-    "services" -> BROWSE_PROVIDER_ENTRIES
-    "studios" -> BROWSE_STUDIOS
-    "decades" -> BROWSE_DECADES
-    "collections" -> emptyList() // runtime-resolved
-    else -> emptyList()
-}
-
 val BROWSE_CATEGORIES: List<BrowseCategory> = listOf(
     BrowseCategory("genres", "Genres", BROWSE_GENRES),
     BrowseCategory("keywords", "Keywords", emptyList()),

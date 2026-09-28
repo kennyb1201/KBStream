@@ -149,8 +149,6 @@ private val HomePosterHeight = 180.dp
 private val HomeLandscapeWidth = 210.dp
 private val HomeLandscapeHeight = 118.dp
 private val HomeRailGap = 12.dp
-private val ContinueWatchingCardWidth = 260.dp
-private val ContinueWatchingCardImageHeight = 146.dp
 private const val HeroTrailerDwellMs = 4_000L
 
 private val HomeHeroHeight = 300.dp
@@ -1956,16 +1954,6 @@ private fun CompactUpNextCard(
                     UpNextBadge.NEW_SEASON ->
                         "NEW SEASON"
                 }
-        }
-
-    val subtitle = item.subtitle
-        ?.removePrefix("Resume - ")
-        ?.removePrefix("Up Next - ")
-        ?.trim()
-        ?.takeIf {
-            it.isNotBlank() &&
-                it != episodeLabel &&
-                it != item.title
         }
 
     val progress = item.progressPercent

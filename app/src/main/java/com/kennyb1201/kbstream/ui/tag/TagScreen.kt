@@ -441,7 +441,6 @@ private fun TagHeader(
                 val rotations = listOf(-10f, -5f, 3f, 7f, -3f)
                 val widths = listOf(66.dp, 76.dp, 96.dp, 76.dp, 66.dp)
                 val heights = listOf(99.dp, 114.dp, 144.dp, 114.dp, 99.dp)
-                val frontIndex = posterUrls.size / 2
                 posterUrls.take(5).forEachIndexed { index, url ->
                     val context = LocalContext.current
                     AsyncImage(

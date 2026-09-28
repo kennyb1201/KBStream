@@ -359,9 +359,6 @@ class MpvPlayerActivity : ComponentActivity() {
         "*/*"
     )
 
-    /** Where sidecar subtitles are copied; shared with the online downloads. */
-    private val subtitleCacheDirName = DiskSweep.SUBTITLE_DIR
-
     // --- External subtitles: the other half of the main player's SUBTITLES
     // picker ---------------------------------------------------------------
     private var externalSubtitleUri: Uri? = null

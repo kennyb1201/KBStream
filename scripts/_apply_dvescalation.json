@@ -1,8 +1,0 @@
-[
-  {
-    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
-    "old": "            if (decoderFailure) {\n                if (decoderFailureRetried) {",
-    "new": "            if (decoderFailure) {\n                // A DV session that has already spent its one strip retry has\n                // no ladder step left that can help it. The raw-extractor probe\n                // below addresses a URL whose extension lied about the\n                // CONTAINER; a Dolby Vision decoder refusing the stream is a\n                // verdict on the FORMAT, and that probe asks for the same\n                // component -- which is how this box turned one DV failure into\n                // a chain of identical rebuilds (Attempt 4: probing with raw\n                // extractor) without ever reaching the backup engine. Hand the\n                // session over instead: libmpv decodes the HDR10 base layer in\n                // software, which is what an external player does with the same\n                // file. handOffToMpv still refuses live TV, a DRM session and an\n                // ExoPlayer-only setting, and those keep the ladder below.\n                if (DvEscalation.handOffAfterStripRetry(\n                        stripRetrySpent = forceDvStripForSession,\n                        dvDecoderRefused = dvDecoderRefused\n                    ) &&\n                    handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)\n                ) {\n                    return\n                }\n                if (decoderFailureRetried) {",
-    "count": 1
-  }
-]

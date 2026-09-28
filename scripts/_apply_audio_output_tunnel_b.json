@@ -1,8 +1,0 @@
-[
-  {
-    "file": "app/src/main/java/com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt",
-    "old": "        // Tunneling is skipped outright when the FFmpeg audio decoder is\n        // preferred (see createPlayer), so that session's sink IS in the chain\n        // and its step is already audible.\n        if (AppPreferences.getAudioDecoder(this) == AppPreferences.AUDIO_DECODER_PREFER_APP) {\n            return\n        }\n        if (PlayerAudioTuning.isNeutral == wasNeutral) return",
-    "new": "        // Tunneling is skipped outright when the FFmpeg audio decoder is\n        // preferred (see createPlayer), so that session's sink IS in the chain\n        // and its step is already audible.\n        if (AppPreferences.getAudioDecoder(this) == AppPreferences.AUDIO_DECODER_PREFER_APP) {\n            return\n        }\n        // Same when the decode output mode is in force: createPlayer already\n        // keeps the PCM chain in the renderer path, so no rebuild is owed.\n        if (PlayerAudioTuning.requiresDecode(AppPreferences.getAudioOutput(this))) {\n            return\n        }\n        if (PlayerAudioTuning.isNeutral == wasNeutral) return",
-    "count": 1
-  }
-]
