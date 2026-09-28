@@ -7,6 +7,15 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("io.sentry.android.gradle")
+    id("org.jlleitschuh.gradle.ktlint")
+}
+
+// Dead-import check. The rule set is one rule wide (see .editorconfig), so
+// every finding this reports means exactly one thing - an import nothing
+// references - and `./gradlew ktlintFormat` removes it. It runs over the app
+// and test sources alike: an unused import in a test is the same junk.
+ktlint {
+    ignoreFailures.set(false)
 }
 
 val localProps = Properties()

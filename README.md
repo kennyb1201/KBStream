@@ -118,6 +118,20 @@ and the kids catalog invariants:
 CI (`.github/workflows/build.yml`) runs the tests, then builds the debug
 and signed release APKs on every push to `main`.
 
+## Linting
+
+```sh
+./gradlew ktlintCheck    # fails on an import nothing references
+./gradlew ktlintFormat   # removes them
+```
+
+Exactly one ktlint rule is enabled — unused imports (see `.editorconfig`).
+Everything else is off on purpose: this tree predates the formatter, so turning
+the rest on would either fail on day one or invite a whole-tree reformat nobody
+could review. The single rule is the one piece of junk the compiler accepts in
+silence, which is how several hundred of them accumulated before they were
+swept out by hand. CI runs `ktlintCheck` before the tests.
+
 ## Project layout
 
 ```

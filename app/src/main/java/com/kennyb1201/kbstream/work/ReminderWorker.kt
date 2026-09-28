@@ -10,7 +10,6 @@ import androidx.work.WorkerParameters
 import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
 import com.kennyb1201.kbstream.data.notifications.ReminderNotifier
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 

@@ -7,4 +7,7 @@ plugins {
     // Uploads the R8/ProGuard mapping file to Sentry on release builds so
     // minified stack traces (MainActivity.i etc.) arrive deobfuscated.
     id("io.sentry.android.gradle") version "5.12.1" apply false
+    // Kotlin lint, configured down to a single rule: see .editorconfig. It
+    // exists to stop dead imports accumulating, not to re-style the tree.
+    id("org.jlleitschuh.gradle.ktlint") version "12.1.1" apply false
 }

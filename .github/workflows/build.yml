@@ -251,6 +251,23 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
+      # Dead-import gate. The ktlint plugin is configured down to a single
+      # rule (unused imports - see .editorconfig and app/build.gradle.kts), so
+      # a failure here means exactly one thing: an import nothing references
+      # was left behind. The compiler accepts those silently, which is how
+      # several hundred accumulated before they were swept out by hand; this
+      # stops the next few hundred arriving. `./gradlew ktlintFormat` fixes a
+      # failure locally.
+      #
+      # It runs before the tests because it takes seconds rather than minutes,
+      # so a tidy-up failure costs the least time here - and because a
+      # prepublish gate that can fail on a release push is the only place it is
+      # guaranteed to be seen.
+      - name: Check for dead imports (ktlint)
+        run: ./gradlew ktlintCheck --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
+
       # Unit-test gate: run the JVM tests (KidsMode rating matrix, kids
       # catalog invariants) BEFORE spending time on the APK builds. A
       # red test fails the workflow with the HTML report attached.

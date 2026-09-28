@@ -1,0 +1,18 @@
+# ktlint configuration (see the ktlint plugin in build.gradle.kts).
+#
+# ONE rule is on: imports nothing references. Everything else stays off on
+# purpose. This tree predates the formatter by thousands of lines, and turning
+# the rest on would either fail the check on day one or invite a whole-tree
+# reformat that no one could review - neither of which is why this exists.
+#
+# What it protects: dead imports are the one kind of junk that accumulates
+# silently, because the compiler accepts them and nothing else looks. The
+# whole set was swept out by hand once (the sweep that produced this file);
+# this is what stops the next few hundred arriving.
+#
+# The android ruleset is disabled too: the ktlint plugin enables it for
+# Android projects, and its rules are not the one this check is for.
+[*.{kt,kts}]
+ktlint_standard = disabled
+ktlint_android = disabled
+ktlint_standard_no-unused-imports = enabled
