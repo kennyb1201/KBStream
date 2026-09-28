@@ -84,6 +84,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
+import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
@@ -152,6 +153,7 @@ fun GuideScreen(
     val resolvedGuideIds by viewModel.resolvedGuideChannelIds.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val isImportingGuide by viewModel.isImportingGuide.collectAsStateWithLifecycle()
+    val guideImport by viewModel.guideImport.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val guideError by viewModel.guideError.collectAsStateWithLifecycle()
     val playlistUrl by viewModel.playlistUrl.collectAsStateWithLifecycle()
@@ -798,6 +800,10 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             extraEpgUrls = extraEpgUrls,
             isLoading = isLoading,
             isImportingGuide = isImportingGuide,
+            guideImportLabel = GuideImportProgress.label(
+                state = guideImport,
+                nowMs = System.currentTimeMillis()
+            ),
             error = error,
             guideError = guideError,
             playlist = playlist,
@@ -1436,6 +1442,7 @@ private fun SetupPanel(
     extraEpgUrls: String,
     isLoading: Boolean,
     isImportingGuide: Boolean,
+    guideImportLabel: String,
     error: String?,
     guideError: String?,
     playlist: IptvPlaylist?,
@@ -1700,6 +1707,7 @@ private fun SetupPanel(
                     playlist = playlist,
                     channelCount = channelCount,
                     isImportingGuide = isImportingGuide,
+                    guideImportLabel = guideImportLabel,
                     extraEpgUrls = extraEpgUrls
                 )
             )
@@ -1900,6 +1908,7 @@ private fun buildSetupDiagnosticsText(
     playlist: IptvPlaylist?,
     channelCount: Int,
     isImportingGuide: Boolean,
+    guideImportLabel: String,
     extraEpgUrls: String = ""
 ): String {
     return buildList {
@@ -1908,7 +1917,11 @@ private fun buildSetupDiagnosticsText(
         val extraEpgCount = extraEpgUrls.split('\n', ';').count { it.isNotBlank() }
         if (extraEpgCount > 0) add("Extra EPG x$extraEpgCount")
         if (playlist != null) add("Channels $channelCount")
-        if (isImportingGuide) add("EPG importing")
+        if (guideImportLabel.isNotBlank()) {
+            add("EPG importing: $guideImportLabel")
+        } else if (isImportingGuide) {
+            add("EPG importing")
+        }
         if (playlistName.isNotBlank()) add("Name: $playlistName")
     }.joinToString("  •  ")
 }

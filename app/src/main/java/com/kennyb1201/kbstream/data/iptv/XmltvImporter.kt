@@ -124,11 +124,14 @@ class XmltvImporter(
         val b2 = bufferedInput.read()
         bufferedInput.reset()
 
-        xmlInput = if (b1 == GZIP_MAGIC_1 && b2 == GZIP_MAGIC_2) {
+        val decodedInput = if (b1 == GZIP_MAGIC_1 && b2 == GZIP_MAGIC_2) {
             GZIPInputStream(bufferedInput)
         } else {
             bufferedInput
         }
+        // Counts what the parser pulls, so the setup screen can show the guide
+        // arriving rather than merely claiming it is (see GuideImportProgress).
+        xmlInput = CountingInputStream(decodedInput)
 
         val factory = XmlPullParserFactory.newInstance().apply {
             isNamespaceAware = false
@@ -239,6 +242,10 @@ class XmltvImporter(
         // This is the single heaviest guide write (re-keying every imported
         // row), so it is the one most worth deferring past playback.
         EpgWriteGate.holdWhilePlaying()
+        // The one write nothing can report from inside: it is a single
+        // transaction, so on a large guide the screen would otherwise sit on
+        // the last parse count for a minute or more.
+        GuideImportProgress.phase(GuideImportPhase.SAVING)
         // Kept outside the try so the failure can be rethrown WITH the cause
         // (see the !swapped branch below).
         var swapFailure: Throwable? = null
@@ -315,11 +322,52 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         parsedPrograms: Int,
         keptPrograms: Int
     ) {
+        // The same numbers the log line carries, published for the screen: an
+        // import that is working and one that is wedged look identical from
+        // the outside, and this is what tells them apart.
+        GuideImportProgress.rows(parsedPrograms)
         Log.i(
             TAG,
             "IMPORT PROGRESS channels=$parsedChannels parsedPrograms=$parsedPrograms " +
                 "keptPrograms=$keptPrograms source=$sourceUrl"
         )
+    }
+
+    /**
+     * Wraps the guide stream and mirrors its running byte count into
+     * [GuideImportProgress] as the parser reads it, so the screen shows the
+     * download moving even before the first `<programme>` has been counted.
+     *
+     * Republished once per [BYTE_REPORT_INTERVAL] at most: the parser reads in
+     * small chunks, and a state write per chunk would cost more than the
+     * parsing it is reporting on.
+     */
+    private class CountingInputStream(
+        private val delegate: InputStream
+    ) : InputStream() {
+
+        private var total = 0L
+        private var reported = 0L
+
+        override fun read(): Int =
+            delegate.read().also { byte -> if (byte >= 0) count(1) }
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+            delegate.read(buffer, offset, length).also { read ->
+                if (read > 0) count(read)
+            }
+
+        override fun available(): Int = delegate.available()
+
+        override fun close() = delegate.close()
+
+        private fun count(delta: Int) {
+            total += delta
+            if (total - reported >= BYTE_REPORT_INTERVAL) {
+                reported = total
+                GuideImportProgress.bytes(total)
+            }
+        }
     }
 
     private fun readChannel(parser: XmlPullParser, sourceUrl: String): EpgChannelEntity? {
@@ -477,6 +525,9 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         const val MAX_DATE_PARSE_FAILURE_LOGS = 20
         const val GZIP_MAGIC_1 = 0x1f
         const val GZIP_MAGIC_2 = 0x8b
+
+        /** How much of the guide may pass before the count is republished. */
+        const val BYTE_REPORT_INTERVAL = 1_048_576L
 
         /**
          * How much of the schedule a default import keeps, on both sides of

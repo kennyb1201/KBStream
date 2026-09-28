@@ -193,4 +193,39 @@ class SearchBrowseCatalogKidsTest {
             missing.isEmpty()
         )
     }
+
+    // ── the kids/adult split of the studios list ─────────────────────────
+
+    @Test
+    fun `children's houses stay on the kids menu and off the standard strip`() {
+        // The 2026-09 curating pass took the anime houses and the regional
+        // film studios off the standard studios strip, and MOVED the
+        // children's houses to the kids list rather than deleting them: a kids
+        // studio the kids menu already carries belongs on the kids menu. Both
+        // halves are pinned, because either one alone is a regression — gone
+        // from the kids menu, or back on the adult strip.
+        val houses = listOf(
+            "Nelvana",
+            "WildBrain Studios",
+            "Cartoon Saloon",
+            "Titmouse",
+            "Reel FX Creative Studios",
+            "Animal Logic",
+            "Skydance Animation"
+        )
+
+        val kids = (KIDS_STUDIOS + KIDS_STUDIOS_EXTRA).map { it.name.trim() }
+        val missing = houses.filterNot { it in kids }
+        assertTrue(
+            "children's houses missing from the kids list: $missing",
+            missing.isEmpty()
+        )
+
+        val standard = BROWSE_STUDIOS.map { it.name.trim() }
+        val leaked = houses.filter { it in standard }
+        assertTrue(
+            "children's houses still on the standard studios strip: $leaked",
+            leaked.isEmpty()
+        )
+    }
 }

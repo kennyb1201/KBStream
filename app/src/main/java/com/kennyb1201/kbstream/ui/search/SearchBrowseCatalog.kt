@@ -670,21 +670,12 @@ val BROWSE_STUDIOS: List<BrowseEntry> = popularFirst(
     BrowseEntry(1645, "Scott Free Productions"),
     BrowseEntry(18, "Gracie Films"),
     BrowseEntry(7036, "CJ Entertainment"),
-    BrowseEntry(2073, "KADOKAWA"),
-    BrowseEntry(528, "Bandai Visual"),
     BrowseEntry(3153, "Sunrise"),
-    BrowseEntry(5438, "Kyoto Animation"),
     BrowseEntry(3464, "Madhouse"),
     BrowseEntry(5542, "Toei Animation"),
-    BrowseEntry(31058, "WIT STUDIO"),
-    BrowseEntry(21444, "MAPPA"),
-    BrowseEntry(5887, "ufotable"),
     BrowseEntry(13113, "A-1 Pictures"),
     BrowseEntry(2849, "Bones"), // TMDB canonical: BONES
-    BrowseEntry(529, "Production I.G"),
-    BrowseEntry(6689, "SHAFT"),
     BrowseEntry(50908, "Trigger"), // TMDB canonical: TRIGGER
-    BrowseEntry(3756, "CoMix Wave Films"),
     BrowseEntry(12292, "Temple Hill Entertainment"),
     BrowseEntry(5420, "Color Force"),
     BrowseEntry(6735, "Participant"),
@@ -702,9 +693,8 @@ val BROWSE_STUDIOS: List<BrowseEntry> = popularFirst(
     // to the canonical page instead (NEON 90733 over the 0-movie 307597,
     // StudioCanal 694 over 218178, Pathé 7981 over 209044, Gaumont 9 over
     // 276068, New Regency Pictures 10104, Zentropa Entertainments 76,
-    // Shochiku 192, Nikkatsu Corporation 955, Constantin Film 47,
-    // Nordisk Film 143164, Lotte Entertainment 7819, Huayi Brothers
-    // Pictures 3393, The Asylum 1311, WildBrain Studios 148496).
+    // Constantin Film 47, Huayi Brothers Pictures 3393, The Asylum 1311,
+    // WildBrain Studios 148496).
     // Skipped: Cannon Films / Sony Pictures Imageworks / Netflix Animation
     // / RLJE Films / Bleecker Street — no company page with a real slate.
     BrowseEntry(47729, "STXfilms"),
@@ -722,10 +712,7 @@ val BROWSE_STUDIOS: List<BrowseEntry> = popularFirst(
     BrowseEntry(6626, "Voltage Pictures"),
     BrowseEntry(6896, "EuropaCorp"),
     BrowseEntry(47, "Constantin Film"),
-    BrowseEntry(143164, "Nordisk Film"),
     BrowseEntry(76, "Zentropa Entertainments"),
-    BrowseEntry(192, "Shochiku"),
-    BrowseEntry(955, "Nikkatsu Corporation"),
     BrowseEntry(1311, "The Asylum"),
     BrowseEntry(9118, "Samuel Goldwyn Films"),
     BrowseEntry(10210, "Morgan Creek Entertainment"),
@@ -737,21 +724,28 @@ val BROWSE_STUDIOS: List<BrowseEntry> = popularFirst(
     BrowseEntry(2481, "Platinum Dunes"),
     BrowseEntry(2061, "Twisted Pictures"),
     BrowseEntry(829, "Vertigo Entertainment"),
-    BrowseEntry(7164, "TMS Entertainment"),
-    BrowseEntry(5372, "OLM"),
-    BrowseEntry(1023, "Nelvana"),
-    BrowseEntry(148496, "WildBrain Studios"),
-    BrowseEntry(4152, "Titmouse"),
-    BrowseEntry(23948, "Cartoon Saloon"),
-    BrowseEntry(2787, "Reel FX Creative Studios"),
-    BrowseEntry(8089, "Animal Logic"),
-    BrowseEntry(179999, "Skydance Animation"),
-    BrowseEntry(1569, "Yash Raj Films"),
-    BrowseEntry(19146, "Dharma Productions"),
-    BrowseEntry(3522, "T-Series"),
-    BrowseEntry(7819, "Lotte Entertainment"),
     BrowseEntry(3491, "Showbox"),
     BrowseEntry(3393, "Huayi Brothers Pictures")
+
+    // Removed (2026-09) on request — these catalogue pages are not wanted in
+    // this list: KADOKAWA 2073, Bandai Visual 528, Kyoto Animation 5438,
+    // WIT STUDIO 31058, MAPPA 21444, ufotable 5887, Production I.G 529,
+    // SHAFT 6689, CoMix Wave Films 3756, TMS Entertainment 7164, OLM 5372,
+    // Nelvana 1023, Shochiku 192, Nikkatsu Corporation 955, Nordisk Film
+    // 143164, Yash Raj Films 1569, Dharma Productions 19146, T-Series 3522,
+    // Lotte Entertainment 7819. The ids stay on record so a later curation
+    // pass does not quietly re-add them by name.
+    //
+    // Nelvana 1023 is listed above as removed, but it was never a deletion:
+    // it is one of the children's houses that MOVED to the kids list.
+    //
+    // Moved to the KIDS list (2026-09) — children's animation houses the kids
+    // menu already offers, so they belong there rather than on the standard
+    // strip. Their entries here went; their KIDS_STUDIOS_EXTRA entries stayed:
+    // Nelvana 1023, WildBrain Studios 148496, Cartoon Saloon 23948, Titmouse
+    // 4152, Reel FX Creative Studios 2787, Animal Logic 8089, Skydance
+    // Animation 179999. Curating this list never reaches across into the kids
+    // list — a kids studio the kids menu carries stays on the kids menu.
     ),
     name = { it.name },
     popular = POPULAR_STUDIOS_ORDER

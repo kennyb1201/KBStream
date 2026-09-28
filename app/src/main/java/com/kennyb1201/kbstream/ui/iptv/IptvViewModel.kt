@@ -16,6 +16,8 @@ import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
 import com.kennyb1201.kbstream.data.iptv.EpgWindow
+import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
+import com.kennyb1201.kbstream.data.iptv.GuideImportState
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideWindowFingerprint
 import com.kennyb1201.kbstream.data.reporting.Redaction
@@ -120,6 +122,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _isImportingGuide = MutableStateFlow(false)
     val isImportingGuide: StateFlow<Boolean> = _isImportingGuide.asStateFlow()
+
+    /**
+     * How far the guide import has got, for the setup screen's status line.
+     * Null whenever nothing is importing — see [GuideImportProgress].
+     */
+    val guideImport: StateFlow<GuideImportState?> = GuideImportProgress.state
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -922,10 +930,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         _isImportingGuide.value = true
         _guideError.value = null
         val urls = allEpgUrls()
+        GuideImportProgress.begin(sourceCount = urls.size)
         try {
             var lastError: Throwable? = null
             var imported = 0
             for (url in urls) {
+                GuideImportProgress.startSource(imported + 1)
                 try {
                     importGuideSource(url)
                     imported++
@@ -965,6 +975,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             Log.e(TAG, "GUIDE IMPORT FAILED", t)
         } finally {
             _isImportingGuide.value = false
+            GuideImportProgress.finish()
         }
     }
 

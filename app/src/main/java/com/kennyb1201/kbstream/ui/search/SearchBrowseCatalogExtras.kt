@@ -88,7 +88,15 @@ val KIDS_SERVICES_EXTRA_ENTRIES: List<BrowseEntry> = KIDS_SERVICES_EXTRA.map { s
     )
 }
 
-/** Kid-friendly studios added after the main catalog's kids list. */
+/**
+ * Kid-friendly studios added after the main catalog's kids list.
+ *
+ * These are the children's houses the standard studios strip no longer
+ * carries: the 2026-09 curating pass MOVED them here rather than deleting
+ * them, because a kids studio the kids menu already offers belongs on the kids
+ * menu and not on the standard strip. Nelvana is the one the standard list
+ * also names in its removed block — it moved for the same reason.
+ */
 val KIDS_STUDIOS_EXTRA: List<BrowseEntry> = listOf(
     BrowseEntry(1023, "Nelvana"),
     BrowseEntry(148496, "WildBrain Studios"),
