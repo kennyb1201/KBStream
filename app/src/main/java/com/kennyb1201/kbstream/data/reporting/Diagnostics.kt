@@ -77,6 +77,7 @@ object Diagnostics {
         // the perf summary's ranking below is most likely to crowd out.
         startupLine()?.let { report.appendLine(it) }
         playbackLine()?.let { report.appendLine(it) }
+        trickplayLine()?.let { report.appendLine(it) }
         // Where the time goes: startup + per-service HTTP + home refresh, with
         // the slowest samples named. Empty on a session that recorded nothing.
         PerfTrace.summary().takeIf { it.isNotEmpty() }?.let { perf ->
@@ -198,6 +199,34 @@ object Diagnostics {
                 append("/").append(PerfTrace.maxMs("playback.stall")).append("ms worst")
             }
             append(" rebuilds=").append(rebuilds)
+        }
+    }
+
+    /**
+     * What the scrub previews did, on a session that ever asked for one.
+     *
+     * "I never see a thumbnail when I scrub" has two very different owners: no
+     * preview was ever asked for - in which case this line is absent from the
+     * report entirely, which is itself the answer - or one was asked for and
+     * never came back. The second decoder a preview needs is the thing TV boxes
+     * run out of first, and the pipeline stops asking after two failures rather
+     * than competing with the video for a codec, so `off` says the session gave
+     * up and `failed` says how often. `slowest` separates a frame that was worth
+     * the wait from one that arrived too late to be shown.
+     */
+    private fun trickplayLine(): String? {
+        val decoded = PerfTrace.count("trickplay.decode")
+        val missed = PerfTrace.count("trickplay.miss")
+        if (decoded == 0 && missed == 0) return null
+        return buildString {
+            append("trickplay: frames=").append(decoded)
+            append(" failed=").append(missed)
+            if (decoded > 0) {
+                append(" slowest=").append(PerfTrace.maxMs("trickplay.decode")).append("ms")
+            }
+            if (PerfTrace.count("trickplay.off") > 0) {
+                append(" · off for this session (no decoder to spare)")
+            }
         }
     }
 

@@ -7,6 +7,7 @@ import android.media.Image
 import android.media.ImageReader
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -18,6 +19,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -86,6 +88,9 @@ internal class TrickplayFrames(
     /** True between asking the player for a position and either frame or failure. */
     private var awaitingFrame = false
 
+    /** Uptime when the extraction now in flight was asked for, for its latency. */
+    private var askedAtMs = 0L
+
     private var failures = 0
     private var disabled = false
     private var released = false
@@ -138,6 +143,7 @@ internal class TrickplayFrames(
         if (cache.get(bucket) != null) return
         inFlightBucket = bucket
         awaitingFrame = true
+        askedAtMs = SystemClock.uptimeMillis()
         val player = runCatching { preview ?: buildPreview().also { preview = it } }
             .getOrElse { error ->
                 fail(bucket, "could not build the preview player: ${error.message}")
@@ -270,6 +276,11 @@ internal class TrickplayFrames(
         awaitingFrame = false
         inFlightBucket = null
         handler.removeCallbacks(timeoutRunnable)
+        // Into the diagnostics trace as well as onto the screen: "I never see a
+        // thumbnail" is answered differently by "none was ever decoded" and
+        // "they were decoded and never shown", and neither is visible from the
+        // outside of the app.
+        PerfTrace.record("trickplay.decode", SystemClock.uptimeMillis() - askedAtMs)
         // A frame is proof the second decoder exists and works, so whatever
         // failed earlier was transient and the budget starts over.
         failures = 0
@@ -295,9 +306,15 @@ internal class TrickplayFrames(
         inFlightBucket = null
         handler.removeCallbacks(timeoutRunnable)
         failures++
+        PerfTrace.record(
+            "trickplay.miss",
+            SystemClock.uptimeMillis() - askedAtMs,
+            ok = false
+        )
         Log.w(TAG, "no preview frame: $reason (failure $failures of $TRICKPLAY_MAX_FAILURES)")
         if (trickplayGivesUp(failures)) {
             Log.i(TAG, "scrub previews off for this session: no decoder to spare")
+            PerfTrace.record("trickplay.off", 0L, ok = false)
             disabled = true
             teardown()
             return

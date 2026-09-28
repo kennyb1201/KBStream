@@ -79,6 +79,23 @@ internal const val TRICKPLAY_MAX_FAILURES = 2
 internal const val TRICKPLAY_IDLE_RELEASE_MS = 5_000L
 
 /**
+ * How long a frame that arrives after the viewer let go of the button is still
+ * the one they asked for.
+ *
+ * Scrubbing with a remote is a series of presses, not a drag, and a preview
+ * frame is not ready the instant one lands: the first has to build a second
+ * player and fill its buffer, so it arrives a second or more after the press
+ * that asked for it. Tying the card to the press - taking it away the moment
+ * the key came up - therefore dropped every frame a press-and-release scrub
+ * ever asked for, which is all of them. Three seconds covers the build plus the
+ * fill; a frame slower than that is still cached under the position it belongs
+ * to (dragging back over the same ground stays free) but is no longer put on
+ * screen, because a thumbnail that appears five seconds after the press reads
+ * as a glitch rather than as an answer.
+ */
+internal const val TRICKPLAY_SHOW_GRACE_MS = 3_000L
+
+/**
  * The bucket [positionMs] belongs to.
  *
  * Floored, not rounded: the bucket is also the position handed to the decoder,

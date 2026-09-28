@@ -303,8 +303,23 @@ class MpvPlayerActivity : ComponentActivity() {
     /** The view the card tracks, when the frame being asked for has one. */
     private var trickplayAnchorView: View? = null
 
-    /** True while a scrub is in progress, so a late frame is not shown after it. */
+    /**
+     * Whether a decoded frame is still worth putting on screen.
+     *
+     * A flag with a timer behind it rather than "is a scrub in progress": the
+     * frame for the position just scrubbed to is usually still being decoded when
+     * the key comes up (see [TRICKPLAY_SHOW_GRACE_MS]), so a flag cleared on the
+     * key release dropped every frame a press-and-release scrub had asked for.
+     * Armed by each request, cleared by [trickplayCardHider] once the viewer has
+     * genuinely stopped.
+     */
     private var trickplayWanted = false
+
+    /** Clears [trickplayWanted] and takes the card away, on its own timer. */
+    private val trickplayCardHider = Runnable {
+        trickplayWanted = false
+        trickplayOverlay?.hide()
+    }
 
     // --- Audio tuning: the main player's AUDIO section, on this engine -----
     //
@@ -1216,6 +1231,27 @@ class MpvPlayerActivity : ComponentActivity() {
     // --- Scrub previews -------------------------------------------------------
 
     /**
+     * One seek press with the overlay down: the jump itself, then the preview for
+     * the position it lands on.
+     *
+     * The preview has to be asked for here rather than from the seek bar, because
+     * nothing moves the bar until the overlay is up and its listener only ever
+     * sees a drag - which is why a remote-only scrub showed no thumbnails on this
+     * engine and on the main one alike. The bar is the anchor because that same
+     * press brings the overlay up, and the card resolves where it sits when the
+     * frame arrives (see TrickplayOverlay).
+     */
+    private fun seekStepBy(deltaMs: Long) {
+        val from = runCatching { surface?.positionMs() ?: positionMs }.getOrDefault(positionMs)
+        surface?.seekBy(deltaMs)
+        requestTrickplayFrame(
+            posMs = (from + deltaMs).coerceIn(0L, durationMs.coerceAtLeast(0L)),
+            anchorView = seekBar
+        )
+        endTrickplayScrub()
+    }
+
+    /**
      * Asks for the decoded frame covering [posMs] — the position the seek bar has
      * been dragged to — and notes [anchorView] for the card to centre itself over
      * when the frame arrives.
@@ -1233,6 +1269,10 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun requestTrickplayFrame(posMs: Long, anchorView: View?) {
         if (durationMs <= 0L || currentUrl.isBlank()) return
         trickplayWanted = true
+        // Re-armed by every press, so a held scrub keeps the card up and a
+        // released one keeps it for the grace window only.
+        handler.removeCallbacks(trickplayCardHider)
+        handler.postDelayed(trickplayCardHider, TRICKPLAY_SHOW_GRACE_MS)
         trickplayAnchorView = anchorView
         val frames = trickplay ?: TrickplayFrames(
             activity = this,
@@ -1250,19 +1290,23 @@ class MpvPlayerActivity : ComponentActivity() {
         trickplayOverlay ?: TrickplayOverlay(this).also { trickplayOverlay = it }
 
     /**
-     * The scrub is over. The card goes at once; the decoder behind it is given
-     * back a few seconds later, so the next press of the same scrub does not pay
-     * for a new player and a new connection (see [TrickplayFrames.idle]).
+     * The scrub is over: the decoder behind the card is given back a few seconds
+     * later, so the next press of the same scrub does not pay for a new player
+     * and a new connection (see [TrickplayFrames.idle]).
+     *
+     * The card itself is deliberately NOT taken away here. The frame for the
+     * position just scrubbed to is usually still being decoded, and hiding on the
+     * key release is what made a press-and-release scrub show nothing at all;
+     * [trickplayCardHider] takes it away when the grace window ends.
      */
     private fun endTrickplayScrub() {
-        trickplayWanted = false
-        trickplayOverlay?.hide()
         trickplay?.idle()
     }
 
     /** Hides the card and gives the preview decoder back now (leaving the screen). */
     private fun stopTrickplay() {
         trickplayWanted = false
+        handler.removeCallbacks(trickplayCardHider)
         trickplayOverlay?.hide()
         trickplay?.release()
         trickplay = null
@@ -3227,12 +3271,12 @@ class MpvPlayerActivity : ComponentActivity() {
         if (event.action == KeyEvent.ACTION_DOWN && errorContainer?.visibility != View.VISIBLE) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MEDIA_REWIND -> {
-                    surface?.seekBy(-SEEK_STEP_MS)
+                    seekStepBy(-SEEK_STEP_MS)
                     return true
                 }
 
                 KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
-                    surface?.seekBy(SEEK_STEP_MS)
+                    seekStepBy(SEEK_STEP_MS)
                     return true
                 }
 
@@ -3257,7 +3301,7 @@ class MpvPlayerActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_DPAD_LEFT,
                 KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     if (!controlsVisible) {
-                        surface?.seekBy(
+                        seekStepBy(
                             if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
                                 -SEEK_STEP_MS
                             } else {

@@ -3431,6 +3431,7 @@ class NativePlayerActivity : ComponentActivity() {
                             scrubHandler.removeCallbacks(scrubHoldStarter)
                             scrubHandler.removeCallbacks(scrubRunnable)
                             commitSeekFromBar()
+                            endTrickplayScrub()
                             scheduleAutoHide()
                             true
                         }
@@ -3939,8 +3940,23 @@ class NativePlayerActivity : ComponentActivity() {
     /** The view the card tracks, when the frame being asked for has one. */
     private var trickplayAnchorView: View? = null
 
-    /** True while a scrub is in progress, so a late frame is not shown after it. */
+    /**
+     * Whether a decoded frame is still worth putting on screen.
+     *
+     * A flag with a timer behind it rather than "is a scrub in progress": the
+     * frame for the position just scrubbed to is usually still being decoded
+     * when the key comes up (see [TRICKPLAY_SHOW_GRACE_MS]), so a flag cleared on
+     * the key release dropped every frame a press-and-release scrub had asked
+     * for. Armed by each request, cleared by [trickplayCardHider] once the viewer
+     * has genuinely stopped.
+     */
     private var trickplayWanted = false
+
+    /** Clears [trickplayWanted] and takes the card away, on its own timer. */
+    private val trickplayCardHider = Runnable {
+        trickplayWanted = false
+        trickplayOverlay?.hide()
+    }
 
     private fun ensureScrubHint(): TextView {
         surfaceScrubHint?.let { return it }
@@ -3983,10 +3999,9 @@ class NativePlayerActivity : ComponentActivity() {
         }
         tv.visibility = View.VISIBLE
         scrubHintHandler.removeCallbacks(scrubHintHider)
-        // The overlay is down, so the card is the only thing that can show where
-        // the press landed. No anchor: the bubble is centred, and so is the card
-        // above it.
-        requestTrickplayFrame(pos, anchorView = null)
+        // The preview card is not asked for from here: every press that moves
+        // this bubble's position goes through updateSeekBarPosition, which is
+        // where the request lives now (see trickplayAnchor).
     }
 
     private fun scheduleScrubHintHide() {
@@ -4019,6 +4034,10 @@ class NativePlayerActivity : ComponentActivity() {
         if (isLiveChannel || currentUrl.isBlank()) return
         val duration = exoPlayer?.duration?.takeIf { it > 0 } ?: return
         trickplayWanted = true
+        // Re-armed by every press, so a held scrub keeps the card up and a
+        // released one keeps it for the grace window only.
+        handler.removeCallbacks(trickplayCardHider)
+        handler.postDelayed(trickplayCardHider, TRICKPLAY_SHOW_GRACE_MS)
         trickplayAnchorView = anchorView
         val frames = trickplay ?: TrickplayFrames(
             activity = this,
@@ -4040,19 +4059,23 @@ class NativePlayerActivity : ComponentActivity() {
         trickplayOverlay ?: TrickplayOverlay(this).also { trickplayOverlay = it }
 
     /**
-     * The scrub is over. The card goes at once; the decoder behind it is given
-     * back a few seconds later, so the next press of the same scrub does not pay
-     * for a new player and a new connection (see [TrickplayFrames.idle]).
+     * The scrub is over: the decoder behind the card is given back a few seconds
+     * later, so the next press of the same scrub does not pay for a new player
+     * and a new connection (see [TrickplayFrames.idle]).
+     *
+     * The card itself is deliberately NOT taken away here. The frame for the
+     * position just scrubbed to is usually still being decoded, and hiding on the
+     * key release is what made a press-and-release scrub show nothing at all;
+     * [trickplayCardHider] takes it away when the grace window ends.
      */
     private fun endTrickplayScrub() {
-        trickplayWanted = false
-        trickplayOverlay?.hide()
         trickplay?.idle()
     }
 
     /** Hides the card and gives the preview decoder back now (leaving the screen). */
     private fun stopTrickplay() {
         trickplayWanted = false
+        handler.removeCallbacks(trickplayCardHider)
         trickplayOverlay?.hide()
         trickplay?.release()
         trickplay = null
@@ -4108,6 +4131,10 @@ class NativePlayerActivity : ComponentActivity() {
         scrubHandler.removeCallbacks(scrubRunnable)
         scrubHintHandler.removeCallbacks(scrubHintHider)
         surfaceScrubHint?.visibility = View.GONE
+        // The scrub is over for good here (the overlay is coming up, or the
+        // activity is leaving), so the preview player is told to stand down too.
+        // The card goes on its own timer.
+        endTrickplayScrub()
     }
 
     // --- Player Creation ---
@@ -6431,7 +6458,22 @@ class NativePlayerActivity : ComponentActivity() {
         if (changed) languagesAutoSelected = true
     }
 
+    /**
+     * The view the preview card should track for the scrub that is running: the
+     * seek bar's thumb while the overlay is up, and nothing when it is not (the
+     * overlay-less scrub, where the bar is not on screen to track and the card
+     * sits centred over the position bubble instead).
+     */
+    private fun trickplayAnchor(): View? = if (controlsVisible) seekbar else null
+
     private fun updateSeekBarPosition(posMs: Long, durationMs: Long) {
+        // Every scrub that moves the position lands here - the 10-second step,
+        // the held accelerated scrub, and both of them whether they came from the
+        // seek bar or from the video surface with the overlay down - so this is
+        // where the preview is asked for. The bar's own onProgressChanged only
+        // fires for a touch drag, and a TV remote never drags: that is why
+        // scrubbing with the remote showed no previews however long it went on.
+        requestTrickplayFrame(posMs, anchorView = trickplayAnchor())
         if (durationMs > 0) {
             seekbar.progress = ((posMs * 10_000L) / durationMs).toInt().coerceIn(0, 10_000)
             currentTime.text = formatMillis(posMs)
