@@ -86,8 +86,10 @@ internal fun guideFilesToDelete(
  * Diagnostics on the field TV reports 1.34 GB of app data with ~980 MB of it in
  * four `iptv_epg.db` files — one per profile, plus the legacy global one, at
  * 456 / 271 / 173 / 82 MB. Every other store on that device is capped by
- * design: the player's read-ahead cache at 256 MB, Coil's posters at 2% of
- * usable storage, and the TMDB JSON cache at 64 MB (see
+ * design: the player's read-ahead cache at a share of the free space (a fixed
+ * 256 MB when that report was taken — see
+ * [com.kennyb1201.kbstream.data.player.StreamDiskCache]), Coil's posters at 2%
+ * of usable storage, and the TMDB JSON cache at 64 MB (see
  * [com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance]). The guide had
  * no ceiling, no age sweep and no reclaim at all, and it is the one store that
  * is *replaced* wholesale on every refresh — a guide that shrank (a channel

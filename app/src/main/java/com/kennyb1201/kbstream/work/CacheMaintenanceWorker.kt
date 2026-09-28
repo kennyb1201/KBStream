@@ -14,6 +14,7 @@ import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.iptv.GuideStorage
+import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.update.AppUpdater
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -21,7 +22,8 @@ import kotlinx.coroutines.CancellationException
 /**
  * Every periodic disk cleanup in one place: bounds the TMDB JSON cache, hands
  * the database files their space back, sweeps the caches that grow by file
- * COUNT rather than by bytes, and bounds the IPTV guides.
+ * COUNT rather than by bytes, reclaims the player's read-ahead cache when its
+ * budget has moved out from under it, and bounds the IPTV guides.
  *
  * The guides are the largest store the app owns — four of them (one per
  * profile, plus the legacy global file) accounted for ~980 MB of the 1.34 GB
@@ -54,6 +56,11 @@ class CacheMaintenanceWorker(
             // imports that were picked and then abandoned.
             val subtitles = DiskSweep.sweepSubtitleCache(applicationContext)
             val avatars = DiskSweep.sweepPendingAvatars(applicationContext)
+            // The player's read-ahead cache, when an earlier budget left it
+            // larger than the one its free space allows now. Its LRU evictor
+            // only evicts while a stream is being written into it, so without
+            // this an oversized cache would survive until a long playback.
+            val streamCache = StreamDiskCache.sweepIfOversized(applicationContext)
             // The guides: whole files nothing can read again (the legacy global
             // one, and a profile's guide left idle past the sweep window),
             // then a prune plus the VACUUM that hands a shrunken guide's free
@@ -67,7 +74,7 @@ class CacheMaintenanceWorker(
                 "maintenance done: agedOut=${trim.agedOut} evicted=${trim.evicted} " +
                     "left=${trim.rows} row(s) / ${trim.bytes / 1_048_576} MB, " +
                     "reclaimed=$reclaimed subtitles=$subtitles avatars=$avatars " +
-                    "stagedApk=$stagedApk"
+                    "streamCache=${streamCache / 1_048_576}MB stagedApk=$stagedApk"
             )
             Log.i(
                 TAG,

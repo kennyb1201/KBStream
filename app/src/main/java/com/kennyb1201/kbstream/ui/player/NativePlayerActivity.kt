@@ -77,6 +77,7 @@ import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -4223,7 +4224,7 @@ class NativePlayerActivity : ComponentActivity() {
                 httpOrYoutubeFactory
             } else {
                 androidx.media3.datasource.cache.CacheDataSource.Factory()
-                    .setCache(streamDiskCache(this))
+                    .setCache(StreamDiskCache.get(this))
                     .setUpstreamDataSourceFactory(httpOrYoutubeFactory)
                     .setFlags(
                         androidx.media3.datasource.cache.CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR
@@ -9091,30 +9092,6 @@ class NativePlayerActivity : ComponentActivity() {
 }
 
 // --- Utility Functions (shared with Compose path) ---
-
-/**
- * Process-wide disk cache backing the player's read-ahead.
- *
- * SimpleCache must be a singleton per directory -- a second instance opened
- * on the same folder throws -- and the player Activity is recreated while
- * playback continues, so the instance is held here rather than per-Activity.
- * An LRU evictor keeps a nearly-full device from growing it without bound.
- */
-private var streamCacheSingleton: androidx.media3.datasource.cache.SimpleCache? = null
-private val streamCacheLock = Any()
-
-internal fun streamDiskCache(context: Context): androidx.media3.datasource.cache.SimpleCache {
-    synchronized(streamCacheLock) {
-        streamCacheSingleton?.let { return it }
-        val cache = androidx.media3.datasource.cache.SimpleCache(
-            java.io.File(context.cacheDir, "media_cache"),
-            androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor(256L * 1024 * 1024),
-            androidx.media3.database.StandaloneDatabaseProvider(context)
-        )
-        streamCacheSingleton = cache
-        return cache
-    }
-}
 
 private fun resolveMimeType(url: String): String? {
     val lower = url.lowercase()
