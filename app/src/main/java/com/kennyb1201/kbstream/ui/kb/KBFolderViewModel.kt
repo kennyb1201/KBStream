@@ -18,18 +18,18 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
-import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
-import com.kennyb1201.kbstream.data.tmdb.cardBackdropPath
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import com.kennyb1201.kbstream.data.tmdb.displayRating
 import com.kennyb1201.kbstream.data.tmdb.displayRuntime
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
-import com.kennyb1201.kbstream.ui.home.landscapeArtKey
+import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
+import com.kennyb1201.kbstream.ui.components.landscapeArtFor
+import com.kennyb1201.kbstream.ui.components.landscapeArtKey
+import com.kennyb1201.kbstream.ui.components.landscapeArtUrls
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -360,64 +360,56 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         if (items.isEmpty()) return
 
         viewModelScope.launch {
-            val resolved = supervisorScope {
-                items.map { item ->
-                    async {
-                        // Filed under the key the layouts read no matter what
-                        // the type is: an item that never lands in this map is
-                        // re-attempted on every rails change, which is the one
-                        // thing the map exists to prevent.
-                        val key = landscapeArtKey(item.type, item.id)
-
-                        val type = kbArtworkLookupType(item.type)
-                            ?: return@async key to HeroArtwork(
-                                backdropUrl = null,
-                                logoUrl = null
-                            )
-
-                        // Home's exact lookup path: numeric id = TMDB id,
-                        // "tt…" = imdb id — so addon rails get TMDB art too.
-                        val detail = runCatching {
-                            landscapeArtSemaphore.withPermit {
-                                tmdbRepository.fetchEnrichedMetaCached(
-                                    item.id,
-                                    type
-                                )
-                            }
-                        }.getOrNull()
-
-                        // Card backdrop prefers an ALTERNATE TMDB image so
-                        // cards don't mirror the hero's primary backdrop;
-                        // the item's own background (same image the hero
-                        // shows) stays as fallback. The clearlogo comes
-                        // from TMDB's best logo. Same merge rules as
-                        // HomeViewModel.resolveLandscapeArt's regular
-                        // (non-pinned) rails.
-                        val tmdbBackdrop = detail?.cardBackdropPath()
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { TmdbRepository.BACKDROP_BASE + it }
-                        val tmdbLogo = detail?.bestLogoPath()
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { TmdbRepository.LOGO_BASE + it }
-
-                        // The entry always lands in the map (even all-null)
-                        // so appended pages don't re-resolve. The repository
-                        // does NOT cache a miss - see fetchEnrichedMetaCached,
-                        // where a pinned null would stop the Detail screen ever
-                        // retrying - so this map is the only thing that
-                        // remembers one.
-                        key to HeroArtwork(
-                            backdropUrl = tmdbBackdrop ?: item.backdropUrl,
-                            logoUrl = tmdbLogo
-                        )
-                    }
-                }.awaitAll()
-            }.filterNotNull()
+            // Resolved through the shared vocabulary the Home rails use (see
+            // ui/components/LandscapeArt.kt): one key, one merge rule, one
+            // implementation. What is the folder screen's own is the lookup
+            // below it.
+            val resolved = landscapeArtFor(
+                requests = items.map { item ->
+                    LandscapeArtRequest(
+                        id = item.id,
+                        type = item.type,
+                        addonBackdrop = item.backdropUrl
+                    )
+                },
+                tmdbArtOf = { request -> folderLandscapeArt(request) }
+            ).mapValues { (_, art) ->
+                HeroArtwork(
+                    backdropUrl = art.first,
+                    logoUrl = art.second
+                )
+            }
 
             if (resolved.isNotEmpty()) {
-                _landscapeArt.value = _landscapeArt.value + resolved.toMap()
+                _landscapeArt.value = _landscapeArt.value + resolved
             }
         }
+    }
+
+    /**
+     * The TMDB artwork for one folder item, or a pair of nulls when its type is
+     * not one TMDB can answer for (see [kbArtworkLookupType]).
+     *
+     * Returning nulls rather than skipping the item is the point: the caller
+     * files an entry for it either way, and that entry is what stops the same
+     * fruitless item being re-attempted on every rails change.
+     */
+    private suspend fun folderLandscapeArt(
+        request: LandscapeArtRequest
+    ): Pair<String?, String?> {
+
+        val type = kbArtworkLookupType(request.type)
+            ?: return null to null
+
+        // Home's exact lookup path: numeric id = TMDB id, "tt…" = imdb id - so
+        // add-on rails get TMDB art too.
+        val detail = runCatching {
+            landscapeArtSemaphore.withPermit {
+                tmdbRepository.fetchEnrichedMetaCached(request.id, type)
+            }
+        }.getOrNull()
+
+        return detail.landscapeArtUrls()
     }
 
     // Only TMDB-backed rails (discover / list) paginate; addon sources render

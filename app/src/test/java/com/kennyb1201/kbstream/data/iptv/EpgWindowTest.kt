@@ -1,5 +1,8 @@
 package com.kennyb1201.kbstream.data.iptv
 
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -12,6 +15,10 @@ import org.junit.Test
  * 1.34 GB of data. These assertions state the relationship rather than the
  * values, so raising the guide's read window (or the refresh cadence) fails
  * here instead of silently going back to storing a schedule nobody can open.
+ *
+ * The last group is the same rule applied to a single row: [EpgWindow] also
+ * decides how much of a programme's description is worth storing, against what
+ * the three screens that draw one can show.
  */
 class EpgWindowTest {
 
@@ -68,5 +75,81 @@ class EpgWindowTest {
             "REFRESH_INTERVAL_MS must be REFRESH_INTERVAL_HOURS hours",
             EpgWindow.REFRESH_INTERVAL_MS == EpgWindow.REFRESH_INTERVAL_HOURS * hour
         )
+    }
+
+    // ---- what a single stored row is worth -------------------------------
+
+    /** A description no screen could finish drawing is stored whole. */
+    @Test
+    fun aDescriptionShortEnoughToDrawIsStoredWhole() {
+        val text = "A detective investigates a disappearance in a coastal town."
+        assertEquals(text, epgDescriptionForStorage(text))
+        assertEquals(
+            text,
+            epgDescriptionForStorage("  $text\n")
+        )
+    }
+
+    /** Blank is nothing, not an empty string: the columns and the UI both
+     *  treat "no description" and "an empty one" the same way, and only one of
+     *  them is worth a row. */
+    @Test
+    fun blankDescriptionsAreStoredAsNothing() {
+        assertNull(epgDescriptionForStorage(null))
+        assertNull(epgDescriptionForStorage(""))
+        assertNull(epgDescriptionForStorage("   \n\t "))
+    }
+
+    /**
+     * The clip lands beyond anything any screen could have drawn, which is the
+     * whole point: a description is the largest column in the guide and it was
+     * stored at whatever length the provider wrote.
+     */
+    @Test
+    fun theClipClearsTheWidestScreenWithHeadroom() {
+        assertTrue(
+            "stored ${EpgWindow.MAX_DESCRIPTION_CHARS} chars against the widest " +
+                "${EpgWindow.DISPLAY_CLAMP_CHARS} chars any screen draws",
+            EpgWindow.MAX_DESCRIPTION_CHARS > EpgWindow.DISPLAY_CLAMP_CHARS
+        )
+        assertTrue(
+            "headroom must not be so thin that the cut lands inside text the " +
+                "guide would have shown",
+            EpgWindow.MAX_DESCRIPTION_CHARS >= (EpgWindow.DISPLAY_CLAMP_CHARS * 3) / 2
+        )
+    }
+
+    /**
+     * ...and where it lands is a real, visible edge: exactly the cap, ending in
+     * an ellipsis so a clipped description reads as clipped rather than as the
+     * provider's own text.
+     */
+    @Test
+    fun aLongDescriptionIsClippedToTheCapWithAnEllipsis() {
+        val stored = epgDescriptionForStorage("The quiet town of " + "a".repeat(600))!!
+
+        assertEquals(EpgWindow.MAX_DESCRIPTION_CHARS, stored.length)
+        assertTrue(stored.endsWith("…"))
+        // No space left dangling before the ellipsis - the maintenance pass
+        // rtrims for the same reason (see GuideStorage.trimDescriptions).
+        assertFalse(stored.contains(" …"))
+    }
+
+    /**
+     * The clip is character-safe. Kotlin's `take` counts UTF-16 units, so a cut
+     * could land between the halves of a surrogate pair; a lone surrogate cannot
+     * be encoded and would reach SQLite as U+FFFD. (The maintenance pass, which
+     * clips in SQL, is safe by construction - SQLite's `substr` counts
+     * characters - so this is the branch that needed the guard.)
+     */
+    @Test
+    fun theClipNeverCutsASurrogatePairInHalf() {
+        val stored = epgDescriptionForStorage("🎬".repeat(300))!!
+
+        assertFalse(
+            "the character before the ellipsis must not be half a pair",
+            stored[stored.length - 2].isHighSurrogate()
+        )
+        assertTrue(stored.endsWith("…"))
     }
 }

@@ -35,6 +35,8 @@ internal data class GuideSweep(
     val reclaimed: List<String> = emptyList(),
     /** Programme rows dropped for being outside [EpgWindow], on either edge. */
     val prunedRows: Int = 0,
+    /** Descriptions clipped to [EpgWindow.MAX_DESCRIPTION_CHARS]. */
+    val trimmedDescriptions: Int = 0,
     /** Footprint of the guides that were kept, before and after. */
     val beforeBytes: Long = 0L,
     val afterBytes: Long = 0L,
@@ -112,7 +114,11 @@ internal fun guideFilesToDelete(
  *     window the importer now uses is what keeps the two from being a
  *     surprise to each other. The past edge is pruned for the same reason —
  *     nothing behind it is displayable, and a guide that stopped refreshing
- *     keeps its last rows forever otherwise;
+ *     keeps its last rows forever otherwise. The same pass clips every stored
+ *     description to [EpgWindow.MAX_DESCRIPTION_CHARS] - a provider's `<desc>`
+ *     is routinely a multi-kilobyte synopsis and no screen can draw a tenth of
+ *     it, so on a guide written before that cap those bytes are pure disk (see
+ *     [trimDescriptions]);
  *  3. checkpoint the write-ahead log, and `VACUUM` when most of the file is
  *     free pages, which is what actually hands the space back.
  */
@@ -201,6 +207,7 @@ internal object GuideStorage {
         }
 
         var prunedRows = 0
+        var trimmedDescriptions = 0
         var before = 0L
         var after = 0L
         var vacuumed = 0
@@ -255,6 +262,7 @@ internal object GuideStorage {
                 else -> Unit
             }
             prunedRows += outcome?.prunedRows ?: 0
+            trimmedDescriptions += outcome?.trimmedDescriptions ?: 0
         }
 
         GuideSweep(
@@ -262,6 +270,7 @@ internal object GuideStorage {
             deletedBytes = deletedBytes,
             reclaimed = reclaimed,
             prunedRows = prunedRows,
+            trimmedDescriptions = trimmedDescriptions,
             beforeBytes = before,
             afterBytes = after,
             vacuumed = vacuumed,
@@ -282,8 +291,36 @@ internal object GuideStorage {
      * bound, so it cannot carry anything with it.
      */
     private fun prune(sql: Sql, predicate: String, bound: Long): Int =
-        runCatching { sql.delete("DELETE FROM epg_programs WHERE $predicate $bound") }
+        runCatching { sql.change("DELETE FROM epg_programs WHERE $predicate $bound") }
             .getOrDefault(0)
+
+    /**
+     * Clips stored descriptions to what the guide can render
+     * ([EpgWindow.MAX_DESCRIPTION_CHARS]), returning how many rows it changed.
+     *
+     * The cap is enforced on the import path, so this exists for the guides
+     * already on disk without one - the installs this pass is for, whose every
+     * description is the provider's full synopsis, and where a description is
+     * the largest column in the table by a wide margin. It is what the VACUUM
+     * below then hands back.
+     *
+     * One `UPDATE` rather than a read-and-rewrite: the replacement is a pure
+     * function of the value already in the row, so SQLite does it in place, and
+     * the rows number in the hundreds of thousands. SQLite counts CHARACTERS in
+     * `length`/`substr`, not bytes or UTF-16 units, so a multi-byte character is
+     * never split. It runs whether or not a stream is playing: in WAL mode a
+     * writer does not block the guide's readers, unlike the VACUUM below, which
+     * is why only that one is gated on [EpgWriteGate].
+     */
+    private fun trimDescriptions(sql: Sql): Int =
+        runCatching {
+            sql.change(
+                "UPDATE epg_programs " +
+                    "SET description = rtrim(substr(description, 1, " +
+                    "${EpgWindow.MAX_DESCRIPTION_CHARS - 1})) || '…' " +
+                    "WHERE length(description) > ${EpgWindow.MAX_DESCRIPTION_CHARS}"
+            )
+        }.getOrDefault(0)
 
     /** True for a guide database, scoped or legacy — never for any other file. */
     private fun isGuideDb(name: String): Boolean =
@@ -291,7 +328,11 @@ internal object GuideStorage {
 
     private enum class ReclaimResult { UNCHANGED, VACUUMED, BUSY }
 
-    private data class Reclaim(val result: ReclaimResult, val prunedRows: Int)
+    private data class Reclaim(
+        val result: ReclaimResult,
+        val prunedRows: Int,
+        val trimmedDescriptions: Int
+    )
 
     /**
      * Prunes, checkpoints and (when it is worth it) VACUUMs one guide file.
@@ -312,22 +353,27 @@ internal object GuideStorage {
         var prunedRows = prune(sql, "endUtcMillis <", now - EpgWindow.PAST_MS)
         prunedRows += prune(sql, "startUtcMillis >", now + EpgWindow.FUTURE_MS)
 
+        // Then the row CONTENT, ahead of anything that looks at the freelist
+        // below: the pages this releases are exactly what that check is looking
+        // for, and on a guide written before the cap they are most of the file.
+        val trimmedDescriptions = trimDescriptions(sql)
+
         // A big import lands in the write-ahead log, and it is part of the
         // footprint the report shows until it is checkpointed back.
         runCatching { sql.exec("PRAGMA wal_checkpoint(TRUNCATE)") }
 
         val length = file.length()
-        if (length < RECLAIM_MIN_FILE_BYTES) return Reclaim(ReclaimResult.UNCHANGED, prunedRows)
+        if (length < RECLAIM_MIN_FILE_BYTES) return Reclaim(ReclaimResult.UNCHANGED, prunedRows, trimmedDescriptions)
         // A VACUUM while the viewer is watching is exactly the contention the
         // guide's own write gate exists to avoid; the next pass picks it up.
-        if (EpgWriteGate.isPlayerActive) return Reclaim(ReclaimResult.UNCHANGED, prunedRows)
+        if (EpgWriteGate.isPlayerActive) return Reclaim(ReclaimResult.UNCHANGED, prunedRows, trimmedDescriptions)
 
-        val freeBytes = sql.freePageBytes() ?: return Reclaim(ReclaimResult.UNCHANGED, prunedRows)
-        if (freeBytes < RECLAIM_MIN_FREE_BYTES) return Reclaim(ReclaimResult.UNCHANGED, prunedRows)
-        val usable = file.parentFile?.usableSpace ?: return Reclaim(ReclaimResult.UNCHANGED, prunedRows)
+        val freeBytes = sql.freePageBytes() ?: return Reclaim(ReclaimResult.UNCHANGED, prunedRows, trimmedDescriptions)
+        if (freeBytes < RECLAIM_MIN_FREE_BYTES) return Reclaim(ReclaimResult.UNCHANGED, prunedRows, trimmedDescriptions)
+        val usable = file.parentFile?.usableSpace ?: return Reclaim(ReclaimResult.UNCHANGED, prunedRows, trimmedDescriptions)
         if (usable < length + VACUUM_SPACE_HEADROOM) {
             Log.i(TAG, "not enough room to rewrite ${file.name} (${length / 1_048_576} MB file)")
-            return Reclaim(ReclaimResult.UNCHANGED, prunedRows)
+            return Reclaim(ReclaimResult.UNCHANGED, prunedRows, trimmedDescriptions)
         }
 
         val vacuum = runCatching { sql.exec("VACUUM") }
@@ -335,9 +381,9 @@ internal object GuideStorage {
             // SQLITE_BUSY: the guide screen is reading, or an import is in
             // flight. Pure space reclamation, so this only has to try again.
             Log.w(TAG, "vacuum ${file.name} skipped: ${vacuum.exceptionOrNull()?.message}")
-            return Reclaim(ReclaimResult.BUSY, prunedRows)
+            return Reclaim(ReclaimResult.BUSY, prunedRows, trimmedDescriptions)
         }
-        return Reclaim(ReclaimResult.VACUUMED, prunedRows)
+        return Reclaim(ReclaimResult.VACUUMED, prunedRows, trimmedDescriptions)
     }
 
     /** The two connections a guide can be reached through, as one surface. */
@@ -345,7 +391,7 @@ internal object GuideStorage {
         fun exec(sql: String, args: Array<Any?> = emptyArray())
 
         /** Runs [sql] and reports how many rows it changed. */
-        fun delete(sql: String): Int
+        fun change(sql: String): Int
 
         /** Bytes on the freelist, or null when the pragmas will not answer. */
         fun freePageBytes(): Long? {
@@ -361,7 +407,7 @@ internal object GuideStorage {
     private class RoomSql(private val db: SupportSQLiteDatabase) : Sql {
         override fun exec(sql: String, args: Array<Any?>) = db.execSQL(sql, args)
 
-        override fun delete(sql: String): Int =
+        override fun change(sql: String): Int =
             db.compileStatement(sql).use { it.executeUpdateDelete() }
 
         override fun queryLong(statement: String): Long? =
@@ -372,7 +418,7 @@ internal object GuideStorage {
     private class RawSql(private val db: SQLiteDatabase) : Sql {
         override fun exec(sql: String, args: Array<Any?>) = db.execSQL(sql, args)
 
-        override fun delete(sql: String): Int =
+        override fun change(sql: String): Int =
             db.compileStatement(sql).use { it.executeUpdateDelete() }
 
         override fun queryLong(statement: String): Long? =

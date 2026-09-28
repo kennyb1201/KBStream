@@ -439,7 +439,9 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
                 XmlPullParser.END_DOCUMENT -> return null
                 XmlPullParser.START_TAG -> when (parser.name) {
                     "title" -> title = safeNextText(parser).trim()
-                    "desc" -> description = safeNextText(parser).trim().ifBlank { null }
+                    // Clipped on the way IN, so the guide never stores a
+                    // synopsis it has no screen for (see EpgWindow).
+                    "desc" -> description = epgDescriptionForStorage(safeNextText(parser))
                     "category" -> category = safeNextText(parser).trim().ifBlank { null }
                     else -> skip(parser)
                 }

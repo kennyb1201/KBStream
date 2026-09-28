@@ -1,6 +1,6 @@
 package com.kennyb1201.kbstream.ui.kb
 
-import com.kennyb1201.kbstream.ui.home.landscapeArtKey
+import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull

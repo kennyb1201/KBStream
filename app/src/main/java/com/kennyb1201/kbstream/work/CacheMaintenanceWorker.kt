@@ -80,7 +80,9 @@ class CacheMaintenanceWorker(
                 TAG,
                 "guides: deleted=${guides.deleted} " +
                     "(${guides.deletedBytes / 1_048_576} MB) " +
-                    "pruned=${guides.prunedRows} row(s) vacuumed=${guides.vacuumed} " +
+                    "pruned=${guides.prunedRows} row(s) " +
+                    "clipped=${guides.trimmedDescriptions} description(s) " +
+                    "vacuumed=${guides.vacuumed} " +
                     "skipped=${guides.busy} left=${guides.beforeBytes / 1_048_576} -> " +
                     "${guides.afterBytes / 1_048_576} MB"
             )
@@ -112,7 +114,9 @@ class CacheMaintenanceWorker(
          * day after the update that added it, on a device whose whole point was
          * that it had already grown too large.
          */
-        private const val WORK_NAME_ONCE = "cache_maintenance_once_2"
+        // ...and once more for the description clip, which is another pass
+        // these installs have never run: see the generation note above.
+        private const val WORK_NAME_ONCE = "cache_maintenance_once_3"
 
         /**
          * How often the reclaim is retried.

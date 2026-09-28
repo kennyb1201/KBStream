@@ -32,10 +32,12 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
+import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
+import com.kennyb1201.kbstream.ui.components.landscapeArtFor
+import com.kennyb1201.kbstream.ui.components.landscapeArtKey
+import com.kennyb1201.kbstream.ui.components.landscapeArtUrls
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
-import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
-import com.kennyb1201.kbstream.data.tmdb.cardBackdropPath
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.isAvailableAtHome
 import com.kennyb1201.kbstream.data.tmdb.director
@@ -6333,142 +6335,88 @@ private suspend fun calculateEpisodesRemaining(
     }
 
     /**
-     * Resolves landscape-card artwork (backdrop + clearlogo) for a rail's
-     * items, keyed by "type:id". The TMDB alternate backdrop always wins so
-     * cards never mirror the hero's primary backdrop; the addon's own
-     * background/logo are fallbacks (logo keeps addon-first priority).
-     * All TMDB hits land in the same 12h/30d cache the digital filter and
-     * detail screens use, so rails that were filtered already have warm
-     * entries.
+     * Landscape artwork (backdrop + clearlogo) for a rail's items, through the
+     * shared vocabulary in `ui/components/LandscapeArt.kt` - the same key and
+     * the same merge rule the KB folder layouts use, so the two screens cannot
+     * spell either differently. What is Home's own here is the cache in front
+     * of the lookups, below.
      */
     private suspend fun resolveLandscapeArt(
         metas: List<MetaPreview>,
         tmdbOnly: Boolean = false
-    ): Map<String, Pair<String?, String?>> {
+    ): Map<String, Pair<String?, String?>> =
+        landscapeArtFor(
+            requests = metas.map { meta ->
+                LandscapeArtRequest(
+                    id = meta.id,
+                    type = meta.type,
+                    addonBackdrop = meta.background,
+                    addonLogo = meta.logo,
+                    tmdbOnly = tmdbOnly
+                )
+            },
+            tmdbArtOf = { request -> homeLandscapeArt(request) }
+        )
 
-        return coroutineScope {
+    /**
+     * The TMDB artwork for one item, through this build's memo and the artwork
+     * semaphore.
+     *
+     * No fast-path on the addon's own fields: the addon background is typically
+     * the same primary backdrop the hero shows, so returning it early made
+     * landscape cards mirror the hero. TMDB is always consulted; the addon
+     * fields stay as fallbacks in the shared merge.
+     */
+    private suspend fun homeLandscapeArt(
+        request: LandscapeArtRequest
+    ): Pair<String?, String?> {
 
-            metas.map { meta ->
+        val key = request.key
 
-                async {
+        landscapeLookupMemo[key]?.let { remembered ->
 
-                    // The format lives in LandscapeArtKey.kt, beside the
-                    // test that pins it: the rail builders, HomeScreen's
-                    // landscape card, the KB folders and [previousLandscapeArt]
-                    // all file art under it, and a key that drifted in any one
-                    // of them fails silently.
-                    val key = meta.landscapeArtKey()
-
-                    val addonBackdrop =
-                        if (tmdbOnly) {
-                            null
-                        } else {
-                            meta.background?.takeIf { it.isNotBlank() }
-                        }
-
-                    val addonLogo =
-                        if (tmdbOnly) {
-                            null
-                        } else {
-                            meta.logo?.takeIf { it.isNotBlank() }
-                        }
-
-                    // No fast-path on the addon's own fields: the addon
-                    // background is typically the same primary backdrop the
-                    // Home hero shows, so returning it early made landscape
-                    // cards mirror the hero. TMDB is always consulted; the
-                    // addon fields stay as fallbacks in the merge below.
-
-                    val remembered =
-                        landscapeLookupMemo[key]
-
-                    val tmdbArt =
-                        if (remembered != null) {
-
-                            // An empty pair is a remembered answer too: this
-                            // title is already known to have no TMDB artwork,
-                            // and asking again is a round trip for nothing.
-                            PerfTrace.record("home.artReuse", 0L)
-                            remembered
-                        } else {
-
-                            val startedAtMs =
-                                android.os.SystemClock.elapsedRealtime()
-
-                            val detail =
-                                landscapeArtSemaphore.withPermit {
-
-                                    runCatching {
-
-                                        tmdbRepository.fetchEnrichedMetaCached(
-                                            imdbId = meta.id,
-                                            type = meta.type
-                                        )
-                                    }.getOrNull()
-                                }
-
-                            // Card backdrop prefers an alternate image so
-                            // cards don't mirror the hero's primary backdrop.
-                            val art =
-                                (
-                                    detail?.cardBackdropPath()
-                                        ?.takeIf { it.isNotBlank() }
-                                        ?.let { TmdbRepository.BACKDROP_BASE + it }
-                                    ) to
-                                    (
-                                        detail?.bestLogoPath()
-                                            ?.takeIf { it.isNotBlank() }
-                                            ?.let { TmdbRepository.LOGO_BASE + it }
-                                        )
-
-                            val elapsedMs =
-                                android.os.SystemClock.elapsedRealtime() - startedAtMs
-
-                            PerfTrace.record("home.artLookup", elapsedMs)
-
-                            if (art.first == null && art.second == null) {
-                                // Named on its own so the report can say how
-                                // many empty answers were remembered rather
-                                // than asked for again - the misses the
-                                // repository deliberately does not cache.
-                                PerfTrace.record("home.artEmpty", elapsedMs)
-                            }
-
-                            rememberLandscapeLookup(key, art)
-                            art
-                        }
-
-                    val tmdbBackdrop = tmdbArt.first
-
-                    val tmdbLogo = tmdbArt.second
-
-                    if (tmdbOnly) {
-                        // Pinned Top Today rails: the addon's backgrounds
-                        // carry burned-in promo text ("Just Added" badges,
-                        // title cards), so they are never usable as card
-                        // art. TMDB or nothing — when TMDB has no images,
-                        // blank markers make the card render its clean
-                        // title-only treatment (LandscapeCard treats blank
-                        // like missing; HomeScreen's ?: addon fallback can
-                        // never fire because the map entry exists).
-                        key to (
-                            (tmdbBackdrop ?: "") to
-                                (tmdbLogo ?: "")
-                            )
-                    } else {
-                        // Backdrop: TMDB (alternate) wins over the addon's
-                        // background, which is usually the same primary
-                        // image the hero shows. Logo keeps addon-first
-                        // priority.
-                        key to (
-                            (tmdbBackdrop ?: addonBackdrop) to
-                                (addonLogo ?: tmdbLogo)
-                            )
-                    }
-                }
-            }.awaitAll().toMap()
+            // An empty pair is a remembered answer too: this title is already
+            // known to have no TMDB artwork, and asking again is a round trip
+            // for nothing.
+            PerfTrace.record("home.artReuse", 0L)
+            return remembered
         }
+
+        val startedAtMs =
+            android.os.SystemClock.elapsedRealtime()
+
+        val detail =
+            landscapeArtSemaphore.withPermit {
+
+                runCatching {
+
+                    tmdbRepository.fetchEnrichedMetaCached(
+                        imdbId = request.id,
+                        type = request.type
+                    )
+                }.getOrNull()
+            }
+
+        val art =
+            detail.landscapeArtUrls()
+
+        val elapsedMs =
+            android.os.SystemClock.elapsedRealtime() - startedAtMs
+
+        PerfTrace.record("home.artLookup", elapsedMs)
+
+        if (art.first == null && art.second == null) {
+
+            // Named on its own so the report can say how many empty answers
+            // were remembered rather than asked for again - the misses the
+            // repository deliberately does not cache.
+            PerfTrace.record("home.artEmpty", elapsedMs)
+        }
+
+        rememberLandscapeLookup(key, art)
+        return art
     }
+
 
     /**
      * Stage 2 of the digital-release filter: titles that survived the cheap

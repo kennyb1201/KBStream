@@ -76,4 +76,67 @@ internal object EpgWindow {
      * that can hold tens of thousands — the single largest store the app owned.
      */
     const val FUTURE_MS = READ_FUTURE_MS + 2 * REFRESH_INTERVAL_MS
+
+    /**
+     * The most of a description the widest screen can actually draw.
+     *
+     * A programme's description reaches a screen in three places and nowhere
+     * else, and every one of them clamps it: the guide's "on now" card at three
+     * lines, the catch-up list at one, and the player's zap banner at two lines
+     * of 12sp across the banner (see `activity_player.xml`). The widest of the
+     * three shows under 250 characters on a 1080p panel. Nothing else reads a
+     * description: the guide-wide search is an index over TITLES with a title
+     * `LIKE` fallback (see [EpgSearchIndex]), so a description is never
+     * searched, and no screen scrolls one.
+     */
+    const val DISPLAY_CLAMP_CHARS = 250
+
+    /**
+     * How much of a description is STORED.
+     *
+     * Providers ship far more than [DISPLAY_CLAMP_CHARS]: `<desc>` is routinely
+     * a full synopsis with cast, director and a content warning, and
+     * multi-kilobyte ones are common. Every byte of it sat in the guide file, in
+     * EVERY profile's copy of it, for a window of [FUTURE_MS] across a playlist
+     * that can hold thousands of channels - which is most of the ~130 MB per
+     * profile measured on the field TV.
+     *
+     * Headroom over the widest clamp, so the cut lands beyond anything any
+     * screen could have drawn; a clipped description ends in an ellipsis, so it
+     * reads as clipped rather than as the provider's own text.
+     */
+    const val MAX_DESCRIPTION_CHARS = 400
+}
+
+/**
+ * [raw] as it is STORED: trimmed, blank as null, and clipped to
+ * [EpgWindow.MAX_DESCRIPTION_CHARS].
+ *
+ * One rule for both paths that write a description - the import
+ * ([XmltvImporter]) and the maintenance pass that shortens what an earlier
+ * build already stored (see [GuideStorage]) - so the two cannot disagree about
+ * what a stored description looks like. The pass clips in SQL rather than
+ * through here, because reading and rewriting hundreds of thousands of rows to
+ * shorten them is far more I/O than one `UPDATE` is; the shape they produce is
+ * the same, and `EpgWindowTest` pins it.
+ */
+internal fun epgDescriptionForStorage(raw: String?): String? {
+
+    val trimmed = raw?.trim().orEmpty()
+    if (trimmed.isEmpty()) return null
+    if (trimmed.length <= EpgWindow.MAX_DESCRIPTION_CHARS) return trimmed
+
+    var clipped = trimmed
+        .take(EpgWindow.MAX_DESCRIPTION_CHARS - 1)
+        .trimEnd()
+
+    // A surrogate pair must not be cut in half: a lone surrogate cannot be
+    // encoded, so it would reach SQLite as U+FFFD. (The maintenance pass clips
+    // in SQL, where `substr`/`length` count characters rather than UTF-16
+    // units - this guard is for Kotlin's `take`.)
+    if (clipped.isNotEmpty() && clipped.last().isHighSurrogate()) {
+        clipped = clipped.dropLast(1)
+    }
+
+    return clipped + "…"
 }
