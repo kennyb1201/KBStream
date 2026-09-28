@@ -2192,11 +2192,26 @@ Log.d(
                     ?.takeIf { it.isNotBlank() }
                     ?.let { "https://image.tmdb.org/t/p/w780$it" }
 
+        // A season's return reads NEW SEASON while it is still news: the
+        // card is about the show coming back, not about one more episode.
+        // Recency is what separates the two, and it is the same window the
+        // tracker-sourced cards use.
+        val nextUpBadge =
+            if (
+                SeasonRules.isSeasonPremiere(target.episode) &&
+                    target.airDate
+                        ?.let { isWithinDays(it, NEW_RELEASE_WINDOW_DAYS) } == true
+            ) {
+                UpNextBadge.NEW_SEASON
+            } else {
+                UpNextBadge.NEXT_UP
+            }
+
         return UpNextItem(
             id = "nextup:$parentId",
             title = title,
             poster = poster,
-            badge = UpNextBadge.NEXT_UP,
+            badge = nextUpBadge,
             showTitle = title,
             episodeTitle = target.episodeTitle,
             episodeDescription = target.episodeDescription,
@@ -2209,7 +2224,13 @@ Log.d(
             imdbRating = target.episodeRating,
             runtimeMinutes = target.runtimeMinutes,
             subtitle =
-                "Up Next - ${
+                "${
+                    if (nextUpBadge == UpNextBadge.NEW_SEASON) {
+                        "New Season"
+                    } else {
+                        "Up Next"
+                    }
+                } - ${
                     formatSeasonEpisode(
                         target.season,
                         target.episode
@@ -4536,7 +4557,10 @@ episodesTotal =
                             }
 
                             airedRecently &&
-                                resolvedEpisode <= 1 -> {
+                                SeasonRules
+                                    .isSeasonPremiere(
+                                        resolvedEpisode
+                                    ) -> {
 
                                 UpNextBadge.NEW_SEASON
                             }
@@ -5089,6 +5113,11 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // guards against a lagging season listing). An unaired last episode
     // still never renders as a finale — the watchable-target guard below
     // refuses to tag it.
+    //
+    // A season whose listing holds a single episode is a new season part-way
+    // through arriving, not a one-episode season, so it is never a finale
+    // either -- the floor in SeasonRules says so, and that is what stops a
+    // premiere wearing the SEASON FINALE badge.
     suspend fun seasonFinaleFor(
         season: Int,
         episode: Int
@@ -5141,7 +5170,11 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         val seasonLength =
             maxOf(lastListedEpisode, declaredEpisodeCount)
 
-        return episode >= seasonLength
+        return SeasonRules
+            .isSeasonFinale(
+                episodeNumber = episode,
+                seasonLength = seasonLength
+            )
     }
 
     suspend fun seriesFinaleFor(
