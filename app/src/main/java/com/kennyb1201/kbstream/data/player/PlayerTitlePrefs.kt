@@ -56,7 +56,7 @@ internal object PlayerTitlePrefs {
          * pushing the next show through a boost it does not need.
          */
         val audioDownmix: Int = -1,
-        /** Dialogue/centre lift override, or -1 for the global setting. */
+        /** Dialogue/center lift override, or -1 for the global setting. */
         val audioDialogueBoost: Int = -1,
         /** Volume-boost override in dB, or -1 for the global setting. */
         val audioVolumeBoostDb: Int = -1

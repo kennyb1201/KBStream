@@ -481,7 +481,7 @@ private fun SubmenuChipFlowRow(
 ) {
     // Keyed on the armed chip, not a plain `remember`: consuming one arm used
     // to latch this flag for the rest of the composition, so the NEXT arm -
-    // which hideBrowseChip sets to move focus onto a hidden chip's neighbour -
+    // which hideBrowseChip sets to move focus onto a hidden chip's neighbor -
     // found `returnChipConsumed` already true and never grabbed focus. Only
     // the first Hide could place focus; every later one fell back to the
     // strip's first chip again.
@@ -674,7 +674,7 @@ internal fun PersonResultCard(
             focusedBorder = Border(BorderStroke(2.dp, KBAccent))
         ),
         // Card step of the shared focus scale: a search result is a card, and
-        // these had border + colour feedback but no movement and no press.
+        // these had border + color feedback but no movement and no press.
         scale = CardDefaults.scale(
             scale = 1f,
             focusedScale = KBFocusCard,

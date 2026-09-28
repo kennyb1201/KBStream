@@ -257,7 +257,7 @@ class ExternalPlayerActivity : ComponentActivity() {
             // A DRM session's keys are ours; another app cannot be handed them.
             showRefused(
                 "This source is DRM-protected",
-                "Protected streams can only be played inside KBStream, where the licence " +
+                "Protected streams can only be played inside KBStream, where the license " +
                     "is requested. Play it here instead."
             )
             return

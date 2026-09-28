@@ -11,7 +11,7 @@ import org.junit.Test
  * and got someone else's. These cases pin the two rules that decide it: art
  * beats a stray record, and TMDB's own relevance order beats popularity.
  *
- * The fixtures are modelled on real searches rather than invented: "the office"
+ * The fixtures are modeled on real searches rather than invented: "the office"
  * is the case that motivated votes being a tie-breaker rather than the ranking
  * (two dozen US and UK namesakes, one of them far more voted than the one the
  * viewer meant), and the posterless entries are the unaired-pilot / duplicate

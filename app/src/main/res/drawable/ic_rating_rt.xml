@@ -4,7 +4,7 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <!-- The official mark's burst tips run past the 24-unit box, so the
-         glyph is scaled 0.85 and re-centred vertically: at 1.0 the top-right
+         glyph is scaled 0.85 and re-centered vertically: at 1.0 the top-right
          tips get clipped by the viewport. -->
     <group
         android:scaleX="0.85"

@@ -168,7 +168,7 @@ private const val DECODER_RESOURCE_RETRY_DELAY_MS = 6_000L
  * is still holding ~10 x 4K buffers, and the codec comes back
  * OMX_ErrorInsufficientResources (0x80001000) as soon as samples are
  * submitted. The DV-strip and resource-exhaustion rebuilds below already wait
- * 3s / 6s for this vendor behaviour (their own comments say the release lands
+ * 3s / 6s for this vendor behavior (their own comments say the release lands
  * ~3s after ExoPlayer lets the codec go); a source switch was the one rebuild
  * that waited nothing - and the field log shows a session's first failure
  * landing 4ms after the previous player was released, on a plain HDR10 HEVC
@@ -665,7 +665,7 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var btnPlayPause: ImageView
     // The control bar's buttons are icon views, SOURCE included: they used to be
     // TextViews drawing a font glyph ("\u2672" for next, "\u266b" for audio, "CC",
-    // "\u2699" ...), so their weight and optical centre came from whatever font the
+    // "\u2699" ...), so their weight and optical center came from whatever font the
     // device shipped instead of from the layout, and no two of them matched.
     // SPEED and ASPECT keep their words - a rate and a mode name ARE their
     // state - in the bar's own typeface. Bound by id from bindViews(), listed
@@ -982,8 +982,8 @@ class NativePlayerActivity : ComponentActivity() {
         override fun run() {
             if (controlsVisible) {
                 updateClock()
-                // Live: keep the programme progress honest, and roll the
-                // block over when the programme ends.
+                // Live: keep the program progress honest, and roll the
+                // block over when the program ends.
                 tickLiveProgramBlock()
                 clockHandler.postDelayed(this, 1000)
             }
@@ -1239,7 +1239,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var zapNextTitle: TextView? = null
 
     /**
-     * Live-only programme block inside the controls overlay: what is on NOW
+     * Live-only program block inside the controls overlay: what is on NOW
      * (title, air window, elapsed progress, synopsis) and what is next, from
      * the same guide rows the zap banner reads. Gone for VOD, where the
      * episode row carries instead.
@@ -1263,9 +1263,9 @@ class NativePlayerActivity : ComponentActivity() {
 
     /**
      * "LIVE  •  CH 5  •  SPORTS" prefix of the block's status line. Kept
-     * beside the programme's own air window because the prefix describes the
+     * beside the program's own air window because the prefix describes the
      * channel (fixed for as long as it plays) while the window changes with
-     * every programme.
+     * every program.
      */
     private var liveProgramScope = "LIVE"
 
@@ -1516,8 +1516,8 @@ class NativePlayerActivity : ComponentActivity() {
      * The channel's now/next rows: the cached snapshot while it is fresh (or
      * when the channel has no guide to read at all), otherwise one read of the
      * same Room table the guide screen uses. Shared by the zap banner and the
-     * overlay's live programme block, so both always report the same
-     * programmes for the same channel.
+     * overlay's live program block, so both always report the same
+     * programs for the same channel.
      */
     private suspend fun resolveZapEpg(
         channel: LiveChannelZapRegistry.ZapChannel,
@@ -1547,7 +1547,7 @@ class NativePlayerActivity : ComponentActivity() {
             // category/description columns, which the banner shows.
             val rows = dao.getProgramsForChannelsInWindow(
                 sourceUrl = epgUrl,
-                // The importer stores programmes under a lowercased channel key
+                // The importer stores programs under a lowercased channel key
                 // (epgProgramChannelKey) and this query matches it exactly, so
                 // the guide channel's raw id returns nothing whenever it has an
                 // uppercase letter -- a matched channel with an empty banner.
@@ -1665,7 +1665,7 @@ class NativePlayerActivity : ComponentActivity() {
         channel.channelId + "|" + channel.epgUrl?.trim().orEmpty()
 
     /**
-     * Paints the overlay's live programme block for the channel playing now.
+     * Paints the overlay's live program block for the channel playing now.
      * Opening a channel, zapping and raising the overlay all come through
      * here, so the block always describes the CURRENT channel. Guide rows are
      * read off the resolved now/next cache, so a repeat costs no query.
@@ -1679,7 +1679,7 @@ class NativePlayerActivity : ComponentActivity() {
         val channel = currentZapChannel()
         if (channel == null) {
             // No lineup this session (a channel opened from outside the
-            // guide): there is no guide id to look a programme up with.
+            // guide): there is no guide id to look a program up with.
             block.visibility = View.GONE
             return
         }
@@ -1715,7 +1715,7 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
-     * One now/next snapshot into the overlay's live block: programme title,
+     * One now/next snapshot into the overlay's live block: program title,
      * its air window (start and end), a progress bar for how far in we are,
      * the synopsis, and what follows.
      */
@@ -1775,8 +1775,8 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
-     * Per-second tick while the overlay is up: advance the programme progress
-     * bar, and roll the block over to the next programme once the current one
+     * Per-second tick while the overlay is up: advance the program progress
+     * bar, and roll the block over to the next program once the current one
      * ends (the rows are re-read, never guessed from the clock).
      */
     private fun tickLiveProgramBlock() {
@@ -1793,7 +1793,7 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
 
-        // Nothing resolved, or the programme just ended. Re-read only once the
+        // Nothing resolved, or the program just ended. Re-read only once the
         // cached row is older than the TTL, so a channel whose guide has
         // nothing for this slot cannot turn the per-second tick into a
         // per-second query.
@@ -2030,7 +2030,7 @@ class NativePlayerActivity : ComponentActivity() {
             // card opens during the credits, so that is the ordinary way the two
             // meet) wins: the countdown stops here instead of handing off seconds
             // before the end the timer is waiting for. Re-checked every tick, so
-            // the timer is honoured whenever it is armed - up to the last second.
+            // the timer is honored whenever it is armed - up to the last second.
             if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
                 nextUpCountdownHeld = false
                 nextUpCountdownRemaining = 0
@@ -2288,7 +2288,7 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
 
-        // And the no-logo state for the splash itself: the item name centred on
+        // And the no-logo state for the splash itself: the item name centered on
         // the backdrop, exactly how the pre-player "Finding sources" splash
         // shows a title it has no logo art for.
         val title = splashItemName ?: findViewById<TextView>(R.id.splash_item_name)?.also {
@@ -2957,7 +2957,7 @@ class NativePlayerActivity : ComponentActivity() {
         // launch carrying no position of its own (a source picked from the
         // picker, a rebuilt or restored player) would otherwise replay a
         // partially watched title from the beginning. An explicit "from the
-        // beginning" is honoured as-is, and the player is only created after
+        // beginning" is honored as-is, and the player is only created after
         // the read so the load-time seek already carries the position - nothing
         // starts at 0 and jumps. A failed or empty read leaves the launch as it
         // was.
@@ -3028,7 +3028,7 @@ class NativePlayerActivity : ComponentActivity() {
      * same value set on the MPV side was remembered. Both go through
      * [PlayerTrackBridge] now - it clamps, applies the change to the cue handler
      * and remembers it for the show - and the pending delayed render is
-     * cancelled so the line on screen re-times at once.
+     * canceled so the line on screen re-times at once.
      */
     private fun nudgeSubtitleOffset(stepMs: Int) {
         PlayerTrackBridge.chooseSubtitleOffset(this, subtitleOffsetMs + stepMs)
@@ -4108,7 +4108,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     /**
      * Asks for the decoded frame covering [posMs] — the position a scrub has just
-     * landed on — and notes [anchorView] for the card to centre itself over when
+     * landed on — and notes [anchorView] for the card to center itself over when
      * the frame arrives: the seek bar while that is what is being dragged, and
      * nothing when the overlay is down.
      *
@@ -4707,7 +4707,7 @@ class NativePlayerActivity : ComponentActivity() {
         // instance of class <ViewModel>" the moment Back recomposed Home.
         //
         // So cap the buffered BYTES to a slice of the heap this process actually
-        // has — maxMemory() honours android:largeHeap, so the budget follows the
+        // has — maxMemory() honors android:largeHeap, so the budget follows the
         // device — and stop prioritizing time over size, which is exactly what
         // made targetBufferBytes ineffective. Low-bitrate streams never reach
         // the cap (IPTV's 10 s, ordinary HD), so only 4K/high-bitrate changes.
@@ -5894,11 +5894,11 @@ class NativePlayerActivity : ComponentActivity() {
         hideBufferingSpinner()
         // Live: announce the channel the moment its first frame is up, the
         // way a set-top box does — channel identity, what is on now (with its
-        // air window and synopsis) and what follows. The overlay's programme
+        // air window and synopsis) and what follows. The overlay's program
         // block carries the same rows whenever the overlay is raised; this is
         // the arrival notice. Once per channel: a reconnect must not replay it.
         // ...unless the overlay is already up: that view carries the same
-        // programme block, and a card landing on top of it would just be noise.
+        // program block, and a card landing on top of it would just be noise.
         if (isLiveChannel && !zapBannerInitialShown && !controlsVisible) {
             zapBannerInitialShown = true
             currentZapChannel()?.let { showZapBanner(it) }
@@ -5922,7 +5922,7 @@ class NativePlayerActivity : ComponentActivity() {
         // nothing.
         //
         // It only counts when passthrough was ENABLED for this session. The
-        // old check cleared the record for any DV-labelled track, including
+        // old check cleared the record for any DV-labeled track, including
         // playbacks that ran with passthrough suppressed — the one case where
         // that playback proves nothing. The field log has the loop it made:
         // "suppressed" at 16:49:38 → played fine → record cleared by that very
@@ -6696,7 +6696,7 @@ class NativePlayerActivity : ComponentActivity() {
      * The view the preview card should track for the scrub that is running: the
      * seek bar's thumb while the overlay is up, and nothing when it is not (the
      * overlay-less scrub, where the bar is not on screen to track and the card
-     * sits centred over the position bubble instead).
+     * sits centered over the position bubble instead).
      */
     private fun trickplayAnchor(): View? = if (controlsVisible) seekbar else null
 
@@ -6786,7 +6786,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnSpeed.text = "${playbackSpeed}x"
         btnAspect.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
         // Live channels get the channel-change buttons and the NOW/NEXT
-        // programme block; VOD keeps the episode row instead.
+        // program block; VOD keeps the episode row instead.
         val liveVisibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnChannelUp?.visibility = liveVisibility
         btnChannelDown?.visibility = liveVisibility
@@ -7612,7 +7612,7 @@ class NativePlayerActivity : ComponentActivity() {
         // activity) right after the credits left the episode with no watch
         // marker and the resume bar exactly where the viewer had been.
         saveProgress(reason = "ended", forceCompleted = true)
-        // A sleep timer armed to stop at the end of this episode is honoured
+        // A sleep timer armed to stop at the end of this episode is honored
         // here, where the episode really is over: no card, no auto-advance,
         // just out. The completion write above is what the history keeps.
         if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
@@ -7912,7 +7912,7 @@ class NativePlayerActivity : ComponentActivity() {
 
             // Not one of the chrome fills but the same problem: the cast card's
             // avatar circle is a fixed #FF1D2530 oval, so a pure-black theme
-            // still drew grey circles behind every headshot - and the circle is
+            // still drew gray circles behind every headshot - and the circle is
             // all that shows for the cast members TMDB has no photo for.
             fill == AVATAR_PLACEHOLDER_FILL -> themedAvatarBackground(panelSurfaceColor())
 
@@ -8744,7 +8744,7 @@ class NativePlayerActivity : ComponentActivity() {
      *
      * Refused, and silently, for the two sessions it cannot take, both for the
      * same reason the MPV backup refuses them: live TV has no runtime to
-     * measure and no end to chain from, and a DRM licence is ours to request -
+     * measure and no end to chain from, and a DRM license is ours to request -
      * another app handed the URL alone could not play it.
      */
     private fun handOffToExternal(): Boolean {
@@ -8953,11 +8953,11 @@ class NativePlayerActivity : ComponentActivity() {
     internal fun sleepTimerChoices(): List<SleepTimerOption> = sleepTimerOptions(
         isLive = isLiveChannel,
         isEpisode = season != null && episode != null,
-        hasProgrammeEnd = currentProgrammeEndMs() != null
+        hasProgramEnd = currentProgramEndMs() != null
     )
 
     /**
-     * The guide's end for the programme this channel is on now, or null when
+     * The guide's end for the program this channel is on now, or null when
      * there is none to trust.
      *
      * Only the already-resolved zap row is consulted. Asking the EPG again from
@@ -8965,7 +8965,7 @@ class NativePlayerActivity : ComponentActivity() {
      * the same one the zap banner has already painted on screen - so "end of
      * program" means the end the viewer can see.
      */
-    private fun currentProgrammeEndMs(): Long? {
+    private fun currentProgramEndMs(): Long? {
         if (!isLiveChannel) return null
         val channel = currentZapChannel() ?: return null
         val now = zapEpgCache[zapEpgCacheKey(channel)]?.now ?: return null
@@ -8981,7 +8981,7 @@ class NativePlayerActivity : ComponentActivity() {
         SleepTimer.select(
             option = option,
             nowMs = System.currentTimeMillis(),
-            programmeEndMs = currentProgrammeEndMs()
+            programEndMs = currentProgramEndMs()
         )
         sleepFadeGain = 1f
         exoPlayer?.volume = 1f
@@ -9002,7 +9002,7 @@ class NativePlayerActivity : ComponentActivity() {
             restoreSleepFade(player)
             return
         }
-        // "End of episode" has no deadline to count: it is honoured where the
+        // "End of episode" has no deadline to count: it is honored where the
         // episode actually ends (see onPlaybackEnded).
         if (state.stopsAtEndOfItem) return
         val remaining = (state.deadlineMs ?: return) - System.currentTimeMillis()
@@ -9124,7 +9124,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (!isLiveChannel) {
             carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
         }
-        // Save progress BEFORE cancelling scope: saveProgress writes via
+        // Save progress BEFORE canceling scope: saveProgress writes via
         // lifecycleScope, which is independent of `scope`, but ordering it
         // ahead of teardown keeps intent clear and avoids racing any
         // scope-bound work that reads history.
@@ -9527,7 +9527,7 @@ internal fun normalizeCodec(
         lower.startsWith("av01") || lower.startsWith("av1") -> "AV1"
         lower.contains("mp4a") || lower.startsWith("mp3") || lower.contains("aac") -> "AAC"
         // E-AC3 first: "audio/eac3" contains "ac3", so testing AC-3 here
-        // first labelled every E-AC3 track as AC-3 — the one difference a
+        // first labeled every E-AC3 track as AC-3 — the one difference a
         // viewer choosing between two Dolby tracks is looking for.
         lower.contains("eac3") || lower.contains("ec-3") -> "EAC3"
         lower.contains("ac-3") || lower.contains("ac3") -> "AC-3"

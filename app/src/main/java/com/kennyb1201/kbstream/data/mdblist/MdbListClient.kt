@@ -668,7 +668,7 @@ object MdbListClient {
     // The player mirrors scrobbles from the Simkl job, and every later
     // player event cancels that job. Simkl's call is the FIRST await in it
     // and the MDBList call is the second, so MDBList is the one that can be
-    // cancelled before its request is ever sent — and playback start is
+    // canceled before its request is ever sent — and playback start is
     // exactly when the events fire fastest (a stream that buffers toggles
     // playing -> buffering -> playing, and each toggle cancels the one
     // before it). A dropped `start` means no session on the dashboard for
@@ -677,7 +677,7 @@ object MdbListClient {
     //
     // So a start that did not get through is retried from the client's OWN
     // scope, which the player cannot cancel. Bounded to a few attempts and
-    // cancelled the moment the session ends, so a title that genuinely
+    // canceled the moment the session ends, so a title that genuinely
     // cannot be scrobbled costs two extra requests at most.
     //
     // Deliberately NOT a periodic refresh: /scrobble/start *replaces* the
@@ -695,8 +695,8 @@ object MdbListClient {
     private val sessionMutex = Mutex()
 
     /**
-     * Serializes the scrobble POSTs themselves. A cancelled action can wake
-     * up (see [postScrobble]) while the action that cancelled it is already
+     * Serializes the scrobble POSTs themselves. A canceled action can wake
+     * up (see [postScrobble]) while the action that canceled it is already
      * on the wire, and interleaving the two lets the OLDER state reach the
      * server last — a late "start" landing after the "stop" that ended
      * playback re-opens a session nobody ever closes.
@@ -822,7 +822,7 @@ object MdbListClient {
         // and the very next playback event (the buffering -> playing toggle
         // on a slow start, a pause, the stop on exit) cancels that job. Simkl
         // is the first await in it and this is the second, so the mirror was
-        // cancelled before its request was ever sent — and because the
+        // canceled before its request was ever sent — and because the
         // cancellation surfaced from INSIDE here, it also unwound straight
         // past the caller's own start-retry: no session on the MDBList
         // dashboard for the whole playback. A one-shot progress write must

@@ -335,7 +335,7 @@
                 android:textSize="26sp"
                 android:visibility="gone" />
 
-            <!-- Live channel programme block (IPTV only): what is on now —
+            <!-- Live channel program block (IPTV only): what is on now —
                  title, air window, progress, synopsis — then what is next.
                  Hidden for VOD, where the episode row below carries instead. -->
             <LinearLayout

@@ -25,7 +25,7 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
  * is the same thing it already does for a finished finale.
  *
  * The yes/no rule deliberately mirrors the catalog's own
- * (`DetailScreen.isEpisodeUnavailable`, which greys out the same episodes):
+ * (`DetailScreen.isEpisodeUnavailable`, which grays out the same episodes):
  * a parseable date in the future is unaired; a blank or unparseable date is
  * NOT, because TMDB does not carry an air date for every already-aired
  * episode and treating a gap as "not out yet" would dead-end chains that
@@ -55,7 +55,7 @@ suspend fun airedNextEpisodeTarget(
 ): Pair<Int, Int>? {
     if (target == null) return null
 
-    // Nothing to ask TMDB about: keep the existing behaviour rather than
+    // Nothing to ask TMDB about: keep the existing behavior rather than
     // drop a chain we cannot check.
     if (tmdbId == null || tmdbId <= 0) return target
 

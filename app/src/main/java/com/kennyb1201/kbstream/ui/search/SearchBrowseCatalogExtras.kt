@@ -133,7 +133,7 @@ val KIDS_COLLECTION_NAMES_EXTRA: List<String> = listOf(
     "Monster High Collection",
     // Live-action family staples
     "Casper Collection",
-    // 2026-09 — kid franchises: modern animation, TV-brand favourites, anime
+    // 2026-09 — kid franchises: modern animation, TV-brand favorites, anime
     // features, and the family franchises that moved out of the adult
     // collections list (Honey, I Shrunk the Kids was the only one of them not
     // already in the main kids list). Every name verified live against

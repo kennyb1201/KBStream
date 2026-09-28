@@ -144,7 +144,7 @@ fun ActorScreen(
     when {
         // Poster-shaped placeholders, like every other browse page. The
         // actor's rails then arrive at their real size instead of a lone
-        // centred spinner that shifts the whole layout when the credits land.
+        // centered spinner that shifts the whole layout when the credits land.
         isLoading -> KBSkeletonRailStack(
             posterWidth = posterSize.width,
             posterHeight = posterSize.height,

@@ -83,7 +83,7 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
         response.isSuccessful
     } catch (e: kotlinx.coroutines.CancellationException) {
         // Cancellation is not a failure: rethrow so the scope that was
-        // cancelled stops here instead of logging it and carrying on as if the
+        // canceled stops here instead of logging it and carrying on as if the
         // work had simply failed.
         throw e
     } catch (e: Exception) {

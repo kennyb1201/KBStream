@@ -344,7 +344,7 @@ private data class PendingPlay(
             totalEpisodesInSeason = totalEpisodesInSeason,
             runtimeMinutes = target.runtimeMinutes,
             // The addon's own HTTP headers for this link (Referer / Origin /
-            // Cookie / User-Agent). They were modelled nowhere and passed
+            // Cookie / User-Agent). They were modeled nowhere and passed
             // nowhere, so a gated direct source was fetched with a bare
             // Chrome UA and no Referer - the shape that makes a host answer
             // with a throttled variant. See Stream.requestHeaders.
@@ -388,7 +388,7 @@ private suspend fun recoveredEpisodeAlreadyWatched(
     val id = showId.trim()
     if (id.isBlank()) return false
     // The handoff's stream id carries the add-on's own show id; watch-history
-    // rows are canonicalised to "tt..."/"tmdb:<n>", so both flavors are tried.
+    // rows are canonicalized to "tt..."/"tmdb:<n>", so both flavors are tried.
     val forms = linkedSetOf(id)
     id.removePrefix("tmdb:").toIntOrNull()?.let { forms += "tmdb:$it" }
     return try {
@@ -835,7 +835,7 @@ fun AppRoot() {
     // of finishing the Activity immediately, so an accidental press can't drop
     // the user out of the app. The profile picker gets the same treatment —
     // it is the app's entry screen, so Back there must EXIT, not push the
-    // user into a profile. Cancelling an in-flight auto-play keeps priority
+    // user into a profile. Canceling an in-flight auto-play keeps priority
     // over the prompt.
     var confirmExit by remember { mutableStateOf(false) }
     // Only the ENTRY picker (no returnTo) treats Back as exit; a picker opened
@@ -2046,7 +2046,7 @@ fun AppRoot() {
                 // extras, so nothing below has to know which one it got.
                 // "External player" hands the stream to an installed video app
                 // while THIS app keeps the session (see ExternalPlayerActivity).
-                // DRM stays in-app whatever the setting says: the licence is
+                // DRM stays in-app whatever the setting says: the license is
                 // ours to request, so another app handed the URL alone could
                 // not play it. The external wrapper says the same thing on a
                 // card; deciding it here just skips the detour.

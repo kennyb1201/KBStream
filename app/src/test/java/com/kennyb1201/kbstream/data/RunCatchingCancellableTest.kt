@@ -40,7 +40,7 @@ class RunCatchingCancellableTest {
     @Test
     fun `a thrown CancellationException is rethrown`() {
         val observed = runCatching {
-            runCatchingCancellable { throw CancellationException("cancelled") }
+            runCatchingCancellable { throw CancellationException("canceled") }
         }.exceptionOrNull()
         assertTrue(
             "runCatchingCancellable must let cancellation through, got $observed",
@@ -49,19 +49,19 @@ class RunCatchingCancellableTest {
     }
 
     /**
-     * The real shape of the bug, with a genuinely cancelled coroutine: the
+     * The real shape of the bug, with a genuinely canceled coroutine: the
      * plain call records the cancellation as a failure, while the helper leaves
      * the work stopped and records nothing.
      */
     @Test
-    fun `a cancelled job is not turned into a recorded failure`() = runBlocking {
+    fun `a canceled job is not turned into a recorded failure`() = runBlocking {
         var swallowed: Result<Unit>? = null
         var rethrown: Result<Unit>? = null
 
         val plain = launch { swallowed = runCatching { delay(Long.MAX_VALUE) } }
         val safe = launch { rethrown = runCatchingCancellable { delay(Long.MAX_VALUE) } }
-        // Let both coroutines reach the suspension point before cancelling: a
-        // launch that has not started yet cannot show either behaviour.
+        // Let both coroutines reach the suspension point before canceling: a
+        // launch that has not started yet cannot show either behavior.
         delay(50)
         plain.cancel()
         safe.cancel()

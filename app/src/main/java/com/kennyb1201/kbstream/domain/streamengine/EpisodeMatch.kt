@@ -35,7 +35,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *    what the metadata calls S22E17, are the everyday case), or a bare "E15"
  *    with no season next to it. Deliberately conservative: only a plain
  *    contradiction counts as [Verdict.DIFFERENT], because a file that does not
- *    contradict the request may well *be* it, and treating unlabelled sources
+ *    contradict the request may well *be* it, and treating unlabeled sources
  *    as wrong would break auto-play for every show whose releases are simply
  *    unnamed.
  */
@@ -195,13 +195,13 @@ object EpisodeMatch {
      * to the picker instead.
      *
      * The episode the request is for wins outright; failing that, a source that
-     * says nothing about the episode (the unlabelled release, the season pack
+     * says nothing about the episode (the unlabeled release, the season pack
      * file, the absolute numbering) is the next best thing. A source that
      * declares another episode of the same season is never taken by itself —
      * that is the whole point: it is a file the app *knows* holds something
      * else, and starting it silently is the "playing the wrong episodes"
      * report. When every playable source is one of those, the answer is null
-     * and the picker is shown, labelled, with the filenames in front of the
+     * and the picker is shown, labeled, with the filenames in front of the
      * viewer.
      *
      * With no episode in the request (a movie, a live channel) this is the

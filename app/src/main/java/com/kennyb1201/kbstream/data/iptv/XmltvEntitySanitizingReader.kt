@@ -5,7 +5,7 @@ import java.io.Reader
 /**
  * Escapes bare `&` characters to `&amp;` as the stream is consumed.
  *
- * XMLTV feeds are not always well-formed: a channel or programme description
+ * XMLTV feeds are not always well-formed: a channel or program description
  * containing an unescaped `&` ("Guns & Ammo", "Q&A") makes XmlPullParser throw,
  * and that exception fails the whole import — the staging design keeps the live
  * guide intact, but the guide then simply never updates for that provider, with

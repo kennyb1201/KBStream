@@ -9,18 +9,18 @@ import kotlin.math.exp
  *
  * ## Why this exists at all
  *
- * A 5.1/7.1 film mix puts dialogue in the CENTRE channel and almost everything
+ * A 5.1/7.1 film mix puts dialogue in the CENTER channel and almost everything
  * else — score, explosions, ambience — in the front pair and the surrounds.
  * When the platform downmixes for a TV's own stereo speakers it does the
  * textbook thing: fold everything down with fixed coefficients and no
- * normalisation. Dialogue therefore arrives at roughly the level of the music
+ * normalization. Dialogue therefore arrives at roughly the level of the music
  * bed, which is why speech is unintelligible on a TV and the viewer ends up
  * holding the volume rocker.
  *
  * Doing the fold here instead buys three things a HAL downmix cannot give us:
- *  - the centre channel can be lifted (and the surrounds trimmed) so voices come
+ *  - the center channel can be lifted (and the surrounds trimmed) so voices come
  *    up while score/effects stay where the mixer put them;
- *  - a stereo source gets the same treatment through its phantom centre;
+ *  - a stereo source gets the same treatment through its phantom center;
  *  - the sum is limited, so a loud scene never clips into distortion.
  *
  * Channel order follows media3/Android conventions:
@@ -64,7 +64,7 @@ internal object AudioDownmix {
      * null when there is nothing to fold (same layout, or a layout this code
      * does not model) — the caller then only applies gain and limiting.
      *
-     * [centerGain] lifts dialogue (the centre channel); [surroundScale] trims
+     * [centerGain] lifts dialogue (the center channel); [surroundScale] trims
      * the surrounds that carry effects, which is the other half of making
      * speech audible without raising an explosion.
      */
@@ -100,7 +100,7 @@ internal object AudioDownmix {
                     BR, SR ->
                         rightGains[index] = PlayerAudioTuning.SURROUND_BASE * surroundScale
 
-                    // A back-centre channel belongs to both sides equally.
+                    // A back-center channel belongs to both sides equally.
                     BC -> {
                         leftGains[index] = PlayerAudioTuning.SURROUND_BASE * surroundScale
                         rightGains[index] = PlayerAudioTuning.SURROUND_BASE * surroundScale
@@ -155,13 +155,13 @@ internal object AudioDownmix {
 
     /**
      * Per-channel gains for a stream that is NOT being folded: the same layout in
-     * and out, with the centre channel (dialogue) lifted and the surrounds that
+     * and out, with the center channel (dialogue) lifted and the surrounds that
      * carry score and effects trimmed. Fronts and LFE are left exactly where the
      * mixer put them.
      *
      * This is what makes the dialogue knob worth something with the downmix set
      * to "Auto", which is the default and the case the feature exists for: the
-     * device still folds the 5.1/7.1 stream, but it now folds one whose centre is
+     * device still folds the 5.1/7.1 stream, but it now folds one whose center is
      * already lifted, instead of the untouched mix whose speech sits under the
      * music. Trimming the surrounds matters as much as the lift — it is what
      * stops "louder dialogue" from also meaning "louder explosions".
@@ -216,7 +216,7 @@ internal object AudioDownmix {
      * "Auto": fold down only as far as the output actually needs. An output
      * that can take six channels keeps 5.1 (7.1 folds into it); anything
      * narrower gets the same 2.0 the platform's own downmix would have produced
-     * — except that it is made HERE, with the centre lifted, instead of by the
+     * — except that it is made HERE, with the center lifted, instead of by the
      * device with nothing.
      *
      * Auto used to hand every multichannel stream to the device untouched. That
@@ -237,14 +237,14 @@ internal object AudioDownmix {
      * Whether the layout setting now asks for a different number of channels
      * than the one the sink is carrying ([currentOutputChannels]) for a stream
      * decoded as [inputChannels] channels — i.e. whether the sink has to be
-     * reconfigured to honour it.
+     * reconfigured to honor it.
      *
      * The sink builds its AudioTrack from the processed channel count, so the
      * one thing that cannot be changed from inside an
      * [androidx.media3.common.audio.AudioProcessor] is the number of channels:
      * this is the test [LiveDownmixAudioSink] runs on every buffer on the audio
      * thread before driving Media3's own reconfigure path. Everything else — the
-     * centre lift, the surround trim, the volume gain — is per-sample and needs
+     * center lift, the surround trim, the volume gain — is per-sample and needs
      * no rebuild at all.
      *
      * Notably this is false for the common "nothing to fold" cases: a stereo
@@ -262,7 +262,7 @@ internal object AudioDownmix {
     /**
      * Linked-channel peak limiter: ONE gain for every output channel, so the
      * stereo image never shifts when it engages (independent per-channel
-     * limiting pulls the loud side down and walks the phantom centre around).
+     * limiting pulls the loud side down and walks the phantom center around).
      *
      * Fast attack (a hard transient is caught inside ~2 ms), slow release
      * (~150 ms) so music does not pump. A downmix sums four to six channels of

@@ -7,7 +7,7 @@ import org.junit.Test
 
 /**
  * Both Home rails keep ONE entry per show, even though a show reaches them
- * under more than one id flavour at once.
+ * under more than one id flavor at once.
  *
  * Reported bug: the same show appeared twice in Continue Watching AND in
  * Upcoming. Neither rail compared what the two cards actually resolve to:
@@ -21,7 +21,7 @@ import org.junit.Test
  *  - Upcoming deduped on the raw `parentId` string, so the same show produced
  *    two rows - one from the local card, one from the Simkl caught-up card.
  *
- * The resolved TMDB id is what pairs the flavours, which is why grouping uses
+ * The resolved TMDB id is what pairs the flavors, which is why grouping uses
  * [upNextGroupingKeys] rather than card order or the display title.
  */
 class RailShowIdentityTest {
@@ -259,9 +259,9 @@ class RailShowIdentityTest {
     // ── the instant snapshot seed ────────────────────────────────────
 
     @Test
-    fun `two flavours of one show collapse to the newest snapshot card`() {
+    fun `two flavors of one show collapse to the newest snapshot card`() {
         // The seed's SQL groups by the raw parent id, so the show's older
-        // imdb-flavoured row and its newer tmdb-flavoured row both arrive -
+        // imdb-flavored row and its newer tmdb-flavored row both arrive -
         // and neither has a resolved TMDB id to pair them with yet.
         val older = card(
             parentId = "tt0898266",

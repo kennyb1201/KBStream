@@ -113,7 +113,7 @@ class DolbyVisionCompatTest {
     /**
      * The player detects P5 from the extractor's `label` (the original declared
      * codec, preserved through the rewrite), because the rewritten codecs
-     * string is plain HEVC. If this label extraction ever stops recognising
+     * string is plain HEVC. If this label extraction ever stops recognizing
      * P5, the GPU color path never engages and P5 plays green/purple again.
      */
     @Test

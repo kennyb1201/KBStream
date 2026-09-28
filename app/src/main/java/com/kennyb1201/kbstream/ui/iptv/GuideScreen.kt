@@ -148,7 +148,7 @@ fun GuideScreen(
     val playlist by viewModel.playlist.collectAsState()
     val visibleChannels by viewModel.visibleChannels.collectAsState()
     // Channels whose guide row has actually been queried. Used to keep a
-    // channel that is merely still loading from being labelled "No program
+    // channel that is merely still loading from being labeled "No program
     // data" (see resolvedGuideChannelIds in the ViewModel).
     val resolvedGuideIds by viewModel.resolvedGuideChannelIds.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -220,8 +220,8 @@ fun GuideScreen(
     var catchupChannel by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
     val catchupPrograms by viewModel.catchupPrograms.collectAsStateWithLifecycle()
 
-    // Programme reminders: set from the channel menu ("REMIND ME: <next>").
-    // A poller fires an in-guide banner when a reminder's programme starts;
+    // Program reminders: set from the channel menu ("REMIND ME: <next>").
+    // A poller fires an in-guide banner when a reminder's program starts;
     // WATCH NOW zaps via the same path as a normal channel click.
     var reminders by remember(activeProfileId) {
         mutableStateOf(IptvReminderStore.load(guidePreferences))
@@ -236,7 +236,7 @@ fun GuideScreen(
                     it.startUtcMillis in 1..now && now < it.endUtcMillis
                 }
             }
-            // Prune reminders whose programme ended more than 10 minutes ago.
+            // Prune reminders whose program ended more than 10 minutes ago.
             val staleCutoff = now - 10 * 60_000L
             if (reminders.any { it.endUtcMillis in 1..staleCutoff }) {
                 reminders.filter { it.endUtcMillis in 1..staleCutoff }.forEach { stale ->
@@ -689,7 +689,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
     // has never covered, and the scroll-driven prefetch below is debounced
     // (400ms) to stop scroll churn from re-querying on every frame. Fine
     // while scrolling, but on a group change that debounce stacked on top of
-    // the lineup query, so the new group sat there with no programme data for
+    // the lineup query, so the new group sat there with no program data for
     // over a second. Queueing the incoming group's window here starts the
     // query on the first frame instead.
     viewModel.updateGuideChannels(
@@ -1217,7 +1217,7 @@ Spacer(modifier = Modifier.height(14.dp))
                                 if (itemReminderActive) {
                                     IptvReminderStore.remove(guidePreferences, item.channel.id, nxt.startUtcMillis)
                                     // Drop the armed alert too, or the reminder
-                                    // the user just cancelled still buzzes.
+                                    // the user just canceled still buzzes.
                                     ReminderWorker.cancel(appContext, reminderKey)
                                     reminders = IptvReminderStore.load(guidePreferences)
                                 } else {
@@ -1227,12 +1227,12 @@ Spacer(modifier = Modifier.height(14.dp))
                                             channelId = item.channel.id,
                                             channelName = item.channel.displayName,
                                             logoUrl = item.channel.logoUrl,
-                                            programmeTitle = nxt.title,
+                                            programTitle = nxt.title,
                                             startUtcMillis = nxt.startUtcMillis,
                                             endUtcMillis = nxt.endUtcMillis
                                         )
                                     )
-                                    // Arm the alert at the programme's start: the
+                                    // Arm the alert at the program's start: the
                                     // guide's own banner only exists while the
                                     // guide is on screen, so without this a
                                     // reminder fires only if you happen to be
@@ -1272,7 +1272,7 @@ Spacer(modifier = Modifier.height(14.dp))
                     )
                 }
 
-                // Programme-started banner: fires when a reminder's window
+                // Program-started banner: fires when a reminder's window
                 // opens while the guide is open. WATCH NOW reuses the exact
                 // channel-click path (recent list + onPlayChannel).
                 reminderBanner?.let { hit ->
@@ -1294,7 +1294,7 @@ Spacer(modifier = Modifier.height(14.dp))
                             style = MaterialTheme.typography.labelLarge
                         )
                         Text(
-                            text = hit.programmeTitle,
+                            text = hit.programTitle,
                             color = KBTextHi,
                             style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
@@ -1552,7 +1552,7 @@ private fun SetupPanel(
                 if (containFocus) {
                     // The overlay covers the guide but does not own its focus, so
                     // a search past the panel's edge used to land on the group
-                    // chips behind it. Cancelling the exit keeps the press
+                    // chips behind it. Canceling the exit keeps the press
                     // inside — the panel leaves with Back, not with the D-pad.
                     Modifier.focusProperties { onExit = { cancelFocusChange() } }
                 } else {
@@ -1964,7 +1964,7 @@ private fun GroupChip(
 private fun ChannelRowCard(
     item: IptvChannelWithEpg,
     selected: Boolean,
-    /** Its guide row has not been queried yet, so "no programme" is unknown. */
+    /** Its guide row has not been queried yet, so "no program" is unknown. */
     guidePending: Boolean = false,
     onClick: () -> Unit,
     onFocused: () -> Unit,
@@ -2069,7 +2069,7 @@ private fun ChannelRowCard(
                     }
                 }
 
-                // Three states, not two: a programme, a channel whose guide
+                // Three states, not two: a program, a channel whose guide
                 // was queried and genuinely has nothing on, and a channel
                 // whose guide row is still being queried. The last one used
                 // to read "No program data" as well, which made every group
@@ -2598,7 +2598,7 @@ private fun ChannelActionsDialog(
 }
 
 /**
- * Catch-up (DVR) program list for one channel: fully-aired programmes the
+ * Catch-up (DVR) program list for one channel: fully-aired programs the
  * provider's DVR template can still serve, newest first. Empty state
  * explains why the list can be empty (provider advertises catch-up but has
  * no guide history in the window).
@@ -2733,7 +2733,7 @@ private data class GuideProgramHit(
 private fun ChannelSearchDialog(
     query: String,
     results: List<IptvChannelWithEpg>,
-    /** Guide rows resolved so far, so a hit can show its now/next programme. */
+    /** Guide rows resolved so far, so a hit can show its now/next program. */
     guideItems: Map<String, IptvChannelWithEpg> = emptyMap(),
     programHits: List<GuideProgramHit> = emptyList(),
     channelKey: (IptvChannelWithEpg) -> String,

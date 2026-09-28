@@ -204,7 +204,7 @@ private fun formatTimeLeft(remainingMinutes: Int?): String? {
  * One chip of the top bar: the shared surface chrome and nothing else.
  *
  * The bar holds two kinds of chip now - word chips and the profile avatar - and
- * they must stay identical in size, focus ring and press behaviour, so the
+ * they must stay identical in size, focus ring and press behavior, so the
  * chrome lives here once instead of being copied per chip.
  */
 @Composable
@@ -603,7 +603,7 @@ private fun HeroInlineTrailerPlayer(
 
         // Watchdog: if the trailer doesn't actually start playing
         // (or gets stuck buffering), bail out to the backdrop so the
-        // hero never stays on a blank grey screen.
+        // hero never stays on a blank gray screen.
         val watchdog = object : Runnable {
             override fun run() {
                 val state = exoPlayer.playbackState
@@ -842,7 +842,7 @@ private fun HomeHero(
         !trailerKey.isNullOrBlank() && autoPlayTrailer
 
     // Inline ExoPlayer is the only hero trailer path. The YouTube web
-    // embed was tried but renders a grey screen with audio + subtitles on
+    // embed was tried but renders a gray screen with audio + subtitles on
     // some TVs and has no reliable end-of-video signal. ExoPlayer shares
     // the main player's proven stack (OkHttp + the youtube client UA +
     // bounded range requests via YoutubeChunkedDataSourceFactory), renders
@@ -1361,7 +1361,7 @@ private fun HomeHero(
             // Status comes FIRST, followed by season/episode totals.
             //
             // Continue Watching items intentionally do NOT show the
-            // TMDB status (Ongoing / Ended / Cancelled / etc.).
+            // TMDB status (Ongoing / Ended / Canceled / etc.).
             if (
                 continueWatchingItem == null &&
                 (
@@ -3016,8 +3016,8 @@ fun HomeScreen(
                             item(key = "loading") {
                                 // The shared status card -- the same plate the
                                 // browse screens show while they load -- rather
-                                // than a third hand-rolled centred spinner.
-                                // fillParentMaxSize centres it in the rail
+                                // than a third hand-rolled centered spinner.
+                                // fillParentMaxSize centers it in the rail
                                 // viewport, since an item otherwise sizes to its
                                 // own content height and would sit at the top.
                                 KBStatusMessage(
@@ -3030,7 +3030,7 @@ fun HomeScreen(
 
                         // Only when there are rails for it to sit above. With
                         // the rail list empty this branch won over the retry
-                        // card below, so a failed cold start showed a dead grey
+                        // card below, so a failed cold start showed a dead gray
                         // line instead of the card whose entire point is that
                         // pressing OK retries -- see the empty branch.
                         error != null && rails.isNotEmpty() -> {
@@ -3040,7 +3040,7 @@ fun HomeScreen(
                                         "Error: $error",
                                     // Muted: a failed background refresh is status
                                     // above the rails, not a bright
-                                    // default-coloured line shouting over them.
+                                    // default-colored line shouting over them.
                                     color = KBTextLo,
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,

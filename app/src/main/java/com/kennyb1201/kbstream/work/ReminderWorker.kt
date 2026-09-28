@@ -14,12 +14,12 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 
 /**
- * Delivers live-TV programme reminders while the app is in the background.
+ * Delivers live-TV program reminders while the app is in the background.
  *
- * One delayed job per reminder, armed at the programme's start time (see
+ * One delayed job per reminder, armed at the program's start time (see
  * [ReminderNotifier] for what the job does). A single periodic job was the
  * obvious alternative but WorkManager's floor for periodic work is 15
- * minutes, which would announce a programme that started a quarter of an hour
+ * minutes, which would announce a program that started a quarter of an hour
  * ago — not what "remind me when this starts" means. Delayed work survives
  * reboots and app kills, so nothing needs re-arming at boot.
  */
@@ -59,7 +59,7 @@ class ReminderWorker(
             }
             val now = System.currentTimeMillis()
             IptvReminderStore.load(IptvReminderStore.prefsFor(context)).forEach { reminder ->
-                // Already-started programmes are the guide banner's job; arming
+                // Already-started programs are the guide banner's job; arming
                 // them would announce something the user is already late for.
                 if (ReminderRules.isStale(reminder.endUtcMillis, now)) return@forEach
                 if (reminder.startUtcMillis > now) arm(context, reminder.key, reminder.startUtcMillis)

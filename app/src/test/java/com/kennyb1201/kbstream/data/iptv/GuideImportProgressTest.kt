@@ -36,7 +36,7 @@ class GuideImportProgressTest {
         GuideImportProgress.begin(sourceCount = 1, startedAtMs = start)
 
         assertEquals(
-            "0.0 MB · 0 programmes · 0:00",
+            "0.0 MB · 0 programs · 0:00",
             label(GuideImportProgress.state.value, start)
         )
     }
@@ -48,7 +48,7 @@ class GuideImportProgressTest {
         GuideImportProgress.rows(128_400)
 
         assertEquals(
-            "34.2 MB · 128,400 programmes · 4:12",
+            "34.2 MB · 128,400 programs · 4:12",
             label(GuideImportProgress.state.value, start + 252_000L)
         )
     }
@@ -61,7 +61,7 @@ class GuideImportProgressTest {
         GuideImportProgress.rows(12)
 
         assertEquals(
-            "source 2/3 · 1.0 MB · 12 programmes · 0:05",
+            "source 2/3 · 1.0 MB · 12 programs · 0:05",
             label(GuideImportProgress.state.value, start + 5_000L)
         )
     }
@@ -81,7 +81,7 @@ class GuideImportProgressTest {
         assertEquals(GuideImportPhase.READING, state?.phase)
         // Still timed from the start of the pass, not of the source.
         assertEquals(
-            "source 2/2 · 0.0 MB · 0 programmes · 6:00",
+            "source 2/2 · 0.0 MB · 0 programs · 6:00",
             label(state, start + 360_000L)
         )
     }
@@ -93,7 +93,7 @@ class GuideImportProgressTest {
         GuideImportProgress.phase(GuideImportPhase.SAVING)
 
         assertEquals(
-            "saving 128,400 programmes · 4:40",
+            "saving 128,400 programs · 4:40",
             label(GuideImportProgress.state.value, start + 280_000L)
         )
     }
@@ -103,7 +103,7 @@ class GuideImportProgressTest {
         GuideImportProgress.begin(sourceCount = 1, startedAtMs = start)
 
         assertEquals(
-            "0.0 MB · 0 programmes · 1:02:03",
+            "0.0 MB · 0 programs · 1:02:03",
             label(GuideImportProgress.state.value, start + 3_723_000L)
         )
     }
@@ -113,7 +113,7 @@ class GuideImportProgressTest {
         GuideImportProgress.begin(sourceCount = 1, startedAtMs = start)
 
         assertEquals(
-            "0.0 MB · 0 programmes · 0:00",
+            "0.0 MB · 0 programs · 0:00",
             label(GuideImportProgress.state.value, start - 60_000L)
         )
     }

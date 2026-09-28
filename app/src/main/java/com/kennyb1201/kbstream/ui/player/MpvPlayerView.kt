@@ -138,7 +138,7 @@ class MpvPlayerView @JvmOverloads constructor(
     /** Layout the output should carry: Auto / Stereo / 5.1. */
     private var downmixTarget = PlayerAudioTuning.DOWNMIX_AUTO
 
-    /** Centre (or phantom-centre) lift: 0 off, 1 low, 2 high. */
+    /** Center (or phantom-center) lift: 0 off, 1 low, 2 high. */
     private var dialogueBoost = 0
 
     /** Extra output gain in dB, 0-15. */
@@ -159,7 +159,7 @@ class MpvPlayerView @JvmOverloads constructor(
      * Buffering profile: 0 balanced, 1 low latency.
      *
      * `cache` / `demuxer-max-bytes` are per-file mpv options, so a change made
-     * while a film plays is honoured by the next load rather than by this one -
+     * while a film plays is honored by the next load rather than by this one -
      * which is what the panel row says.
      */
     private var bufferMode = 0
@@ -307,8 +307,8 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     /**
-     * Dialogue lift, matching what the main player's chain does: a centre
-     * boost on a multichannel mix, and a mid (phantom-centre) boost on a
+     * Dialogue lift, matching what the main player's chain does: a center
+     * boost on a multichannel mix, and a mid (phantom-center) boost on a
      * stereo one - the only place dialogue can live in a 2.0 track.
      *
      * Applied through mpv's `pan` filter, built from the channel count mpv
@@ -369,7 +369,7 @@ class MpvPlayerView @JvmOverloads constructor(
     fun setBufferMode(mode: Int) {
         bufferMode = mode
         // Before init the value is picked up by applyOptions(); after it, mpv
-        // takes the properties and honours them on the next file it opens.
+        // takes the properties and honors them on the next file it opens.
         if (initialized) applyCacheOptions(mode)
     }
 
@@ -443,7 +443,7 @@ class MpvPlayerView @JvmOverloads constructor(
      * The languages this session wants, in the app's own tag form ("en").
      *
      * Called before [initialize] so they land as the `alang`/`slang` options
-     * the demuxer honours at open time, and again later when the panel changes
+     * the demuxer honors at open time, and again later when the panel changes
      * them, as runtime properties (which act on the next file).
      */
     fun setLanguagePreferences(audio: String?, subtitle: String?) {
@@ -806,13 +806,13 @@ class MpvPlayerView @JvmOverloads constructor(
     /**
      * The `pan` spec for [level] at [channels], or null for "no filter".
      *
-     * Only the centre channel is lifted on a multichannel mix, and the mid
+     * Only the center channel is lifted on a multichannel mix, and the mid
      * component on a stereo one: `mid = (L+R)/2` is where a 2.0 track keeps its
      * voices while music beds sit in `(L-R)/2`, so lifting mid raises dialogue
      * without dragging the whole mix up - exactly what [PlayerAudioTuning.midGain]
      * and [PlayerAudioTuning.inPlaceCenterGain] express on the other engine.
      *
-     * Channels are named by index (`c2` is the centre in every standard
+     * Channels are named by index (`c2` is the center in every standard
      * layout), which is what keeps this independent of whether the file
      * declares 5.1 or 5.1(side).
      */
@@ -821,7 +821,7 @@ class MpvPlayerView @JvmOverloads constructor(
         val gain = 1f + 0.35f * level
         fun gainText(value: Float): String = String.format(Locale.US, "%.4f", value)
         return when (channels) {
-            // Mono has no centre to lift and no second channel to fold
+            // Mono has no center to lift and no second channel to fold
             // against: the whole track is already the dialogue.
             1 -> null
             2 -> {
@@ -829,19 +829,19 @@ class MpvPlayerView @JvmOverloads constructor(
                 val cross = gainText((gain - 1f) / 2f)
                 "pan=stereo|c0=$same*c0+$cross*c1|c1=$cross*c0+$same*c1"
             }
-            6 -> passThroughWithCentreLift("5.1", 6, gainText(gain))
-            8 -> passThroughWithCentreLift("7.1", 8, gainText(gain))
+            6 -> passThroughWithCenterLift("5.1", 6, gainText(gain))
+            8 -> passThroughWithCenterLift("7.1", 8, gainText(gain))
             else -> null
         }
     }
 
-    /** [count] channels of the [layout], all passed through bar the centre. */
-    private fun passThroughWithCentreLift(layout: String, count: Int, gain: String): String =
+    /** [count] channels of the [layout], all passed through bar the center. */
+    private fun passThroughWithCenterLift(layout: String, count: Int, gain: String): String =
         buildString {
             append("pan=").append(layout)
             for (index in 0 until count) {
                 append("|c").append(index).append('=')
-                if (index == CENTRE_CHANNEL_INDEX) append(gain).append('*')
+                if (index == CENTER_CHANNEL_INDEX) append(gain).append('*')
                 append('c').append(index)
             }
         }
@@ -1117,7 +1117,7 @@ class MpvPlayerView @JvmOverloads constructor(
          */
         const val VOLUME_MAX = 800.0
 
-        /** FL, FR, FC, ... - the centre is channel 3 in every standard layout. */
-        const val CENTRE_CHANNEL_INDEX = 2
+        /** FL, FR, FC, ... - the center is channel 3 in every standard layout. */
+        const val CENTER_CHANNEL_INDEX = 2
     }
 }

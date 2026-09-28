@@ -10,7 +10,7 @@ import org.junit.Test
  * Reported problem: saving one from that rail put the poster in the library
  * with the rank number and the "JUST ADDED" strip still burned into it — both
  * are part of the add-on's ranked/tagged image, not UI the app draws, so they
- * travelled with the URL the library stored.
+ * traveled with the URL the library stored.
  */
 class LibraryPosterTest {
 

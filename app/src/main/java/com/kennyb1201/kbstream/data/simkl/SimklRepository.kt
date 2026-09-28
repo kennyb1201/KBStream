@@ -2711,9 +2711,9 @@ class SimklRepository(
 
         } catch (e: kotlinx.coroutines.CancellationException) {
 
-            // Not a fetch failure. The caller is being cancelled, so its result
+            // Not a fetch failure. The caller is being canceled, so its result
             // is discarded either way - and answering with the last cached feed
-            // here is what made a cancelled continue-watching load look like a
+            // here is what made a canceled continue-watching load look like a
             // successful one. (The runCatchingCancellable write above rethrows
             // for the same reason.)
             throw e

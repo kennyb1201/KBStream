@@ -70,7 +70,7 @@ internal fun DialogueBoostRow(
         }
     }
     Text(
-        text = "Each step lifts voices (the centre channel, or the phantom centre of a stereo " +
+        text = "Each step lifts voices (the center channel, or the phantom center of a stereo " +
             "track) further over score, ambience and explosions, and trims the surrounds to " +
             "match. Off is the untouched mix. A title can override this from the player's own " +
             "panel.",

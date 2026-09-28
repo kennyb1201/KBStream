@@ -25,7 +25,7 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
  * What is deliberately *not* consulted is `FEATURE_PICTURE_IN_PICTURE`. A box
  * that lacks it returns false from the call below and nothing happens, so the
  * flag would only ever be able to take PiP away - from the cheap Android TV
- * boxes that do not declare it while still honouring a PiP window. Whether the
+ * boxes that do not declare it while still honoring a PiP window. Whether the
  * platform really shrinks the window is answered by `enterPictureInPictureMode`
  * itself, not by a manifest flag.
  */

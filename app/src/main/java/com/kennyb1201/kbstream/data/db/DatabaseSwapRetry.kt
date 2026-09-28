@@ -39,7 +39,7 @@ import kotlinx.coroutines.flow.retryWhen
  * Kept free of Android types so the rule can be unit tested.
  */
 
-/** Depth cap on the cause walk: a wrapped error is still recognised, a cycle is not walked forever. */
+/** Depth cap on the cause walk: a wrapped error is still recognized, a cycle is not walked forever. */
 private const val CAUSE_DEPTH_LIMIT = 8
 
 /**
@@ -98,7 +98,7 @@ internal const val DB_SWAP_RETRY_MAX_DELAY_MS = 2_000L
  * symptom, up to [attempts] times with a doubling pause. [onRetry] is called
  * before each wait so the swap is visible in logcat.
  *
- * A [CancellationException] always propagates: a cancelled guide read must not
+ * A [CancellationException] always propagates: a canceled guide read must not
  * be retried back to life.
  */
 internal suspend fun <T> withDatabaseSwapRetry(

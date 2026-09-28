@@ -39,7 +39,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import kotlinx.coroutines.delay
 
-/** How long a plain acknowledgement ("Added to list") stays up. */
+/** How long a plain acknowledgment ("Added to list") stays up. */
 private const val FEEDBACK_VISIBLE_MS = 3_500L
 
 /** Messages that ask something of the viewer get longer — see [visibleMillisFor]. */
@@ -81,7 +81,7 @@ data class KBFeedbackMessage(
  * Before this the app had four ways of saying "something happened": an Android
  * `Toast` in the player and the profile editor, a dismissible `StatusBanner` in
  * add-ons, an `InlineErrorChip` in the guide and a plain `Text` line in the
- * Simkl screen. The system Toast is the worst of them on a TV — small, grey,
+ * Simkl screen. The system Toast is the worst of them on a TV — small, gray,
  * phone-shaped, and gone before a viewer sitting ten feet away has finished
  * reading it.
  */
@@ -128,9 +128,9 @@ fun rememberKBFeedback(): KBFeedbackState =
     LocalKBFeedback.current ?: rememberKBFeedbackState()
 
 /**
- * Renders the current message bottom-centre, above everything else in the app
+ * Renders the current message bottom-center, above everything else in the app
  * shell. Auto-dismisses; a new message replaces the old one outright rather
- * than queueing, because on a TV these are acknowledgements, not a log.
+ * than queueing, because on a TV these are acknowledgments, not a log.
  *
  * The container carries `liveRegion = Polite`, so TalkBack reads each message
  * as it appears. Nothing in the app announced state changes before this:

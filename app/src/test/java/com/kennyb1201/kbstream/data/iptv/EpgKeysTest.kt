@@ -9,7 +9,7 @@ import org.junit.Test
 
 /**
  * These rules decide whether a playlist channel matches a guide channel, and a
- * wrong answer is invisible: the channel shows no programmes at all, or borrows
+ * wrong answer is invisible: the channel shows no programs at all, or borrows
  * another channel's. M3U and XMLTV spellers disagree about case, decorations,
  * `&`/`+` and punctuation, so each of those cases is pinned.
  */
@@ -124,11 +124,11 @@ class EpgKeysTest {
     }
 
     @Test
-    fun `a mixed-case guide id only matches its programmes through the program key`() {
-        // The regression this exists for: programmes are stored lowercased and
+    fun `a mixed-case guide id only matches its programs through the program key`() {
+        // The regression this exists for: programs are stored lowercased and
         // the DAO matches `channelId IN (...)` case-sensitively, so a query
         // handed the guide's raw id found nothing -- a matched channel whose
-        // programmes were imported, showing "No program data" forever.
+        // programs were imported, showing "No program data" forever.
         val rawGuideId = "ESPN.us"
         assertNotEquals(rawGuideId, epgProgramChannelKey(rawGuideId))
         assertEquals("espn.us", epgProgramChannelKey(rawGuideId))
@@ -276,7 +276,7 @@ class EpgKeysTest {
     }
 
     @Test
-    fun `a qualifier the guide lacks still matches, so its programmes stay`() {
+    fun `a qualifier the guide lacks still matches, so its programs stay`() {
         // The ESPN2 HD / ESPN2 case: matched through the SIMPLIFIED pass, so
         // the simplified spelling has to be one of the playlist's keys.
         val keys = playlistEpgMatchKeys(
@@ -328,7 +328,7 @@ class EpgKeysTest {
     @Test
     fun `channel details outside the guide window do not change it`() {
         // A background refresh routinely touches logos and stream URLs; that
-        // must not throw away loaded programmes and re-run every batch.
+        // must not throw away loaded programs and re-run every batch.
         val before = listOf(channel("bbc1"), channel("itv1"))
         val after = listOf(
             channel("bbc1", name = "Channel bbc1", logoUrl = "http://logo/new.png"),
@@ -340,7 +340,7 @@ class EpgKeysTest {
     @Test
     fun `matcher inputs do change it`() {
         val before = listOf(channel("bbc1", name = "BBC One"), channel("itv1"))
-        // Rename: the guide is matched by name, so programmes may differ now.
+        // Rename: the guide is matched by name, so programs may differ now.
         assertNotEquals(
             fingerprint(before),
             fingerprint(listOf(channel("bbc1", name = "BBC One HD"), channel("itv1")))

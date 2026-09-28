@@ -9,8 +9,8 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * The two content-based modes exist because they are the two things a viewer
  * actually means by "I'm going to fall asleep": *finish what I'm watching, then
- * stop* ([END_OF_EPISODE]) and *stop when this programme is over*
- * ([END_OF_PROGRAMME], live only). A minutes timer is the fallback for when
+ * stop* ([END_OF_EPISODE]) and *stop when this program is over*
+ * ([END_OF_PROGRAM], live only). A minutes timer is the fallback for when
  * neither is on the table — a live channel with no guide data, or a viewer who
  * simply wants to be off to sleep by a certain time.
  */
@@ -27,8 +27,8 @@ internal enum class SleepTimerMode {
      */
     END_OF_EPISODE,
 
-    /** Live: stops when the guide's current programme block ends. */
-    END_OF_PROGRAMME
+    /** Live: stops when the guide's current program block ends. */
+    END_OF_PROGRAM
 }
 
 /** One row of the panel's SLEEP TIMER section. */
@@ -88,20 +88,20 @@ internal const val SLEEP_FADE_MS = 20_000L
  * is not something to hand a sleeping viewer, so the ends are pulled into this
  * window: at least a minute of playback, at most six hours.
  */
-private const val PROGRAMME_MIN_LEAD_MS = 60_000L
-private const val PROGRAMME_MAX_SPAN_MS = 6L * 60L * 60L * 1000L
+private const val PROGRAM_MIN_LEAD_MS = 60_000L
+private const val PROGRAM_MAX_SPAN_MS = 6L * 60L * 60L * 1000L
 
 /** How long the "minutes" choices run for. Wall clock, not content. */
 internal fun sleepDeadlineMs(nowMs: Long, minutes: Int): Long =
     nowMs + minutes.coerceAtLeast(1) * 60_000L
 
 /** Wall-clock deadline for "end of program", clamped as described above. */
-internal fun programmeSleepDeadlineMs(nowMs: Long, programmeEndMs: Long): Long =
-    programmeEndMs.coerceIn(nowMs + PROGRAMME_MIN_LEAD_MS, nowMs + PROGRAMME_MAX_SPAN_MS)
+internal fun programSleepDeadlineMs(nowMs: Long, programEndMs: Long): Long =
+    programEndMs.coerceIn(nowMs + PROGRAM_MIN_LEAD_MS, nowMs + PROGRAM_MAX_SPAN_MS)
 
 /**
  * The rows the panel shows, in order: Off, the minute steps, then whatever
- * ending this session can actually honour.
+ * ending this session can actually honor.
  *
  * "End of program" is offered **only** when the guide has a current block
  * that ends in the future. A row that silently degraded to an hour because the
@@ -111,11 +111,11 @@ internal fun programmeSleepDeadlineMs(nowMs: Long, programmeEndMs: Long): Long =
 internal fun sleepTimerOptions(
     isLive: Boolean,
     isEpisode: Boolean,
-    hasProgrammeEnd: Boolean
+    hasProgramEnd: Boolean
 ): List<SleepTimerOption> {
     val endings = when {
-        isLive && hasProgrammeEnd ->
-            listOf(SleepTimerOption("End of program", SleepTimerMode.END_OF_PROGRAMME))
+        isLive && hasProgramEnd ->
+            listOf(SleepTimerOption("End of program", SleepTimerMode.END_OF_PROGRAM))
 
         isLive -> emptyList()
 
@@ -170,7 +170,7 @@ internal fun sleepTimerStatusText(state: SleepTimerState, nowMs: Long): String {
  *
  * This is what the Up Next countdown re-checks on every tick, so arming the
  * timer *after* the card appeared - which is the normal way the two meet, since
- * the card opens during the credits - is honoured too, right up to the last
+ * the card opens during the credits - is honored too, right up to the last
  * second.
  *
  * Deliberately not applied to a handoff the viewer presses for: an explicit
@@ -221,7 +221,7 @@ internal object SleepTimer {
      * offers that row when the guide has an end, so this is the case where the
      * guide data went away between drawing the row and pressing it.
      */
-    fun select(option: SleepTimerOption, nowMs: Long, programmeEndMs: Long? = null) {
+    fun select(option: SleepTimerOption, nowMs: Long, programEndMs: Long? = null) {
         _state.value = when (option.mode) {
             SleepTimerMode.OFF -> SleepTimerState()
 
@@ -231,10 +231,10 @@ internal object SleepTimer {
                 label = option.label
             )
 
-            SleepTimerMode.END_OF_PROGRAMME -> programmeEndMs?.let { end ->
+            SleepTimerMode.END_OF_PROGRAM -> programEndMs?.let { end ->
                 SleepTimerState(
                     mode = option.mode,
-                    deadlineMs = programmeSleepDeadlineMs(nowMs, end),
+                    deadlineMs = programSleepDeadlineMs(nowMs, end),
                     label = option.label
                 )
             } ?: SleepTimerState()

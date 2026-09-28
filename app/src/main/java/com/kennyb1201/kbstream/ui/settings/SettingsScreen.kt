@@ -310,7 +310,7 @@ fun SettingsScreen(
         // focused row is brought into view by its scrollable ancestor, so
         // walking down the rail to About just works.
         //
-        // The pane colour is repeated here because the rail's background now
+        // The pane color is repeated here because the rail's background now
         // stops at its content on a panel tall enough to fit every row
         // (a 4K set), where this scrollable does not scroll at all.
         val railScroll = rememberScrollState()
@@ -818,14 +818,14 @@ fun SettingsScreen(
                     label = "Audio Downmix",
                     description = when (audioDownmix) {
                         PlayerAudioTuning.DOWNMIX_STEREO ->
-                            "Fold 5.1/7.1 into stereo with the centre channel (dialogue) lifted and " +
+                            "Fold 5.1/7.1 into stereo with the center channel (dialogue) lifted and " +
                                 "the surrounds trimmed. Best for a TV's own speakers."
                         PlayerAudioTuning.DOWNMIX_SURROUND ->
                             "Keep 5.1 (7.1 folds into it). Use with an AVR or a device that really has " +
                                 "six channels."
                         else ->
                             "Fold multichannel down to what this device can carry — stereo on a TV's " +
-                                "own speakers, 5.1 kept on an AVR — lifting the centre channel as it " +
+                                "own speakers, 5.1 kept on an AVR — lifting the center channel as it " +
                                 "folds."
                     },
                     options = PlayerAudioTuning.DOWNMIX_OPTIONS,
@@ -1951,7 +1951,7 @@ fun SettingsScreen(
                 clearingHistory = true
                 backupScope.launch {
                     // Plain runCatching, deliberately: `clearingHistory = false`
-                    // below has to run even when this coroutine is cancelled, or
+                    // below has to run even when this coroutine is canceled, or
                     // the confirm button stays disabled for the rest of the
                     // session. A rethrow here would skip that reset.
                     runCatching {
@@ -2494,7 +2494,7 @@ private fun SettingsClearHistoryDialog(
 // ── Helper composables ──────────────────────────────────────────
 
 /**
- * A labelled option row for the audio-tuning settings: description under the
+ * A labeled option row for the audio-tuning settings: description under the
  * label, then the pills, four per line.
  */
 /**
@@ -2577,7 +2577,7 @@ private fun SettingsExternalPlayerDialog(
 }
 
 /**
- * A labelled option row for the audio-tuning settings: description under the
+ * A labeled option row for the audio-tuning settings: description under the
  * label, then the pills, four per line.
  */
 @Composable

@@ -40,12 +40,12 @@ class PlayerTrackBridgeLanguageTest {
     @Test
     fun `only the Auto entry changes`() {
         val plain = PlayerTrackBridge.LANGUAGE_OPTIONS
-        val labelled = PlayerTrackBridge.playerLanguageOptions("en")
+        val labeled = PlayerTrackBridge.playerLanguageOptions("en")
 
-        assertEquals(plain.size, labelled.size)
-        assertEquals(plain.drop(1), labelled.drop(1))
+        assertEquals(plain.size, labeled.size)
+        assertEquals(plain.drop(1), labeled.drop(1))
         // The codes are what get stored and applied; none of them may shift.
-        assertEquals(plain.map { it.second }, labelled.map { it.second })
+        assertEquals(plain.map { it.second }, labeled.map { it.second })
     }
 
     @Test

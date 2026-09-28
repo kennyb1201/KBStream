@@ -235,8 +235,8 @@ class TrickplayTest {
     // ── where the card sits ──────────────────────────────────────────────────
 
     @Test
-    fun `a card anchored on the thumb is centred on it`() {
-        // The card is laid out centred already, so the translation is simply how
+    fun `a card anchored on the thumb is centered on it`() {
+        // The card is laid out centered already, so the translation is simply how
         // far the anchor is from the middle of the screen.
         assertEquals(
             0f,
@@ -261,7 +261,7 @@ class TrickplayTest {
     }
 
     @Test
-    fun `a card wider than the screen is centred rather than clamped`() {
+    fun `a card wider than the screen is centered rather than clamped`() {
         assertEquals(0f, trickplayAnchorTranslation(500f, 400, 600, 16f), 0.01f)
         assertEquals(0f, trickplayAnchorTranslation(500f, 0, 480, 16f), 0.01f)
         assertEquals(0f, trickplayAnchorTranslation(500f, 1920, 0, 16f), 0.01f)

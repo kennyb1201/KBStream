@@ -11,7 +11,7 @@ import org.junit.Test
  *
  * Two failures matter equally here: missing a genuinely new episode, and
  * buzzing about one the user has already been told about (or about a whole
- * back catalogue the first time the app ever looks).
+ * back catalog the first time the app ever looks).
  */
 class NewEpisodeRulesTest {
 

@@ -376,7 +376,7 @@ private fun playbackItemMatchesParent(
 
 /*
  * Runs [block]'s suspending work on a job the caller cannot cancel, so an
- * in-flight scrobble request survives the player cancelling the coroutine
+ * in-flight scrobble request survives the player canceling the coroutine
  * that launched it. Matches MdbListClient.postScrobble().
  */
 private suspend fun <T> uncancellable(block: suspend () -> T): T =
@@ -448,7 +448,7 @@ suspend fun SimklRepository.scrobbleImpl(
         // The player runs these on a job it cancels the moment the next
         // playback event arrives (buffering -> playing toggles more than once
         // on a slow start), and cancellation killed the request mid-flight:
-        // the log showed "scrobble/start error: x0 was cancelled" a fraction
+        // the log showed "scrobble/start error: x0 was canceled" a fraction
         // of a second after the start was sent, so Simkl was never told the
         // session began and the title never showed as now-playing — while the
         // independently-sent MDBList mirror did get through (its postScrobble

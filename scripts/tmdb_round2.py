@@ -130,7 +130,7 @@ KW = ["esports", "influencer", "gamer", "chess", "poker",
       "banker", "stockbroker", "hedge fund", "crypto",
       "influencer culture", "social media", " paparazzi",
       "fashion", "model", "musician", "band", "rapper",
-      "dj", "stand-up comedian", "broadway", "theatre", "opera",
+      "dj", "stand-up comedian", "broadway", "theater", "opera",
       "ballet", "dancer", "choir", "military", "veteran",
       "ptsd", "homelessness", "poverty", "immigrant",
       "american dream", "racism", "civil rights", "suffrage"]

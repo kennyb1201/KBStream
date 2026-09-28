@@ -116,8 +116,8 @@ class CatchupUrlsTest {
     @Test
     fun `a literal template is declined because it cannot address a broadcast`() {
         // No token at all means the provider offers the SAME url for every past
-        // programme — in practice the live stream. Serving that as catch-up
-        // would play the current broadcast under an old programme's title.
+        // program — in practice the live stream. Serving that as catch-up
+        // would play the current broadcast under an old program's title.
         assertNull(build("http://h/1789992000.ts"))
     }
 

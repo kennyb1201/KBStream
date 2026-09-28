@@ -59,7 +59,7 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 /**
  * The cast card's avatar circle fill, as fixed by its XML. A pure-black theme
  * has to repaint it (see [MpvPlayerActivity.refillPlayerChromeView]) instead of
- * leaving a grey circle behind every headshot - and the circle is all that shows
+ * leaving a gray circle behind every headshot - and the circle is all that shows
  * for the cast members TMDB has no photo for. Matches the main player's.
  */
 private val AVATAR_PLACEHOLDER_FILL: Int = 0xFF1D2530.toInt()
@@ -429,7 +429,7 @@ class MpvPlayerActivity : ComponentActivity() {
             // card opens during the credits, so that is the ordinary way the two
             // meet) wins: the countdown stops here instead of handing off seconds
             // before the end the timer is waiting for. Re-checked every tick, so
-            // the timer is honoured whenever it is armed - up to the last second.
+            // the timer is honored whenever it is armed - up to the last second.
             if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
                 nextUpCountdownHeld = false
                 nextUpCountdownRemaining = 0
@@ -671,7 +671,7 @@ class MpvPlayerActivity : ComponentActivity() {
 
         // Languages for this session: what the title remembers, else the global
         // Settings preference. Set BEFORE initialize(), because `alang`/`slang`
-        // are options the demuxer honours at open time - the fast path, with no
+        // are options the demuxer honors at open time - the fast path, with no
         // flicker of the wrong track.
         //
         // The subtitle look is deliberately not set from here: it is a global
@@ -1306,7 +1306,7 @@ class MpvPlayerActivity : ComponentActivity() {
 
     /**
      * Asks for the decoded frame covering [posMs] — the position the seek bar has
-     * been dragged to — and notes [anchorView] for the card to centre itself over
+     * been dragged to — and notes [anchorView] for the card to center itself over
      * when the frame arrives.
      *
      * The guards are the main player's: no duration means nothing to scrub (live,
@@ -2544,7 +2544,7 @@ class MpvPlayerActivity : ComponentActivity() {
     /**
      * Builds the row once the panel views exist. The cards, the featured strip
      * and the focus rules are the shared panel UI's; this supplies only what is
-     * this engine's own - its theme colours, its pill styling, and where PLAY /
+     * this engine's own - its theme colors, its pill styling, and where PLAY /
      * DETAILS go.
      */
     private fun setupBecauseYouWatched() {
@@ -2903,7 +2903,7 @@ class MpvPlayerActivity : ComponentActivity() {
             saveProgress(reason = "ended", forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
 
-            // A sleep timer armed to stop at the end of this episode is honoured
+            // A sleep timer armed to stop at the end of this episode is honored
             // here, where the episode really is over: no card, no auto-advance,
             // just out. The completion write above is what the history keeps.
             if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
@@ -3636,7 +3636,7 @@ class MpvPlayerActivity : ComponentActivity() {
     internal fun sleepTimerChoices(): List<SleepTimerOption> = sleepTimerOptions(
         isLive = false,
         isEpisode = season != null && episode != null,
-        hasProgrammeEnd = false
+        hasProgramEnd = false
     )
 
     /**
@@ -3661,7 +3661,7 @@ class MpvPlayerActivity : ComponentActivity() {
             restoreSleepFade()
             return
         }
-        // "End of episode" has no deadline to count: it is honoured where the
+        // "End of episode" has no deadline to count: it is honored where the
         // file actually ends (see onPlaybackEnded).
         if (state.stopsAtEndOfItem) return
         val remaining = (state.deadlineMs ?: return) - System.currentTimeMillis()

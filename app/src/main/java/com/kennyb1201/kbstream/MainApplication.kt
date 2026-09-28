@@ -43,7 +43,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
         com.kennyb1201.kbstream.data.reporting.PerfTrace.markAppStart()
         // Build fingerprint, logged before anything that can fail. The question
         // every device test turns on is "which build is this?": a logcat full of
-        // behaviour from a stale APK wastes the whole session, and a suppression
+        // behavior from a stale APK wastes the whole session, and a suppression
         // record written by an older build reads as a live bug. Log.i survives
         // release minification — -assumenosideeffects strips only Log.v/Log.d.
         Log.i(
@@ -169,7 +169,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
      * Dispatched to IO because every step is disk or database work (WorkManager
      * enqueues and prefs reads), and because nothing here is read by the UI
      * until long after the first frame. The Application outlives every screen,
-     * so the scope is never cancelled; SupervisorJob keeps one failing step
+     * so the scope is never canceled; SupervisorJob keeps one failing step
      * from taking the rest of the chain down with it.
      */
     private val startupScope =
@@ -385,8 +385,8 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
     }
 
     /**
-     * Live-TV programme reminder alerts. Each reminder gets its own delayed
-     * job armed at the programme's start time; this is what re-arms the
+     * Live-TV program reminder alerts. Each reminder gets its own delayed
+     * job armed at the program's start time; this is what re-arms the
      * reminders stored on a previous run, and what honors the toggle.
      */
     private fun scheduleReminderAlerts() {

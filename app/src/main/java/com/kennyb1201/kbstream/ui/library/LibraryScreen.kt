@@ -417,7 +417,7 @@ private fun ChipDivider() {
  * `.focusable().clickable()` box. Two stacked focus/click modifiers make two
  * targets: the D-pad press landed focus on the outer one and only the second
  * press reached the inner clickable — the "you have to double click chips"
- * behaviour. A Surface carries focus, activation and the focused colours as a
+ * behavior. A Surface carries focus, activation and the focused colors as a
  * single target, so one press selects, like every other control in the app.
  */
 @Composable
@@ -609,7 +609,7 @@ private fun ListsPane(
                     ),
                     // A rail row, so it takes the row step of the shared focus
                     // scale -- and the press-in every other row in the app
-                    // has. It previously changed container colour only, which
+                    // has. It previously changed container color only, which
                     // left the list rail the one place a Select press did
                     // nothing at all.
                     scale = ClickableSurfaceDefaults.scale(

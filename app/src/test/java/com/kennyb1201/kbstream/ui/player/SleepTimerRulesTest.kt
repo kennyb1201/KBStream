@@ -14,7 +14,7 @@ import org.junit.Test
  * is only noticed the next morning, if at all.
  *
  * So the rules are pure and pinned here: what each session is offered, what an
- * "end of programme" resolves to when the guide is wrong, how the countdown
+ * "End of program" resolves to when the guide is wrong, how the countdown
  * reads, and where the fade starts. The one-second enforcement that reads them
  * lives in the two player activities.
  */
@@ -33,7 +33,7 @@ class SleepTimerRulesTest {
 
     @Test
     fun `the minute steps are the ones the panel promises, in order`() {
-        val minutes = sleepTimerOptions(isLive = false, isEpisode = true, hasProgrammeEnd = false)
+        val minutes = sleepTimerOptions(isLive = false, isEpisode = true, hasProgramEnd = false)
             .filter { it.mode == SleepTimerMode.MINUTES }
 
         assertEquals(listOf(15, 30, 45, 60, 90), minutes.map { it.minutes })
@@ -42,14 +42,14 @@ class SleepTimerRulesTest {
 
     @Test
     fun `off leads the rows, so leaving the timer is the first press`() {
-        val options = sleepTimerOptions(isLive = false, isEpisode = true, hasProgrammeEnd = false)
+        val options = sleepTimerOptions(isLive = false, isEpisode = true, hasProgramEnd = false)
         assertEquals(SleepTimerMode.OFF, options.first().mode)
     }
 
     @Test
     fun `an episode offers the end of the episode and a film the end of the film`() {
-        val episode = sleepTimerOptions(isLive = false, isEpisode = true, hasProgrammeEnd = false)
-        val film = sleepTimerOptions(isLive = false, isEpisode = false, hasProgrammeEnd = false)
+        val episode = sleepTimerOptions(isLive = false, isEpisode = true, hasProgramEnd = false)
+        val film = sleepTimerOptions(isLive = false, isEpisode = false, hasProgramEnd = false)
 
         assertEquals(
             "End of episode",
@@ -59,25 +59,22 @@ class SleepTimerRulesTest {
     }
 
     @Test
-    fun `the live row is labelled in the copy's own US spelling`() {
-        // The app's on-screen copy says "program" (the guide's "No program
-        // data", the guide's program details screen), while this module's
-        // comments spell it "programme" like the rest of the codebase - so the
-        // label a viewer reads is pinned to the copy it sits next to, not to
-        // the prose around it. It was "End of programme" once.
-        val live = sleepTimerOptions(isLive = true, isEpisode = false, hasProgrammeEnd = true)
-            .first { it.mode == SleepTimerMode.END_OF_PROGRAMME }
+    fun `the live row reads the same words the guide screen does`() {
+        // Pinned to the copy a viewer reads beside it, not to whatever the
+        // module happens to call the thing.
+        val live = sleepTimerOptions(isLive = true, isEpisode = false, hasProgramEnd = true)
+            .first { it.mode == SleepTimerMode.END_OF_PROGRAM }
 
         assertEquals("End of program", live.label)
     }
 
     @Test
     fun `a live channel offers end of program only when the guide has an end`() {
-        val withGuide = sleepTimerOptions(isLive = true, isEpisode = false, hasProgrammeEnd = true)
-        val withoutGuide = sleepTimerOptions(isLive = true, isEpisode = false, hasProgrammeEnd = false)
+        val withGuide = sleepTimerOptions(isLive = true, isEpisode = false, hasProgramEnd = true)
+        val withoutGuide = sleepTimerOptions(isLive = true, isEpisode = false, hasProgramEnd = false)
 
-        assertTrue(withGuide.any { it.mode == SleepTimerMode.END_OF_PROGRAMME })
-        assertFalse(withoutGuide.any { it.mode == SleepTimerMode.END_OF_PROGRAMME })
+        assertTrue(withGuide.any { it.mode == SleepTimerMode.END_OF_PROGRAM })
+        assertFalse(withoutGuide.any { it.mode == SleepTimerMode.END_OF_PROGRAM })
         // A live channel must never be offered "end of movie": there is no
         // title, and a wrong row in this list is a wrong answer to a viewer on
         // their way to sleep.
@@ -95,32 +92,32 @@ class SleepTimerRulesTest {
     }
 
     @Test
-    fun `a programme that is already over is not armed in the past`() {
+    fun `a program that is already over is not armed in the past`() {
         // A stale EPG whose rows never rolled over: the block's end is behind
         // the clock. The deadline is pulled forward so the timer still fires,
         // rather than silently never.
         val now = 1_000_000L
-        val deadline = programmeSleepDeadlineMs(now, programmeEndMs = now - 10 * minute)
+        val deadline = programSleepDeadlineMs(now, programEndMs = now - 10 * minute)
 
         assertTrue("deadline=$deadline", deadline > now)
         assertEquals(now + minute, deadline)
     }
 
     @Test
-    fun `an implausibly distant programme end is capped at six hours`() {
+    fun `an implausibly distant program end is capped at six hours`() {
         // A placeholder all-night block, or a malformed timestamp.
         val now = 1_000_000L
-        val deadline = programmeSleepDeadlineMs(now, programmeEndMs = now + 40L * 60L * minute)
+        val deadline = programSleepDeadlineMs(now, programEndMs = now + 40L * 60L * minute)
 
         assertEquals(now + 6L * 60L * minute, deadline)
     }
 
     @Test
-    fun `a plausible programme end is used as it stands`() {
+    fun `a plausible program end is used as it stands`() {
         val now = 1_000_000L
         val end = now + 47 * minute
 
-        assertEquals(end, programmeSleepDeadlineMs(now, end))
+        assertEquals(end, programSleepDeadlineMs(now, end))
     }
 
     // ── the countdown and its caption ────────────────────────────────────────
@@ -226,14 +223,14 @@ class SleepTimerRulesTest {
     }
 
     @Test
-    fun `an end-of-programme timer leaves the auto-advance alone`() {
+    fun `an end-of-program timer leaves the auto-advance alone`() {
         // It is a clock deadline on a live channel, not a statement about a
         // title's ending - and a live channel has no next episode to hand off
         // to anyway.
         val armed = SleepTimerState(
-            mode = SleepTimerMode.END_OF_PROGRAMME,
+            mode = SleepTimerMode.END_OF_PROGRAM,
             deadlineMs = 60 * minute,
-            label = "End of programme"
+            label = "End of program"
         )
 
         assertFalse(sleepTimerBlocksAutoAdvance(armed))
@@ -261,7 +258,7 @@ class SleepTimerRulesTest {
 
     @Test
     fun `end of episode arms no deadline at all`() {
-        // It is honoured where the episode ends, not on a clock, so a wrong
+        // It is honored where the episode ends, not on a clock, so a wrong
         // runtime cannot make it fire early or never.
         SleepTimer.select(
             SleepTimerOption("End of episode", SleepTimerMode.END_OF_EPISODE),
@@ -274,21 +271,21 @@ class SleepTimerRulesTest {
     }
 
     @Test
-    fun `end of programme arms the guide's own end`() {
+    fun `end of program arms the guide's own end`() {
         val now = 2_000_000L
         val end = now + 35 * minute
         SleepTimer.select(
-            SleepTimerOption("End of programme", SleepTimerMode.END_OF_PROGRAMME),
+            SleepTimerOption("End of program", SleepTimerMode.END_OF_PROGRAM),
             nowMs = now,
-            programmeEndMs = end
+            programEndMs = end
         )
 
         assertEquals(end, SleepTimer.state.value.deadlineMs)
-        assertEquals(SleepTimerMode.END_OF_PROGRAMME, SleepTimer.state.value.mode)
+        assertEquals(SleepTimerMode.END_OF_PROGRAM, SleepTimer.state.value.mode)
     }
 
     @Test
-    fun `end of programme with no usable end clears the timer rather than arming a guess`() {
+    fun `end of program with no usable end clears the timer rather than arming a guess`() {
         // The panel only offers the row when the guide has an end, so this is
         // the guide data going away between drawing the row and pressing it.
         // Arming an hour would be a lie in the one place it cannot be checked.
@@ -296,9 +293,9 @@ class SleepTimerRulesTest {
         assertTrue(SleepTimer.state.value.isArmed)
 
         SleepTimer.select(
-            SleepTimerOption("End of programme", SleepTimerMode.END_OF_PROGRAMME),
+            SleepTimerOption("End of program", SleepTimerMode.END_OF_PROGRAM),
             nowMs = 0L,
-            programmeEndMs = null
+            programEndMs = null
         )
 
         assertFalse(SleepTimer.state.value.isArmed)
@@ -311,7 +308,7 @@ class SleepTimerRulesTest {
         // The unarmed state carries no label, so "Off" has to be matched on the
         // mode: without this the panel would show every row unselected and read
         // as a timer that forgot what it was doing.
-        val options = sleepTimerOptions(isLive = false, isEpisode = true, hasProgrammeEnd = false)
+        val options = sleepTimerOptions(isLive = false, isEpisode = true, hasProgramEnd = false)
         val state = SleepTimerState()
 
         assertTrue(state.marks(options.first { it.mode == SleepTimerMode.OFF }))
@@ -321,7 +318,7 @@ class SleepTimerRulesTest {
     @Test
     fun `only the minute step that was chosen lights up`() {
         SleepTimer.select(SleepTimerOption("45 min", SleepTimerMode.MINUTES, 45), nowMs = 0L)
-        val options = sleepTimerOptions(isLive = false, isEpisode = true, hasProgrammeEnd = false)
+        val options = sleepTimerOptions(isLive = false, isEpisode = true, hasProgramEnd = false)
         val state = SleepTimer.state.value
 
         val lit = options.filter { state.marks(it) }
@@ -334,7 +331,7 @@ class SleepTimerRulesTest {
             SleepTimerOption("End of episode", SleepTimerMode.END_OF_EPISODE),
             nowMs = 0L
         )
-        val options = sleepTimerOptions(isLive = false, isEpisode = true, hasProgrammeEnd = false)
+        val options = sleepTimerOptions(isLive = false, isEpisode = true, hasProgramEnd = false)
         val state = SleepTimer.state.value
 
         val lit = options.filter { state.marks(it) }

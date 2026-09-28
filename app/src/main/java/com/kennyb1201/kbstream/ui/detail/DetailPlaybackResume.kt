@@ -21,7 +21,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
  *    estimated from the TMDB runtime and skipped entirely when neither a
  *    position nor a duration can be worked out (a bar with no time reads as a
  *    bug);
- *  - nothing here throws: a tracker being down or unauthorised just means no
+ *  - nothing here throws: a tracker being down or unauthorized just means no
  *    resume row.
  */
 internal object DetailPlaybackResume {

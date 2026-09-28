@@ -33,7 +33,7 @@
     <!-- Package visibility. Android 11+ filters what this app is allowed to see,
          and an implicit query only returns apps declared here.
 
-         Two features depend on it: voice search needs the system recogniser,
+         Two features depend on it: voice search needs the system recognizer,
          and the External player engine needs every installed video player's
          picker entry. Without the VIEW intents below, queryIntentActivities is
          filtered even when starting the intent is not, so a box with VLC

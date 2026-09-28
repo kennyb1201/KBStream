@@ -84,8 +84,8 @@ fun GenreChipRow(
  * Built on the TV clickable [Surface] rather than a Box with
  * `.focusable().clickable()`: that stack was TWO focus targets, so a D-pad
  * press landed on the outer one and only the second press reached the
- * clickable — the "press twice to filter" behaviour. One Surface means
- * focus, activation and the focused colours are a single target (the same
+ * clickable — the "press twice to filter" behavior. One Surface means
+ * focus, activation and the focused colors are a single target (the same
  * pattern the Library filter chips and the Home rail list use).
  */
 @Composable
@@ -118,7 +118,7 @@ private fun DiscoverFilterChip(
         // networks, studios, decades -- and they were the one chip row in the
         // app that did not move on D-pad focus at all: no growth, and (a tv
         // Surface with no `scale` reports nothing on press either) no
-        // press-in. Colour and border alone carried the whole cue.
+        // press-in. Color and border alone carried the whole cue.
         scale = ClickableSurfaceDefaults.scale(
             focusedScale = KBFocusChip,
             pressedScale = KBFocusPressed

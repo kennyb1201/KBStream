@@ -50,7 +50,7 @@ import kotlinx.coroutines.withContext
  * two places for the ranking tiers, the doubled-logo fix and the focus rules to
  * drift apart - the recommendation logic and the row's view construction live
  * here, and each activity supplies only what is genuinely its own: the panel
- * views from its own layout, its theme colours, its pill styling, and where a
+ * views from its own layout, its theme colors, its pill styling, and where a
  * PLAY / DETAILS press should go.
  */
 

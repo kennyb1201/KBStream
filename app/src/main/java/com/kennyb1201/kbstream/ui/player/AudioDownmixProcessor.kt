@@ -22,13 +22,13 @@ import kotlin.math.roundToInt
  *
  * What it does, in order, per frame:
  *  1. **Fold** a multichannel stream to the requested layout (5.1/7.1 → stereo),
- *     lifting the centre channel — dialogue — and trimming the surrounds that
+ *     lifting the center channel — dialogue — and trimming the surrounds that
  *     carry score and effects (see [AudioDownmix]).
  *  2. **Balance in place** when nothing is folded. This is what makes the
  *     dialogue knob work at all with the downmix left on "Auto" (the default):
- *     a stereo stream has its phantom centre lifted (mid/side — voices up, wide
+ *     a stereo stream has its phantom center lifted (mid/side — voices up, wide
  *     effects untouched), and a multichannel stream keeps its layout but has the
- *     real centre channel lifted and its surrounds trimmed, so the device's own
+ *     real center channel lifted and its surrounds trimmed, so the device's own
  *     fold then works on an already-balanced mix rather than the untouched one.
  *  3. **Gain** by the configured volume boost, so content mixed too quietly is
  *     audible without the TV's volume rocker pinned and the amp clipping.
@@ -190,7 +190,7 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
 
         val gain = PlayerAudioTuning.linearGain
         val midLift = PlayerAudioTuning.midGain
-        val liftPhantomCentre = inputChannels == 2 && outputChannels == 2 && midLift > 1f
+        val liftPhantomCenter = inputChannels == 2 && outputChannels == 2 && midLift > 1f
         val mixing = matrix
 
         val output = replaceOutputBuffer(frames * bytesPerSample * outputChannels)
@@ -216,8 +216,8 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
             } else {
                 for (out in 0 until outputChannels) mixed[out] = channels[out]
 
-                if (liftPhantomCentre) {
-                    // Voices live in the phantom centre of a 2.0 mix — the
+                if (liftPhantomCenter) {
+                    // Voices live in the phantom center of a 2.0 mix — the
                     // "mid" component. Raising it (and its twin below, so the
                     // side content is untouched) lifts dialogue over a wide
                     // music bed without touching bass or hard-panned effects.
@@ -297,7 +297,7 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
         matrixSignature = signature()
     }
 
-    /** Surround trim that lets a lifted centre read as dialogue rather than as volume. */
+    /** Surround trim that lets a lifted center read as dialogue rather than as volume. */
     private fun surroundScale(): Float =
         1f - 0.2f * PlayerAudioTuning.dialogueBoost
 

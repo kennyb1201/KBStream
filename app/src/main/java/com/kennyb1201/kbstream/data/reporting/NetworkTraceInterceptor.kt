@@ -11,7 +11,7 @@ import okhttp3.Response
  *
  * One interceptor is shared by each client (see the `addInterceptor` wiring
  * in the TMDB, Simkl, addon and IPTV clients); it only reads the host, so
- * adding it cannot change request behaviour.
+ * adding it cannot change request behavior.
  */
 internal class NetworkTraceInterceptor : Interceptor {
 

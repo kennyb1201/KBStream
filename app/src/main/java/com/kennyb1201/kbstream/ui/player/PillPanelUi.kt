@@ -25,14 +25,14 @@ internal class PillPanelUi(private val context: Context) {
 
     fun dp(value: Int): Int = (value * density).toInt()
 
-    /** A section heading, in the panel's accent colour. */
+    /** A section heading, in the panel's accent color. */
     fun header(text: String, topMarginDp: Int): TextView =
         label(text, topMarginDp, 12f).apply {
             setTextColor(ContextCompat.getColor(context, R.color.kb_accent))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         }
 
-    /** A caption or hint line, in the panel's dim colour. */
+    /** A caption or hint line, in the panel's dim color. */
     fun label(text: String, topMarginDp: Int, sizeSp: Float = 11f): TextView =
         TextView(context).apply {
             setText(text)
@@ -62,14 +62,14 @@ internal class PillPanelUi(private val context: Context) {
         // able to move (see neutralPillBackground).
         background = neutralPillBackground()
         setTextColor(ContextCompat.getColor(context, R.color.kb_text_hi))
-        // Same look as applyPillState() in the activity: selection colour plus a
+        // Same look as applyPillState() in the activity: selection color plus a
         // distinct focused state, so a D-pad user can see where they are.
         setOnFocusChangeListener { v, _ -> stylePill(v as TextView, isSelected(v)) }
     }
 
     /**
      * Three pills per row: the 360dp panel fits three of the longest language
-     * labels, and every option stays one press from its neighbour.
+     * labels, and every option stays one press from its neighbor.
      */
     fun <T> addPillGrid(
         column: LinearLayout,
@@ -163,7 +163,7 @@ internal class PillPanelUi(private val context: Context) {
         // the + sits at the panel's right edge: when the search comes up empty
         // there, the press is clamped away as "nothing inside the panel that
         // way" and the pad reads as a button the remote cannot land on. Naming
-        // the neighbour takes that geometry out of it - the pads are one step
+        // the neighbor takes that geometry out of it - the pads are one step
         // apart in both directions, whatever the row is measured to.
         minusPad.nextFocusRightId = plusPad.id
         plusPad.nextFocusLeftId = minusPad.id
@@ -202,7 +202,7 @@ internal class PillPanelUi(private val context: Context) {
      * The unselected pill fill: the same 6dp-cornered @color/kb_surface shape
      * @drawable/pill_chip_bg carries, but resolved through the AMOLED /
      * pure-black toggles so it tracks the theme like the rest of the player.
-     * Without AMOLED it is exactly the drawable's own colour.
+     * Without AMOLED it is exactly the drawable's own color.
      */
     private fun neutralPillBackground(): android.graphics.drawable.GradientDrawable =
         roundedPanelDrawable(context, playerPanelSurfaceColor(context), 6f)

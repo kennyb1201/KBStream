@@ -424,7 +424,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Cancellation is not a failure: rethrow so the scope that was
-                // cancelled stops here instead of clearing the poster badges as
+                // canceled stops here instead of clearing the poster badges as
                 // if the refresh had failed.
                 throw e
             } catch (e: Exception) {
@@ -1166,7 +1166,7 @@ for ((metaAddon, response, error) in probeResults) {
                 }
                 
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // A load the user navigated away from is cancelled, not
+                // A load the user navigated away from is canceled, not
                 // failed: rethrow rather than putting an error on a screen
                 // nobody is looking at.
                 throw e

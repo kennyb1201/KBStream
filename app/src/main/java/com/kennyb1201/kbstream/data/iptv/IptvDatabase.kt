@@ -63,7 +63,7 @@ abstract class IptvDatabase : RoomDatabase() {
          * retired was the case that died.
          *
          * Now a file asked for again inside the grace window gets its instance
-         * BACK ([reviveIfPending]) and the pending close is cancelled.
+         * BACK ([reviveIfPending]) and the pending close is canceled.
          */
         private val pendingClose = HashMap<String, Retirement>()
 
@@ -117,7 +117,7 @@ abstract class IptvDatabase : RoomDatabase() {
 
         /**
          * The retired-but-still-open instance for [name], if there is one,
-         * taking it out of retirement (i.e. cancelling its close).
+         * taking it out of retirement (i.e. canceling its close).
          */
         private fun reviveIfPending(name: String): IptvDatabase? =
             synchronized(this) { pendingClose.remove(name)?.db }

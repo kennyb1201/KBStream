@@ -17,7 +17,7 @@ import org.junit.Test
  * here instead of silently going back to storing a schedule nobody can open.
  *
  * The last group is the same rule applied to a single row: [EpgWindow] also
- * decides how much of a programme's description is worth storing, against what
+ * decides how much of a program's description is worth storing, against what
  * the three screens that draw one can show.
  */
 class EpgWindowTest {

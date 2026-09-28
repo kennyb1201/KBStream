@@ -322,7 +322,7 @@ private class VideoCompatTrackOutput(
         // convert the ICtCp planes to Rec.2020 PQ — the same shape "Strip All"
         // produces for P5, and the color path engages alongside this toggle (see
         // p5GlesPathWanted in the player). The declared codec stays on the
-        // format label so the player still recognises the source as P5.
+        // format label so the player still recognizes the source as P5.
         val p5Conversion =
             convertP5To81 && !convertAllProfiles && DolbyVisionCompat.isP5Profile(format.codecs)
         val dvRewrite = when {

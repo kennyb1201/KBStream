@@ -590,7 +590,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 checkHealth()
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Cancellation is not a failure: rethrow rather than reporting
-                // a refresh failure for a scope that was simply cancelled.
+                // a refresh failure for a scope that was simply canceled.
                 throw e
             } catch (e: Exception) {
                 _error.value =
@@ -1086,7 +1086,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Cancellation is not a failure: rethrow rather than reporting
-                // a refresh failure for a scope that was simply cancelled.
+                // a refresh failure for a scope that was simply canceled.
                 throw e
             } catch (e: Exception) {
                 _error.value =
@@ -1146,7 +1146,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Cancellation is not a failure: rethrow rather than reporting
-                // a refresh failure for a scope that was simply cancelled.
+                // a refresh failure for a scope that was simply canceled.
                 throw e
             } catch (e: Exception) {
                 _error.value =

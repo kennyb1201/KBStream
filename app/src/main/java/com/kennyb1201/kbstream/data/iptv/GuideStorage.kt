@@ -35,7 +35,7 @@ internal data class GuideSweep(
     val reclaimed: List<String> = emptyList(),
     /** Guide files dropped because their rows now live in a shared file. */
     val migrated: List<String> = emptyList(),
-    /** Programme rows dropped for being outside [EpgWindow], on either edge. */
+    /** Program rows dropped for being outside [EpgWindow], on either edge. */
     val prunedRows: Int = 0,
     /** Descriptions clipped to [EpgWindow.MAX_DESCRIPTION_CHARS]. */
     val trimmedDescriptions: Int = 0,
@@ -142,8 +142,8 @@ internal fun guideFilesToMigrate(
  *     the space returns immediately. A guide whose profile IS in use is never
  *     touched here: it is live data, and its size is the window's business,
  *     not this pass's;
- *  2. prune programmes outside [EpgWindow] — the whole point. A guide written
- *     by a build whose import window was 48 hours holds programmes the guide
+ *  2. prune programs outside [EpgWindow] — the whole point. A guide written
+ *     by a build whose import window was 48 hours holds programs the guide
  *     cannot render (its grid and search read 8 hours ahead) and cannot be
  *     found again, so those rows are pure disk. Pruning them here is what
  *     shrinks an ALREADY-LARGE guide on the next pass, rather than waiting for
@@ -335,7 +335,7 @@ internal object GuideStorage {
     }
 
     /**
-     * Deletes the programmes [predicate] selects [bound] for, returning how
+     * Deletes the programs [predicate] selects [bound] for, returning how
      * many went.
      *
      * One statement, with the row count coming back from the delete itself.

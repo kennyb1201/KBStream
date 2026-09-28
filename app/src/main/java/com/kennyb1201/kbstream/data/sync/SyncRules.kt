@@ -191,7 +191,7 @@ internal object DisplayPrefsRules {
  *
  * Two halves were missing and each one alone breaks the eye badge:
  *  - the PUSH payload only carried [WATCHED_FIELD], so a row that this
- *    device had resolved as "started but not finished" travelled without its
+ *    device had resolved as "started but not finished" traveled without its
  *    eye flag and arrived looking like a plain un-watched title, and
  *  - the PULL/apply paths built the entity without the flag at all, so the
  *    default (false) landed in the receiving profile's cache — where the

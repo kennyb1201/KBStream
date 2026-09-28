@@ -11,7 +11,7 @@ import org.junit.Test
  *
  * Two failures matter equally: a reminder that never alerts (the state this
  * feature was in before — the guide's own banner only exists while the guide
- * is on screen), and one that alerts repeatedly or after the programme is
+ * is on screen), and one that alerts repeatedly or after the program is
  * over.
  */
 class ReminderRulesTest {
@@ -36,17 +36,17 @@ class ReminderRulesTest {
     // ── due ─────────────────────────────────────────────────────────
 
     @Test
-    fun `a programme that has started is due`() {
+    fun `a program that has started is due`() {
         assertTrue(ReminderRules.isDue(now - 1_000, now, alreadyNotified = false))
     }
 
     @Test
-    fun `a programme starting right now is due`() {
+    fun `a program starting right now is due`() {
         assertTrue(ReminderRules.isDue(now, now, alreadyNotified = false))
     }
 
     @Test
-    fun `a programme that has not started is not due`() {
+    fun `a program that has not started is not due`() {
         assertFalse(ReminderRules.isDue(now + 1, now, alreadyNotified = false))
     }
 
@@ -57,7 +57,7 @@ class ReminderRulesTest {
 
     @Test
     fun `a reminder with no schedule is never due`() {
-        // The guide falls back to 0 when a programme has no start time.
+        // The guide falls back to 0 when a program has no start time.
         assertFalse(ReminderRules.isDue(0L, now, alreadyNotified = false))
         assertFalse(ReminderRules.isDue(-5L, now, alreadyNotified = false))
     }
@@ -65,12 +65,12 @@ class ReminderRulesTest {
     // ── staleness ───────────────────────────────────────────────────
 
     @Test
-    fun `a programme that just ended is still worth keeping`() {
+    fun `a program that just ended is still worth keeping`() {
         assertFalse(ReminderRules.isStale(now - 1_000, now))
     }
 
     @Test
-    fun `a programme beyond the grace window is stale`() {
+    fun `a program beyond the grace window is stale`() {
         assertTrue(
             ReminderRules.isStale(now - ReminderRules.STALE_GRACE_MS - 1, now)
         )
@@ -91,12 +91,12 @@ class ReminderRulesTest {
     // ── arming ──────────────────────────────────────────────────────
 
     @Test
-    fun `delay is the wait until the programme starts`() {
+    fun `delay is the wait until the program starts`() {
         assertEquals(60_000L, ReminderRules.delayUntilStart(now + 60_000, now))
     }
 
     @Test
-    fun `an already started programme needs no delay`() {
+    fun `an already started program needs no delay`() {
         // Arming is skipped for these, but a zero delay must never go negative
         // and schedule work in the past.
         assertEquals(0L, ReminderRules.delayUntilStart(now - 60_000, now))

@@ -42,7 +42,7 @@ class HeroTrailerDelayTest {
 
     @Test
     fun `a wait from another build snaps to the nearest one on offer`() {
-        // A build that offered 3s: neither neighbour is more right, so the
+        // A build that offered 3s: neither neighbor is more right, so the
         // shorter wait wins the tie rather than the list being consulted twice.
         assertEquals(2_000L, AppPreferences.heroTrailerDelayFromStored(3_000L))
         assertEquals(2_000L, AppPreferences.heroTrailerDelayFromStored(2_400L))

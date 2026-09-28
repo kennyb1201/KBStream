@@ -1,13 +1,13 @@
 package com.kennyb1201.kbstream.data.iptv
 
 /**
- * Query builders for the guide-wide programme search, lifted out of
+ * Query builders for the guide-wide program search, lifted out of
  * [IptvRepository] so the string handling can be unit tested.
  *
  * The search runs in two stages: an indexed FTS pass first, and — only when
  * that finds nothing — the original substring `LIKE '%q%'` scan. The split
  * exists because `LIKE '%q%'` cannot use an index at all (SQLite scans and
- * sorts every programme that has not finished yet), which is why a one-letter
+ * sorts every program that has not finished yet), which is why a one-letter
  * query used to block the query thread on a large guide.
  *
  * Stage two is what keeps the search behaving exactly as before: a mid-word

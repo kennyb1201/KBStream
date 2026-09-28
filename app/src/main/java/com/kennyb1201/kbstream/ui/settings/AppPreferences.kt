@@ -407,7 +407,7 @@ object AppPreferences {
     }
 
     /**
-     * "REMIND ME" alerts for live programmes, delivered as system
+     * "REMIND ME" alerts for live programs, delivered as system
      * notifications. On by default: pressing REMIND ME in the guide is already
      * an explicit request for an alert, and until now nothing delivered it
      * outside the guide screen.
@@ -629,7 +629,7 @@ object AppPreferences {
     //
     //   downmix: 0 = Auto (leave the layout to the device/HAL), 2 = stereo,
     //            6 = 5.1
-    //   dialogue: 0 = off, 1..DIALOGUE_MAX = stacked centre/phantom-centre
+    //   dialogue: 0 = off, 1..DIALOGUE_MAX = stacked center/phantom-center
     //             lifts, set with the player panel's and the settings screen's
     //             own ± steppers (levels 1 and 2 are the old "Low" and "High")
     //   volume: overall gain in dB, 0-15, applied with the limiter

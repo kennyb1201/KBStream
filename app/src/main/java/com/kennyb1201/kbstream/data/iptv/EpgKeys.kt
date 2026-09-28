@@ -7,7 +7,7 @@ import java.util.Locale
  * the rules can be unit tested.
  *
  * These functions decide whether a playlist channel matches a guide channel,
- * and a wrong answer is invisible: the channel simply shows no programmes (or,
+ * and a wrong answer is invisible: the channel simply shows no programs (or,
  * worse, borrows another channel's). M3U and XMLTV spellers disagree about
  * everything — case, `[HD]`/`(US)` decorations, `&` vs "and", `+` vs "plus",
  * punctuation — so every one of those is stripped or expanded here rather than
@@ -54,7 +54,7 @@ internal fun normalizeEpgChannelKey(value: String): String =
     value.trim().lowercase(Locale.US)
 
 /**
- * The key an imported programme is STORED under, and therefore the only key a
+ * The key an imported program is STORED under, and therefore the only key a
  * program query may ask with.
  *
  * [XmltvImporter] writes `<programme channel=...>` through this function, so
@@ -65,7 +65,7 @@ internal fun normalizeEpgChannelKey(value: String): String =
  *
  * So handing a program query the guide channel's raw id silently returns
  * nothing whenever the guide spells that id with any uppercase letter
- * (`ESPN.us`, `BBC.UK`, `Discovery.HD`), while its programmes are imported and
+ * (`ESPN.us`, `BBC.UK`, `Discovery.HD`), while its programs are imported and
  * sitting in the database: the channel shows "No program data" forever. That
  * is the whole reason this function exists next to [epgLookupKey]: matching is
  * deliberately fuzzy, but reading back what was written has to be exact.
@@ -186,16 +186,16 @@ internal fun playlistEpgMatchKeys(channels: List<IptvChannel>): Set<String> {
 
 /**
  * Whether a guide channel could ever be matched by a playlist carrying
- * [playlistKeys], which is what decides whether its programmes are worth
+ * [playlistKeys], which is what decides whether its programs are worth
  * importing. True when [playlistKeys] is empty - "cannot decide" keeps the
- * old keep-everything behaviour.
+ * old keep-everything behavior.
  *
  * Deliberately a SUPERSET test: it may keep a guide channel that would not
  * have matched, but it must never drop one that would. Both indexes the
  * matcher reads are mirrored here - `byId` is keyed by [epgLookupKey] of the
  * channel id, `byName` by [epgLookupKey] of every alias key - so a channel
  * whose ids or names intersect the playlist's probes is kept, and one whose do
- * not could only ever have shown programmes no playlist row could reach.
+ * not could only ever have shown programs no playlist row could reach.
  */
 internal fun guideChannelCanMatch(
     channelId: String,
@@ -237,7 +237,7 @@ internal fun guideWindowFingerprint(
         if (channel.id !in channelIds) continue
         found++
         // Everything the matcher reads, and nothing else: a logo or stream URL
-        // change must not invalidate programmes that are already loaded.
+        // change must not invalidate programs that are already loaded.
         builder.append(channel.id).append(SEP_PART)
             .append(channel.name).append(SEP_PART)
             .append(channel.displayName).append(SEP_PART)

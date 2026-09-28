@@ -214,7 +214,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     // Bumped by the periodic now/next refresh. It is part of the query request
     // (so a clock refresh can never be conflated away by distinctUntilChanged)
-    // but deliberately NOT part of the guide source key: the loaded programmes
+    // but deliberately NOT part of the guide source key: the loaded programs
     // are still valid, only "now" moved.
     private val _guideClockTick = MutableStateFlow(0)
 
@@ -285,9 +285,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         )
     }
         // The request carries more than the query reads: _playlist changes for
-        // reasons that cannot move a single programme row (a logo URL, a
+        // reasons that cannot move a single program row (a logo URL, a
         // channel outside the guide window), and the import flag used to flip
-        // twice per EPG import — each flip cancelling and re-running the whole
+        // twice per EPG import — each flip canceling and re-running the whole
         // lineup query for identical data. The refresh and clock ticks stay
         // explicit request inputs, so real refreshes still land.
         .distinctUntilChanged()
@@ -299,7 +299,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             request.guideUrls.isEmpty() -> flowOf(emptyList())
             request.channelIds.isEmpty() -> flowOf(emptyList())
             // NOTE: no isImportingGuide guard here. While a stale-EPG
-            // background refresh runs, the previous import's programmes are
+            // background refresh runs, the previous import's programs are
             // still in the DB — blanking the lineup for the whole import made
             // the guide show "no program data" for minutes on entry (it only
             // recovered when the import finished). Query the cached data
@@ -468,7 +468,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * Keeps NOW/NEXT/Upcoming from going stale while the guide is open. The
      * lineup flow computes nowUtcMillis and the query window once per run and
      * only re-runs when playlist/EPG/tick/channel-batch changes -- left alone,
-     * a channel whose query ran at 10:00 keeps claiming the 10:00 programme
+     * a channel whose query ran at 10:00 keeps claiming the 10:00 program
      * is "on now" well past its end. Re-queuing the already-loaded channel
      * ids through _pendingGuideChannelIds makes the flow re-run on the same
      * channels with a fresh clock, and mergeGuideItems() only touches channels
@@ -476,7 +476,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      *
      * Periodic while the VM is alive (subscribers stop within STOP_TIMEOUT_MS
      * of leaving the guide, and the VM dies with it) plus one shot on start
-     * so returning to the guide after a while shows current programmes
+     * so returning to the guide after a while shows current programs
      * immediately instead of the last session's snapshot.
      *
      * The same loop is where guide FRESHNESS gets re-checked, on a slow
@@ -1222,12 +1222,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         const val MAX_GUIDE_CHANNELS_PER_REQUEST = 80
 
         // Was 240 -- too small a shared budget for a full 80-channel guide
-        // load. IptvRepository targets 12 programmes/channel, so a full
+        // load. IptvRepository targets 12 programs/channel, so a full
         // batch wants up to 80*12=960; anything less than that causes
         // loadProgramsChunked() to exhaust its budget partway through the
-        // channel list and skip programmes for whichever channels come
+        // channel list and skip programs for whichever channels come
         // later in the batch order, even though their own schedules have
-        // plenty of programmes in the window. This covers a full request
+        // plenty of programs in the window. This covers a full request
         // with headroom.
         const val VISIBLE_GUIDE_PROGRAM_LIMIT = 960
 
@@ -1239,7 +1239,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
         // The future half. 8 hours comfortably covers 4 back-to-back ~2-hour
         // blocks so the "coming up" row (which only shows 4) has something to
-        // fill it regardless of how long each channel's programme blocks run.
+        // fill it regardless of how long each channel's program blocks run.
         // This was once 2 hours, which was too narrow for exactly that; going
         // the other way (storing far beyond it) is what the guide database
         // paid for.

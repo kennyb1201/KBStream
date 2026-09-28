@@ -349,8 +349,8 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
             .flatMap { it.items }
             .distinctBy { "${it.type}:${it.id}" }
             // Keyed exactly as the resolver files them: the old check spelled
-            // the key with a third normaliser, so an item filed as "no TMDB
-            // artwork" was not recognised as resolved and was re-attempted on
+            // the key with a third normalizer, so an item filed as "no TMDB
+            // artwork" was not recognized as resolved and was re-attempted on
             // every rails change.
             .filterNot { item ->
                 alreadyResolved.containsKey(
@@ -664,7 +664,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Cancellation is not a failure: rethrow so the scope that was
-            // cancelled stops here instead of logging it as one.
+            // canceled stops here instead of logging it as one.
             throw e
         } catch (e: Exception) {
             Log.e("KB_FOLDER_VM", "resolveAndPreload failed: ${e.message}", e)

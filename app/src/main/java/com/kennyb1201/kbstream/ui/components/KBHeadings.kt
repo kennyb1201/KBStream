@@ -22,7 +22,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
  * and the typeface comes from the theme rather than from whichever slot the
  * call site happened to pick.
  *
- * [color] stays a parameter because the accent-coloured title on Library is a
+ * [color] stays a parameter because the accent-colored title on Library is a
  * deliberate brand beat, not an accident — but the size and weight no longer
  * vary.
  */
@@ -48,7 +48,7 @@ fun KBPageTitle(
  *
  * This existed twice, byte-identical, as a private `SectionHeader` in the
  * search screen and in the sync settings section. The player's settings panel
- * keeps its own accent-coloured variant on purpose: it is an overlay on top of
+ * keeps its own accent-colored variant on purpose: it is an overlay on top of
  * video, not a page, and its labels read as chrome there rather than as
  * headings.
  */

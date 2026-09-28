@@ -127,7 +127,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
          * re-open an already-closed object".
          *
          * A file asked for again inside the grace window now gets its instance
-         * back ([reviveIfPending]) and the pending close is cancelled.
+         * back ([reviveIfPending]) and the pending close is canceled.
          */
         private val pendingClose = HashMap<String, Retirement>()
 
@@ -170,7 +170,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
 
         /**
          * The retired-but-still-open instance for [name], if there is one,
-         * taking it out of retirement (i.e. cancelling its close).
+         * taking it out of retirement (i.e. canceling its close).
          */
         private fun reviveIfPending(name: String): WatchHistoryDatabase? =
             synchronized(this) { pendingClose.remove(name)?.db }

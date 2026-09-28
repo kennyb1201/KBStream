@@ -2,7 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 /**
  * The decisions behind automatic intro/credits skipping, kept pure so the
- * behaviour is unit-testable without a player or a network. The activity only
+ * behavior is unit-testable without a player or a network. The activity only
  * supplies the two prefs and acts on what comes back.
  *
  * Nothing here ever fires for [IntroDbMarkerType.PostCredits] or

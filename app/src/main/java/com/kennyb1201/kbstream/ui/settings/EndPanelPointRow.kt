@@ -37,7 +37,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  * [selected] (and [onPick]) speak in TENTHS of a percent - the unit the pref is
  * stored in, so a 0.5 step is exactly [AppPreferences.END_PANEL_POINT_STEP_TENTHS].
  *
- * Greyed out while the panel it configures is switched off: a point that
+ * Grayed out while the panel it configures is switched off: a point that
  * nothing opens at means nothing.
  */
 @Composable

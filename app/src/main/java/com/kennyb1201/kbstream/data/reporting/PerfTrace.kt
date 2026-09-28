@@ -8,7 +8,7 @@ import android.util.Log
  *
  * Why: "is there any way to speed everything up" is unanswerable from a
  * diagnostics dump that only lists counts. This records a bounded ring of
- * labelled durations (app start, home refreshes, per-service HTTP calls) and
+ * labeled durations (app start, home refreshes, per-service HTTP calls) and
  * renders a one-block summary into the same `adb logcat -s DIAGNOSTICS` line
  * set the rest of Diagnostics uses, so the slowest thing is visible without
  * a profiler attached to a TV box.

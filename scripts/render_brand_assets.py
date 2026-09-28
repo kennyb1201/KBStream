@@ -78,11 +78,11 @@ TEXT_LO = rgb("8891A0")
 
 
 # --------------------------------------------------------------------------- #
-# paints: "solid" | "lin" (p0, p1, c0, c1) | "rad" (centre, r, colour, a, gamma)
+# paints: "solid" | "lin" (p0, p1, c0, c1) | "rad" (center, r, color, a, gamma)
 # --------------------------------------------------------------------------- #
 
 def with_alpha(c, a):
-    """The same colour at a fraction of its alpha. The plate is drawn at full
+    """The same color at a fraction of its alpha. The plate is drawn at full
     strength for the opaque outputs and faded for the translucent banner."""
     return (c[0], c[1], c[2], c[3] * a)
 
@@ -95,8 +95,8 @@ def lin(p0, p1, c0, c1):
     return ("lin", p0, p1, c0, c1)
 
 
-def rad(centre, r, colour, alpha, gamma=1.7):
-    return ("rad", centre, r, colour, alpha, gamma)
+def rad(center, r, color, alpha, gamma=1.7):
+    return ("rad", center, r, color, alpha, gamma)
 
 
 def paint_at(p, x, y):
@@ -115,7 +115,7 @@ def paint_at(p, x, y):
             c0[2] + (c1[2] - c0[2]) * t,
             c0[3] + (c1[3] - c0[3]) * t,
         )
-    # radial: bright at the centre, fading to nothing at r
+    # radial: bright at the center, fading to nothing at r
     (cx, cy), r, c, a, gamma = p[1], p[2], p[3], p[4], p[5]
     dx, dy = x - cx, y - cy
     d2 = dx * dx + dy * dy
@@ -377,9 +377,9 @@ def fill(buf, w, h, polys, paint, ss=SS):
     flat = constant_in_x(paint)
     inv = 1.0 / ss
     # Coverage for this layer, already weighted by the paint's own alpha
-    # (`acov`, so a radial's falling alpha is honoured), and that same weight
-    # applied to the colour so a partially covered pixel takes the paint's
-    # average colour rather than the last sample's.
+    # (`acov`, so a radial's falling alpha is honored), and that same weight
+    # applied to the color so a partially covered pixel takes the paint's
+    # average color rather than the last sample's.
     acov = [0.0] * (w * h)
     col = [0.0] * (w * h * 3)
     for sub in range(y_lo * ss, y_hi * ss):
@@ -586,10 +586,10 @@ def svg_doc(layers, w, h, title):
 
 def vector_xml(size, w, h, shapes, desc):
     """shapes: [(path_d, paint)] -- paint is a solid RGBA, a linear gradient or a
-    radial one. A gradient paint is written as an <aapt:attr> inline colour, so
+    radial one. A gradient paint is written as an <aapt:attr> inline color, so
     the layer stays a plain vector drawable to every API level that can read
-    one. Android's <gradient> takes two colours and no falloff exponent, so a
-    radial paints its centre colour to fully transparent and the softness comes
+    one. Android's <gradient> takes two colors and no falloff exponent, so a
+    radial paints its center color to fully transparent and the softness comes
     from the alpha pair (the raster and the SVG keep the exact curve)."""
     body = []
     for d, paint in shapes:
@@ -657,7 +657,7 @@ MARK_FACE = 0.11        # alpha of the glass face inside the bezel
 MARK_TRI_H = 0.52       # triangle height, as a fraction of the diameter
 MARK_TRI_ASPECT = 0.88  # width / height; a play glyph is taller than it is wide
 MARK_FILLET = 0.085     # triangle corner fillet, as a fraction of its height
-MARK_NUDGE = 0.020      # optical centring: a triangle's mass sits left of its box
+MARK_NUDGE = 0.020      # optical centering: a triangle's mass sits left of its box
 MARK_D = 58.0           # the button's diameter in every lockup, so the mark-to-
                         # wordmark ratio is the same on the banner and the logo
 
@@ -672,9 +672,9 @@ def mark(d, x=0.0, y=0.0):
 
 def mark_split(d, x=0.0, y=0.0):
     """The same geometry as two pieces -- (bezel polys, glyph polys) -- so each
-    can take its own fill. The glyph is nudged right of the geometric centre:
-    a triangle's mass sits to the left of its bounding box, and centring the box
-    is what leaves a play mark looking off-centre."""
+    can take its own fill. The glyph is nudged right of the geometric center:
+    a triangle's mass sits to the left of its bounding box, and centering the box
+    is what leaves a play mark looking off-center."""
     cx, cy = x + d / 2.0, y + d / 2.0
     r_in = d / 2.0 * (1.0 - 2.0 * MARK_RING)
     tri_h = MARK_TRI_H * d
@@ -709,7 +709,7 @@ def mark_layers(d, x, y):
 TILE = 108.0
 
 # The mark inside the icon plate. The adaptive-icon safe zone is a 66dp
-# diameter circle centred in the 108dp layer -- a launcher is free to crop
+# diameter circle centered in the 108dp layer -- a launcher is free to crop
 # everything outside it -- so 62 leaves 2dp of margin all round. It used to be
 # 58, which read as a small badge floating in the plate rather than as the
 # app's mark: the launcher rail draws this at 48-96px, and 58/108 of 48px is
@@ -774,7 +774,7 @@ PLATE_LOCK = 0.90
 def plate_layers(w, h, k=1.0, inset=0.0, alpha=1.0, lock=1.0):
     """The KBStream plate: background, mark-as-light-source, lockup.
 
-    The lockup is centred in (w, h) at design scale `k`, so a wider plate gets
+    The lockup is centered in (w, h) at design scale `k`, so a wider plate gets
     more breathing room around the same lockup rather than a stretched one.
     `k = 1.0` at 320x180 is the TV banner, bit for bit.
 
@@ -853,12 +853,12 @@ def banner_lockup_layers(lock=BANNER_LOCKUP_LOCK):
     the wordmark cannot drift apart between the two forms -- minus everything
     that is not the brand: no plate, no halo, no beam and no tagline. What is
     left in the PNG is the brass play button and the word KBSTREAM, so a
-    launcher that draws its own card (or its own colour behind the tile) gets
+    launcher that draws its own card (or its own color behind the tile) gets
     nothing but the brand painted over it.
 
-    The wordmark is centred by its CAP height rather than inside the plate's
+    The wordmark is centered by its CAP height rather than inside the plate's
     three-line block: with the tagline gone there is no second line to balance
-    against, and centring that block would sit the word high.
+    against, and centering that block would sit the word high.
     """
     scale = lock
     mark_d = MARK_D * scale
@@ -1048,7 +1048,7 @@ def emit_vectors():
                          "     sits inside the 66dp safe circle the launcher masks to." % ICON_MARK_D)),
         write(os.path.join(RES, "drawable", "ic_launcher_monochrome.xml"),
               vector_xml(TILE, TILE, TILE, mono,
-                         "Single-colour mark for Android 13+ themed icons.")),
+                         "Single-color mark for Android 13+ themed icons.")),
     ]
     anydpi = (
         '<?xml version="1.0" encoding="utf-8"?>\n'

@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
  * all: the only refreshes were the manual one and the staleness check that
  * runs while the Guide screen is open. With the app closed (or on a TV box
  * that is left on the launcher) the guide simply aged, and because an import
- * only stores a window of programmes, it eventually aged into "No program
+ * only stores a window of programs, it eventually aged into "No program
  * data" rather than merely being old. [MainApplication] now schedules it on
  * every launch.
  *

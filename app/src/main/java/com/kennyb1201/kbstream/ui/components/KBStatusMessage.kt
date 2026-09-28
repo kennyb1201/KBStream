@@ -26,19 +26,19 @@ import kotlinx.coroutines.android.awaitFrame
 
 /**
  * The app's ONE status card: the loading spinner, the "nothing here" line and
- * the error line all render as this same centred pill on a [KBSurface] plate.
+ * the error line all render as this same centered pill on a [KBSurface] plate.
  *
  * Every browse screen needs those three states, and before this they each did
  * it their own way — the actor page had this card, while the genre / decade /
  * studio pages dropped a bare `Text("Nothing found for …")` straight into a
- * LazyColumn (no style, no colour, no padding, flush against the left edge,
+ * LazyColumn (no style, no color, no padding, flush against the left edge,
  * misaligned with the 20dp-inset rails around it) and a raw spinner in the
  * top-left corner. One shared component is what makes a failed load, an empty
- * result and a spinner recognisable as the same kind of thing wherever the
+ * result and a spinner recognizable as the same kind of thing wherever the
  * user meets them.
  *
  * [loading] swaps the icon for a spinner; otherwise [icon] is drawn as-is
- * (emoji carry their own colour, unlike a tinted vector).
+ * (emoji carry their own color, unlike a tinted vector).
  *
  * [onRetry] adds a focusable "Press OK to retry" card under the pill. Pass it
  * from FAILED loads only: a failure is the one state where the screen has
@@ -47,7 +47,7 @@ import kotlinx.coroutines.android.awaitFrame
  * button on a remote goes nowhere — see the comment in the body.
  *
  * Callers that place this inside a `LazyColumn` item should pass
- * `Modifier.fillParentMaxSize()` so the card centres in the rail viewport
+ * `Modifier.fillParentMaxSize()` so the card centers in the rail viewport
  * rather than sitting at the top of the item's content height.
  */
 @Composable

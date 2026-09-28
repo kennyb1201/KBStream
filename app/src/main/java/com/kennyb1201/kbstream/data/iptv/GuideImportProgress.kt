@@ -111,11 +111,15 @@ object GuideImportProgress {
     /**
      * The status line: what is being imported and how far along it is, e.g.
      *
-     *     source 2/3 · 34.2 MB · 128,400 programmes · 4:12
-     *     saving 128,400 programmes · 4:40
+     *     source 2/3 · 34.2 MB · 128,400 programs · 4:12
+     *     saving 128,400 programs · 4:40
      *
      * Empty when no pass is open. [nowMs] is a parameter so the elapsed half is
      * testable; the screen passes the clock.
+     *
+     * The wording is the viewer's, not the parser's: "program" here, "No program
+     * data" on the guide screen. Only the source this reads spells the word the
+     * XMLTV way, as `<programme>`.
      */
     fun label(
         state: GuideImportState?,
@@ -127,10 +131,10 @@ object GuideImportProgress {
                 add("source ${state.sourceIndex}/${state.sourceCount}")
             }
             if (state.phase == GuideImportPhase.SAVING) {
-                add("saving ${grouped(state.rowsParsed)} programmes")
+                add("saving ${grouped(state.rowsParsed)} programs")
             } else {
                 add("${megabytes(state.bytesRead)} MB")
-                add("${grouped(state.rowsParsed)} programmes")
+                add("${grouped(state.rowsParsed)} programs")
             }
             add(elapsed(state.startedAtMs, nowMs))
         }.joinToString(" · ")

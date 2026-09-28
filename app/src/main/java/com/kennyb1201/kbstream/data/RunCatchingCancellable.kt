@@ -8,7 +8,7 @@ import kotlinx.coroutines.CancellationException
  *
  * Why this exists: `runCatching` catches `Throwable`, and cancellation is
  * delivered as a `CancellationException`, so `runCatching` around suspending
- * work silently converts "this coroutine was cancelled" into "this operation
+ * work silently converts "this coroutine was canceled" into "this operation
  * failed". Two things follow, and both are bugs:
  *
  *  - the coroutine keeps running. Kotlin cancellation is cooperative: swallowing
@@ -16,7 +16,7 @@ import kotlinx.coroutines.CancellationException
  *    left (or a worker Android has stopped, or a switched-away profile) carries
  *    on doing work — and every subsequent suspend call has to throw the
  *    cancellation again before it can stop.
- *  - the cancellation is reported as a failure. A cancelled fetch reaches
+ *  - the cancellation is reported as a failure. A canceled fetch reaches
  *    `.onFailure { Log.w(...) }`, `CrashReporter.recordNonFatal` and the error
  *    snackbar, which is how "fetch failed" noise gets into the logs and into
  *    Sentry with no underlying fault, and how a real failure gets buried in it.
@@ -25,7 +25,7 @@ import kotlinx.coroutines.CancellationException
  * inside [block] (this is why it cannot be a normal function).
  *
  * Not for every block: converting one means the statements AFTER it in the
- * enclosing lambda are now skipped when the coroutine is cancelled. That is the
+ * enclosing lambda are now skipped when the coroutine is canceled. That is the
  * point for a fetch feeding UI state, but it is wrong for bookkeeping that must
  * happen either way — a sign-out that has to clear its own prefs, a resource
  * that has to be released. Those stay on plain `runCatching` (they are already

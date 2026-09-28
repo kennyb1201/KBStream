@@ -8,7 +8,7 @@
      Same spec as the rest of the family: 24x24 viewport, bars 2.2 units on
      the 3.4 grid, heads the same isoceles triangles every bar arrow uses
      (4.8 long, 6.8 across the base). The diagonals run at 45 degrees and
-     cross on the centre line, so the whole mark stays inside the same
+     cross on the center line, so the whole mark stays inside the same
      3.4-unit margin the other glyphs respect. Carries kb_text_hi
      (#FFF3EFE4) baked in, the way every bar glyph does. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"

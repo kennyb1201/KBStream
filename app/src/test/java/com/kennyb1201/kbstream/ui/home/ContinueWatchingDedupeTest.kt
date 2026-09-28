@@ -226,11 +226,11 @@ class ContinueWatchingDedupeTest {
     // ── a card whose enrichment failed ──────────────────────────────
 
     @Test
-    fun `a card labelled with its raw id collapses onto the real one`() {
+    fun `a card labeled with its raw id collapses onto the real one`() {
         // Reported bug: a show appeared twice in Continue Watching - one card
         // with artwork, and one with no thumbnail whose title was the raw
         // TMDB id. The twin's enrichment had failed, so it had no title to
-        // match on either, and the two id flavours ("tt..." vs "tmdb:...")
+        // match on either, and the two id flavors ("tt..." vs "tmdb:...")
         // never collided on their own. The resolved TMDB id both cards carry
         // is what pairs them.
         val localRow = resumeCard().copy(

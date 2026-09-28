@@ -20,7 +20,7 @@ import org.junit.Test
  * still empty ("IllegalStateException: The connection pool has been closed").
  * Too broad — retrying a real failure — hides network errors and malformed
  * guides behind three attempts and a delay, and in the worst case retries a
- * cancelled read back to life.
+ * canceled read back to life.
  */
 class DatabaseSwapRetryTest {
 
@@ -53,7 +53,7 @@ class DatabaseSwapRetryTest {
     }
 
     @Test
-    fun `a swap symptom wrapped in a cause is still recognised`() {
+    fun `a swap symptom wrapped in a cause is still recognized`() {
         val wrapped = RuntimeException(
             "batch write failed",
             IllegalStateException("The connection pool has been closed.")

@@ -3,7 +3,7 @@
 
 `runCatching` catches Throwable, and coroutine cancellation arrives as a
 CancellationException, so `runCatching` around a suspending call turns "this
-coroutine was cancelled" into "this operation failed": the coroutine carries on
+coroutine was canceled" into "this operation failed": the coroutine carries on
 with the next statement, and the cancellation reaches `.onFailure` /
 CrashReporter as if it were a fault (see
 app/src/main/java/com/kennyb1201/kbstream/data/RunCatchingCancellable.kt).
@@ -23,11 +23,11 @@ there are three ways to see it:
     - it is the expression of a `return`, which ends the path by definition.
 
 Everything else is reported as REVIEW and left alone, because converting it
-means the statements after it are skipped when the coroutine is cancelled. That
+means the statements after it are skipped when the coroutine is canceled. That
 is right for a fetch feeding UI state and wrong for bookkeeping that has to
 happen either way - the classic example is a bare
 `runCatching { client.signOut() }` with the sign-out prefs clearing and state
-update on the lines below it. That judgement is a human's, so a REVIEW site is
+update on the lines below it. That judgment is a human's, so a REVIEW site is
 converted only when a reviewer names it in the file passed to --approve. The
 remaining sites in this tree were swept that way in one pass, entry by entry,
 and the two that had to stay are marked in the code (see KEEP_MARKERS).
@@ -291,7 +291,7 @@ def classify(masked, call_start):
     # tree, so the block may not suspend at all: `build()` on a request builder,
     # `prefs.edit().apply()`, an mpv `load()`. Name matching cannot say which
     # declaration a call resolves to, and a runCatchingCancellable around work
-    # that cannot be cancelled buys nothing (it renames the call and claims a
+    # that cannot be canceled buys nothing (it renames the call and claims a
     # guarantee the code does not need - see RunCatchingCancellable.kt). Report
     # it so a human can look, but never rewrite on this evidence.
     if names <= AMBIGUOUS_NAMES:
@@ -478,7 +478,7 @@ def load_approvals(path):
     """`path:line` per line, `#` comments ignored: sites a human reviewed.
 
     A REVIEW site is a call that suspends mid-block, so converting it means the
-    statements after it are skipped when the coroutine is cancelled. That is the
+    statements after it are skipped when the coroutine is canceled. That is the
     right answer for the great majority of them (a fetch feeding UI state or a
     cache) and the wrong one for bookkeeping that has to happen either way, and
     nothing mechanical can tell the two apart. So the tool never converts one on

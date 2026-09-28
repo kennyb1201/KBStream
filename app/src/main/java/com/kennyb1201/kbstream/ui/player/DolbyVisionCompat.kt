@@ -954,7 +954,7 @@ internal object DolbyVisionCompat {
         if (br.readUe() == -1L) return SpsRewriteOutcome.Failed("sps-id") // sps_seq_parameter_set_id
         val chromaFormat = br.readUe()
         if (chromaFormat == -1L) return SpsRewriteOutcome.Failed("chroma-format")
-        if (chromaFormat == 3L && br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("separate-colour")
+        if (chromaFormat == 3L && br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("separate-color")
         if (br.readUe() == -1L || br.readUe() == -1L) return SpsRewriteOutcome.Failed("resolution")
         if (br.readBits(1) == 1L) { // conformance_window_flag
             for (i in 0 until 4) {

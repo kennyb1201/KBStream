@@ -11,9 +11,9 @@ import org.junit.Test
  * and the key that item is filed under either way.
  *
  * Those two answers have to be independent. The resolver used to give both with
- * one normaliser and the layouts answered the key question with a second one:
- * the resolver dropped any type it did not recognise (filing nothing at all)
- * while the layouts read every unrecognised type as "movie", so for such an item
+ * one normalizer and the layouts answered the key question with a second one:
+ * the resolver dropped any type it did not recognize (filing nothing at all)
+ * while the layouts read every unrecognized type as "movie", so for such an item
  * the reader looked up a key that could not exist and the resolver re-attempted
  * it on every rails change. Everything below is about that pair of questions
  * staying apart.
@@ -53,7 +53,7 @@ class KBArtworkLookupTest {
     fun `a KB item and a Home rail item file under the same key`() {
         // One format across the two screens that resolve this artwork: a "tv"
         // folder item and a "series" rail item are the same medium, and the
-        // whole point of the shared normaliser is that they cannot drift apart.
+        // whole point of the shared normalizer is that they cannot drift apart.
         assertEquals(
             landscapeArtKey("tv", "tt1"),
             landscapeArtKey("series", "tt1")

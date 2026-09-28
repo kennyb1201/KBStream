@@ -15,7 +15,7 @@ import okhttp3.OkHttpClient
  * DataSource.Factory that downloads YouTube googlevideo streams in ~1 MB
  * chunks by reopening a fresh connection per chunk. YouTube throttles (and
  * kills) connections that try to pull a whole adaptive stream in one shot,
- * but honours bounded range requests.
+ * but honors bounded range requests.
  *
  * Serving an extracted InnerTube URL reliably requires:
  *  - the same YouTube client User-Agent that requested the URL (otherwise
@@ -25,7 +25,7 @@ import okhttp3.OkHttpClient
  *    allow for every stream (it 403s range requests on some URLs).
  *
  * googlevideo 403s many streams when requested open-ended (no Range header)
- * while honouring bounded range requests, so we ALWAYS attempt a bounded
+ * while honoring bounded range requests, so we ALWAYS attempt a bounded
  * range first — even when the total content length is unknown (we chunk by
  * a fixed size and advance). To stay robust we try, in order: bounded-range +
  * ratebypass, bounded-range without ratebypass, open-ended + ratebypass,
@@ -160,7 +160,7 @@ class YoutubeChunkedDataSourceFactory(
             } else {
                 spec.uri
             }
-            // googlevideo only honours Range requests that start at byte 0.
+            // googlevideo only honors Range requests that start at byte 0.
             // Always request from 0 and skip the prefix we already delivered
             // in read().
             //
@@ -205,7 +205,7 @@ class YoutubeChunkedDataSourceFactory(
             // Order proven by device bisection (see runDiagnostics): the clean
             // signed URL with a capped <=1MB range serves ONLY at offset 0;
             // capped ranges at later offsets return 403. Mid-stream the server
-            // still honours an open-ended range from the current position, so
+            // still honors an open-ended range from the current position, so
             // try clean-bounded first (offset 0 case), then clean open-ended,
             // then ratebypass variants as a last resort (mutating the URL can
             // corrupt the signature).

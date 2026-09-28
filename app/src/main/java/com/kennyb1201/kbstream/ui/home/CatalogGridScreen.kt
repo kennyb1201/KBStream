@@ -124,7 +124,7 @@ fun CatalogGridScreen(
         // within a frame; this is just that one loading frame (plus a
         // possible cold-restore wait for the rails to load). It NEVER
         // navigates from here — see the open effect above for why.
-        // Skeleton grid rather than a centred spinner: the cards cost the
+        // Skeleton grid rather than a centered spinner: the cards cost the
         // same space either way, so the page does not jump when the real
         // posters land.
         val posterSize = rememberPosterSize()
@@ -196,7 +196,7 @@ fun CatalogGridScreen(
 
             // The shared status card, like the empty branch below it and every
             // other browse screen (Decade / Tag / Studio / Actor). This branch
-            // dropped a bare left-aligned grey line instead -- one branch under
+            // dropped a bare left-aligned gray line instead -- one branch under
             // a branch that already used the card, in the same `when`.
             state.error != null && state.items.isEmpty() -> {
                 KBStatusMessage(

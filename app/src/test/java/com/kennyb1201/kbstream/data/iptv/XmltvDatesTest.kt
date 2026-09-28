@@ -31,7 +31,7 @@ class XmltvDatesTest {
     }
 
     @Test
-    fun `a whitespace separated offset is honoured`() {
+    fun `a whitespace separated offset is honored`() {
         assertEquals(noonUtc, parseXmltvDateMillis("20260921120000 +0000"))
         assertEquals(noonUtc, parseXmltvDateMillis("20260921120000 +00:00"))
         assertEquals(noonUtc, parseXmltvDateMillis("20260921120000 Z"))
@@ -43,7 +43,7 @@ class XmltvDatesTest {
     }
 
     @Test
-    fun `an offset with an unrecognised spelling falls back rather than guessing`() {
+    fun `an offset with an unrecognized spelling falls back rather than guessing`() {
         // A tz we cannot read leaves the compact form unparseable, so the ISO
         // path gets its chance; the point is that it never silently becomes UTC.
         assertNull(parseXmltvDateMillis("20260921120000 CET"))

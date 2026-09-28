@@ -600,7 +600,7 @@ fun PosterContextMenu(
             scale = ClickableSurfaceDefaults.scale(
                 scale = 1f,
                 // No growth: this panel is nearly full width, so its focus cue
-                // is the border and the lifted container colour instead.
+                // is the border and the lifted container color instead.
                 focusedScale = KBFocusNone
             ),
             border = ClickableSurfaceDefaults.border(

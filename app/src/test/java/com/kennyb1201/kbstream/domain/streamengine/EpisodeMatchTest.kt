@@ -16,7 +16,7 @@ import org.junit.Test
  * handed back for that id was another episode, and auto-play started the head
  * of the list anyway. These tests pin the reading that stops that — and, just
  * as importantly, the cases it must stay silent about, because demoting the
- * everyday unlabelled release would break auto-play everywhere else.
+ * everyday unlabeled release would break auto-play everywhere else.
  */
 class EpisodeMatchTest {
 
@@ -144,14 +144,14 @@ class EpisodeMatchTest {
 
     @Test
     fun `a source that names nothing is not a contradiction`() {
-        val unlabelled = stream(title = "Paw Patrol 1080p WEB-DL 8 GB")
-        assertEquals(EpisodeMatch.Verdict.UNKNOWN, EpisodeMatch.verdict(unlabelled, 3, 30))
+        val unlabeled = stream(title = "Paw Patrol 1080p WEB-DL 8 GB")
+        assertEquals(EpisodeMatch.Verdict.UNKNOWN, EpisodeMatch.verdict(unlabeled, 3, 30))
     }
 
     // ── what auto-play starts ───────────────────────────────────────────────
 
     @Test
-    fun `the episode asked for is played over a better-labelled stranger`() {
+    fun `the episode asked for is played over a better-labeled stranger`() {
         // The whole point of the tier: auto-play takes the 480p file that says
         // it is S03E30 over the 4K one that says it is S03E15.
         val stranger = stream(
@@ -169,7 +169,7 @@ class EpisodeMatchTest {
 
     @Test
     fun `a source that names nothing still plays when nothing names the episode`() {
-        // An unlabelled release may well be the episode; refusing it would stop
+        // An unlabeled release may well be the episode; refusing it would stop
         // auto-play for every show whose releases carry no episode numbers.
         val stranger = stream(title = "Paw Patrol S03E15 1080p", url = "https://host/a.mkv")
         val quiet = stream(title = "Paw Patrol 1080p WEB-DL", url = "https://host/b.mkv")

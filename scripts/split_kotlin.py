@@ -156,7 +156,7 @@ def attached_start(lines, idx):
     A single blank line between two comment runs does not end the run: section
     dividers in this codebase sit above the declaration they introduce, with a
     blank line after them, and leaving a divider at the tail of the previous
-    part would read as if it labelled the wrong block.
+    part would read as if it labeled the wrong block.
     """
     start = idx
     blank_seen = False

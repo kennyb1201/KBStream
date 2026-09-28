@@ -26,7 +26,7 @@ package com.kennyb1201.kbstream.data.iptv
  *
  * The past edge is different in kind: the guide leans back only
  * [READ_PAST_MS] (to fill the "on now" cell and the row of what just finished)
- * while catch-up TV lists programmes that have already aired, so the import
+ * while catch-up TV lists programs that have already aired, so the import
  * keeps [PAST_MS] — the two are cheap next to the future, which is where the
  * rows and the hundreds of megabytes were.
  *
@@ -40,7 +40,7 @@ internal object EpgWindow {
 
     /**
      * What the guide RENDERS behind the clock. The "on now" cell and the row
-     * of just-finished programmes; see `IptvViewModel.GUIDE_PAST_WINDOW_MS`.
+     * of just-finished programs; see `IptvViewModel.GUIDE_PAST_WINDOW_MS`.
      */
     const val READ_PAST_MS = 30L * 60L * 1000L
 
@@ -67,7 +67,7 @@ internal object EpgWindow {
     const val PAST_MS = 2L * 60L * 60L * 1000L
 
     /**
-     * How far ahead an import keeps programmes.
+     * How far ahead an import keeps programs.
      *
      * [READ_FUTURE_MS] plus two [REFRESH_INTERVAL_MS] of slack: enough that a
      * guide which was refreshed on time still reaches the end of the grid after
@@ -80,7 +80,7 @@ internal object EpgWindow {
     /**
      * The most of a description the widest screen can actually draw.
      *
-     * A programme's description reaches a screen in three places and nowhere
+     * A program's description reaches a screen in three places and nowhere
      * else, and every one of them clamps it: the guide's "on now" card at three
      * lines, the catch-up list at one, and the player's zap banner at two lines
      * of 12sp across the banner (see `activity_player.xml`). The widest of the

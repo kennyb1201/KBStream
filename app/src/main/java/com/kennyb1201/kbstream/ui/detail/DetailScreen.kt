@@ -257,8 +257,8 @@ private val BUTTON_PROGRESS_WIDTH = 26.dp
  * would match each other (see ic_player_next); its play mark and Material's
  * PlayArrow happen to be the same triangle, but the shuffle and film-strip
  * glyphs are a different hand, and this row was the last place mixing them in.
- * They are still tinted by the card's content colour, as the Material ones
- * were, so focus/idle colouring is unchanged.
+ * They are still tinted by the card's content color, as the Material ones
+ * were, so focus/idle coloring is unchanged.
  */
 @Composable
 private fun IconButtonBody(
@@ -299,7 +299,7 @@ private fun IconButtonBody(
             contentAlignment = Alignment.CenterStart
         ) {
             if (progress != null) {
-                // Focus-aware: the card's content colour is KBTextHi while
+                // Focus-aware: the card's content color is KBTextHi while
                 // idle and KBAccent while focused, so the bar highlights with
                 // the card it sits in.
                 val barColor = androidx.tv.material3.LocalContentColor.current
@@ -1116,15 +1116,15 @@ fun DetailScreen(
         isLoading -> {
             // The app's one status card (spinner + word), the same shape the
             // browse screens show while they load. This page had its own
-            // hand-rolled centred spinner, one screen away from the card.
+            // hand-rolled centered spinner, one screen away from the card.
             KBStatusMessage(loading = true, message = KB_STATUS_LOADING)
         }
 
         error != null -> {
-            // Was a bare Text("Error: ...") in a Box with no colour at all, so
-            // it inherited the tv theme's default bright content colour and
+            // Was a bare Text("Error: ...") in a Box with no color at all, so
+            // it inherited the tv theme's default bright content color and
             // sat against the left edge while every sibling screen showed a
-            // centred card.
+            // centered card.
             //
             // The retry is the reason DetailViewModel.isFreshDetailLoad treats
             // a failed load as never-fresh ("the error screen has to be able to
@@ -4153,7 +4153,7 @@ private fun CastCard(
             ),
             scale = ClickableSurfaceDefaults.scale(
                 // No growth: the cast rail packs several circles per row, and growing
-                // one would shove its neighbours; the press-in still gives feedback.
+                // one would shove its neighbors; the press-in still gives feedback.
                 focusedScale = KBFocusNone,
                 pressedScale = KBFocusPressed
             ),
@@ -5160,7 +5160,7 @@ private fun seriesStatusTag(status: String?): String? {
         normalizedStatus.equals("In Production", ignoreCase = true) -> "IN PRODUCTION"
         normalizedStatus.equals("Planned", ignoreCase = true) -> "PLANNED"
         normalizedStatus.equals("Canceled", ignoreCase = true) ||
-        normalizedStatus.equals("Cancelled", ignoreCase = true) -> "CANCELED"
+        normalizedStatus.equals("Canceled", ignoreCase = true) -> "CANCELED"
         normalizedStatus.equals("Ended", ignoreCase = true) -> "ENDED"
         else -> null
     }

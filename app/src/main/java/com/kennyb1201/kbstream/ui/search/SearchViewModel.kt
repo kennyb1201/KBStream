@@ -56,7 +56,7 @@ data class SearchTitleResult(
 
 /**
  * Search hits from one installed add-on (AIOMetadata, BingeCat, ...),
- * grouped so the search screen can show them as a labelled source rail.
+ * grouped so the search screen can show them as a labeled source rail.
  */
 data class AddonResultGroup(
     // Display name of the add-on (e.g. "AIOMetadata"). Rendered as the
@@ -572,7 +572,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // badges/marks can key off the IMDB id.
                 resolveTmdbTitles(_results.value)
             } catch (e: kotlinx.coroutines.CancellationException) {
-                // A superseded search is cancelled, not failed: rethrow rather
+                // A superseded search is canceled, not failed: rethrow rather
                 // than logging it and blanking the results the newer search is
                 // about to fill.
                 throw e
@@ -592,7 +592,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      * Second wave of a search: query every catalog add-on (AIOMetadata's AI /
      * meta catalogs, BingeCat lists, Cinemeta, ...) via the standard Stremio
      * search endpoint and publish the hits grouped by add-on so the search
-     * screen can show them as their own labelled rails. Runs after — and
+     * screen can show them as their own labeled rails. Runs after — and
      * never delays — the TMDB wave.
      */
     private fun launchAddonSearch(
@@ -1176,7 +1176,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      * named to replace it the strip put focus back on its FIRST chip: in a
      * submenu of dozens of entries (Services & Networks holds 91) that threw
      * the viewer to the top of the list, so they had to scroll back down to
-     * where they were. The neighbour - the next chip, or the previous one when
+     * where they were. The neighbor - the next chip, or the previous one when
      * the hidden chip was the last - is where they were already looking.
      */
     fun hideBrowseChip(categoryKey: String, entry: BrowseEntry) {

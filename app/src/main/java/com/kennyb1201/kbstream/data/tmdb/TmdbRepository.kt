@@ -405,7 +405,7 @@ class TmdbRepository private constructor(context: Context) :
      *
      * The cost has to be paid somewhere. Paying it here is deliberate rather
      * than leaving it to first use, because "first use" is a `viewModelScope`
-     * coroutine — `Dispatchers.Main.immediate` — so on-demand initialisation
+     * coroutine — `Dispatchers.Main.immediate` — so on-demand initialization
      * would move the same work to the main thread a few milliseconds later,
      * and delay the first real data instead of the first frame.
      *
@@ -2468,7 +2468,7 @@ class TmdbRepository private constructor(context: Context) :
          * the KB folders key their entries on this, and a reader spelling it
          * differently from the writer finds nothing. That failure is silent and
          * shows up only for the titles an add-on happens to type oddly ("tv",
-         * "anime.series"), which is exactly how two normalisers lived here long
+         * "anime.series"), which is exactly how two normalizers lived here long
          * enough to disagree.
          */
         internal fun normalizeMediaType(type: String): String {

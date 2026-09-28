@@ -32,7 +32,7 @@ internal object PlayerAudioTuning {
      *
      * "Auto" folds down only as far as this device's output needs (see
      * [deviceMaxChannels]): stereo on a TV's own speakers, 5.1 kept on an AVR,
-     * and 7.1 trimmed to 5.1 either way — always with the centre lift, which is
+     * and 7.1 trimmed to 5.1 either way — always with the center lift, which is
      * the part leaving the layout to the device could never give us.
      */
     val DOWNMIX_OPTIONS: List<Pair<String, Int>> =
@@ -151,7 +151,7 @@ internal object PlayerAudioTuning {
     @Volatile
     var deviceMaxChannels: Int = 2
 
-    /** Dialogue / centre-channel lift. */
+    /** Dialogue / center-channel lift. */
     @Volatile
     var dialogueBoost: Int = 0
 
@@ -161,8 +161,8 @@ internal object PlayerAudioTuning {
 
     /**
      * Center-channel gain for a 5.1/7.1 downmix. 0.7071 is the standard ITU
-     * coefficient (centre at the same perceived level as a front channel);
-     * the boost multiplies on top of it, and the centre channel is where
+     * coefficient (center at the same perceived level as a front channel);
+     * the boost multiplies on top of it, and the center channel is where
      * dialogue lives in every film/TV mix.
      *
      * Applies to a fold only: a stream that is not being folded keeps this as a
@@ -172,9 +172,9 @@ internal object PlayerAudioTuning {
         get() = CENTER_BASE * (1f + 0.5f * dialogueBoost)
 
     /**
-     * Centre-channel gain for a stream that keeps its layout (Downmix = Auto),
+     * Center-channel gain for a stream that keeps its layout (Downmix = Auto),
      * i.e. the one the device folds itself. 1.0 at Off, so the default state is
-     * the untouched mix, and the same step as [midGain] — the phantom-centre lift
+     * the untouched mix, and the same step as [midGain] — the phantom-center lift
      * an already-stereo track gets — so the two halves of the dialogue boost feel
      * alike.
      */
@@ -182,8 +182,8 @@ internal object PlayerAudioTuning {
         get() = 1f + 0.35f * dialogueBoost
 
     /**
-     * Mid-channel lift for STEREO sources. A 2.0 track has no centre channel:
-     * dialogue sits in the phantom centre, which is exactly the "mid" component
+     * Mid-channel lift for STEREO sources. A 2.0 track has no center channel:
+     * dialogue sits in the phantom center, which is exactly the "mid" component
      * (L+R)/2 while music beds and wide effects sit in the "side" (L-R)/2. So
      * lifting mid raises voices without dragging up the whole mix.
      */
@@ -214,7 +214,7 @@ internal object PlayerAudioTuning {
         this.volumeBoostDb = volumeBoostDb
     }
 
-    /** Standard ITU-R BS.775 centre coefficient (1/sqrt(2)). */
+    /** Standard ITU-R BS.775 center coefficient (1/sqrt(2)). */
     const val CENTER_BASE = 0.7071f
 
     /** Surround coefficient, from the same standard. */

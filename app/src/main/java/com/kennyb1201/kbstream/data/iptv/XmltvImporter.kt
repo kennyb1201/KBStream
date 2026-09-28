@@ -46,10 +46,10 @@ class XmltvImporter(
 
     /**
      * Keys of every channel the loaded playlist could match, from
-     * [playlistEpgMatchKeys]. Programmes whose channel is known to be
+     * [playlistEpgMatchKeys]. Programs whose channel is known to be
      * unreachable are skipped.
      *
-     * The guide only ever reads programmes for channels that matched a playlist
+     * The guide only ever reads programs for channels that matched a playlist
      * entry ([IptvRepository] queries them by matched channel id), so the rows a
      * large provider ships for its other few thousand channels are pure import
      * cost: the batched inserts, the staging -> live swap that re-keys every
@@ -154,7 +154,7 @@ class XmltvImporter(
         // Whether any playlist channel can reach each guide channel, keyed the
         // way a <programme channel="..."> value is normalized
         // ([normalizeEpgChannelKey]). A channel missing from this map has not
-        // been read yet, which fails open (see the programme branch).
+        // been read yet, which fails open (see the program branch).
         val channelMatchability = HashMap<String, Boolean>(1024)
 
         var parsedChannels = 0
@@ -198,7 +198,7 @@ class XmltvImporter(
                         // A whole block for a channel the playlist can never
                         // reach is skipped before title/description/category
                         // are even read. A channel that has not been seen yet
-                        // (a file that lists programmes before channels) has
+                        // (a file that lists programs before channels) has
                         // no entry, and an unknown channel is KEPT: the filter
                         // may only ever drop rows it is sure about.
                         if (shouldSkipProgram(parser, channelMatchability)) {
@@ -276,7 +276,7 @@ class XmltvImporter(
             // logic still sees the import as unsuccessful. The cause is
             // attached deliberately: this write is the heaviest of the import
             // and the most likely to lose the profile-scoped database, and the
-            // caller recognises a swap by walking the cause chain
+            // caller recognizes a swap by walking the cause chain
             // (data/db/DatabaseSwapRetry.kt). A bare message here would read as
             // a real failure and the guide would be left empty.
             throw IllegalStateException(
@@ -485,7 +485,7 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
     /**
      * Whether the <programme> the parser is sitting on belongs to a channel
      * this import intends to keep. See [playlistMatchKeys]: with no playlist
-     * known nothing is skipped, and an unread channel keeps its programmes.
+     * known nothing is skipped, and an unread channel keeps its programs.
      */
     private fun shouldSkipProgram(
         parser: XmlPullParser,

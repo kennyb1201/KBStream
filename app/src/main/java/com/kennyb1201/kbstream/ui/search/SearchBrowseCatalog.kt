@@ -280,7 +280,7 @@ val BROWSE_KEYWORD_NAMES = listOf(
     "dj",
     "stand-up comedian",
     "broadway",
-    "theatre",
+    "theater",
     "opera",
     "ballet",
     "dancer",
@@ -727,7 +727,7 @@ val BROWSE_STUDIOS: List<BrowseEntry> = popularFirst(
     BrowseEntry(3491, "Showbox"),
     BrowseEntry(3393, "Huayi Brothers Pictures")
 
-    // Removed (2026-09) on request — these catalogue pages are not wanted in
+    // Removed (2026-09) on request — these catalog pages are not wanted in
     // this list: KADOKAWA 2073, Bandai Visual 528, Kyoto Animation 5438,
     // WIT STUDIO 31058, MAPPA 21444, ufotable 5887, Production I.G 529,
     // SHAFT 6689, CoMix Wave Films 3756, TMS Entertainment 7164, OLM 5372,

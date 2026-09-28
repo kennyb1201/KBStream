@@ -5,10 +5,10 @@ import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
- * Full-text index over EPG programme titles, used by the guide-wide search.
+ * Full-text index over EPG program titles, used by the guide-wide search.
  *
- * The search used to be a leading-wildcard `LIKE '%q%'` across every programme
- * row. That cannot use an index, so SQLite scanned and sorted all programmes
+ * The search used to be a leading-wildcard `LIKE '%q%'` across every program
+ * row. That cannot use an index, so SQLite scanned and sorted all programs
  * that had not finished yet — the reason the search is gated behind a minimum
  * query length at all.
  *
@@ -24,7 +24,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  * copy of each title. That makes it immune to the failure mode of an
  * external-content index: a stale entry can never make the FTS engine read a
  * row that no longer exists. Rows are kept in sync by triggers, and the search
- * always joins back to `epg_programs` on `id`, so an entry whose programme is
+ * always joins back to `epg_programs` on `id`, so an entry whose program is
  * gone — including one an `INSERT OR REPLACE` removed without firing SQLite's
  * delete trigger — simply drops out of the results.
  */
@@ -38,7 +38,7 @@ object EpgSearchIndex {
 
     /**
      * Creates the index and its triggers when they are missing, backfilling
-     * from the programmes already in the table. Safe to call on every database
+     * from the programs already in the table. Safe to call on every database
      * open: the DDL is `IF NOT EXISTS` and the backfill only runs when the
      * index is first created.
      *
@@ -60,7 +60,7 @@ object EpgSearchIndex {
             }
             createTriggers(db)
             if (created) {
-                // Programmes imported before this index existed are not covered
+                // Programs imported before this index existed are not covered
                 // by the triggers, so index the existing rows now.
                 db.execSQL(
                     "INSERT INTO `$TABLE`(rowid, title) " +
@@ -76,9 +76,9 @@ object EpgSearchIndex {
     }
 
     private fun createTriggers(db: SupportSQLiteDatabase) {
-        // The FTS row's `rowid` is the programme's `id`, which is what the
+        // The FTS row's `rowid` is the program's `id`, which is what the
         // search joins on. DELETE-then-INSERT on UPDATE keeps a retitled
-        // programme from leaving its old title searchable.
+        // program from leaving its old title searchable.
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS ${TABLE}_ai AFTER INSERT ON `$CONTENT_TABLE` " +
                 "BEGIN INSERT INTO `$TABLE`(rowid, title) VALUES (new.id, new.title); END"

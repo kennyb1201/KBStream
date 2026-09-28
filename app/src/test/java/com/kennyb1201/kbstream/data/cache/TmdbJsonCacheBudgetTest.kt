@@ -12,7 +12,7 @@ import org.junit.Test
  * was by age - which never fires for a title the user keeps re-fetching.
  *
  * So these cases are about the rule that replaces that: a hard byte budget with
- * newest-first retention. Sizes are modelled on the measured payloads (150 KB
+ * newest-first retention. Sizes are modeled on the measured payloads (150 KB
  * detail rows, 60 KB season rows) rather than round numbers, because the whole
  * point of the budget is how many real rows it holds.
  */

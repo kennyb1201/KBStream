@@ -20,7 +20,7 @@ package com.kennyb1201.kbstream.data.reporting
  * Authorization headers, sensitive query/header/JSON fields, URL user-info, and
  * bare JWTs — while leaving the rest of the message readable, so a report stays
  * diagnosable. It is a scrubber, not a guarantee: it can only mask values that
- * follow a recognisable key or that look like a token.
+ * follow a recognizable key or that look like a token.
  */
 object Redaction {
 

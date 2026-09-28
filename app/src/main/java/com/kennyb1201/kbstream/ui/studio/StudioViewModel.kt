@@ -481,7 +481,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             )
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Cancellation is not a failure: rethrow so the scope that was
-            // cancelled stops here instead of logging it and clearing state as
+            // canceled stops here instead of logging it and clearing state as
             // if the work had simply failed.
             throw e
         } catch (e: Exception) {

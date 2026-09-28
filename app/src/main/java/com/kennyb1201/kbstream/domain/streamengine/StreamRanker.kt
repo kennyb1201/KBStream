@@ -28,7 +28,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *     the right thing - it is the wrong thing, and the picker's head is what
  *     auto-play starts. See [EpisodeMatch].
  *  4. **Debrid-served links.** A link served by the viewer's own debrid service
- *     comes before a plain hoster link, whatever that one is labelled: the
+ *     comes before a plain hoster link, whatever that one is labeled: the
  *     URL's host is the service itself, or the entry carries that service's own
  *     completion tag. It sits above availability because it is a fact about the
  *     URL rather than a claim in a title - an addon writes its own titles, so a
@@ -72,7 +72,7 @@ object StreamRanker {
      *
      * WEBRip is deliberately NOT in this group. It is an ordinary source, and
      * penalising it the way a CAM is penalised pushed good web releases below
-     * unlabelled ones.
+     * unlabeled ones.
      */
     private val UNWATCHABLE_RELEASE =
         Regex(
@@ -103,7 +103,7 @@ object StreamRanker {
     /**
      * A 3D encode (side-by-side or over-under, including the half variants):
      * without a 3D mode this is a doubled, squashed picture - the other way a
-     * well-labelled stream turns out to be unwatchable.
+     * well-labeled stream turns out to be unwatchable.
      */
     private val THREE_D_RELEASE =
         Regex("""\b(3d|sbs|hsbs|half-sbs|ou|hou|half-ou)\b""")
@@ -398,9 +398,9 @@ object StreamRanker {
 
         // --- Signals from the stream's own fields ---
 
-        // Widevine: the main player negotiates the licence, so DRM stays a
+        // Widevine: the main player negotiates the license, so DRM stays a
         // (small) quality signal - deliberately nowhere near big enough to lift
-        // a DRM entry over a better-labelled open one, since it also cannot be
+        // a DRM entry over a better-labeled open one, since it also cannot be
         // handed to the MPV engine at all.
         if (stream.drm != null) score += 60
 
@@ -504,7 +504,7 @@ object StreamRanker {
     /**
      * Penalty for a resolution label the file's own size does not support:
      * "2160p" on a sub-[MIN_PLAUSIBLE_4K_GB] file, or "1080p" under
-     * [MIN_PLAUSIBLE_1080P_GB]. Zero when the size is unknown — an unlabelled
+     * [MIN_PLAUSIBLE_1080P_GB]. Zero when the size is unknown — an unlabeled
      * size is not evidence of a fake, and guessing would demote honest sources.
      */
     private fun fakeQualityPenalty(stream: Stream, text: String): Int {
@@ -520,7 +520,7 @@ object StreamRanker {
      * The release's size in GB: the server's own hint when it sent one
      * (`behaviorHints.videoSize`, in bytes), otherwise the largest unit written
      * in the text. MB and TB used to be invisible to this - only "N gb" matched
-     * - so a "700 MB" and a "1.2 TB" release both scored as unlabelled.
+     * - so a "700 MB" and a "1.2 TB" release both scored as unlabeled.
      */
     private fun sizeInGb(stream: Stream, text: String): Double? {
         stream.behaviorHints

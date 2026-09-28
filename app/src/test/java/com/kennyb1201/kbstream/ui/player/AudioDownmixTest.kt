@@ -12,7 +12,7 @@ import org.junit.Test
  *
  * Reported problem: a single-audio-track stream was so quiet that the TV's
  * volume had to be pinned, and dialogue sat under the score on a 5.1 mix. The
- * fix folds the channels in the app (centre lifted, surrounds trimmed, output
+ * fix folds the channels in the app (center lifted, surrounds trimmed, output
  * limited) instead of leaving it to the platform's plain downmix.
  */
 class AudioDownmixTest {
@@ -82,7 +82,7 @@ class AudioDownmixTest {
         assertEquals(0f, matrix[1 * 2 + 0], 1e-4f)
         assertEquals(1f, matrix[1 * 2 + 1], 1e-4f)
 
-        // Centre feeds both sides at the standard 1/sqrt(2).
+        // Center feeds both sides at the standard 1/sqrt(2).
         assertEquals(0.7071f, matrix[2 * 2 + 0], 1e-4f)
         assertEquals(0.7071f, matrix[2 * 2 + 1], 1e-4f)
 
@@ -98,13 +98,13 @@ class AudioDownmixTest {
     }
 
     @Test
-    fun `the centre lift puts dialogue above the surround effects`() {
+    fun `the center lift puts dialogue above the surround effects`() {
         val neutral = AudioDownmix.mixingMatrix(6, 2, PlayerAudioTuning.CENTER_BASE, 1f)!!
         val boosted = AudioDownmix.mixingMatrix(6, 2, PlayerAudioTuning.CENTER_BASE * 1.5f, 0.8f)!!
 
-        val neutralCentre = neutral[2 * 2 + 0]
-        val boostedCentre = boosted[2 * 2 + 0]
-        assertTrue("centre must come up", boostedCentre > neutralCentre)
+        val neutralCenter = neutral[2 * 2 + 0]
+        val boostedCenter = boosted[2 * 2 + 0]
+        assertTrue("center must come up", boostedCenter > neutralCenter)
 
         // ...while the surrounds that carry explosions come DOWN.
         assertTrue(boosted[4 * 2 + 0] < neutral[4 * 2 + 0])
@@ -122,7 +122,7 @@ class AudioDownmixTest {
         assertEquals(1f, matrix!![6 * 6 + 4], 1e-4f)
         assertEquals(0f, matrix[6 * 6 + 5], 1e-4f)
         assertEquals(1f, matrix[7 * 6 + 5], 1e-4f)
-        // Fronts, centre and LFE pass straight through.
+        // Fronts, center and LFE pass straight through.
         assertEquals(1f, matrix[0 * 6 + 0], 1e-4f)
         assertEquals(1f, matrix[1 * 6 + 1], 1e-4f)
         assertEquals(1f, matrix[2 * 6 + 2], 1e-4f)
@@ -130,7 +130,7 @@ class AudioDownmixTest {
     }
 
     @Test
-    fun `a back centre channel is split across both rears`() {
+    fun `a back center channel is split across both rears`() {
         // 7 channels is 6.1: [FL, FR, FC, LFE, BC, SL, SR].
         val matrix = AudioDownmix.mixingMatrix(7, 6, PlayerAudioTuning.CENTER_BASE, 1f)!!
         assertEquals(0.7071f, matrix[4 * 6 + 4], 1e-4f)
@@ -154,14 +154,14 @@ class AudioDownmixTest {
      * The other half of the same idea: with the layout left to the device there
      * is nothing to fold, and the dialogue knob used to do nothing at all for a
      * 5.1/7.1 file in exactly that (default) configuration. It is a per-channel
-     * balance instead — the device then folds an already-lifted centre.
+     * balance instead — the device then folds an already-lifted center.
      */
     @Test
     fun `a stream that keeps its layout is balanced in place`() {
         val balance = AudioDownmix.gainMatrix(inputChannels = 6, centerGain = 1.7f, surroundScale = 0.8f)
         assertNotNull(balance)
 
-        // Centre up...
+        // Center up...
         assertEquals(1.7f, balance!![2 * 6 + 2], 1e-4f)
         // ...the surrounds that carry score and explosions down...
         assertEquals(0.8f, balance[4 * 6 + 4], 1e-4f)
@@ -173,7 +173,7 @@ class AudioDownmixTest {
         // A gain, not a fold: nothing bleeds into another channel.
         assertEquals(0f, balance[0 * 6 + 1], 1e-4f)
 
-        // 7.1's sides are trimmed too, and its back centre is not a surround.
+        // 7.1's sides are trimmed too, and its back center is not a surround.
         val sevenOne = AudioDownmix.gainMatrix(8, 1.7f, 0.6f)!!
         assertEquals(0.6f, sevenOne[6 * 8 + 6], 1e-4f)
         assertEquals(0.6f, sevenOne[7 * 8 + 7], 1e-4f)
@@ -195,12 +195,12 @@ class AudioDownmixTest {
             PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
         }
 
-        // Stereo has no centre channel: it is lifted through mid/side instead.
+        // Stereo has no center channel: it is lifted through mid/side instead.
         assertNull(AudioDownmix.gainMatrix(2, 1.7f, 0.6f))
         // An unmodelled layout is left alone rather than guessed at.
         assertNull(AudioDownmix.gainMatrix(9, 1.7f, 0.6f))
 
-        // And with the boost on, the in-place centre gain really is a lift.
+        // And with the boost on, the in-place center gain really is a lift.
         PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 2, 0)
         try {
             assertTrue(PlayerAudioTuning.inPlaceCenterGain > 1f)
@@ -257,7 +257,7 @@ class AudioDownmixTest {
             // A stereo output — the default until a sink has reported its
             // width, and what a TV's own speakers are: multichannel folds
             // down there. It is done HERE rather than left to the device, so
-            // the centre lift comes with it (the whole point of Auto).
+            // the center lift comes with it (the whole point of Auto).
             PlayerAudioTuning.deviceMaxChannels = 2
             assertEquals(2, AudioDownmix.desiredOutputChannels(6))
             assertEquals(2, AudioDownmix.desiredOutputChannels(8))
@@ -328,24 +328,24 @@ class AudioDownmixTest {
     // ── Gains ─────────────────────────────────────────────────────────────
 
     @Test
-    fun `dialogue boost lifts the centre and the stereo mid channel`() {
+    fun `dialogue boost lifts the center and the stereo mid channel`() {
         PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)
-        val offCentre = PlayerAudioTuning.centerGain
+        val offCenter = PlayerAudioTuning.centerGain
         val offMid = PlayerAudioTuning.midGain
 
         PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 1, 0)
-        val lowCentre = PlayerAudioTuning.centerGain
+        val lowCenter = PlayerAudioTuning.centerGain
         val lowMid = PlayerAudioTuning.midGain
 
         PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 2, 0)
-        val highCentre = PlayerAudioTuning.centerGain
+        val highCenter = PlayerAudioTuning.centerGain
 
-        assertTrue(lowCentre > offCentre)
-        assertTrue(highCentre > lowCentre)
+        assertTrue(lowCenter > offCenter)
+        assertTrue(highCenter > lowCenter)
         assertTrue(lowMid > offMid)
 
-        // Untouched at Off, so the default path is exactly the old behaviour.
-        assertEquals(PlayerAudioTuning.CENTER_BASE, offCentre, 1e-4f)
+        // Untouched at Off, so the default path is exactly the old behavior.
+        assertEquals(PlayerAudioTuning.CENTER_BASE, offCenter, 1e-4f)
         assertEquals(1f, offMid, 1e-4f)
 
         PlayerAudioTuning.apply(PlayerAudioTuning.DOWNMIX_AUTO, 0, 0)

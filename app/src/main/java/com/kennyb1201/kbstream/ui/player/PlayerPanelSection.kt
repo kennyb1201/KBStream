@@ -12,7 +12,7 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
  * The player's panel is the legacy View tree from `activity_player.xml`, whose
  * rows sit past the tooling's edit window — so this section is built in code and
  * appended to the end of the panel's own column, reusing the panel's drawables,
- * type sizes and colours so it reads as part of it rather than as a bolt-on.
+ * type sizes and colors so it reads as part of it rather than as a bolt-on.
  *
  * Every choice is delegated to [PlayerTrackBridge]: it applies the choice to the
  * running player, remembers it per show, and reflects the state back. Nothing
@@ -124,7 +124,7 @@ internal class PlayerPanelSection(
         column.addView(
             label(
                 "Auto folds 5.1/7.1 down to what this device can carry; Stereo always " +
-                    "folds. Either way the centre (dialogue) is lifted.",
+                    "folds. Either way the center (dialogue) is lifted.",
                 topMarginDp = 4
             )
         )
@@ -141,7 +141,7 @@ internal class PlayerPanelSection(
         )
         column.addView(
             label(
-                "Each step lifts the centre channel (voices), or the phantom centre of a " +
+                "Each step lifts the center channel (voices), or the phantom center of a " +
                     "stereo track, and trims the surrounds that carry score and effects.",
                 topMarginDp = 4
             )

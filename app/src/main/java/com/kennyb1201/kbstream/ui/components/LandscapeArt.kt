@@ -17,7 +17,7 @@ import kotlinx.coroutines.coroutineScope
  * item's artwork is filed under, which of TMDB's images to prefer, and what the
  * add-on's own fields are worth when TMDB has nothing. Each screen had its own
  * copy of all three, and they had already drifted: the folder resolver dropped
- * any media type it did not recognise while its layouts read every unrecognised
+ * any media type it did not recognize while its layouts read every unrecognized
  * type as "movie", so those items were looked up under a key that could not
  * exist and were re-attempted on every rails change. One implementation, pinned
  * by `LandscapeArtTest`, is what keeps that from being a thing that can happen

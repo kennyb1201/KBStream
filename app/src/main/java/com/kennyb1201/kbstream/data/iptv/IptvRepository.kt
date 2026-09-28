@@ -91,7 +91,7 @@ class IptvRepository(
      * depend on a playlist fetch - the background worker has no UI to trigger
      * one - and the cache is what a cold start has. Anything unreadable
      * contributes nothing, and an empty result means the import keeps every
-     * channel's programmes exactly as it used to.
+     * channel's programs exactly as it used to.
      *
      * Pref names match IptvViewModel's: both address the same profile-scoped
      * "iptv_prefs" store.
@@ -266,7 +266,7 @@ class IptvRepository(
             // Plain runCatching, deliberately: `waiter.complete(result)` on the
             // next line is what releases every other caller that joined this
             // import (see the activeGuideImports handshake above), so the block
-            // has to hand back a Result even when this coroutine is cancelled -
+            // has to hand back a Result even when this coroutine is canceled -
             // a rethrow here would leave those joiners awaiting a deferred
             // nobody completes. The cancellation still propagates:
             // result.getOrThrow() rethrows it just below.
@@ -385,11 +385,11 @@ class IptvRepository(
             cachedMatches = cachedMatches
         )
 
-        // The programme rows were stored under the importer's key
+        // The program rows were stored under the importer's key
         // ([epgProgramChannelKey], lowercased), not under the guide channel's
         // raw id. The DAO matches `channelId IN (...)` case-sensitively, so
         // asking with the raw id returned nothing for every channel whose
-        // guide id carries an uppercase letter -- programmes imported and in
+        // guide id carries an uppercase letter -- programs imported and in
         // the database, but a permanent "No program data" on screen.
         val matchedGuideIds = resolvedMatches.values
             .mapNotNull { it.epgChannel?.id }

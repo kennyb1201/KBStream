@@ -252,8 +252,8 @@ internal class MpvSettingsSection(
         )
         column.addView(
             ui.label(
-                "Each step lifts the centre channel (voices) on a multichannel mix, " +
-                    "and the phantom centre a stereo track keeps its dialogue in.",
+                "Each step lifts the center channel (voices) on a multichannel mix, " +
+                    "and the phantom center a stereo track keeps its dialogue in.",
                 topMarginDp = 4
             )
         )

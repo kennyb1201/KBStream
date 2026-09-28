@@ -90,7 +90,7 @@ internal object NotificationCenter {
     }
 
     /**
-     * Posts the "your programme is starting" alert for a live-TV reminder and
+     * Posts the "your program is starting" alert for a live-TV reminder and
      * deep-links its tap into the guide.
      *
      * The tap deliberately does NOT tune straight into the player: a reminder
@@ -107,12 +107,12 @@ internal object NotificationCenter {
     // canPost() - areNotificationsEnabled(), false on 13+ without the grant -
     // already does, only at runtime instead of in lint's flow analysis.
     @SuppressLint("MissingPermission")
-    fun programmeReminder(
+    fun programReminder(
         context: Context,
         reminderKey: String,
         channelId: String,
         channelName: String,
-        programmeTitle: String
+        programTitle: String
     ): Boolean {
         ensureChannels(context)
         if (!canPost(context)) {
@@ -121,7 +121,7 @@ internal object NotificationCenter {
         }
 
         val body = buildString {
-            append(programmeTitle.ifBlank { "Your program" })
+            append(programTitle.ifBlank { "Your program" })
             append(" is starting now")
         }
 
@@ -182,7 +182,7 @@ internal object NotificationCenter {
      * its tap to that show's detail screen. Returns true when the system took
      * the notification.
      */
-    // See programmeReminder: canPost() gates this, and the runCatching below
+    // See programReminder: canPost() gates this, and the runCatching below
     // catches the SecurityException of a grant revoked in the gap.
     @SuppressLint("MissingPermission")
     fun newEpisode(

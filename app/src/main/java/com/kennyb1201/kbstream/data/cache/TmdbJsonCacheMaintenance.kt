@@ -54,7 +54,7 @@ internal object TmdbJsonCacheMaintenance {
      * more than the rails and a browsing session actually re-ask for, because
      * the window that matters is what the user saw in the last few days and
      * the rest is a re-fetch at worst. Sized against the observed 65-280 KB
-     * rows rather than by feel; the previous behaviour was unbounded.
+     * rows rather than by feel; the previous behavior was unbounded.
      */
     const val MAX_BYTES = 64L * 1024 * 1024
 

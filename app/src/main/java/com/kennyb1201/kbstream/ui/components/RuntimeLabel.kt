@@ -31,7 +31,7 @@ private val MINUTES_ONLY =
  *
  * TMDB hands over a number of minutes and always renders in the short form. An
  * add-on's `runtime` is a free-form string instead, and most send bare minutes
- * ("96"), which used to reach the meta line unlabelled and read as a mystery
+ * ("96"), which used to reach the meta line unlabeled and read as a mystery
  * count next to the year and the rating. Those get the short form too, so the
  * line always says how long the thing is. A runtime the add-on spells out some
  * other way ("1h 36m") is passed through exactly as it wrote it -- there is no

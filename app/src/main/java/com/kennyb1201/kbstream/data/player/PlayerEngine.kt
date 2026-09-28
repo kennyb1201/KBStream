@@ -26,7 +26,7 @@ import com.kennyb1201.kbstream.ui.settings.AppPreferences
  *
  *  1. A launch: MainActivity asks [prefersMpv] to decide whether to open MPV
  *     straight away (the "MPV" setting, plus the "Play anime in MPV" setting
- *     for a title [AnimeDetect] recognises as anime - the fansub typesetting
+ *     for a title [AnimeDetect] recognizes as anime - the fansub typesetting
  *     and 10-bit releases above are the common case on that side).
  *  2. A failure: NativePlayerActivity asks [mpvFallbackEnabled] before handing
  *     its own launch intent to the MPV player (the default setting).
@@ -53,7 +53,7 @@ object PlayerEngine {
     /**
      * The stored choice, coerced to something this device can actually run: a
      * Fire OS 6 box (API 25) has no libmpv, so a stored "MPV" reads back as
-     * ExoPlayer there instead of being honoured at playback time and dying on
+     * ExoPlayer there instead of being honored at playback time and dying on
      * a missing native library.
      */
     fun selected(context: Context): Int {
@@ -157,7 +157,7 @@ object PlayerEngine {
      * request's id and its media type and calls [publishLaunchAnime] on its way
      * to the player screen.
      *
-     * One-shot, and only honoured while fresh - see [LAUNCH_ANIME_TTL_MS].
+     * One-shot, and only honored while fresh - see [LAUNCH_ANIME_TTL_MS].
      * Without that, a verdict would outlive its launch and reach the next one
      * through a path that publishes nothing at all (a live channel, a
      * because-you-watched card, a chained next episode) and open it in MPV.

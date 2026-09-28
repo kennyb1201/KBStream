@@ -355,7 +355,7 @@ internal fun upNextShowKey(item: UpNextItem): String {
  *
  * A show reaches the rail under more than one id at once: local history and
  * add-on catalogs write "tt..." while the tracker cards and TMDB enrichment
- * use "tmdb:<n>". [upNextShowKey] can only name the one flavour a card
+ * use "tmdb:<n>". [upNextShowKey] can only name the one flavor a card
  * happens to carry, so the same show produced two different keys and survived
  * the collapse.
  *
@@ -386,7 +386,7 @@ internal fun upNextIdentityKeys(item: UpNextItem): Set<String> {
 
 /**
  * [upNextIdentityKeys] narrowed to one episode, so the same episode reached
- * from two id flavours pairs up - and a *different* episode of that show does
+ * from two id flavors pairs up - and a *different* episode of that show does
  * not, because it is a separate thing to continue.
  */
 internal fun upNextEpisodeKeys(item: UpNextItem): Set<String> {
@@ -475,7 +475,7 @@ internal fun collapseDuplicateUpNextCards(
  *
  * The seed is built from `getContinueWatchingParentsSnapshot`, whose SQL
  * groups by the RAW parent id, so a show whose resume rows were written under
- * two id flavours ("tt..." from the player's canonicalization, "tmdb:<n>"
+ * two id flavors ("tt..." from the player's canonicalization, "tmdb:<n>"
  * from the TMDB rows and the kids rails) arrives as TWO rows. The enriched
  * pass pairs those through the resolved TMDB id - which is exactly what the
  * snapshot does not have, since resolving it is the enrichment - so until that
@@ -516,7 +516,7 @@ internal fun collapseInstantSnapshotItems(
  * resolved TMDB id is what pairs an "tt..." card with its "tmdb:..." twin,
  * since both sources resolve it (see buildLocalNextUpItem /
  * buildSimklUpNextItem). Only a card with no id at all falls back to the name,
- * which is the case where two flavours have nothing else to meet on.
+ * which is the case where two flavors have nothing else to meet on.
  */
 internal fun upNextGroupingKeys(
     item: UpNextItem
@@ -543,7 +543,7 @@ internal fun upNextGroupingKeys(
  *
  * Used wherever the rail must show one card per show. A show reaches it under
  * "tt...", "tmdb:<n>" and a bare numeric id at once, and each key alone only
- * names the flavour that card happens to carry - which is how the same show
+ * names the flavor that card happens to carry - which is how the same show
  * survived as two cards after the show-level dedupe compared one hand-picked
  * key per card.
  *
@@ -607,7 +607,7 @@ internal fun <T> clusterByIdentityKeys(
  * A show has exactly one next unaired episode, so a second row for the same
  * show is a duplicate. The rail merges two sources that name a show
  * differently - the local cards carry its canonical imdb id, the
- * Simkl-derived caught-up cards carry the tracker's flavour - and
+ * Simkl-derived caught-up cards carry the tracker's flavor - and
  * [UpcomingEpisode] alone cannot tell those apart because it keeps no resolved
  * TMDB id. Pairing therefore happens on the SOURCE cards
  * ([upNextGroupingKeys]) before the winner is kept.
@@ -657,7 +657,7 @@ internal fun selectUpcomingPerShow(
  *
  * Top level on purpose: the resolver that uses it is a private member of
  * HomeViewModel, and a rule declared next to it would be a member too - i.e.
- * unreachable from the unit tests that pin this behaviour down.
+ * unreachable from the unit tests that pin this behavior down.
  */
 internal fun hasNothingLeftToWatch(
     simklSeason: Int?,
@@ -1070,7 +1070,7 @@ class HomeViewModel(
     /**
      * Like runCatching, but for suspend calls: runCatching swallows
      * CancellationException along with real failures, which lets a
-     * cancelled coroutine keep running instead of stopping -- it then
+     * canceled coroutine keep running instead of stopping -- it then
      * surfaces later as a fake "failure" further down. This rethrows
      * cancellation and only treats genuine exceptions as null.
      */
@@ -1124,7 +1124,7 @@ class HomeViewModel(
                 // Dwell before any network work: scrolling a rail with the
                 // D-pad fires one focus event per card. Without this pause
                 // every transitively-focused title launched a full meta +
-                // detail + artwork chain before being cancelled, wasting
+                // detail + artwork chain before being canceled, wasting
                 // requests and starving the ones that mattered. Focus that
                 // survives 250ms is a deliberate stop — resolve it fully.
                 delay(HERO_RESOLVE_DWELL_MS)
@@ -3268,7 +3268,7 @@ Log.d(
             .toEpochMilli()
         // (source card, derived row) pairs. The winner per show is chosen
         // only after every row is built, because one show can reach the rail
-        // twice under different id flavours (see selectUpcomingPerShow).
+        // twice under different id flavors (see selectUpcomingPerShow).
         val rows = ArrayList<Pair<UpNextItem, UpcomingEpisode>>()
 
         // Second-source air dates for the shows on the rail, fetched up front
@@ -3309,7 +3309,7 @@ Log.d(
 
             // Air dates carry no time (midnight), so compare against the
             // start of today: an episode airing later today still shows
-            // (labelled "Today"); anything before today has aired.
+            // (labeled "Today"); anything before today has aired.
             if (epochMs < startOfToday) continue
 
             val airLabel = formatAirDateLabel(airDateText)
@@ -4739,7 +4739,7 @@ episodesTotal =
 
         // The tracker's title, or the name TMDB resolved, or no card at all.
         // A Simkl item whose title is a bare id is the same phantom the
-        // MDBList builder drops: nothing recognisable to show.
+        // MDBList builder drops: nothing recognizable to show.
         val displayTitle =
             upNextDisplayTitleOrNull(
                 item.title,
@@ -5315,7 +5315,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     /**
      * Whether the series itself has concluded, per TMDB's series-level status.
      * A season finale of a still-running show (Returning Series, In
-     * Production, Planned, or status unknown) must NOT be labelled "Series
+     * Production, Planned, or status unknown) must NOT be labeled "Series
      * Finale" — the show may air more seasons. Only Ended/Canceled qualifies.
      * Cached per show for the lifetime of this resolution pass.
      */
@@ -5790,7 +5790,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      * viewer watched (or E1 of the season they are on), with
      * episodesRemaining = 0. Callers read a non-null target as "there is
      * something here", so a show that was completely finished kept a
-     * "next up" card labelled with the very episode just watched - while the
+     * "next up" card labeled with the very episode just watched - while the
      * detail page said "caught up". There is no episode to continue to, so
      * say so: null leaves a caught-up show off Continue Watching, and what is
      * left for it (a next UNAIRED episode) is the Upcoming rail's job (see
@@ -5800,7 +5800,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      * no hint: a tracker's queued next episode can run ahead of TMDB's aired
      * set, and the Simkl feed deliberately keeps exactly that show on the rail
      * (ShowCompletionRules.isContinueWatchingCandidate), while a season walk
-     * that failed to load must keep today's behaviour rather than hide the
+     * that failed to load must keep today's behavior rather than hide the
      * show.
      */
     if (
@@ -7370,7 +7370,7 @@ private suspend fun calculateEpisodesRemaining(
             .removeSuffix("/")
 
         // Pinned rails load in parallel (previously sequential — with the
-        // request semaphore tightened this serialised the whole home load),
+        // request semaphore tightened this serialized the whole home load),
         // preserving TOP_TODAY_CATALOGS order in the result list.
         coroutineScope {
 

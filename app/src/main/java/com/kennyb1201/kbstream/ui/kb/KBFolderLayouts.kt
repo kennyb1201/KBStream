@@ -177,13 +177,13 @@ private fun TabChip(
  * [KBStatusMessage] card.
  *
  * These were two functions with identical bodies ([FolderLoading] and
- * [FolderErrorMessage]) wrapping a plain centred line of text, so a
+ * [FolderErrorMessage]) wrapping a plain centered line of text, so a
  * collection that failed to load looked exactly like one that was
  * legitimately empty. Loading is no longer handled here: it draws skeleton
  * rails/grid instead, matching every other browse surface — a skeleton says
  * "this is coming", the card says "there is nothing here".
  *
- * The `weight` is what makes the card centre in the space the rails would have
+ * The `weight` is what makes the card center in the space the rails would have
  * used — KBStatusMessage itself defaults to fillMaxSize, and inside a Column
  * that would run past the bottom of the screen instead of filling what is
  * left below the hero and source tabs.

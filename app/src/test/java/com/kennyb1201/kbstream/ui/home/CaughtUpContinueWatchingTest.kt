@@ -97,7 +97,7 @@ class CaughtUpContinueWatchingTest {
     @Test
     fun `an unwalked show is never hidden`() {
         // Every season lookup failed: an offline device cannot prove the
-        // viewer is caught up, so the old behaviour stands.
+        // viewer is caught up, so the old behavior stands.
         assertFalse(
             hasNothingLeftToWatch(
                 simklSeason = null,

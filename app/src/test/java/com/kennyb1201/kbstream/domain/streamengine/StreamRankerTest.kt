@@ -68,9 +68,9 @@ class StreamRankerTest {
     @Test
     fun `a source that names no episode outranks one that names another`() {
         val other = stream("Paw Patrol S03E15 1080p WEB-DL 8 GB", url = "https://host/a.mkv")
-        val unlabelled = stream("Paw Patrol 1080p WEB-DL", url = "https://host/b.mkv")
+        val unlabeled = stream("Paw Patrol 1080p WEB-DL", url = "https://host/b.mkv")
 
-        assertEquals(listOf(unlabelled, other), orderFor(3, 30, other, unlabelled))
+        assertEquals(listOf(unlabeled, other), orderFor(3, 30, other, unlabeled))
     }
 
     @Test
@@ -139,7 +139,7 @@ class StreamRankerTest {
         val cam = stream("Some Film 2024 1080p CAM", url = "https://host/cam.mkv")
 
         // WEBRip was penalised by the same rule as CAM, which pushed good web
-        // releases below unlabelled ones.
+        // releases below unlabeled ones.
         assertEquals(listOf(webrip, cam), order(cam, webrip))
     }
 
@@ -250,9 +250,9 @@ class StreamRankerTest {
         // Only "N gb" used to match, so anything listed in MB or TB scored as
         // if it declared no size at all.
         val megabyte = stream("Some Film 2024 480p 700 MB", url = "https://host/sd.mkv")
-        val unlabelled = stream("Some Film 2024 480p", url = "https://host/plain.mkv")
+        val unlabeled = stream("Some Film 2024 480p", url = "https://host/plain.mkv")
 
-        assertEquals(listOf(megabyte, unlabelled), order(unlabelled, megabyte))
+        assertEquals(listOf(megabyte, unlabeled), order(unlabeled, megabyte))
 
         val terabyte = stream("Some Film 2024 2160p REMUX 1.2 TB", url = "https://host/huge.mkv")
         val gigabytes = stream("Some Film 2024 2160p REMUX 8 GB", url = "https://host/big.mkv")
@@ -339,7 +339,7 @@ class StreamRankerTest {
             url = "https://cdn.pengu.example/Some.Film.2024.2160p.mkv"
         )
 
-        // The hoster link is the bigger, better-labelled file and it still sits
+        // The hoster link is the bigger, better-labeled file and it still sits
         // second: the debrid link is a completed file on a CDN, the other is one
         // hoster's copy of the same film.
         assertEquals(listOf(debrid, hoster), order(hoster, debrid))
@@ -401,7 +401,7 @@ class StreamRankerTest {
     @Test
     fun `a debrid-served cam still sits under an honest release`() {
         // The debrid tier sits under the known-bad one for a reason: being
-        // served by a service the viewer pays for is not a licence to hand a CAM
+        // served by a service the viewer pays for is not a license to hand a CAM
         // the top spot it was kept out of.
         val debridCam = stream(
             "Some Film 2024 1080p CAM",
@@ -441,10 +441,10 @@ class StreamRankerTest {
 
         assertEquals(listOf(busy, quiet), order(quiet, busy))
 
-        val labelled = stream("Some Film 2024 720p Seeders: 30", url = "https://host/labelled.mkv")
+        val labeled = stream("Some Film 2024 720p Seeders: 30", url = "https://host/labeled.mkv")
         val bare = stream("Some Film 2024 720p", url = "https://host/bare.mkv")
 
-        assertEquals(listOf(labelled, bare), order(bare, labelled))
+        assertEquals(listOf(labeled, bare), order(bare, labeled))
     }
 
     @Test
@@ -514,7 +514,7 @@ class StreamRankerTest {
     }
 
     @Test
-    fun `an unlabelled size is not treated as a fake`() {
+    fun `an unlabeled size is not treated as a fake`() {
         // Nothing to contradict the label, so the real 4K release keeps its win.
         val uhd = stream("Some Film 2024 2160p REMUX DV", url = "https://host/uhd.mkv")
         val hd = stream("Some Film 2024 1080p WEB-DL", url = "https://host/hd.mkv")

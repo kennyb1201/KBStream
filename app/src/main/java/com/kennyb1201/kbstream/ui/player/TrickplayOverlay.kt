@@ -20,7 +20,7 @@ import android.widget.ImageView
  * controls hidden, which is half of when previews are wanted.
  *
  * It tracks the thumb while the seek bar is being dragged ([show]'s `anchorX`)
- * and sits centred the rest of the time, and it never takes focus: on a TV, a
+ * and sits centered the rest of the time, and it never takes focus: on a TV, a
  * preview that can be focused would steal the D-pad from the controls it is
  * floating over.
  */
@@ -31,8 +31,8 @@ internal class TrickplayOverlay(private val activity: Activity) {
     val isVisible: Boolean get() = card?.visibility == View.VISIBLE
 
     /**
-     * Shows [frame], horizontally centred on [anchorView] — the seek bar, whose
-     * thumb is the thing a scrubbing viewer is watching — or centred on the
+     * Shows [frame], horizontally centered on [anchorView] — the seek bar, whose
+     * thumb is the thing a scrubbing viewer is watching — or centered on the
      * screen when there is none to anchor to (the overlay-less scrub, where the
      * card sits over the position bubble instead).
      *
@@ -49,22 +49,22 @@ internal class TrickplayOverlay(private val activity: Activity) {
         val width = parent.width
         // From the layout params, not the measured width: the card is added and
         // shown in the same message, so on the very first frame it has not been
-        // through a layout pass yet and would be centred instead of tracking.
+        // through a layout pass yet and would be centered instead of tracking.
         val cardWidth = (view.layoutParams?.width ?: 0).takeIf { it > 0 } ?: view.width
         if (width <= 0 || cardWidth <= 0 || anchorView == null) {
             view.translationX = 0f
             return
         }
         view.translationX = trickplayAnchorTranslation(
-            anchorX = centreOf(anchorView, parent),
+            anchorX = centerOf(anchorView, parent),
             contentWidth = width,
             cardWidth = cardWidth,
             edgeMarginPx = CARD_EDGE_MARGIN_DP * view.resources.displayMetrics.density
         )
     }
 
-    /** [view]'s horizontal centre, in [parent]'s coordinates. */
-    private fun centreOf(view: View, parent: View): Float {
+    /** [view]'s horizontal center, in [parent]'s coordinates. */
+    private fun centerOf(view: View, parent: View): Float {
         val target = IntArray(2)
         val origin = IntArray(2)
         view.getLocationInWindow(target)

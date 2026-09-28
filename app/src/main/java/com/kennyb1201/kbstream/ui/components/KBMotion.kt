@@ -26,7 +26,7 @@ const val KB_SCREEN_TRANSITION_MS = 220
  * to stop is the motion equivalent of ignoring a text-size preference.
  *
  * Read once per composition rather than observed: a user who changes the
- * setting gets the right behaviour on the next launch, and the alternative is
+ * setting gets the right behavior on the next launch, and the alternative is
  * a ContentObserver on a global setting held open for the whole session.
  */
 @Composable

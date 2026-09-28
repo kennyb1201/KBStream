@@ -30,7 +30,7 @@ import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
-/** One rating source: the value MDBList returned, its brand mark and colour. */
+/** One rating source: the value MDBList returned, its brand mark and color. */
 private data class RatingSource(
     val name: String,
     val value: String,
@@ -38,10 +38,10 @@ private data class RatingSource(
     val tint: Color
 )
 
-// Brand colours. MDBList's own badges are colour-coded per source, so the
-// icon carries the recognition and the value stays the accent-coloured number.
+// Brand colors. MDBList's own badges are color-coded per source, so the
+// icon carries the recognition and the value stays the accent-colored number.
 // MyAnimeList is lifted from its #2E51A2, which is nearly invisible on the
-// dark chip surface; the rest are the brands' own colours.
+// dark chip surface; the rest are the brands' own colors.
 private val ImdbTint = Color(0xFFF5C518)
 private val RottenTomatoesTint = Color(0xFFFA320A)
 private val TmdbTint = Color(0xFF01B4E4)

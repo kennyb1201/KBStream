@@ -64,7 +64,7 @@ val KBSuccess = Color(0xFF3DBB6A)
 // Semantic badge companions (muted, same screening-room palette): season
 // finales, next-up, new seasons on Up-Next cards. Raw Material-palette
 // literals previously used here clashed with the brass accent.
-val KBRust = Color(0xFFA8542E)   // burnt sienna — season finale
+val KBRust = Color(0xFFA8542E)   // burned sienna — season finale
 val KBSteel = Color(0xFF3E5C76)  // desaturated navy — next up
 val KBPlum = Color(0xFF6E4E7E)   // muted aubergine — new season
 
@@ -91,13 +91,13 @@ val KBShapePill = RoundedCornerShape(999.dp()) // avatars, fully-round pills
 // different amounts, and the same kind of button grew by 1.04 on one screen
 // and 1.08 on another. The rule that actually applies is the surface's own
 // size — a fixed percentage of a chip is a few pixels, and the same percentage
-// of a full-bleed row is a lurch that shoves its neighbours — so the scale is
+// of a full-bleed row is a lurch that shoves its neighbors — so the scale is
 // now chosen by surface class and nothing else:
 //
 //   row (1.02) < card (1.03) < button (1.04) < chip (1.06) < tile (1.08)
 //
 // KBFocusNone is not "unpolished": a surface wider than about half the screen
-// takes its focus cue from colour and border instead, because growing it would
+// takes its focus cue from color and border instead, because growing it would
 // move more than it lights up.
 const val KBFocusNone = 1f
 const val KBFocusRow = 1.02f

@@ -296,9 +296,9 @@ fun StreamsScreen(
 /**
  * What a source's own text says about the episode, when it says another one.
  *
- * Only the contradiction is labelled: a source that names the requested
+ * Only the contradiction is labeled: a source that names the requested
  * episode needs no note, and one that names nothing at all is the ordinary
- * unlabelled release — marking those would put a line on every card in the
+ * unlabeled release — marking those would put a line on every card in the
  * picker and say nothing.
  */
 private fun declaredLabelFor(stream: Stream, season: Int?, episode: Int?): String? =

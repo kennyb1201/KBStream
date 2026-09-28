@@ -29,7 +29,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  * in place, so a row added there would have to be written as a second definition
  * of a pill that has to look like every other one on the screen.
  *
- * Greyed out while hero trailer autoplay is switched off: a wait that nothing
+ * Grayed out while hero trailer autoplay is switched off: a wait that nothing
  * waits for means nothing.
  */
 @Composable

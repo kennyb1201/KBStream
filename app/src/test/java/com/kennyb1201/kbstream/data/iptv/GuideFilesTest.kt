@@ -104,7 +104,7 @@ class GuideFilesTest {
 
     @Test
     fun `every name is a guide file the sweep can see`() {
-        // The sweep recognises guides by suffix, so both naming schemes have to
+        // The sweep recognizes guides by suffix, so both naming schemes have to
         // end in one — a name it could not see would be a file nothing ever
         // reclaims.
         assertTrue(guideNameFor("profile-1", null).endsWith(GuideStorage.DB_SUFFIX))

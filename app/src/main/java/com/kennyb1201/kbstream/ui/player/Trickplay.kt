@@ -20,7 +20,7 @@ import kotlin.math.abs
  */
 
 /**
- * One preview frame per this much programme.
+ * One preview frame per this much program.
  *
  * Ten seconds is the coarsest step that still answers "roughly where is this?"
  * on a 90-minute episode (540 possible frames) and instantly on any single
@@ -226,11 +226,11 @@ internal fun trickplayMimeHint(url: String, resolved: String?): String? {
 }
 
 /**
- * The horizontal translation that centres something [cardWidth] wide on
+ * The horizontal translation that centers something [cardWidth] wide on
  * [anchorX] inside a [contentWidth]-wide parent, without letting it hang off
  * either edge.
  *
- * The preview is laid out centred, so this is the offset that moves it over the
+ * The preview is laid out centered, so this is the offset that moves it over the
  * seek bar's thumb — clamped, because a thumbnail half off the screen is worse
  * than one that is merely not exactly over the thumb, and the bar's own ends
  * are where a viewer scrubs most.
@@ -245,7 +245,7 @@ internal fun trickplayAnchorTranslation(
     val half = contentWidth / 2f
     val lowest = cardWidth / 2f + edgeMarginPx - half
     val highest = half - cardWidth / 2f - edgeMarginPx
-    // A card wider than the space it has: centred beats clamped to a nonsense
+    // A card wider than the space it has: centered beats clamped to a nonsense
     // edge it would then be hanging off anyway.
     if (lowest > highest) return 0f
     return (anchorX - half).coerceIn(lowest, highest)

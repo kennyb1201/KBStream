@@ -76,7 +76,7 @@ internal class NewEpisodeChecker(private val context: Context) {
             val previous = store.lastSeen(showId)
             if (previous == null) {
                 // First time we ever see this show: record the baseline so a
-                // fresh install doesn't alert for the whole back catalogue.
+                // fresh install doesn't alert for the whole back catalog.
                 store.record(showId, episodeKey)
                 continue
             }

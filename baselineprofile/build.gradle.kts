@@ -48,7 +48,7 @@ android {
 baselineProfile {
     // Generate against a CONNECTED device (or an emulator started by hand)
     // rather than a Gradle Managed Device: this is a TV app whose focus
-    // behaviour is part of what the profile should cover, and a managed phone
+    // behavior is part of what the profile should cover, and a managed phone
     // device would capture the wrong traversal. `./gradlew
     // :app:generateBaselineProfile` with a device attached is the intended path.
     useConnectedDevices = true

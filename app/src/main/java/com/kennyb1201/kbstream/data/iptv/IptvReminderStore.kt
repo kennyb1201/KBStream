@@ -8,11 +8,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * IPTV programme reminders: "notify me when this starts" on upcoming guide
- * programmes. The guide passes its own profile-scoped SharedPreferences (the
+ * IPTV program reminders: "notify me when this starts" on upcoming guide
+ * programs. The guide passes its own profile-scoped SharedPreferences (the
  * same file its favorites/hidden groups live in), so reminders follow the
  * active profile automatically. Keyed by channel + start time, so
- * re-imported guides with new programme ids don't orphan reminders.
+ * re-imported guides with new program ids don't orphan reminders.
  * Playback resolves the channel from the live guide at banner time — no
  * stream data is persisted here.
  */
@@ -22,7 +22,7 @@ object IptvReminderStore {
         val channelId: String,
         val channelName: String,
         val logoUrl: String?,
-        val programmeTitle: String,
+        val programTitle: String,
         val startUtcMillis: Long,
         val endUtcMillis: Long
     ) {
@@ -86,7 +86,7 @@ object IptvReminderStore {
                     channelId = channelId,
                     channelName = o.optString("channel_name"),
                     logoUrl = o.optString("logo_url").takeIf { it.isNotBlank() },
-                    programmeTitle = o.optString("title"),
+                    programTitle = o.optString("title"),
                     startUtcMillis = o.optLong("start", 0L),
                     endUtcMillis = o.optLong("end", 0L)
                 )
@@ -116,7 +116,7 @@ object IptvReminderStore {
                     .put("channel_id", r.channelId)
                     .put("channel_name", r.channelName)
                     .put("logo_url", r.logoUrl.orEmpty())
-                    .put("title", r.programmeTitle)
+                    .put("title", r.programTitle)
                     .put("start", r.startUtcMillis)
                     .put("end", r.endUtcMillis)
             )

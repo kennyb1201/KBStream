@@ -35,13 +35,13 @@ class RuntimeLabelTest {
     }
 
     @Test
-    fun `bare add-on minutes are labelled`() {
+    fun `bare add-on minutes are labeled`() {
         assertEquals("1h 36m", formatRuntimeLabel(null, "96"))
         assertEquals("42m", formatRuntimeLabel(null, "42"))
     }
 
     @Test
-    fun `minutes the add-on already labels are normalised`() {
+    fun `minutes the add-on already labels are normalized`() {
         assertEquals("2h 14m", formatRuntimeLabel(null, "134 min"))
         assertEquals("2h 14m", formatRuntimeLabel(null, "134mins"))
         assertEquals("1h 36m", formatRuntimeLabel(null, " 96m "))
