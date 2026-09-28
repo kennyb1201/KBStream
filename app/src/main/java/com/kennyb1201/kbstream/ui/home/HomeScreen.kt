@@ -62,6 +62,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -154,39 +155,23 @@ private const val HeroTrailerDwellMs = 4_000L
 
 private val HomeHeroHeight = 300.dp
 
-private val RailTopContentPadding = 4.dp
-private val RailBottomContentPadding = 12.dp
+private val RailTopContentPadding = 0.dp
+
+// No bottom padding: a card's box already reserves [PosterFocusHeadroom] below
+// the artwork for the focus glow and its 1.03 scale, so anything here is dead
+// air charged against the next rail's title — which is exactly what made that
+// title a row of dots at the panel edge. See [RailLanding] for the packing.
+private val RailBottomContentPadding = 0.dp
 
 internal val RailHorizontalStartPadding = 12.dp
-private val RailSectionGap = 20.dp
 
-// Room reserved below the focused rail for the NEXT rail: the section gap, the
-// next title, and a slice of its posters. railRowsBringIntoViewSpec pulls a
-// rail up off the landing inset when it is too tall to leave this band
-// visible, so every rail peeks the one below it instead of only the short
-// Continue Watching / Upcoming rows.
-//
-// Kept to the next title plus a sliver of its posters rather than a generous
-// slice of them: what this band buys is charged against the focused rail's OWN
-// header (see [RailHeaderRoom]), and a smaller band is what keeps the reveal
-// winning — instead of falling back to that floor — on a rail that only just
-// has the room, which is the difference between the next rail's title showing
-// and not.
-private val RailNextSectionReveal = RailSectionGap + 46.dp
-
-// KB parity: MODERN_ROW_HEADER_FOCUS_INSET. When a row takes focus, its
-// header lands this far below the rails viewport top — deterministic landing
-// kills both the CW/Upcoming sliver and the per-focus-step bounce.
-private val RailHeaderFocusInset = 40.dp
-
-// Floor under that landing line. A rail's OWN header sits above its posters, so
-// a landing pulled any closer to the viewport top than this reads as a cut-off
-// title instead of a section heading: a poster rail is ~250dp tall in a ~280dp
-// viewport, so the reveal band asks for a landing of 0 and the heading ends up
-// flush against the seam at the top of the rails viewport, half-eaten by it.
-// When a rail cannot have both, the title of the rail you are ON wins and the
-// next rail's title waits below the fold.
-private val RailHeaderRoom = 34.dp
+// The numbers the landing is built from live in [RailLanding], together with
+// the geometry they have to satisfy: which slack a focused rail gives up, and
+// why the next rail's title has to come out of it. Named here so this screen
+// keeps reading as one set of layout numbers.
+private val RailSectionGap = RailLanding.SectionGap
+private val RailHeaderFocusInset = RailLanding.HeaderInset
+private val RailHeaderFloor = RailLanding.HeaderFloor
 
 private val HeroToFirstRailGap = 2.dp
 
@@ -1895,15 +1880,27 @@ private fun HomeHeroHost(
 }
 
 @Composable
-private fun SectionTitle(text: String) {
+private fun SectionTitle(
+    text: String,
+    onHeight: ((Int) -> Unit)? = null
+) {
     Text(
         text = text,
         color = KBTextHi.copy(alpha = 0.94f),
         style = MaterialTheme.typography.titleMedium,
-        modifier = Modifier.padding(
-            top = 4.dp,
-            bottom = 2.dp
-        )
+        modifier = Modifier
+            // Outermost, so what is reported is the title's whole line box
+            // (glyph line plus its own padding below). The band reserved under
+            // a focused rail for the NEXT rail's title is built from exactly
+            // this, so it stays right at any type scale — see [RailLanding].
+            .then(
+                if (onHeight == null) Modifier
+                else Modifier.onSizeChanged { onHeight(it.height) }
+            )
+            .padding(
+                top = 4.dp,
+                bottom = 2.dp
+            )
     )
 }
 
@@ -2417,6 +2414,11 @@ fun HomeScreen(
     // focus (see below).
     val railListState = rememberLazyListState()
 
+    // Height of a section title, in pixels, reported by the rails themselves.
+    // The band left below a focused rail is built from this rather than from a
+    // number guessed at the default type scale — see [RailLanding].
+    var railTitleHeightPx by remember { mutableStateOf(0f) }
+
     fun openTopBar(
         requester: FocusRequester
     ) {
@@ -2471,10 +2473,18 @@ fun HomeScreen(
     // KB uses MODERN_ROW_HEADER_FOCUS_INSET = 40.dp for the same job;
     // RailHeaderFocusInset mirrors that (defined with the Home constants).
     val density = LocalDensity.current
-    val railRowsBringIntoViewSpec = remember(density) {
+    val railRowsBringIntoViewSpec = remember(density, railTitleHeightPx) {
         val topInsetPx = with(density) { RailHeaderFocusInset.toPx() }
-        val headerRoomPx = with(density) { RailHeaderRoom.toPx() }
-        val revealBandPx = with(density) { RailNextSectionReveal.toPx() }
+        val headerFloorPx = with(density) { RailHeaderFloor.toPx() }
+        // Rebuilt whenever a rail reports a different title height, so a
+        // font-scale change re-reserves the band instead of leaving the next
+        // rail's title short of the panel edge.
+        val revealBandPx = railRevealBandPx(
+            sectionGapPx = with(density) { RailSectionGap.toPx() },
+            titleHeightPx = railTitleHeightPx,
+            fallbackTitlePx = with(density) { RailLanding.FallbackTitleHeight.toPx() },
+            sliverPx = with(density) { RailLanding.NextTitleSliver.toPx() }
+        )
         object : BringIntoViewSpec {
             override fun calculateScrollDistance(
                 offset: Float,
@@ -2483,20 +2493,17 @@ fun HomeScreen(
             ): Float {
                 val currentLeadingEdge = offset
                 // Landing line, pulled up when the focused rail is too tall to
-                // leave the reveal band below it: landing a poster rail on the
-                // inset puts the next rail's title just past the viewport edge
-                // on shorter panels, which is why only the Continue Watching /
-                // Upcoming rows ever peeked the rail below them. Depends only
-                // on the row's size, so every child of a row still returns the
-                // same distance (no bounce mid-flight).
-                //
-                // Floored at the focused rail's own header: the pull-up must
-                // never cost the heading of the rail being read, so a rail too
-                // tall to spare the band keeps its title in full and lets the
-                // next rail's title fall below the fold instead.
+                // leave the reveal band below it — a poster rail always is, so
+                // it lands on the floor and the next rail's title is fitted
+                // into what remains. Depends only on the row's size, so every
+                // child of a row still returns the same distance (no bounce
+                // mid-flight). See [RailLanding] for the packing this closes.
                 val revealTarget = containerSize - abs(size) - revealBandPx
-                val targetLeadingEdge =
-                    minOf(topInsetPx, revealTarget).coerceAtLeast(headerRoomPx)
+                val targetLeadingEdge = railLandingTarget(
+                    topInsetPx = topInsetPx,
+                    floorPx = headerFloorPx,
+                    revealTargetPx = revealTarget
+                )
                 // Already resting on the landing line: done. This also keeps
                 // the spring quiet during horizontal focus moves (no bounce).
                 if (abs(currentLeadingEdge - targetLeadingEdge) < 1f) return 0f
@@ -2781,11 +2788,14 @@ fun HomeScreen(
                                 modifier = Modifier.padding(
                                     start = TvSafeAreaHorizontal,
                                     top = 0.dp,
-                                    bottom = 8.dp
+                                    bottom = 0.dp
                                 )
                             ) {
                                 SectionTitle(
-                                    "Continue Watching"
+                                    "Continue Watching",
+                                    onHeight = {
+                                        railTitleHeightPx = it.toFloat()
+                                    }
                                 )
 
                                 CompositionLocalProvider(
@@ -2910,11 +2920,14 @@ fun HomeScreen(
                                 modifier = Modifier.padding(
                                     start = TvSafeAreaHorizontal,
                                     top = 0.dp,
-                                    bottom = 8.dp
+                                    bottom = 0.dp
                                 )
                             ) {
                                 SectionTitle(
-                                    "Upcoming"
+                                    "Upcoming",
+                                    onHeight = {
+                                        railTitleHeightPx = it.toFloat()
+                                    }
                                 )
 
                                 CompositionLocalProvider(
@@ -3096,7 +3109,7 @@ fun HomeScreen(
                                             modifier = Modifier.padding(
                                                 start = TvSafeAreaHorizontal,
                                                 top = 0.dp,
-                                                bottom = 8.dp
+                                                bottom = 0.dp
                                             )
                                         ) {
                                             SectionTitle(
@@ -3106,7 +3119,10 @@ fun HomeScreen(
                                                     type = rail.type,
                                                     showType = showRailType,
                                                     showAddon = showRailAddon
-                                                )
+                                                ),
+                                                onHeight = {
+                                                    railTitleHeightPx = it.toFloat()
+                                                }
                                             )
 
                                     val railRowState = rememberLazyListState()
