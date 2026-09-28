@@ -861,6 +861,42 @@ class HomeViewModel(
         Map<String, Map<String, Pair<String?, String?>>> =
         emptyMap()
 
+    /**
+     * The TMDB artwork answer for this build's lookups, per art key - including
+     * the answers that were "there is no artwork".
+     *
+     * The repository will not remember a miss (see
+     * [TmdbRepository.fetchEnrichedMetaCached]: a pinned null there would lock
+     * the Detail screen out of ever retrying for the rest of the session), so a
+     * title TMDB has nothing for was re-asked over the network once per rail it
+     * appears in - and a title that is trending, in a top-ten row and in its own
+     * catalog rail appears in three. This remembers the answer for the length of
+     * one build instead: long enough to make the repeats free, short enough that
+     * the next build asks again.
+     *
+     * Keyed by art key and holding the TMDB art rather than the [TmdbDetail]
+     * behind it, because the merge that follows differs per rail (a pinned rail
+     * takes TMDB art or nothing) and a detail is large.
+     */
+    private val landscapeLookupMemo =
+        java.util.concurrent.ConcurrentHashMap<String, Pair<String?, String?>>()
+
+    /**
+     * [landscapeLookupMemo] is cleared between builds but has to be bounded
+     * within one: a profile with very large catalogs can page a lot of items
+     * through here, and this box's heap is 192MB. Dropping it costs at most one
+     * repeated lookup - the cost it had before the memo existed.
+     */
+    private fun rememberLandscapeLookup(
+        key: String,
+        art: Pair<String?, String?>
+    ) {
+        if (landscapeLookupMemo.size >= LANDSCAPE_MEMO_MAX_KEYS) {
+            landscapeLookupMemo.clear()
+        }
+        landscapeLookupMemo[key] = art
+    }
+
     private val watchedRefreshMutex =
         Mutex()
 
@@ -6305,18 +6341,6 @@ private suspend fun calculateEpisodesRemaining(
      * detail screens use, so rails that were filtered already have warm
      * entries.
      */
-    /**
-     * The key one item's artwork is filed under, in a rail's `landscapeArt`
-     * map and in [previousLandscapeArt] alike.
-     *
-     * One function rather than the same string built in three places: a key that
-     * drifts from the one the map is written with reads as "nothing is known
-     * yet", which is exactly the re-resolution [previousLandscapeArt] exists to
-     * stop - and it would fail silently.
-     */
-    private fun landscapeArtKey(meta: MetaPreview): String =
-        "${meta.type}:${meta.id}"
-
     private suspend fun resolveLandscapeArt(
         metas: List<MetaPreview>,
         tmdbOnly: Boolean = false
@@ -6328,7 +6352,12 @@ private suspend fun calculateEpisodesRemaining(
 
                 async {
 
-                    val key = landscapeArtKey(meta)
+                    // The format lives in LandscapeArtKey.kt, beside the
+                    // test that pins it: the rail builders, HomeScreen's
+                    // landscape card, the KB folders and [previousLandscapeArt]
+                    // all file art under it, and a key that drifted in any one
+                    // of them fails silently.
+                    val key = meta.landscapeArtKey()
 
                     val addonBackdrop =
                         if (tmdbOnly) {
@@ -6350,29 +6379,68 @@ private suspend fun calculateEpisodesRemaining(
                     // cards mirror the hero. TMDB is always consulted; the
                     // addon fields stay as fallbacks in the merge below.
 
-                    val detail =
-                        landscapeArtSemaphore.withPermit {
+                    val remembered =
+                        landscapeLookupMemo[key]
 
-                            runCatching {
+                    val tmdbArt =
+                        if (remembered != null) {
 
-                                tmdbRepository.fetchEnrichedMetaCached(
-                                    imdbId = meta.id,
-                                    type = meta.type
-                                )
-                            }.getOrNull()
+                            // An empty pair is a remembered answer too: this
+                            // title is already known to have no TMDB artwork,
+                            // and asking again is a round trip for nothing.
+                            PerfTrace.record("home.artReuse", 0L)
+                            remembered
+                        } else {
+
+                            val startedAtMs =
+                                android.os.SystemClock.elapsedRealtime()
+
+                            val detail =
+                                landscapeArtSemaphore.withPermit {
+
+                                    runCatching {
+
+                                        tmdbRepository.fetchEnrichedMetaCached(
+                                            imdbId = meta.id,
+                                            type = meta.type
+                                        )
+                                    }.getOrNull()
+                                }
+
+                            // Card backdrop prefers an alternate image so
+                            // cards don't mirror the hero's primary backdrop.
+                            val art =
+                                (
+                                    detail?.cardBackdropPath()
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { TmdbRepository.BACKDROP_BASE + it }
+                                    ) to
+                                    (
+                                        detail?.bestLogoPath()
+                                            ?.takeIf { it.isNotBlank() }
+                                            ?.let { TmdbRepository.LOGO_BASE + it }
+                                        )
+
+                            val elapsedMs =
+                                android.os.SystemClock.elapsedRealtime() - startedAtMs
+
+                            PerfTrace.record("home.artLookup", elapsedMs)
+
+                            if (art.first == null && art.second == null) {
+                                // Named on its own so the report can say how
+                                // many empty answers were remembered rather
+                                // than asked for again - the misses the
+                                // repository deliberately does not cache.
+                                PerfTrace.record("home.artEmpty", elapsedMs)
+                            }
+
+                            rememberLandscapeLookup(key, art)
+                            art
                         }
 
-                    // Card backdrop prefers an alternate image so cards
-                    // don't mirror the hero's primary backdrop.
-                    val tmdbBackdrop =
-                        detail?.cardBackdropPath()
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { TmdbRepository.BACKDROP_BASE + it }
+                    val tmdbBackdrop = tmdbArt.first
 
-                    val tmdbLogo =
-                        detail?.bestLogoPath()
-                            ?.takeIf { it.isNotBlank() }
-                            ?.let { TmdbRepository.LOGO_BASE + it }
+                    val tmdbLogo = tmdbArt.second
 
                     if (tmdbOnly) {
                         // Pinned Top Today rails: the addon's backgrounds
@@ -6524,7 +6592,7 @@ private suspend fun calculateEpisodesRemaining(
         // and reducing it to the unseen items is the difference between one
         // lookup and a rail's worth of them.
         val missing =
-            items.filter { meta -> landscapeArtKey(meta) !in known }
+            items.filter { meta -> meta.landscapeArtKey() !in known }
 
         if (missing.isEmpty()) return
 
@@ -6650,6 +6718,12 @@ private suspend fun calculateEpisodesRemaining(
                 // replacements inherit (see previousLandscapeArt).
                 previousLandscapeArt =
                     _rails.value.associate { rail -> railKeyOf(rail) to rail.landscapeArt }
+
+                // A new build asks TMDB again. The memo exists to stop the
+                // repeats WITHIN one build, not to outlive it: the repository
+                // deliberately does not cache a miss, and a lookup that came
+                // back empty while Wi-Fi was still coming up has to be retried.
+                landscapeLookupMemo.clear()
 
                 val pinned =
                     mutableListOf<Rail>()
@@ -7684,6 +7758,14 @@ private suspend fun calculateEpisodesRemaining(
     }
 
     companion object {
+
+        /**
+         * Ceiling on the per-build artwork memo (see landscapeLookupMemo),
+         * sized for the rail items one build resolves. Paging far past it drops
+         * the memo and pays for a repeated lookup, which is what every lookup
+         * cost before the memo existed.
+         */
+        private const val LANDSCAPE_MEMO_MAX_KEYS = 2_000
 
         // Dwell before hero network resolution kicks in (see resolveHeroMeta).
         // 150ms: still rides out fast D-pad scrolls (one focus event per

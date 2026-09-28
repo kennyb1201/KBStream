@@ -78,6 +78,7 @@ object Diagnostics {
         startupLine()?.let { report.appendLine(it) }
         playbackLine()?.let { report.appendLine(it) }
         trickplayLine()?.let { report.appendLine(it) }
+        artLine()?.let { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
         // the bookkeeping behind "the binge offered an episode I had already
         // watched". Absent until something has played (see
@@ -242,6 +243,30 @@ object Diagnostics {
                 append(" · off for this session, last: ").append(trickplayReasons())
             } else if (late > 0) {
                 append(" · frames arrived after the card closed")
+            }
+        }
+    }
+
+    /**
+     * How the landscape cards' artwork lookups went, or null when there were
+     * none (the toggle is off by default, and a build that needs no artwork
+     * records nothing).
+     *
+     * `empty` is the count that matters on this box: the repository refuses to
+     * cache a miss, so each of those is a title TMDB has no artwork for, and
+     * without the build's memo every extra rail carrying it was another round
+     * trip. `reused` is what that memo served instead.
+     */
+    private fun artLine(): String? {
+        val lookups = PerfTrace.count("home.artLookup")
+        val reused = PerfTrace.count("home.artReuse")
+        if (lookups == 0 && reused == 0) return null
+        return buildString {
+            append("art: lookups=").append(lookups)
+            append(" empty=").append(PerfTrace.count("home.artEmpty"))
+            append(" reused=").append(reused)
+            if (lookups > 0) {
+                append(" slowest=").append(PerfTrace.maxMs("home.artLookup")).append("ms")
             }
         }
     }

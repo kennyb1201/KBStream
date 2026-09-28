@@ -26,6 +26,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayRuntime
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import com.kennyb1201.kbstream.ui.home.landscapeArtKey
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -346,9 +347,13 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         val items = _state.value.rails
             .flatMap { it.items }
             .distinctBy { "${it.type}:${it.id}" }
+            // Keyed exactly as the resolver files them: the old check spelled
+            // the key with a third normaliser, so an item filed as "no TMDB
+            // artwork" was not recognised as resolved and was re-attempted on
+            // every rails change.
             .filterNot { item ->
                 alreadyResolved.containsKey(
-                    "${normalizeType(item.type) ?: "movie"}:${item.id}"
+                    landscapeArtKey(item.type, item.id)
                 )
             }
             .take(200)
@@ -358,7 +363,17 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
             val resolved = supervisorScope {
                 items.map { item ->
                     async {
-                        val type = normalizeType(item.type) ?: return@async null
+                        // Filed under the key the layouts read no matter what
+                        // the type is: an item that never lands in this map is
+                        // re-attempted on every rails change, which is the one
+                        // thing the map exists to prevent.
+                        val key = landscapeArtKey(item.type, item.id)
+
+                        val type = kbArtworkLookupType(item.type)
+                            ?: return@async key to HeroArtwork(
+                                backdropUrl = null,
+                                logoUrl = null
+                            )
 
                         // Home's exact lookup path: numeric id = TMDB id,
                         // "tt…" = imdb id — so addon rails get TMDB art too.
@@ -386,10 +401,12 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                             ?.let { TmdbRepository.LOGO_BASE + it }
 
                         // The entry always lands in the map (even all-null)
-                        // so appended pages don't re-resolve; misses are
-                        // cheap because fetchEnrichedMetaCached caches null
-                        // details in memory.
-                        "$type:${item.id}" to HeroArtwork(
+                        // so appended pages don't re-resolve. The repository
+                        // does NOT cache a miss - see fetchEnrichedMetaCached,
+                        // where a pinned null would stop the Detail screen ever
+                        // retrying - so this map is the only thing that
+                        // remembers one.
+                        key to HeroArtwork(
                             backdropUrl = tmdbBackdrop ?: item.backdropUrl,
                             logoUrl = tmdbLogo
                         )

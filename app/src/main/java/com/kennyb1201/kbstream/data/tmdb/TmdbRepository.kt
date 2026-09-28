@@ -2454,15 +2454,30 @@ class TmdbRepository private constructor(context: Context) :
         return "${normalizeType(type)}::$tmdbId"
     }
 
-    private fun normalizeType(type: String): String {
-        return when (type.lowercase().trim()) {
-            "movie", "anime.movie" -> "movie"
-            "series", "show", "tv", "anime", "anime.series" -> "series"
-            else -> type.lowercase().trim()
-        }
-    }
+    private fun normalizeType(type: String): String =
+        normalizeMediaType(type)
 
     companion object {
+
+        /**
+         * The media type every TMDB call - and every key derived from one - is
+         * filed under.
+         *
+         * Shared rather than duplicated: the landscape artworks on Home and in
+         * the KB folders key their entries on this, and a reader spelling it
+         * differently from the writer finds nothing. That failure is silent and
+         * shows up only for the titles an add-on happens to type oddly ("tv",
+         * "anime.series"), which is exactly how two normalisers lived here long
+         * enough to disagree.
+         */
+        internal fun normalizeMediaType(type: String): String {
+            return when (type.lowercase().trim()) {
+                "movie", "anime.movie" -> "movie"
+                "series", "show", "tv", "anime", "anime.series" -> "series"
+                else -> type.lowercase().trim()
+            }
+        }
+
         @Volatile
         private var instance: TmdbRepository? = null
 

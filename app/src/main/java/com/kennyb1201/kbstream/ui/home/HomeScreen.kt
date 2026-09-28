@@ -3229,7 +3229,7 @@ fun HomeScreen(
                                                 ) {
                                                     val art =
                                                         rail.landscapeArt[
-                                                            "${meta.type}:${meta.id}"
+                                                            meta.landscapeArtKey()
                                                         ]
 
                                                     if (landscapeCards) {

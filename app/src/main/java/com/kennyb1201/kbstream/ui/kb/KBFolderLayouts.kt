@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.home.HomeHeroArtwork
+import com.kennyb1201.kbstream.ui.home.landscapeArtKey
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -453,7 +454,7 @@ private fun FolderRailPageHandler(
                 // suit.
                 showCaptions = false,
                 art = railContext.landscapeArt[
-                    "${normalizeItemType(item)}:${item.id}"
+                    landscapeArtKey(item.type, item.id)
                 ],
                 onClick = { railContext.onOpenItem(item) },
                 onLongClick = { railContext.onLongPressItem(item) },
@@ -713,7 +714,7 @@ private fun RowsLayout(
                                         showLandscapeCards = showLandscapeCards,
                                         showCaptions = true,
                                         art = landscapeArt[
-                                            "${normalizeItemType(item)}:${item.id}"
+                                            landscapeArtKey(item.type, item.id)
                                         ],
                                         onClick = { onOpenItem(item) },
                                         onLongClick = { onLongPressItem(item) }
