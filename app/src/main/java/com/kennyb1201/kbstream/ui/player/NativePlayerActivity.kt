@@ -125,6 +125,22 @@ private const val MAX_RETRY_ATTEMPTS = 6
 private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 
 /**
+ * Attempts a source that never opened gets before the next one is tried.
+ *
+ * The full [MAX_RETRY_ATTEMPTS] ladder is for a source that played and then
+ * broke, where a rebuild can plausibly help. A source whose connection was
+ * refused, or whose request the server answered with a status, is a different
+ * animal: the retry rebuilds the player with the IDENTICAL url, so the sixth
+ * attempt asks the same dead endpoint the same question, and nothing in this
+ * app re-resolves a stream url - only the add-on can. A field capture spent
+ * the whole six attempts on one such source, which on this box is about two
+ * minutes of "Reconnecting..." once the connect timeouts are counted, and
+ * finished on a card whose CHANGE SOURCE button was the only way forward with
+ * two more sources already ranked behind it.
+ */
+private const val MAX_UNOPENABLE_RETRY_ATTEMPTS = 2
+
+/**
  * Attempt index at which the retry ladder stops trusting the inferred MIME
  * type and lets the extractor sniff the container itself (see [createPlayer]).
  * Attempts before it rebuild an otherwise identical player, which is pointless
@@ -5277,7 +5293,7 @@ class NativePlayerActivity : ComponentActivity() {
 
         override fun onPlayerError(error: PlaybackException) {
             lastPlaybackError = error
-            var msg = friendlyErrorMessage(error)
+            var msg = friendlyErrorMessage(error, hostOf(currentUrl))
             // Resource exhaustion is a different animal from "this box can't
             // decode Dolby Vision", and both the recovery and the persisted
             // verdict below depend on telling them apart.
@@ -5760,9 +5776,7 @@ class NativePlayerActivity : ComponentActivity() {
         val error = lastPlaybackError ?: return
         if (error === recordedPlaybackFailure) return
         recordedPlaybackFailure = error
-        val host = currentUrl
-            ?.let { url -> runCatching { java.net.URI(url).host }.getOrNull() }
-            ?.takeIf { it.isNotBlank() }
+        val host = hostOf(currentUrl)
         com.kennyb1201.kbstream.data.reporting.CrashReporter.recordEvent(
             source = "playback",
             summary = buildString {
@@ -7625,14 +7639,25 @@ class NativePlayerActivity : ComponentActivity() {
 
     // --- Retry ---
     private fun scheduleRetry() {
-        if (retryAttempt >= MAX_RETRY_ATTEMPTS) {
+        // A source that never opened gets a shorter ladder than one that
+        // played and then broke, and when even that is spent the next ranked
+        // source is tried rather than a card. See
+        // [MAX_UNOPENABLE_RETRY_ATTEMPTS] and [isUnopenableSource].
+        val unopenable = lastPlaybackError?.let { isUnopenableSource(it) } == true
+        val attemptLimit = if (unopenable) MAX_UNOPENABLE_RETRY_ATTEMPTS else MAX_RETRY_ATTEMPTS
+        if (retryAttempt >= attemptLimit) {
+            if (unopenable &&
+                tryNextSource(statusText = "That source won't open. Trying the next one...")
+            ) {
+                return
+            }
             retryExhausted = true
             updateUIError()
             return
         }
         reconnectingContainer.visibility = View.VISIBLE
         hideBufferingSpinner()
-        reconnectingText.text = "Reconnecting... (${retryAttempt + 1}/$MAX_RETRY_ATTEMPTS)"
+        reconnectingText.text = "Reconnecting... (${retryAttempt + 1}/$attemptLimit)"
 
         if (retryAttempt >= RAW_EXTRACTOR_PROBE_ATTEMPT) {
             Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: probing with raw extractor")
@@ -9361,10 +9386,49 @@ class NativePlayerActivity : ComponentActivity() {
             return null
         }
 
-        private fun friendlyErrorMessage(error: PlaybackException): String = when (error.errorCode) {
+        /**
+         * The host of [url], or null when it has none (a local file, or a url
+         * that will not parse).
+         *
+         * Host only, never the whole url: a debrid resolve link carries its
+         * token in the query string, and a diagnostics export is forwarded off
+         * the device.
+         */
+        private fun hostOf(url: String?): String? = url
+            ?.let { runCatching { java.net.URI(it).host }.getOrNull() }
+            ?.takeIf { it.isNotBlank() }
+
+        /**
+         * True when the source never opened at all: the connection could not be
+         * established, or the server answered the request for it with a status.
+         *
+         * Deliberately narrower than [isLikelyRetryable]. A mid-playback I/O
+         * break or a player timeout can clear on its own and keeps the full
+         * ladder; these three cannot, for the structural reason given on
+         * [MAX_UNOPENABLE_RETRY_ATTEMPTS].
+         */
+        private fun isUnopenableSource(error: PlaybackException): Boolean = when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
-            PlaybackException.ERROR_CODE_TIMEOUT -> "No internet connection."
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> true
+            else -> false
+        }
+
+        private fun friendlyErrorMessage(error: PlaybackException, host: String?): String = when (error.errorCode) {
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+            PlaybackException.ERROR_CODE_TIMEOUT -> {
+                // "No internet connection." was the blanket answer here, and the
+                // diagnostics export has since falsified it: a capture taken
+                // while this card was on screen had sync live, catalogue
+                // fetches still landing, and 13 sources retrieved from the very
+                // add-on the stream came from. One host had failed, not the
+                // television's network. Naming it is the difference between
+                // "check your router" - wrong, and nothing the viewer can act
+                // on - and "that source is down", which points at the one
+                // button that helps.
+                if (host == null) "No internet connection." else "Couldn't reach $host."
+            }
             PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> {
                 // The status is the diagnosis, and it is the one fact the server
                 // itself handed us: 403 is a refused or expired resolve link,
