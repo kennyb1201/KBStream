@@ -69,6 +69,10 @@ object Diagnostics {
         report.appendLine(storageLine(app))
         markerLines(app).forEach { report.appendLine(it) }
         report.appendLine(addonLine(app))
+        // How the last source fetch ordered its results, and why the head of the
+        // list is the head: the two rules that outrank every quality label
+        // (playability, availability) are invisible in the picker itself.
+        StreamRankReport.lines().forEach { report.appendLine(it) }
         // The launch breakdown, printed explicitly: it is the one set of samples
         // the perf summary's ranking below is most likely to crowd out.
         startupLine()?.let { report.appendLine(it) }

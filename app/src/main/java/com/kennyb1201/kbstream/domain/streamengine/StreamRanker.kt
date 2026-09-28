@@ -21,16 +21,29 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *     rather than a score penalty for a reason: as points a CAM penalty had to
  *     out-shout the bonuses below, and the cache bonus that arrived with the
  *     debrid addons could hand a *cached* CAM right back over an honest 480p.
- *  3. **Availability.** A copy the debrid service already holds starts now; an
+ *  3. **Debrid-served links.** A link served by the viewer's own debrid service
+ *     comes before a plain hoster link, whatever that one is labelled: the
+ *     URL's host is the service itself, or the entry carries that service's own
+ *     completion tag. It sits above availability because it is a fact about the
+ *     URL rather than a claim in a title - an addon writes its own titles, so a
+ *     scraper addon can print "Instant" beside a hoster link as readily as a
+ *     debrid addon can write "cached", but it cannot print someone else's
+ *     domain into the link it serves the file from. That is the difference
+ *     between a completed file on a CDN and one hoster's copy of it, and it is
+ *     the one this ranker kept missing: a scraper addon's 4K direct link kept
+ *     taking the head of the list from the TorBox copy the viewer's own addon
+ *     had sent, because only the quality labels were ever compared.
+ *  4. **Availability.** A copy the debrid service already holds starts now; an
  *     uncached one of the same title waits for peers, whatever its resolution
  *     label says. AIOStreams sorts on exactly this first, and it is the one
  *     criterion a re-sort by quality labels alone got backwards - which is how
  *     a 4K that had to find its swarm ended up heading a list whose addon had
  *     deliberately put a cached 1080p there.
- *  4. Resolution, HDR/DV, release type, size, seeders and a resolution label
+ *  5. Resolution, HDR/DV, release type, size, seeders and a resolution label
  *     its own file size contradicts, in that order of weight.
  *
- * Every rule reads the stream's *text*, and that text is every field the addon
+ * Every rule but the debrid one above reads the stream's *text*, and that text
+ * is every field the addon
  * sent plus the filename its link carries - not just `title ?: description ?:
  * name`. Two consequences of that were visible in the app: an addon that puts
  * the release name in `description` while `title` holds something short scored
@@ -109,8 +122,48 @@ object StreamRanker {
      * was NOT ready collected the bonus for saying it was — the exact opposite
      * of the claim, and in the one place it matters most, since this tier is
      * what decides the head of an AIOStreams list.
+     *
+     * The bracketed tag is spelled with whatever debrid service the viewer
+     * configured — `[RD+]` for Real-Debrid, but equally `[PM+]`, `[AD+]`,
+     * `[DL+]`, `[OC+]`, `[ED+]`, `[EZ+]` — so it is matched by SHAPE (a short
+     * tag, a plus) rather than by naming two of them. Only RD and TB used to
+     * count, which meant a Premiumize or AllDebrid account got no availability
+     * signal at all: its cached copies fell back to being ranked on labels, and
+     * a plain 4K direct link headed the list over the cached copy the viewer's
+     * own addon had deliberately put first.
      */
-    private val INSTANT_HINT = Regex("""\b(cached|instant)\b|\u26a1|\b(?:rd|tb)\+""")
+    private val INSTANT_HINT = Regex(
+        """\b(cached|instant)\b|\u26a1|\[\s?[a-z]{2,5}\s?\+\s?\]|\b(?:rd|tb)\+"""
+    )
+
+    /**
+     * The links a debrid service serves itself: the URLs those services hand
+     * back once they have resolved a torrent, and the only links in a source
+     * list whose bytes come from a CDN the viewer already pays for.
+     *
+     * Matched on the category word and on the services whose names do not carry
+     * it, so one rule covers whichever account the viewer configured instead of
+     * a list that has to be extended per service; the word may sit anywhere in
+     * the host, so a service whose name carries another's (alldebrid.com) still
+     * counts, where a leading word boundary would have missed it. Read on the
+     * URL's HOST (see [hostOf]): an addon writes its own titles, but it cannot
+     * print someone else's domain into the link it serves the file from.
+     */
+    private val DEBRID_HOST = Regex("""(debrid|torbox|premiumize|offcloud|put\.io|seedr)\b""")
+
+    /**
+     * The completion tag of a debrid service, spelled with the abbreviation of
+     * whichever service the viewer configured - `[RD+]` Real-Debrid, `[TB+]`
+     * TorBox, `[PM+]` Premiumize, `[AD+]` AllDebrid, `[DL+]` Debrid-Link,
+     * `[OC+]` Offcloud - plus the bare `rd+` and `tb+` spellings some addons
+     * use where there is no bracket to put a tag in.
+     *
+     * Kept apart from [INSTANT_HINT], which is deliberately shape-based: there
+     * the only question is whether the addon claims the copy is ready, here it
+     * is which service is serving it.
+     */
+    private val DEBRID_TAG =
+        Regex("""\[\s?(rd|tb|pm|ad|dl|oc|ed|ez)\s?\+\s?\]|\b(?:rd|tb)\+""")
 
     /**
      * Peers a release reports, in any of the shapes addons print them: the
@@ -134,13 +187,27 @@ object StreamRanker {
     private const val MIN_PLAUSIBLE_4K_GB = 1.5
     private const val MIN_PLAUSIBLE_1080P_GB = 0.25
 
+    /**
+     * One stream and the facts the rules read, worked out once per stream. The
+     * comparator runs O(n log n) times, so the text join, the URL decode and
+     * the host parse must not happen inside a selector.
+     */
+    private class Candidate(
+        val stream: Stream,
+        val text: String,
+        val debridServed: Boolean
+    )
+
     fun rank(streams: List<Stream>): List<Stream> =
         streams
             .filter { stream -> isPlayable(stream) || !stream.infoHash.isNullOrBlank() }
-            // The text every rule reads, built once per stream. The comparator
-            // below runs O(n log n) times, so joining and URL-decoding inside a
-            // selector would repeat that work on every comparison.
-            .map { stream -> stream to searchableText(stream) }
+            // The text every rule reads, and whether the debrid service the
+            // viewer pays for is the one serving the link, both worked out once
+            // per stream.
+            .map { stream ->
+                val text = searchableText(stream)
+                Candidate(stream, text, isDebridServed(stream, text))
+            }
             // Playability is its own tier, not a score bonus: no combination of
             // quality labels may lift an entry this app cannot open over one it
             // can. Kotlin's sort is stable, so within a tier the addon's own
@@ -149,23 +216,88 @@ object StreamRanker {
             // (AIOStreams with a regex + SEL config): the ranker only speaks
             // where it has something to say.
             .sortedWith(
-                compareByDescending<Pair<Stream, String>> { if (isPlayable(it.first)) 1 else 0 }
+                compareByDescending<Candidate> { if (isPlayable(it.stream)) 1 else 0 }
                     // Known-bad copies sink as a class, above every question of
                     // quality or availability - the only way a cached CAM stays
                     // under an honest 480p, which no score bonus can promise.
-                    .thenBy { if (isKnownBad(it.second)) 1 else 0 }
+                    .thenBy { if (isKnownBad(it.text)) 1 else 0 }
+                    // Served by the debrid service the viewer pays for. Its own
+                    // tier, and above availability, because it is a fact about
+                    // the link rather than a claim in a title: a scraper addon
+                    // can call a hoster link instant, but it cannot put someone
+                    // else's domain in the URL it hands over (see
+                    // [isDebridServed]).
+                    .thenByDescending { if (it.debridServed) 1 else 0 }
                     // Availability, because it is what the sorted addons sort on
                     // first and what the viewer's configuration asked for.
-                    .thenByDescending { if (INSTANT_HINT.containsMatchIn(it.second)) 1 else 0 }
-                    .thenByDescending { score(it.first, it.second) }
+                    .thenByDescending { if (INSTANT_HINT.containsMatchIn(it.text)) 1 else 0 }
+                    .thenByDescending { score(it.stream, it.text) }
             )
-            .map { it.first }
+            .map { it.stream }
+
+    /**
+     * One line saying why [rank] placed a stream where it did: the tiers it
+     * cleared, the score it earned, and the numbers behind that score.
+     *
+     * For the diagnostics report. "The ranker keeps putting this add-on above
+     * that one" cannot be answered from the ordered list alone — the list shows
+     * where an entry landed and never which rule put it there — and the two
+     * rules that outrank every label (playability and the debrid link) are
+     * invisible in the picker. Read-only: it walks exactly the paths [rank]
+     * does.
+     */
+    internal fun explain(stream: Stream): String {
+        val text = searchableText(stream)
+        return buildString {
+            append(if (isPlayable(stream)) "playable" else "hash-only")
+            if (isKnownBad(text)) append(" known-bad")
+            if (isDebridServed(stream, text)) append(" debrid-served")
+            if (INSTANT_HINT.containsMatchIn(text)) append(" instant")
+            append(" score=").append(score(stream, text))
+            sizeInGb(stream, text)?.let { size ->
+                append(" size=")
+                    .append(String.format(java.util.Locale.US, "%.1f", size))
+                    .append("GB")
+            }
+            seeders(text)?.let { peers -> append(" peers=").append(peers) }
+            append(" · ").append(stream.title?.take(60) ?: "(no title)")
+        }
+    }
 
     /** True when this app can open the stream directly. */
     private fun isPlayable(stream: Stream): Boolean {
         val url = stream.url?.lowercase() ?: return false
         return url.startsWith("http://") || url.startsWith("https://") ||
             url.startsWith("file://") || url.startsWith("rtmp://")
+    }
+
+    /**
+     * True when the link is being served by a debrid service: the URL's host is
+     * one of the services themselves (see [DEBRID_HOST]), or the entry carries
+     * that service's own completion tag (see [DEBRID_TAG]).
+     *
+     * The distinction is not how good the file looks but who is on the other end
+     * of the socket. A resolved debrid link is a completed file on a CDN that is
+     * paid to serve video; a scraper addon's direct link is one hoster's copy of
+     * the film on a host that throttles, expires its links and stalls. Compared
+     * on labels alone the two were interchangeable, and the bigger label won -
+     * which is how a 4K hoster link kept taking the head of the list from the
+     * copy the viewer's own debrid service was already holding.
+     */
+    internal fun isDebridServed(stream: Stream, text: String): Boolean =
+        DEBRID_HOST.containsMatchIn(hostOf(stream.url)) ||
+            DEBRID_TAG.containsMatchIn(text)
+
+    /**
+     * The URL's host, lowercased, or an empty string when it has none.
+     *
+     * The one rule that reads the link rather than the text reads it here: the
+     * host is the part of a stream an addon cannot fabricate, since a link that
+     * streams from a debrid service has to point at that service to work.
+     */
+    private fun hostOf(url: String?): String {
+        val authority = url?.substringAfter("://", "")?.substringBefore('/') ?: return ""
+        return authority.substringAfterLast('@').lowercase()
     }
 
     /**

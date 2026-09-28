@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.async
@@ -30,6 +31,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         /** Keeps the log line readable when a title is a full release name. */
         const val DESCRIBE_MAX_LABEL = 90
         const val DESCRIBE_MAX_HASH = 12
+
+        /** Sources named in the diagnostics report, head of the list first. */
+        const val RANK_REPORT_TOP = 3
     }
 
     private val _streams = MutableStateFlow<List<Stream>>(emptyList())
@@ -194,8 +198,59 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         debugLines.add(rankedMsg)
         debugLines.add(topMsg)
 
+        // Into the diagnostics report as well: the picker shows the order but
+        // never the rule that produced it, and the two rules that outrank every
+        // quality label are invisible in the list itself.
+        StreamRankReport.record(
+            rankReportLines(
+                streams = withBadges,
+                results = results,
+                ranked = useRanker
+            )
+        )
+
         return withBadges
     }
+
+    /**
+     * The diagnostics block for one fetch: how many sources came back, and for
+     * the head of the list, which add-on sent each one and why it is there.
+     *
+     * The add-on is carried alongside because the ranked list mixes every
+     * add-on's results into one — once the ranker reorders them, "whose link is
+     * this" stops being readable from the list, which is the first question a
+     * complaint about the order asks.
+     */
+    private fun rankReportLines(
+        streams: List<Stream>,
+        results: List<AddonLoadResult>,
+        ranked: Boolean
+    ): List<String> {
+        if (streams.isEmpty()) return listOf("streams: none returned")
+
+        val addonByStream = results
+            .filterIsInstance<AddonLoadResult.Success>()
+            .flatMap { result -> result.streams.map { streamKey(it) to result.addonName } }
+            .toMap()
+
+        return buildList {
+            add(
+                "streams: ${streams.size} source(s), " +
+                    (if (ranked) "ranked" else "add-on order") +
+                    ", top $RANK_REPORT_TOP:"
+            )
+            streams.take(RANK_REPORT_TOP).forEach { stream ->
+                add(
+                    "  ${addonByStream[streamKey(stream)] ?: "?"} · " +
+                        StreamRanker.explain(stream)
+                )
+            }
+        }
+    }
+
+    /** A stream's identity for the report: the link it plays, or its hash. */
+    private fun streamKey(stream: Stream): String =
+        stream.url ?: stream.infoHash ?: stream.title ?: stream.name ?: ""
 
     /**
      * One-line identity for the stream that was picked, for both the log and

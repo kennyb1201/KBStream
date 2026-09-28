@@ -231,6 +231,110 @@ class StreamRankerTest {
         assertEquals(listOf(honest, cachedCam), order(cachedCam, honest))
     }
 
+    // ── Debrid-served: whose link is it, not what does it claim ──
+    //
+    // Reported rule: a link the viewer's own debrid service serves has to head
+    // the list. The picker kept putting a scraper addon's direct hoster links
+    // (PenguPlay) above the TorBox copies AIOStreams sent, because who serves
+    // the bytes is written nowhere the score looks - and the label comparison
+    // then handed the top spot to the bigger resolution label.
+
+    @Test
+    fun `a debrid-served link heads a plain hoster link`() {
+        val debrid = stream(
+            "Some Film 2024 1080p WEB-DL 6 GB",
+            url = "https://store-9.torbox.app/download/abc/Some.Film.2024.1080p.mkv"
+        )
+        val hoster = stream(
+            "Some Film 2024 2160p REMUX DV HDR 18 GB",
+            url = "https://cdn.pengu.example/Some.Film.2024.2160p.mkv"
+        )
+
+        // The hoster link is the bigger, better-labelled file and it still sits
+        // second: the debrid link is a completed file on a CDN, the other is one
+        // hoster's copy of the same film.
+        assertEquals(listOf(debrid, hoster), order(hoster, debrid))
+    }
+
+    @Test
+    fun `every debrid service's own host counts, not only TorBox`() {
+        // One rule covers the account rather than naming the one service this
+        // was reported with.
+        for (link in listOf(
+            "https://real-debrid.com/d/ABC123",
+            "https://www.premiumize.me/download/abc123",
+            "https://alldebrid.com/f/abc123",
+            "https://debrid-link.com/dl/abc123",
+            "https://offcloud.com/cloud/download/abc123",
+            "https://put.io/v2/files/1/download"
+        )) {
+            val debrid = stream("Some Film 2024 1080p WEB-DL", url = link)
+            val hoster = stream(
+                "Some Film 2024 2160p REMUX DV HDR 18 GB",
+                url = "https://cdn.pengu.example/4k.mkv"
+            )
+
+            assertEquals(
+                "expected $link to head the list",
+                listOf(debrid, hoster),
+                order(hoster, debrid)
+            )
+        }
+    }
+
+    @Test
+    fun `the debrid completion tag counts on the addon's own host too`() {
+        // Some addons proxy the debrid stream and never expose the service's
+        // domain; the tag they print is then the only evidence that the viewer's
+        // own account is serving it.
+        val tagged = stream(
+            "Some Film 2024 1080p WEB-DL [TB+]",
+            url = "https://aiostreams.example/proxy/abc.mkv"
+        )
+        val hoster = stream(
+            "Some Film 2024 2160p REMUX DV HDR 18 GB",
+            url = "https://cdn.pengu.example/4k.mkv"
+        )
+
+        assertEquals(listOf(tagged, hoster), order(hoster, tagged))
+    }
+
+    @Test
+    fun `a plain hoster link is not debrid-served`() {
+        // Same labels, same kind of host: nothing here for the ranker to
+        // separate, so the addon's own order survives.
+        val first = stream("Some Film 2024 1080p WEB-DL", url = "https://cdn.pengu.example/a.mkv")
+        val second = stream("Some Film 2024 1080p WEB-DL", url = "https://cdn.othercdn.example/b.mkv")
+
+        assertEquals(listOf(first, second), order(first, second))
+    }
+
+    @Test
+    fun `a debrid-served cam still sits under an honest release`() {
+        // The debrid tier sits under the known-bad one for a reason: being
+        // served by a service the viewer pays for is not a licence to hand a CAM
+        // the top spot it was kept out of.
+        val debridCam = stream(
+            "Some Film 2024 1080p CAM",
+            url = "https://store-9.torbox.app/download/cam.mkv"
+        )
+        val honest = stream("Some Film 2024 480p", url = "https://cdn.pengu.example/sd.mkv")
+
+        assertEquals(listOf(honest, debridCam), order(debridCam, honest))
+    }
+
+    @Test
+    fun `explain names the debrid tier`() {
+        val line = StreamRanker.explain(
+            stream(
+                "Some Film 2024 1080p WEB-DL",
+                url = "https://store-9.torbox.app/download/abc/a.mkv"
+            )
+        )
+
+        assertTrue(line, line.contains("debrid-served"))
+    }
+
     // ── Peers ──
 
     @Test
@@ -327,6 +431,58 @@ class StreamRankerTest {
         val hd = stream("Some Film 2024 1080p WEB-DL", url = "https://host/hd.mkv")
 
         assertEquals(listOf(uhd, hd), order(hd, uhd))
+    }
+
+    @Test
+    fun `a cached copy marked for any debrid service outranks a plain 4K link`() {
+        // The bracketed tag is spelled with whatever service the viewer
+        // configured. Only `[RD+]` and `[TB+]` used to count, so a Premiumize or
+        // AllDebrid account got no availability signal at all and its cached
+        // copies were ranked on labels alone - which is how a direct 4K link the
+        // box cannot buffer kept heading the list over the cached copy the
+        // viewer's own add-on had deliberately put first.
+        val cached = stream(
+            "Some Film 2024 1080p WEB-DL [PM+]",
+            url = "https://debrid.example/download/abc"
+        )
+        val plain4k = stream("Some Film 2024 2160p REMUX DV HDR", url = "https://host/plain.mkv")
+
+        assertEquals(listOf(cached, plain4k), order(plain4k, cached))
+    }
+
+    @Test
+    fun `an unbracketed tag other than rd or tb is not a cache claim`() {
+        // Only the two well-known bare spellings count: inside a release name a
+        // bare "xx+" says nothing about availability, and treating every one of
+        // them as a cache claim would hand the top spot to whichever file
+        // happened to carry the noisiest name. Equal tiers and equal scores, so
+        // the add-on's own order survives - which is the ranker's contract.
+        val noisy = stream("Some Film 2024 1080p WEB-DL XV+", url = "https://host/a.mkv")
+        val quiet = stream("Some Film 2024 1080p WEB-DL", url = "https://host/b.mkv")
+
+        assertEquals(listOf(noisy, quiet), order(noisy, quiet))
+    }
+
+    @Test
+    fun `explain names the tiers and the score`() {
+        val cached = stream(
+            "Some Film 2024 1080p WEB-DL [AD+] cached",
+            url = "https://debrid.example/download/xyz"
+        )
+        val line = StreamRanker.explain(cached)
+
+        assertTrue(line, line.startsWith("playable"))
+        assertTrue(line, line.contains("instant"))
+        assertTrue(line, line.contains("score="))
+        assertTrue(line, line.contains("Some Film 2024 1080p WEB-DL"))
+    }
+
+    @Test
+    fun `explain reports an entry this app cannot open at all`() {
+        val hashOnly = stream("Some Film 2024 2160p REMUX", infoHash = "0f1e2d3c4b5a")
+        val line = StreamRanker.explain(hashOnly)
+
+        assertTrue(line, line.startsWith("hash-only"))
     }
 
     @Test
