@@ -1234,20 +1234,58 @@ class MpvPlayerActivity : ComponentActivity() {
                 endTrickplayScrub()
             }
         })
+
+        // The bar's keys are its own, and they have to be: a bare SeekBar answers
+        // LEFT/RIGHT by moving its own thumb, which on this engine slid the bar -
+        // and asked for preview frames - without ever asking mpv to seek, so the
+        // picture carried on playing under a bar that said otherwise. Walking the
+        // bar seeks the video, and OK plays and pauses, because the bar is where
+        // the controls land when they come up (see focusControls) - so those are
+        // the two presses a viewer makes with the overlay open.
+        seekBar?.setOnKeyListener { _, keyCode, event ->
+            when (keyCode) {
+                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    // Repeats seek again, which is this engine's hold-to-scrub:
+                    // mpv seeks by keyframe, so a long press walks in steps.
+                    if (event.action == KeyEvent.ACTION_DOWN) {
+                        seekStepBy(
+                            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
+                                -SEEK_STEP_MS
+                            } else {
+                                SEEK_STEP_MS
+                            }
+                        )
+                        keepControlsVisible()
+                    }
+                    true
+                }
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    // One press, one toggle: a held OK would otherwise walk the
+                    // pause state back and forth.
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        surface?.togglePause()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     // --- Scrub previews -------------------------------------------------------
 
     /**
-     * One seek press with the overlay down: the jump itself, then the preview for
-     * the position it lands on.
+     * One seek press - made from the D-pad with the overlay down, or from the
+     * seek bar itself with it up: the jump, then the preview for the position it
+     * lands on.
      *
-     * The preview has to be asked for here rather than from the seek bar, because
-     * nothing moves the bar until the overlay is up and its listener only ever
-     * sees a drag - which is why a remote-only scrub showed no thumbnails on this
-     * engine and on the main one alike. The bar is the anchor because that same
-     * press brings the overlay up, and the card resolves where it sits when the
-     * frame arrives (see TrickplayOverlay).
+     * The preview has to be asked for here rather than from the bar's own
+     * progress listener: that one only ever sees a drag, and a TV remote never
+     * drags - which is why a remote-only scrub showed no thumbnails on this
+     * engine and on the main one alike. The bar is the anchor either way: the
+     * overlay-down press brings the overlay up and the card tracks the bar from
+     * there, and the overlay-up press is made on the bar itself. Where the card
+     * sits is resolved when the frame arrives (see TrickplayOverlay).
      */
     private fun seekStepBy(deltaMs: Long) {
         val from = runCatching { surface?.positionMs() ?: positionMs }.getOrDefault(positionMs)
@@ -3282,9 +3320,31 @@ class MpvPlayerActivity : ComponentActivity() {
         errorSwitchButton?.post { errorSwitchButton?.requestFocus() }
     }
 
+    /**
+     * Hands the D-pad to the overlay as it comes up: the seek bar, or play/pause
+     * where there is no bar that could do anything.
+     *
+     * Raising the controls used to land on play/pause, which left LEFT/RIGHT
+     * meaning "walk the button row" - so a viewer who raised the controls to
+     * jump ten seconds had to press UP onto the bar before LEFT/RIGHT would seek
+     * anything at all. Landing on the bar costs the row nothing: every button in
+     * it declares `nextFocusUp` to the bar and the bar declares `nextFocusDown`
+     * back to play/pause, so the row is still one press away, and the bar's own
+     * key listener seeks on LEFT/RIGHT and plays and pauses on OK.
+     *
+     * The bar only takes it where it can do something with it: a skip prompt is
+     * the primary target while it is up, and a session with no duration has
+     * nothing on the bar to scrub.
+     */
+    private fun focusControls() {
+        val scrubbable = skipButton?.visibility != View.VISIBLE && durationMs > 0L
+        if (scrubbable && seekBar?.requestFocus() == true) return
+        playPauseButton?.requestFocus()
+    }
+
     private fun showControls() {
         controlsContainer?.visibility = View.VISIBLE
-        playPauseButton?.requestFocus()
+        focusControls()
         keepControlsVisible()
     }
 

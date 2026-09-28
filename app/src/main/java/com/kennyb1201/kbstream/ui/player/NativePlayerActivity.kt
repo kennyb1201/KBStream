@@ -3440,6 +3440,19 @@ class NativePlayerActivity : ComponentActivity() {
         // Quick-press = 10s jump; holding (past 400ms) = accelerated scrubbing.
         seekbar.setOnKeyListener { _, keyCode, event ->
             when (keyCode) {
+                // OK on the bar is the primary action, the same press the
+                // play/pause button makes. The bar is where the overlay lands
+                // when it comes up (see focusControls), so this is the press
+                // that follows the controls appearing: without it, OK on the
+                // bar did nothing at all and pausing meant a DOWN into the row
+                // first. One press, one toggle - a held OK would otherwise walk
+                // the pause state back and forth.
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                    if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                        togglePlayPause()
+                    }
+                    true
+                }
                 // Up from the seekbar lands on the FIRST cast member.
                 // Without this, the default focus search picks whichever
                 // actor the proximity algorithm guesses, which feels
@@ -6886,15 +6899,18 @@ class NativePlayerActivity : ComponentActivity() {
     /**
      * Parks the D-pad on the overlay's primary control.
      *
-     * One definition, because three places need the same answer - raising the
-     * overlay, handing focus back when a picker or panel closes, and catching a
-     * focus that landed on the video surface - and the answer is not "the
-     * overlay's first focusable child". Requesting focus on the container lets
-     * the framework choose among its descendants, which is not the play button,
-     * so a viewer who pressed OK there was pressing a button they could not
-     * see. While a skip prompt is up that prompt is the primary target
-     * (Netflix-style), and on a live channel it is CH up, since pausing live
-     * television is not a thing.
+     * One definition, because two places need the same answer - handing focus
+     * back when a picker or panel closes, and catching a focus that landed on
+     * the video surface - and the answer is not "the overlay's first focusable
+     * child". Requesting focus on the container lets the framework choose among
+     * its descendants, which is not the play button, so a viewer who pressed OK
+     * there was pressing a button they could not see. While a skip prompt is up
+     * that prompt is the primary target (Netflix-style), and on a live channel
+     * it is CH up, since pausing live television is not a thing.
+     *
+     * Raising the overlay is deliberately not one of the two any more: it lands
+     * on the seek bar instead, so that the LEFT/RIGHT that follows scrubs rather
+     * than walking the row. See [focusControls].
      */
     private fun focusControlsPrimary() {
         if (btnSkipIntro.visibility == View.VISIBLE) {
@@ -6904,6 +6920,32 @@ class NativePlayerActivity : ComponentActivity() {
         } else {
             btnPlayPause.requestFocus()
         }
+    }
+
+    /**
+     * Hands the D-pad to the overlay as it comes up: the seek bar, or the
+     * primary button where there is no bar that could do anything.
+     *
+     * Raising the controls used to land on play/pause, which left LEFT/RIGHT
+     * meaning "walk the button row" - so a viewer who raised the controls to
+     * jump ten seconds had to press UP onto the bar before LEFT/RIGHT would seek
+     * anything at all. Landing on the bar costs the row nothing: every button in
+     * it declares `nextFocusUp` to the bar and the bar declares `nextFocusDown`
+     * back to play/pause, so the row is still one press away, and OK on the bar
+     * plays and pauses (see its key listener) - which is what the press after
+     * the overlay appeared did before this anyway.
+     *
+     * The bar only takes it where it can do something with it: a skip prompt is
+     * the primary target while it is up, live television has no duration to
+     * scrub, and a stream that never reported one would leave the bar swallowing
+     * LEFT/RIGHT and giving back nothing.
+     */
+    private fun focusControls() {
+        val scrubbable = !isLiveChannel &&
+            btnSkipIntro.visibility != View.VISIBLE &&
+            exoPlayer?.duration?.takeIf { it > 0 } != null
+        if (scrubbable && seekbar.requestFocus()) return
+        focusControlsPrimary()
     }
 
     /**
@@ -6939,7 +6981,7 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
         if (!showSettingsPanel && !isPickerShowing) {
-            controlsOverlay.post { focusControlsPrimary() }
+            controlsOverlay.post { focusControls() }
         }
         scheduleAutoHide()
         // Best-effort: resolve the next episode's name so the Next button's
