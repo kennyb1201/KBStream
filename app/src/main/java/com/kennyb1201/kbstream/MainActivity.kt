@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream
 
+import android.annotation.SuppressLint
 import android.os.Bundle
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -424,6 +425,12 @@ class MainActivity : ComponentActivity() {
     /** Latched by [observeFirstFrame]: the draw listener records once. */
     private var firstFrameRecorded = false
 
+    // androidx.core marks ComponentActivity.dispatchKeyEvent @RestrictedApi
+    // ("same library group"), which an app cannot satisfy however it calls it.
+    // The call is `super`, from an override of the same method: the ordinary
+    // way to see a key before the view tree does, and deliberate here (the
+    // exit guard above has to catch keys aimed at a dialog's window too).
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
         if (exitGuardLatched) {
             // Consume everything: both DOWN and UP of any in-flight press.

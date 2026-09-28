@@ -2,6 +2,7 @@
 
 package com.kennyb1201.kbstream.ui.player
 
+import android.annotation.SuppressLint
 import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
@@ -165,6 +166,11 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
      * reports inactive is dropped when the sink is built and would only come
      * back on a full rebuild.) At defaults [queueInput] is a pass-through.
      */
+    // Deliberately not `super.isActive()`, which is what lint's
+    // MissingSuperCall wants: the base returns false whenever no buffer is
+    // queued, and reporting inactive drops the processor from the sink's chain
+    // - the one thing the doc above says must not happen.
+    @SuppressLint("MissingSuperCall")
     override fun isActive(): Boolean = true
 
     override fun queueInput(inputBuffer: ByteBuffer) {

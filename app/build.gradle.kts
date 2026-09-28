@@ -240,6 +240,12 @@ android {
         // fail the build stays on.
         disable += "MissingTranslation"
         disable += "ExtraTranslation"
+        // The one thing lint cannot infer on its own: media3's `@UnstableApi`
+        // (an androidx.annotation.RequiresOptIn(ERROR) marker) is opted into
+        // project-wide there, because the marker's granularity is the library
+        // and this app uses that library throughout. See the file for why, and
+        // note the check itself stays enabled for every other marker.
+        lintConfig = file("lint.xml")
         htmlReport = true
         xmlReport = true
     }

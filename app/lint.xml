@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Lint configuration for :app. Wired in from app/build.gradle.kts
+  (`lint { lintConfig = file("lint.xml") }`).
+
+  One entry, and it is the opt-in the marker was designed around. media3 marks
+  nearly its whole surface `@UnstableApi`, which is an androidx.annotation
+  .RequiresOptIn(level = ERROR) marker, and this app uses that surface
+  deliberately and pervasively - ExoPlayer, the audio processors that keep a
+  downmix settings change audible mid-playback, the extractors factory, the
+  custom data sources (374 call sites across 11 files). The marker's granularity
+  is the library, not the call site: there is no subset of it this app uses
+  "carefully" and another it does not.
+
+  So the opt-in is declared once, project-wide, which is the mechanism lint
+  documents for this case, instead of `@androidx.annotation.OptIn` on every
+  declaration that touches media3 - and the check itself stays ON, so a different
+  opt-in marker introduced later (a new experimental AndroidX or Compose API)
+  still fails the build until somebody writes the opt-in where it belongs.
+-->
+<lint>
+    <issue id="UnsafeOptInUsageError">
+        <option name="opt-in" value="androidx.media3.common.util.UnstableApi" />
+    </issue>
+</lint>

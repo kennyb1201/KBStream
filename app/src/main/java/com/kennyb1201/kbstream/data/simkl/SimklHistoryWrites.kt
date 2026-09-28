@@ -81,6 +81,11 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
         }
 
         response.isSuccessful
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // Cancellation is not a failure: rethrow so the scope that was
+        // cancelled stops here instead of logging it and carrying on as if the
+        // work had simply failed.
+        throw e
     } catch (e: Exception) {
         Log.e("SIMKL_REPO", "pushWatchedMovie error: ${e.message}", e)
         false
@@ -151,6 +156,9 @@ suspend fun SimklRepository.pushWatchedShowImpl(
         }
 
         response.isSuccessful
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // See pushWatchedMovie.
+        throw e
     } catch (e: Exception) {
         Log.e("SIMKL_REPO", "pushWatchedShow error: ${e.message}", e)
         false
@@ -345,6 +353,9 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
         }
 
         response.isSuccessful
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // See pushWatchedMovie.
+        throw e
     } catch (e: Exception) {
         Log.e("SIMKL_REPO", "pushWatchedEpisode error: ${e.message}", e)
         false
@@ -436,6 +447,9 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
         }
 
         response.isSuccessful
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        // See pushWatchedMovie.
+        throw e
     } catch (e: Exception) {
         Log.e("SIMKL_REPO", "pushWatchedSeason error: ${e.message}", e)
         false

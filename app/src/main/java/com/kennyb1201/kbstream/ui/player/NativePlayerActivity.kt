@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.net.Uri
@@ -2415,6 +2416,12 @@ class NativePlayerActivity : ComponentActivity() {
      * alone: a pause is a deliberate request and pausing needs the overlay.
      * The guard keeps every panel, picker and popup working normally.
      */
+    // androidx.core marks ComponentActivity.dispatchKeyEvent @RestrictedApi
+    // ("same library group"), which an app cannot satisfy however it calls it.
+    // The calls below are `super`, from an override of the same method: the
+    // ordinary way to see a key before the view tree does, and the skip-prompt
+    // rules in the doc above depend on being ahead of it.
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // LEFT/RIGHT seek the video directly while nothing but the video (or a
         // skip prompt) is on screen, and raise nothing while doing it. This

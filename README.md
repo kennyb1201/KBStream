@@ -155,10 +155,24 @@ Two gates with different jobs. Both run in CI, both fail the build on an error:
 ```
 
 Android Lint is configured in the `lint` block of `app/build.gradle.kts`:
-errors fail the run, warnings are reported and uploaded as an artifact. It is
-deliberately not part of a local build loop — the analysis on a tree this size
-needs more memory than the dev container has, where it OOM-kills the Gradle
-daemon — so CI is the only place it can be relied on to have run.
+errors fail the run, warnings are reported and uploaded as an artifact. CI runs
+it on every push. Locally it is slow and memory-hungry on a tree this size (a
+few minutes, and it has OOM-killed the Gradle daemon on a small container — it
+wants the build caches present and disk headroom for its report), which is why
+it is not part of the edit/build loop even though it does run here.
+
+`app/lint.xml` carries the one project-wide exception. Most of what the first
+run reported was `UnsafeOptInUsageError` on media3: `@UnstableApi` is an
+`androidx.annotation` opt-in marker whose granularity is the library, and this
+app uses that library throughout (ExoPlayer, the audio processors, the
+extractors factory, the custom data sources), so the opt-in is declared once
+for the project — the mechanism the marker documents — instead of on each of
+those call sites. The check itself stays enabled, so an opt-in marker
+introduced later still fails the build until somebody opts in where it
+belongs. The handful of remaining errors are either a `@SuppressLint` with the
+reason written above it (see `MainActivity.dispatchKeyEvent`,
+`NotificationCenter`) or a real fix (`IptvRepository`'s byte-order mark,
+`HomeViewModel`'s suspicious indentation).
 
 Exactly one ktlint rule is enabled — unused imports (see `.editorconfig`).
 Everything else is off on purpose: this tree predates the formatter, so turning

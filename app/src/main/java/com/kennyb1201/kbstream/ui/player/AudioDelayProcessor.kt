@@ -2,6 +2,7 @@
 
 package com.kennyb1201.kbstream.ui.player
 
+import android.annotation.SuppressLint
 import android.util.Log
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
@@ -130,7 +131,15 @@ internal class AudioDelayProcessor : BaseAudioProcessor() {
         }
     }
 
-    /** Always true — see the class doc; the 0 ms path is a pass-through. */
+    /**
+     * Always true — see the class doc; the 0 ms path is a pass-through.
+     *
+     * Deliberately not `super.isActive()`, which is why lint's MissingSuperCall
+     * is suppressed here: the base returns false whenever no buffer is queued,
+     * and a processor that reports inactive is dropped from the sink's chain
+     * (see the class doc - this one has to survive that).
+     */
+    @SuppressLint("MissingSuperCall")
     override fun isActive(): Boolean = true
 
     override fun queueInput(inputBuffer: ByteBuffer) {

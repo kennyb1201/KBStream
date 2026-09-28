@@ -284,6 +284,11 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 "ACTOR_WATCHED",
                 "resolveAndPreloadWatched done, credits=${cast.size}, resolved=${preloadItems.size}"
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Cancellation is not a failure: rethrow so the scope that was
+            // cancelled stops here instead of logging it and clearing state as
+            // if the work had simply failed.
+            throw e
         } catch (e: Exception) {
             _resolvedCreditIds.value = emptyMap()
             Log.e("ACTOR_WATCHED", "resolveAndPreloadWatched failed", e)

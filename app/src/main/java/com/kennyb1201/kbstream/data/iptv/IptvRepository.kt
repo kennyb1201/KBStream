@@ -191,7 +191,7 @@ class IptvRepository(
 
         val playlistContent = IptvHttpClient
             .fetchTextWithRetry(client, normalizedUrl)
-            .removePrefix("﻿")
+            .removePrefix("\uFEFF")
 
         if (
             !playlistContent.contains("#EXTM3U", ignoreCase = true) &&

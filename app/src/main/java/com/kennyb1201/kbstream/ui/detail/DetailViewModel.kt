@@ -422,6 +422,11 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     "KBStream",
                     "poster watched refresh resolved=${resolvedItems.size} watched=${_watchedKeys.value.size}"
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is not a failure: rethrow so the scope that was
+                // cancelled stops here instead of clearing the poster badges as
+                // if the refresh had failed.
+                throw e
             } catch (e: Exception) {
                 _watchedKeys.value = emptySet()
                 _resolvedPosterIds.value = emptyMap()
@@ -1160,6 +1165,11 @@ for ((metaAddon, response, error) in probeResults) {
                     )
                 }
                 
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // A load the user navigated away from is cancelled, not
+                // failed: rethrow rather than putting an error on a screen
+                // nobody is looking at.
+                throw e
             } catch (e: Exception) {
                 _error.value = "Failed to load: ${e.message}"
                 Log.e("KBStream", "detail load failed", e)

@@ -662,6 +662,10 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
                     if (imdbId != null && type != null) imdbId to type else null
                 }.distinct()
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Cancellation is not a failure: rethrow so the scope that was
+            // cancelled stops here instead of logging it as one.
+            throw e
         } catch (e: Exception) {
             Log.e("KB_FOLDER_VM", "resolveAndPreload failed: ${e.message}", e)
         }

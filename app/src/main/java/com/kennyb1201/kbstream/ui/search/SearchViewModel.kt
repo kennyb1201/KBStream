@@ -571,6 +571,11 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 // Resolve the visible TMDB ids -> IMDB in the background so
                 // badges/marks can key off the IMDB id.
                 resolveTmdbTitles(_results.value)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // A superseded search is cancelled, not failed: rethrow rather
+                // than logging it and blanking the results the newer search is
+                // about to fill.
+                throw e
             } catch (e: Exception) {
                 Log.e("KBStream", "Search failed", e)
                 _results.value = emptyList()

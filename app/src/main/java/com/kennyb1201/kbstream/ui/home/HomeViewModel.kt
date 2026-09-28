@@ -1772,6 +1772,10 @@ Log.d(
                     "HOME_UPNEXT",
                     "Removed continue watching parent=$parentId"
                 )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is not a failure: rethrow so a superseded
+                // build is not logged as a failed removal.
+                throw e
             } catch (e: Exception) {
 
                 Log.e(
@@ -3929,15 +3933,15 @@ Log.d(
     }.awaitAll().filterNotNull()
 }
 
-                    // A series with watched episodes but no in-progress row
-                    // still has unwatched aired episodes, so it belongs on the
-                    // rail pointing at the next one. Marking episodes watched
-                    // (or finishing them) removes the resume rows the rail is
-                    // built from, which dropped a show with plenty left to
-                    // watch. Caught-up shows resolve to no next episode and are
-                    // still kept off the rail.
-                    val localCards =
-                        localItems + loadLocalNextUpItems(localItems)
+                        // A series with watched episodes but no in-progress row
+                        // still has unwatched aired episodes, so it belongs on the
+                        // rail pointing at the next one. Marking episodes watched
+                        // (or finishing them) removes the resume rows the rail is
+                        // built from, which dropped a show with plenty left to
+                        // watch. Caught-up shows resolve to no next episode and are
+                        // still kept off the rail.
+                        val localCards =
+                            localItems + loadLocalNextUpItems(localItems)
 
                         // Publish local cards first: the enriched local rows
                         // are ready here, so the rail shows real content while

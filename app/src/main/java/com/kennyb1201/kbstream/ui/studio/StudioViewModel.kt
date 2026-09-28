@@ -479,6 +479,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 "STUDIO_WATCHED",
                 "resolveAndPreloadWatched done, items=${uniqueItems.size}, resolved=${resolved.size}"
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Cancellation is not a failure: rethrow so the scope that was
+            // cancelled stops here instead of logging it and clearing state as
+            // if the work had simply failed.
+            throw e
         } catch (e: Exception) {
             Log.e("STUDIO_WATCHED", "resolveAndPreloadWatched failed: ${e.message}", e)
             _resolvedIds.value = emptyMap()

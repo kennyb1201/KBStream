@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioAttributes
@@ -3417,6 +3418,12 @@ class MpvPlayerActivity : ComponentActivity() {
      * it); once it is up, the buttons take focus and OK activates them, which
      * is what a TV remote expects.
      */
+    // androidx.core marks ComponentActivity.dispatchKeyEvent @RestrictedApi
+    // ("same library group"), which an app cannot satisfy however it calls it.
+    // The calls below are `super`, from an override of the same method: the
+    // ordinary way to see a key before the view tree does, and the D-pad rules
+    // in the doc above depend on being ahead of it.
+    @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // The settings panel is a side panel, not a takeover: while it is up the
         // focus system owns the D-pad (BACK still reaches the activity, which

@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.notifications
 
+import android.annotation.SuppressLint
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -98,6 +99,14 @@ internal object NotificationCenter {
      * fall back to something sensible. MainActivity hands the channel id over
      * and the guide plays it as soon as its lineup is loaded.
      */
+    // notify() is the call lint's MissingPermission is about. POST_NOTIFICATIONS
+    // can be revoked between canPost() and the call, and the runCatching around
+    // it is what handles that: it catches the SecurityException. The static
+    // check the warning asks for would have to be API-gated (on the 23-32 boxes
+    // this app also runs on nothing is ever granted), which is exactly what
+    // canPost() - areNotificationsEnabled(), false on 13+ without the grant -
+    // already does, only at runtime instead of in lint's flow analysis.
+    @SuppressLint("MissingPermission")
     fun programmeReminder(
         context: Context,
         reminderKey: String,
@@ -173,6 +182,9 @@ internal object NotificationCenter {
      * its tap to that show's detail screen. Returns true when the system took
      * the notification.
      */
+    // See programmeReminder: canPost() gates this, and the runCatching below
+    // catches the SecurityException of a grant revoked in the gap.
+    @SuppressLint("MissingPermission")
     fun newEpisode(
         context: Context,
         showId: String,

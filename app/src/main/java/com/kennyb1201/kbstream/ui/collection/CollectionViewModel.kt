@@ -172,6 +172,11 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             watchedStatusRepository.preload(
                 resolved.mapNotNull { (_, imdbId) -> imdbId?.let { it to "movie" } }.distinct()
             )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Cancellation is not a failure: rethrow so the scope that was
+            // cancelled stops here instead of logging it and clearing state as
+            // if the work had simply failed.
+            throw e
         } catch (e: Exception) {
             Log.e("COLLECTION_VM", "resolveAndPreload failed: ${e.message}", e)
             _resolvedIds.value = emptyMap()

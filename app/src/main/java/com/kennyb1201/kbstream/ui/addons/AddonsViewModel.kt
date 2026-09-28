@@ -588,6 +588,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     "Updated $updatedName"
                 }
                 checkHealth()
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is not a failure: rethrow rather than reporting
+                // a refresh failure for a scope that was simply cancelled.
+                throw e
             } catch (e: Exception) {
                 _error.value =
                     "Failed to add add-on: ${e.message ?: "Unknown error"}"
@@ -1080,6 +1084,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     else ->
                         "Refreshed $successCount; $failureCount failed"
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is not a failure: rethrow rather than reporting
+                // a refresh failure for a scope that was simply cancelled.
+                throw e
             } catch (e: Exception) {
                 _error.value =
                     "Refresh failed: ${e.message ?: "Unknown error"}"
@@ -1136,6 +1144,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     else ->
                         "Refreshed ${addon.displayName} · no catalog changes"
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // Cancellation is not a failure: rethrow rather than reporting
+                // a refresh failure for a scope that was simply cancelled.
+                throw e
             } catch (e: Exception) {
                 _error.value =
                     "Refresh failed: ${e.message ?: "Unknown error"}"
