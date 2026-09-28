@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.lifecycleScope
 import com.kennyb1201.kbstream.MainActivity
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import kotlinx.coroutines.Dispatchers
@@ -99,13 +100,13 @@ class VoiceSearchActivity : ComponentActivity() {
     private suspend fun resolveSpokenTitle(query: String): PlayTarget? {
         val tmdb = TmdbRepository.getInstance(applicationContext)
         val match = pickPlayFromSearchMatch(
-            movies = runCatching { tmdb.searchMovies(query) }.getOrDefault(emptyList()),
-            shows = runCatching { tmdb.searchTv(query) }.getOrDefault(emptyList())
+            movies = runCatchingCancellable { tmdb.searchMovies(query) }.getOrDefault(emptyList()),
+            shows = runCatchingCancellable { tmdb.searchTv(query) }.getOrDefault(emptyList())
         ) ?: return null
         // TMDB names the two kinds "movie" / "tv"; the external-id lookup wants
         // the "series" spelling for the second, which is the app's own name for
         // it everywhere history and scrobbling are concerned.
-        val imdbId = runCatching {
+        val imdbId = runCatchingCancellable {
             tmdb.resolveImdbId(match.tmdbId, if (match.type == "tv") "series" else "movie")
         }.getOrNull()
         return imdbId?.takeIf { it.isNotBlank() }?.let { PlayTarget(match.type, it) }

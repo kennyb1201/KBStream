@@ -404,7 +404,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
 
         // Home's exact lookup path: numeric id = TMDB id, "tt…" = imdb id - so
         // add-on rails get TMDB art too.
-        val detail = runCatching {
+        val detail = runCatchingCancellable {
             landscapeArtSemaphore.withPermit {
                 tmdbRepository.fetchEnrichedMetaCached(request.id, type)
             }
@@ -441,7 +441,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
     fun loadById(folderId: String) {
         if (_state.value.folder?.id == folderId && !_state.value.isLoading) return
         viewModelScope.launch {
-            val folder = runCatching { repository.findFolder(folderId) }.getOrNull()
+            val folder = runCatchingCancellable { repository.findFolder(folderId) }.getOrNull()
             if (folder == null) {
                 _state.value = _state.value.copy(
                     isLoading = false,
@@ -713,7 +713,7 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
     ): String? {
         val imdbId = item.tmdbId?.let { tmdbId ->
             _resolvedIds.value[lookupKey(tmdbId, normalizedType)]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
                 ?.also { resolved ->

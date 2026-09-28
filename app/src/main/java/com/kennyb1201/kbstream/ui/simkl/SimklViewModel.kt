@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
@@ -90,7 +91,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun loadAccountInfo() {
         viewModelScope.launch {
-            val user = runCatching { repository.getAccountInfo() }.getOrNull()
+            val user = runCatchingCancellable { repository.getAccountInfo() }.getOrNull()
             _uiState.value = _uiState.value.copy(accountName = user?.name)
         }
     }
@@ -101,7 +102,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
      */
     private fun loadWatchedCounts() {
         viewModelScope.launch {
-            val counts = runCatching { repository.getWatchedCounts() }.getOrNull()
+            val counts = runCatchingCancellable { repository.getWatchedCounts() }.getOrNull()
             counts?.let {
                 _uiState.value = _uiState.value.copy(watchedCounts = it)
             }
@@ -118,7 +119,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                 statusMessage = "Requesting Simkl code..."
             )
 
-            runCatching { repository.createPinCode() }
+            runCatchingCancellable { repository.createPinCode() }
                 .onSuccess { pin ->
                     _uiState.value = _uiState.value.copy(
                         isLoading = false,
@@ -152,7 +153,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             repeat(120) {
                 delay(interval * 1000L)
 
-                runCatching { repository.checkPin(userCode) }
+                runCatchingCancellable { repository.checkPin(userCode) }
                     .onSuccess { token ->
                         if (!token.accessToken.isNullOrBlank()) {
                             repository.forceClearWatchedActivitySync()
@@ -201,7 +202,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                 errorMessage = null
             )
 
-            runCatching { repository.getContinueWatching() }
+            runCatchingCancellable { repository.getContinueWatching() }
                 .onSuccess { items ->
                     _uiState.value = _uiState.value.copy(
                         isConnected = true,
@@ -245,9 +246,9 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                 statusMessage = "Refreshing Simkl data..."
             )
 
-            runCatching { repository.getContinueWatching(forceRefresh = true) }
+            runCatchingCancellable { repository.getContinueWatching(forceRefresh = true) }
                 .onSuccess { items ->
-                    runCatching { repository.markWatchedActivitySynced() }
+                    runCatchingCancellable { repository.markWatchedActivitySynced() }
                     loadWatchedCounts()
                     loadAccountInfo()
 

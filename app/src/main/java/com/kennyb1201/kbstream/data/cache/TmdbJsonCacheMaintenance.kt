@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -97,9 +98,9 @@ internal object TmdbJsonCacheMaintenance {
      */
     suspend fun trim(dao: TmdbJsonCacheDao): TmdbJsonCacheTrim = withContext(Dispatchers.IO) {
         val cutoff = System.currentTimeMillis() - MAX_AGE_MS
-        val agedOut = runCatching { dao.deleteOlderThan(cutoff) }.getOrDefault(0)
+        val agedOut = runCatchingCancellable { dao.deleteOlderThan(cutoff) }.getOrDefault(0)
 
-        val rows = runCatching { dao.sizeIndex() }.getOrNull()
+        val rows = runCatchingCancellable { dao.sizeIndex() }.getOrNull()
             ?: return@withContext TmdbJsonCacheTrim(agedOut = agedOut)
 
         val evicted = jsonCacheEvictions(
@@ -110,7 +111,7 @@ internal object TmdbJsonCacheMaintenance {
 
         var deleted = 0
         evicted.chunked(DELETE_CHUNK).forEach { chunk ->
-            if (runCatching { dao.deleteByKeys(chunk) }.isSuccess) deleted += chunk.size
+            if (runCatchingCancellable { dao.deleteByKeys(chunk) }.isSuccess) deleted += chunk.size
         }
 
         // `rows` was read AFTER the age prune, so it already excludes
@@ -178,7 +179,7 @@ internal object TmdbJsonCacheMaintenance {
             // freelist check first would see a healthy file and skip the very
             // reclaim that matters. Trimming first also avoids rewriting the
             // file twice to free pages that were about to be deleted anyway.
-            runCatching { trim(dao) }
+            runCatchingCancellable { trim(dao) }
 
             val freeBytes = freePageBytes(sqlite)
             if (freeBytes < RECLAIM_MIN_FREE_BYTES) return@withContext false

@@ -277,7 +277,7 @@ class SimklRepository(
 
         val out = mutableListOf<LibraryItem>()
 
-        runCatching {
+        runCatchingCancellable {
             api.getWatchlistMovies(bearer(token)).let { resp ->
                 if (resp.isSuccessful) {
                     resp.body()?.movies?.forEach { entry ->
@@ -297,7 +297,7 @@ class SimklRepository(
             }
         }
 
-        runCatching {
+        runCatchingCancellable {
             api.getWatchlistShows(bearer(token)).let { resp ->
                 if (resp.isSuccessful) {
                     resp.body()?.shows?.forEach { item ->
@@ -594,7 +594,7 @@ class SimklRepository(
         }
 
         val activities =
-            runCatching {
+            runCatchingCancellable {
                 getActivities(
                     accessToken
                 )
@@ -658,7 +658,7 @@ class SimklRepository(
         }
 
         val activities =
-            runCatching {
+            runCatchingCancellable {
                 getActivities(
                     accessToken
                 )
@@ -1402,7 +1402,7 @@ class SimklRepository(
                 cachedAllShowItemsToken =
                     accessToken
 
-                runCatching {
+                runCatchingCancellable {
                     tmdbJsonCacheDao?.upsert(
                         TmdbJsonCacheEntity(
                             key =
@@ -2034,7 +2034,7 @@ class SimklRepository(
             cachedCompletedMovieKeysToken =
                 accessToken
 
-            runCatching {
+            runCatchingCancellable {
                 tmdbJsonCacheDao?.upsert(
                     TmdbJsonCacheEntity(
                         key =
@@ -2393,7 +2393,7 @@ class SimklRepository(
                                 sessionEpisode != null
                             ) {
                                 val watchedEpisodes =
-                                    runCatching {
+                                    runCatchingCancellable {
                                         getWatchedEpisodesForShowByImdb(
                                             imdbId = imdbId.orEmpty(),
                                             tmdbId = show.ids?.tmdb
@@ -2689,7 +2689,7 @@ class SimklRepository(
             cachedContinueWatchingOwner =
                 ownerAtStart
 
-            runCatching {
+            runCatchingCancellable {
                 tmdbJsonCacheDao?.upsert(
                     TmdbJsonCacheEntity(
                         key =
@@ -2708,6 +2708,15 @@ class SimklRepository(
             }
 
             return result
+
+        } catch (e: kotlinx.coroutines.CancellationException) {
+
+            // Not a fetch failure. The caller is being cancelled, so its result
+            // is discarded either way - and answering with the last cached feed
+            // here is what made a cancelled continue-watching load look like a
+            // successful one. (The runCatchingCancellable write above rethrows
+            // for the same reason.)
+            throw e
 
         } catch (e: Exception) {
 

@@ -254,7 +254,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             val resolvedTriples = supervisorScope {
                 uniqueItems.map { (tmdbId, mediaType) ->
                     async {
-                        val imdbId = runCatching {
+                        val imdbId = runCatchingCancellable {
                             tmdbRepository.resolveImdbId(tmdbId, mediaType)
                         }.getOrNull()
                         Triple(tmdbId, mediaType, imdbId)
@@ -351,7 +351,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             val imdbId: String? = if (tmdbId != null) {
                 val lookup = lookupKey(tmdbId, normalizedType)
                 val resolved = _resolvedIds.value[lookup]
-                    ?: runCatching {
+                    ?: runCatchingCancellable {
                         tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                     }.getOrNull()
 
@@ -390,7 +390,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             val imdbId = if (tmdbId != null) {
                 val lookup = lookupKey(tmdbId, normalizedType)
                 val resolved = _resolvedIds.value[lookup]
-                    ?: runCatching {
+                    ?: runCatchingCancellable {
                         tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                     }.getOrNull()
 
@@ -402,7 +402,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 result.id.trim().takeIf { it.isNotBlank() }
             } ?: return@launch
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markWatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
                 Log.e("SEARCH_WATCHED", "markAsWatched failed id=${result.id}", e)
@@ -425,7 +425,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             val imdbId = if (tmdbId != null) {
                 val lookup = lookupKey(tmdbId, normalizedType)
                 val resolved = _resolvedIds.value[lookup]
-                    ?: runCatching {
+                    ?: runCatchingCancellable {
                         tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                     }.getOrNull()
 
@@ -437,7 +437,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 result.id.trim().takeIf { it.isNotBlank() }
             } ?: return@launch
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markUnwatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
                 Log.e("SEARCH_WATCHED", "markUnwatched failed id=${result.id}", e)
@@ -498,31 +498,31 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             _isLoading.value = true
             try {
                 val tmdbMoviesDeferred = async {
-                    runCatching { tmdbRepository.searchMovies(normalized) }
+                    runCatchingCancellable { tmdbRepository.searchMovies(normalized) }
                         .onFailure { e ->
                             Log.e("KBStream", "Movie search failed", e)
                         }
                         .getOrDefault(emptyList())
                 }
                 val tmdbTvDeferred = async {
-                    runCatching { tmdbRepository.searchTv(normalized) }
+                    runCatchingCancellable { tmdbRepository.searchTv(normalized) }
                         .onFailure { e ->
                             Log.e("KBStream", "TV search failed", e)
                         }
                         .getOrDefault(emptyList())
                 }
                 val personDeferred = async {
-                    runCatching { tmdbRepository.searchPerson(normalized) }
+                    runCatchingCancellable { tmdbRepository.searchPerson(normalized) }
                         .onFailure { e -> Log.e("KBStream", "Person search failed", e) }
                         .getOrDefault(emptyList())
                 }
                 val studioDeferred = async {
-                    runCatching { tmdbRepository.searchCompany(normalized) }
+                    runCatchingCancellable { tmdbRepository.searchCompany(normalized) }
                         .onFailure { e -> Log.e("KBStream", "Studio search failed", e) }
                         .getOrDefault(emptyList())
                 }
                 val collectionDeferred = async {
-                    runCatching { tmdbRepository.searchCollection(normalized) }
+                    runCatchingCancellable { tmdbRepository.searchCollection(normalized) }
                         .onFailure { e -> Log.e("KBStream", "Collection search failed", e) }
                         .getOrDefault(emptyList())
                 }
@@ -695,7 +695,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     val imdbId = result.meta.id.takeIf { it.startsWith("tt") }
                         ?: return@forEach
                     val type = normalizedType(result.type) ?: return@forEach
-                    val detail = runCatching {
+                    val detail = runCatchingCancellable {
                         tmdbRepository.fetchEnrichedMetaCached(imdbId, type)
                     }.getOrNull() ?: return@forEach
                     val year = result.year
@@ -941,7 +941,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         synchronized(ignoredQueryCache) {
             ignoredQueryCache[key]?.let { return it }
         }
-        val unfiltered = runCatching {
+        val unfiltered = runCatchingCancellable {
             repository.getCatalog(
                 baseUrl = baseUrl,
                 type = catalog.type,
@@ -1548,7 +1548,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------------
 
     private fun loadBrowseCatalogCache() {
-        runCatching {
+        runCatchingCancellable {
             val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val savedAt = prefs.getLong(KEY_BROWSE_CATALOG_SAVED_AT, 0L)
             val keywordsJson = prefs.getString(KEY_BROWSE_KEYWORD_IDS, null)

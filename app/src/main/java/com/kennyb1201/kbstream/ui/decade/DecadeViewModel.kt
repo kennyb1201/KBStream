@@ -22,6 +22,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * ViewModel for the Decade screen (Screen.Decade): TMDB discover rails for
@@ -289,7 +290,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
             val resolvedTriples = supervisorScope {
                 uniqueItems.map { (tmdbId, mediaType) ->
                     async {
-                        val imdbId = runCatching {
+                        val imdbId = runCatchingCancellable {
                             imdbResolveSemaphore.withPermit {
                                 tmdbRepository.resolveImdbId(tmdbId, mediaType)
                             }
@@ -332,7 +333,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             val normalizedType = normalizeMediaType(mediaType) ?: return@launch
             val imdbId = _resolvedIds.value[lookupKey(tmdbId, normalizedType)]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
 
@@ -363,7 +364,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
             val normalizedType = normalizeMediaType(mediaType) ?: return@launch
             val lookup = lookupKey(tmdbId, normalizedType)
             val imdbId = _resolvedIds.value[lookup]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
                     ?: return@launch
@@ -372,7 +373,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                 _resolvedIds.value = _resolvedIds.value + (lookup to imdbId)
             }
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markWatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
                 Log.e("DECADE_VM", "markAsWatched failed tmdb=$tmdbId", e)
@@ -394,7 +395,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
             val normalizedType = normalizeMediaType(mediaType) ?: return@launch
             val lookup = lookupKey(tmdbId, normalizedType)
             val imdbId = _resolvedIds.value[lookup]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
                     ?: return@launch
@@ -403,7 +404,7 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                 _resolvedIds.value = _resolvedIds.value + (lookup to imdbId)
             }
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markUnwatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
                 Log.e("DECADE_VM", "markUnwatched failed tmdb=$tmdbId", e)

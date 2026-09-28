@@ -547,7 +547,7 @@ class TmdbRepository private constructor(context: Context) :
      * object that was just fetched.
      */
     private suspend fun cacheJson(key: String, json: String, now: Long) {
-        runCatching {
+        runCatchingCancellable {
             tmdbJsonCacheDao.upsert(
                 TmdbJsonCacheEntity(key = key, json = json, updatedAt = now)
             )
@@ -605,7 +605,7 @@ class TmdbRepository private constructor(context: Context) :
         normalizedType: String
     ): TmdbDetail? {
         val found =
-            runCatching { api.find(externalId, apiKey, externalSource) }.getOrNull()
+            runCatchingCancellable { api.find(externalId, apiKey, externalSource) }.getOrNull()
                 ?: return null
         val tmdbId =
             if (normalizedType == "series") {
@@ -632,7 +632,7 @@ class TmdbRepository private constructor(context: Context) :
         }
         // Unknown type (anime, custom collection, ...): try series first,
         // fall back to movie. Both failures are silently swallowed.
-        return runCatching {
+        return runCatchingCancellable {
             api.getTv(tmdbId, apiKey)
         }.getOrNull()
             ?: runCatchingCancellable {
@@ -691,7 +691,7 @@ class TmdbRepository private constructor(context: Context) :
         // Disk cache so resolved metadata survives restarts. Full first, for the
         // same reason; the slim row is only consulted when there is no full one.
         val diskKey = detailDiskKey(key)
-        val diskCached = runCatching {
+        val diskCached = runCatchingCancellable {
             tmdbJsonCacheDao.getByKey(diskKey)
         }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
@@ -706,7 +706,7 @@ class TmdbRepository private constructor(context: Context) :
         }
         if (!full) {
             val railKey = railDetailKey(key)
-            val railDiskCached = runCatching {
+            val railDiskCached = runCatchingCancellable {
                 tmdbJsonCacheDao.getByKey(railKey)
             }.getOrNull()
             if (railDiskCached != null && now - railDiskCached.updatedAt < detailCacheDiskTtlMs) {
@@ -722,7 +722,7 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
 
-        val result = runCatching { fetchEnrichedMeta(imdbId, type) }.getOrNull()
+        val result = runCatchingCancellable { fetchEnrichedMeta(imdbId, type) }.getOrNull()
         // A MISS is deliberately not cached. A transient TMDB failure (or an
         // add-on-only title with no TMDB record) used to pin a null in the 12h
         // memory cache, after which every caller - the Detail screen included -
@@ -761,13 +761,13 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
 
-        val diskCached = runCatching { imdbResolutionDao.getByKey(key) }.getOrNull()
+        val diskCached = runCatchingCancellable { imdbResolutionDao.getByKey(key) }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < imdbResolutionTtlMs) {
             imdbResolutionMemoryCache[key] = diskCached.updatedAt to diskCached.imdbId
             return diskCached.imdbId
         }
 
-        val imdbId = runCatching {
+        val imdbId = runCatchingCancellable {
             val ext = if (normalizedType == "series") {
                 api.getTvExternalIds(tmdbId, apiKey)
             } else {
@@ -818,7 +818,7 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
 
-        val diskCached = runCatching { imdbResolutionDao.getByImdbId(trimmedId, normalizedType) }
+        val diskCached = runCatchingCancellable { imdbResolutionDao.getByImdbId(trimmedId, normalizedType) }
             .getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < imdbResolutionTtlMs) {
             tmdbResolutionMemoryCache[cacheKey] = diskCached.updatedAt to diskCached.tmdbId
@@ -828,7 +828,7 @@ class TmdbRepository private constructor(context: Context) :
             return diskCached.tmdbId
         }
 
-        val tmdbId = runCatching {
+        val tmdbId = runCatchingCancellable {
             val found = api.find(trimmedId, apiKey, "imdb_id")
             if (normalizedType == "series") {
                 found.tvResults.firstOrNull()?.id
@@ -842,7 +842,7 @@ class TmdbRepository private constructor(context: Context) :
             imdbResolutionKey(tmdbId, normalizedType)
         ] = now to trimmedId
 
-        runCatching {
+        runCatchingCancellable {
             imdbResolutionDao.upsert(
                 ImdbResolutionEntity(
                     key = imdbResolutionKey(tmdbId, normalizedType),
@@ -900,7 +900,7 @@ class TmdbRepository private constructor(context: Context) :
     suspend fun searchMovies(query: String): List<TmdbSearchTitleResult> {
         if (apiKey.isBlank()) return emptyList()
         val results =
-            runCatching { api.searchMovie(query, apiKey).results }
+            runCatchingCancellable { api.searchMovie(query, apiKey).results }
                 .getOrDefault(emptyList())
 
         if (!isDigitalFilterEnabled()) return results
@@ -923,7 +923,7 @@ class TmdbRepository private constructor(context: Context) :
             movieGenresCache = it
             return it
         }
-        return runCatching { api.getMovieGenreList(apiKey).genres }
+        return runCatchingCancellable { api.getMovieGenreList(apiKey).genres }
             .getOrDefault(emptyList())
             .also { movieGenresCache = it }
             .also { writeGenresToDisk("movie", it) }
@@ -936,7 +936,7 @@ class TmdbRepository private constructor(context: Context) :
             tvGenresCache = it
             return it
         }
-        return runCatching { api.getTvGenreList(apiKey).genres }
+        return runCatchingCancellable { api.getTvGenreList(apiKey).genres }
             .getOrDefault(emptyList())
             .also { tvGenresCache = it }
             .also { writeGenresToDisk("tv", it) }
@@ -944,7 +944,7 @@ class TmdbRepository private constructor(context: Context) :
 
     private suspend fun readGenresFromDisk(key: String): List<TmdbGenre>? {
         val now = System.currentTimeMillis()
-        val diskCached = runCatching {
+        val diskCached = runCatchingCancellable {
             tmdbJsonCacheDao.getByKey("genres:$key")
         }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
@@ -963,7 +963,7 @@ class TmdbRepository private constructor(context: Context) :
         if (apiKey.isBlank()) return null
 
         val detail =
-            runCatching { api.getCollection(collectionId, apiKey) }.getOrNull()
+            runCatchingCancellable { api.getCollection(collectionId, apiKey) }.getOrNull()
                 ?: return null
 
         // Kids Mode first: a kids profile never sees franchise pages whose
@@ -1010,7 +1010,7 @@ class TmdbRepository private constructor(context: Context) :
         // when no year range is set, so decade/decade-style year filters win.
         val dateGte = yearRange?.first ?: filters?.releaseDateGte
         val dateLte = yearRange?.second ?: filters?.releaseDateLte
-        return runCatching {
+        return runCatchingCancellable {
             if (isTv) {
                 api.discoverTvGeneric(
                     apiKey = apiKey,
@@ -1079,7 +1079,7 @@ class TmdbRepository private constructor(context: Context) :
      */
     suspend fun getKBListItems(listId: Int, page: Int = 1): List<TmdbDiscoverItem>? {
         if (apiKey.isBlank()) return null
-        return runCatching {
+        return runCatchingCancellable {
             api.getListItems(listId, apiKey, page).results
         }.getOrNull()?.let { items ->
             if (kidsMaxAge() == null) items
@@ -1157,7 +1157,7 @@ class TmdbRepository private constructor(context: Context) :
         }
         // Disk cache so a reopen after a restart does not refetch every page.
         val diskKey = "reviews:$key"
-        val diskCached = runCatching { tmdbJsonCacheDao.getByKey(diskKey) }.getOrNull()
+        val diskCached = runCatchingCancellable { tmdbJsonCacheDao.getByKey(diskKey) }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < reviewsCacheDiskTtlMs) {
             val parsed = runCatching { reviewsJsonAdapter.fromJson(diskCached.json) }.getOrNull()
             if (parsed != null) {
@@ -1166,7 +1166,7 @@ class TmdbRepository private constructor(context: Context) :
                 return parsed
             }
         }
-        val result = runCatching {
+        val result = runCatchingCancellable {
             if (normalized == "series") {
                 api.getTvReviews(tmdbId, apiKey, page)
             } else {
@@ -1206,7 +1206,7 @@ class TmdbRepository private constructor(context: Context) :
 
         // Disk cache so the season scans also survive restarts.
         val diskKey = "season:$key"
-        val diskCached = runCatching {
+        val diskCached = runCatchingCancellable {
             tmdbJsonCacheDao.getByKey(diskKey)
         }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < seasonEpisodesDiskTtlMs) {
@@ -1276,7 +1276,7 @@ class TmdbRepository private constructor(context: Context) :
 
         // Disk cache so resolved metadata survives restarts.
         val diskKey = detailDiskKey(key)
-        val diskCached = runCatching {
+        val diskCached = runCatchingCancellable {
             tmdbJsonCacheDao.getByKey(diskKey)
         }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
@@ -1289,7 +1289,7 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
 
-        val result = runCatching {
+        val result = runCatchingCancellable {
             if (normalizeType(type) == "series") {
                 api.getTv(tmdbId, apiKey)
             } else {
@@ -1323,7 +1323,7 @@ class TmdbRepository private constructor(context: Context) :
             return cached.second
         }
 
-        val diskCached = runCatching {
+        val diskCached = runCatchingCancellable {
             tmdbJsonCacheDao.getByKey(detailDiskKey(key))
         }.getOrNull()
         if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
@@ -1440,8 +1440,8 @@ class TmdbRepository private constructor(context: Context) :
 
     suspend fun getBrowseGenres(): List<TmdbGenre> {
         browseGenreCache?.let { return it }
-        val movie = runCatching { api.getMovieGenreList(apiKey).genres }.getOrDefault(emptyList())
-        val tv = runCatching { api.getTvGenreList(apiKey).genres }.getOrDefault(emptyList())
+        val movie = runCatchingCancellable { api.getMovieGenreList(apiKey).genres }.getOrDefault(emptyList())
+        val tv = runCatchingCancellable { api.getTvGenreList(apiKey).genres }.getOrDefault(emptyList())
         val merged = (movie + tv.filter { tvGenre -> movie.none { it.id == tvGenre.id } })
             .sortedBy { it.name }
         if (merged.isNotEmpty()) browseGenreCache = merged
@@ -1876,7 +1876,7 @@ class TmdbRepository private constructor(context: Context) :
 
         suspend fun load(p: Int): List<StudioItem> =
             cachedRailPage(cacheKey, p) { requestedPage ->
-                runCatching {
+                runCatchingCancellable {
                     discoverKB(
                         mediaType = mediaType,
                         page = requestedPage,
@@ -2330,7 +2330,7 @@ class TmdbRepository private constructor(context: Context) :
      * with marks too small to draw filtered out.
      */
     private suspend fun entityLogoUrls(entityId: Int, company: Boolean): List<String> {
-        val fetched = runCatching {
+        val fetched = runCatchingCancellable {
             if (company) {
                 api.getCompanyImages(entityId, apiKey).logos
             } else {
@@ -2386,7 +2386,7 @@ class TmdbRepository private constructor(context: Context) :
         }
         val byId = mutableMapOf<Int, String>()
         listOf(true, false).forEach { movie ->
-            val results = runCatching {
+            val results = runCatchingCancellable {
                 if (movie) api.getWatchProvidersMovie("US", apiKey).results
                 else api.getWatchProvidersTv("US", apiKey).results
             }.getOrDefault(emptyList())
@@ -2440,7 +2440,7 @@ class TmdbRepository private constructor(context: Context) :
 
         if (isNetwork) {
             // Networks have their own endpoint; fall back to the company shape.
-            val networkDetail = runCatching {
+            val networkDetail = runCatchingCancellable {
                 api.getNetworkDetail(entityId, apiKey)
             }.getOrNull()
             if (networkDetail != null && !networkDetail.name.isNullOrBlank()) {

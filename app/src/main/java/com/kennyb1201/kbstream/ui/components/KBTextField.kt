@@ -51,6 +51,7 @@ import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 private val KBFieldShape = KBShapeCard
 
@@ -60,7 +61,7 @@ private val KBFieldShape = KBShapeCard
  * TV leanback keyboard has no paste action, so paste is an explicit button).
  */
 fun readClipboardText(context: Context): String? =
-    runCatching {
+    runCatchingCancellable {
         context.getSystemService(ClipboardManager::class.java)
             ?.primaryClip
             ?.takeIf { it.itemCount > 0 }

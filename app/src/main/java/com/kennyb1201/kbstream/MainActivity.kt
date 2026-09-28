@@ -114,6 +114,7 @@ import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.screenTransitionMs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 sealed class Screen {
 
@@ -807,7 +808,7 @@ fun AppRoot() {
         }
 
         val dao = WatchHistoryDatabase.getInstanceScoped(context).watchHistoryDao()
-        val entries = runCatching { dao.getAll() }.getOrDefault(emptyList())
+        val entries = runCatchingCancellable { dao.getAll() }.getOrDefault(emptyList())
         TvLauncherPublisher.sync(context, entries)
     }
 

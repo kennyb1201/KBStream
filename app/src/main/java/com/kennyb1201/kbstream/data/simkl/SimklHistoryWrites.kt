@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.simkl
 
 import android.util.Log
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /*
  * Outbound watched-history writes for [SimklRepository]: the POST
@@ -69,7 +70,7 @@ suspend fun SimklRepository.pushWatchedMovieImpl(
             // Close any open playback session for the movie so the just-
             // watched title can't resurface in Continue Watching at its
             // pre-completion progress (e.g. "99% watched").
-            runCatching {
+            runCatchingCancellable {
                 deleteOpenPlaybackSessionsForWatched(
                     parentId = imdbId,
                     tmdbId = tmdbId
@@ -139,7 +140,7 @@ suspend fun SimklRepository.pushWatchedShowImpl(
             // Close any open playback sessions for the show so the just-
             // watched title can't resurface in Continue Watching at its
             // pre-completion progress (e.g. "99% watched").
-            runCatching {
+            runCatchingCancellable {
                 deleteOpenPlaybackSessionsForWatched(
                     parentId = showImdbId,
                     tmdbId = tmdbId
@@ -331,7 +332,7 @@ suspend fun SimklRepository.pushWatchedEpisodeImpl(
             // Close the open playback session for this episode so the
             // just-watched episode can't resurface in Continue Watching
             // at its pre-completion progress (e.g. "99% watched").
-            runCatching {
+            runCatchingCancellable {
                 deleteOpenPlaybackSessionsForWatched(
                     parentId = showImdbId,
                     tmdbId = tmdbId,
@@ -422,7 +423,7 @@ suspend fun SimklRepository.pushWatchedSeasonImpl(
             // Close open playback sessions for the marked episodes so
             // they can't resurface in Continue Watching at their old
             // progress.
-            runCatching {
+            runCatchingCancellable {
                 deleteOpenPlaybackSessionsForWatched(
                     parentId = showImdbId,
                     tmdbId = tmdbId,

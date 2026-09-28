@@ -98,6 +98,14 @@ val releaseStorePassword = System.getenv("KBSTREAM_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("KBSTREAM_KEY_ALIAS")
 val releaseKeyPassword = System.getenv("KBSTREAM_KEY_PASSWORD")
 
+// Whether a release keystore is actually available (CI passes one through the
+// KBSTREAM_* environment variables; a developer machine usually has none).
+val releaseSigningConfigured =
+    !releaseStoreFile.isNullOrBlank() &&
+        !releaseStorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
+
 // Release version stamping (set by CI; local builds fall back to dev values).
 // VERSION_CODE=github.run_number makes every CI build strictly higher than the
 // last, so `adb install -r` upgrades cleanly and bug reports identify builds.
@@ -132,12 +140,7 @@ android {
 
     signingConfigs {
         create("release") {
-            if (
-                !releaseStoreFile.isNullOrBlank() &&
-                !releaseStorePassword.isNullOrBlank() &&
-                !releaseKeyAlias.isNullOrBlank() &&
-                !releaseKeyPassword.isNullOrBlank()
-            ) {
+            if (releaseSigningConfigured) {
                 storeFile = file(releaseStoreFile)
                 storePassword = releaseStorePassword
                 keyAlias = releaseKeyAlias
@@ -256,6 +259,14 @@ android {
         unitTests.isIncludeAndroidResources = true
     }
 
+    // A note for `:app:generateBaselineProfile`, whose failures are confusing:
+    // the profile-capturing variants the baseline profile plugin adds
+    // (nonMinifiedRelease, benchmark) INHERIT the release signing config above,
+    // because the generator installs the app on the device. On a machine where
+    // the KBSTREAM_* variables are unset that config is empty, so the run stops
+    // at the install step with INSTALL_PARSE_FAILED_NO_CERTIFICATES and nothing
+    // in the message mentions signing. Point those four variables at the debug
+    // keystore to capture a profile locally - see README, "Baseline profile".
     sourceSets {
         // MigrationTestHelper reads the exported schemas from ASSETS, not from
         // the filesystem: it looks for "<database class name>/<version>.json"

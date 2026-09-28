@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * Air-date gate for the player's end-of-playback chain.
@@ -65,7 +66,7 @@ suspend fun airedNextEpisodeTarget(
     // would turn a transport hiccup into a missing Up next panel. The call
     // itself is cached (memory + disk) by the repository, so a season the
     // detail page already loaded costs nothing.
-    val seasonEpisodes = runCatching {
+    val seasonEpisodes = runCatchingCancellable {
         withContext(Dispatchers.IO) {
             TmdbRepository.getInstance(context.applicationContext)
                 .getSeasonEpisodes(tmdbId, season, showId)

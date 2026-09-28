@@ -245,7 +245,7 @@ object SupabaseSync {
             client?.auth?.sessionStatus?.collect { status ->
                 if (status is SessionStatus.Authenticated) {
                     val ctx = appContextRef?.get() ?: return@collect
-                    runCatching { persistSessionFromClient(ctx) }
+                    runCatchingCancellable { persistSessionFromClient(ctx) }
                         .onFailure { Log.w(TAG, "session persist failed", it) }
                     // The cloud half of the one-time cross-profile poison
                     // sweep needs a session; the ProfileManager.init call
@@ -548,7 +548,7 @@ object SupabaseSync {
     private val outboxStore = object : OutboxStore {
         override fun save(item: OutboxItem) {
             scope.launch {
-                runCatching { outboxDao()?.upsert(item.toEntity()) }
+                runCatchingCancellable { outboxDao()?.upsert(item.toEntity()) }
                     .onFailure { Log.w(TAG, "outbox persist failed: ${it.message}") }
             }
         }
@@ -557,14 +557,14 @@ object SupabaseSync {
             if (ids.isEmpty()) return
             val list = ids.toList()
             scope.launch {
-                runCatching { outboxDao()?.deleteByIds(list) }
+                runCatchingCancellable { outboxDao()?.deleteByIds(list) }
                     .onFailure { Log.w(TAG, "outbox delete failed: ${it.message}") }
             }
         }
 
         override fun clear() {
             scope.launch {
-                runCatching { outboxDao()?.deleteAll() }
+                runCatchingCancellable { outboxDao()?.deleteAll() }
                     .onFailure { Log.w(TAG, "outbox clear failed: ${it.message}") }
             }
         }
@@ -601,7 +601,7 @@ object SupabaseSync {
      * [OutboxQueue.seed] never re-persists, so this is not a write loop.
      */
     private suspend fun hydrateOutbox() {
-        val rows = runCatching { outboxDao()?.getAll() }.getOrNull().orEmpty()
+        val rows = runCatchingCancellable { outboxDao()?.getAll() }.getOrNull().orEmpty()
         if (rows.isEmpty()) return
         val items = rows.mapNotNull { row ->
             runCatching {
@@ -1058,8 +1058,8 @@ object SupabaseSync {
         // A stranded write from a dead process is only in the table until the
         // init-time hydrate ran; seed again here so the worker flushes it even
         // if it started before hydration finished (putIfAbsent makes it safe).
-        runCatching { hydrateOutbox() }
-        runCatching { flushOutbox() }
+        runCatchingCancellable { hydrateOutbox() }
+        runCatchingCancellable { flushOutbox() }
             .onFailure { Log.w(TAG, "outbox flush from worker failed: ${it.message}") }
         return outbox.isEmpty
     }
@@ -1124,7 +1124,7 @@ object SupabaseSync {
      */
     fun launchLauncherRepublish(context: Context) {
         scope.launch {
-            runCatching {
+            runCatchingCancellable {
                 val entries = com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
                     .getInstanceScoped(context)
                     .watchHistoryDao()
@@ -1487,7 +1487,7 @@ object SupabaseSync {
         scope.launch {
             delay(8_000L)
             if (isSignedIn()) {
-                runCatching { pullAllNow(context) }
+                runCatchingCancellable { pullAllNow(context) }
                     .onFailure { Log.w(TAG, "catch-up pull failed: ${it.message}") }
             }
         }

@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * Loads a TMDB collection and its parts, resolving each part's TMDB id to
@@ -148,7 +149,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
             val resolvedPairs = supervisorScope {
                 unique.map { tmdbId ->
                     async {
-                        val imdbId = runCatching {
+                        val imdbId = runCatchingCancellable {
                             imdbResolveSemaphore.withPermit {
                                 tmdbRepository.resolveImdbId(tmdbId, "movie")
                             }
@@ -187,7 +188,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             val lookup = lookupKey(tmdbId, "movie")
             val imdbId = _resolvedIds.value[lookup]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, "movie")
                 }.getOrNull()
                     ?: return@launch
@@ -196,7 +197,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 _resolvedIds.value = _resolvedIds.value + (lookup to imdbId)
             }
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markWatchedLocal(imdbId, "movie")
             }.onFailure { e ->
                 Log.e("COLLECTION_VM", "markAsWatched failed tmdb=$tmdbId", e)
@@ -214,7 +215,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             val lookup = lookupKey(tmdbId, "movie")
             val imdbId = _resolvedIds.value[lookup]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, "movie")
                 }.getOrNull()
                     ?: return@launch
@@ -223,7 +224,7 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
                 _resolvedIds.value = _resolvedIds.value + (lookup to imdbId)
             }
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markUnwatchedLocal(imdbId, "movie")
             }.onFailure { e ->
                 Log.e("COLLECTION_VM", "markUnwatched failed tmdb=$tmdbId", e)

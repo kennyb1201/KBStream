@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -167,7 +168,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        val detail = runCatching {
+        val detail = runCatchingCancellable {
             tmdbRepository.getDetailByTmdbId(topCredit.id, normalizedType)
         }.getOrNull()
 
@@ -250,7 +251,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             val resolvedPairs = supervisorScope {
                 cast.map { (credit, mediaType) ->
                     async {
-                        val imdbId = runCatching {
+                        val imdbId = runCatchingCancellable {
                             imdbResolveSemaphore.withPermit {
                                 tmdbRepository.resolveImdbId(credit.id, mediaType)
                             }
@@ -297,7 +298,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val normalizedType = normalizeMediaType(mediaType) ?: return@launch
             val imdbId = _resolvedCreditIds.value[creditLookupKey(tmdbId, normalizedType)]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
 
@@ -328,7 +329,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             val normalizedType = normalizeMediaType(mediaType) ?: return@launch
             val lookup = creditLookupKey(tmdbId, normalizedType)
             val imdbId = _resolvedCreditIds.value[lookup]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
                     ?: return@launch
@@ -337,7 +338,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 _resolvedCreditIds.value = _resolvedCreditIds.value + (lookup to imdbId)
             }
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markWatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
                 Log.e("ACTOR_WATCHED", "markAsWatched failed tmdb=$tmdbId", e)
@@ -359,7 +360,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
             val normalizedType = normalizeMediaType(mediaType) ?: return@launch
             val lookup = creditLookupKey(tmdbId, normalizedType)
             val imdbId = _resolvedCreditIds.value[lookup]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     tmdbRepository.resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
                     ?: return@launch
@@ -368,7 +369,7 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
                 _resolvedCreditIds.value = _resolvedCreditIds.value + (lookup to imdbId)
             }
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markUnwatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
                 Log.e("ACTOR_WATCHED", "markUnwatched failed tmdb=$tmdbId", e)

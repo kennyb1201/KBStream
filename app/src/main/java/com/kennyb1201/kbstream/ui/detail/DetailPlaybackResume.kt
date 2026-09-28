@@ -64,7 +64,7 @@ internal object DetailPlaybackResume {
             return cached
         }
 
-        val fresh = runCatching { vm.simklRepository.getPlaybackItems() }.getOrNull()
+        val fresh = runCatchingCancellable { vm.simklRepository.getPlaybackItems() }.getOrNull()
             ?: return emptyList()
 
         cachedSimklPlayback = fresh
@@ -214,7 +214,7 @@ internal object DetailPlaybackResume {
             return null
         }
 
-        val sessions = runCatching {
+        val sessions = runCatchingCancellable {
             MdbListClient.getPlaybackSessions(appContext)
         }.getOrDefault(emptyList())
 

@@ -778,7 +778,7 @@ class ExternalPlayerActivity : ComponentActivity() {
             val target = airedNextEpisodeTarget(
                 context = this@ExternalPlayerActivity,
                 target = nextEpisodeTarget(),
-                tmdbId = runCatching { tmdbId() }.getOrNull(),
+                tmdbId = runCatchingCancellable { tmdbId() }.getOrNull(),
                 showId = parentId
             )
             when {
@@ -819,7 +819,7 @@ class ExternalPlayerActivity : ComponentActivity() {
 
         val initialThumb = backdropUrl ?: itemPoster
         if (!initialThumb.isNullOrBlank()) {
-            runCatchingCancellable { nextUpThumb?.load(initialThumb) }
+            runCatching { nextUpThumb?.load(initialThumb) }
         } else {
             nextUpThumb?.setImageDrawable(null)
         }
@@ -873,7 +873,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                 runCatchingCancellable { tmdbId() }.getOrNull()
             } ?: return@launch
             val nextEp = withContext(Dispatchers.IO) {
-                runCatching {
+                runCatchingCancellable {
                     TmdbRepository.getInstance(this@ExternalPlayerActivity)
                         .getSeasonEpisodes(tmdb, targetSeason, parentId)
                 }.getOrNull()?.firstOrNull { it.episodeNumber == targetEpisode }
@@ -882,7 +882,7 @@ class ExternalPlayerActivity : ComponentActivity() {
             pendingNextEpisodeName = nextEp.name
             nextUpEpisodeTitle?.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
             nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
-                runCatchingCancellable { nextUpThumb?.load(still) }
+                runCatching { nextUpThumb?.load(still) }
             }
         }
     }
@@ -994,7 +994,7 @@ class ExternalPlayerActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
-                val tmdb = runCatching { tmdbId() }.getOrNull()
+                val tmdb = runCatchingCancellable { tmdbId() }.getOrNull()
                 // The panel used to vanish without a trace in this case (an
                 // addon-only title TMDB cannot map). Say so, so a missing row
                 // is a line in the log rather than a mystery.
@@ -1119,7 +1119,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         durationMs = (runtimeMinutes ?: 0) * 60_000L
         if (durationMs > 0L) return durationMs
 
-        val tmdb = runCatching { tmdbId() }.getOrNull() ?: return 0L
+        val tmdb = runCatchingCancellable { tmdbId() }.getOrNull() ?: return 0L
         val showSeason = season
         val showEpisode = episode
 
@@ -1181,7 +1181,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                 "save progress: ${safePosition}ms / ${durationMs}ms completed=$completed"
             )
 
-            runCatching {
+            runCatchingCancellable {
                 val dao = WatchHistoryDatabase.getInstanceScoped(this@ExternalPlayerActivity)
                     .watchHistoryDao()
                 val existing = dao.getById(historyId)
@@ -1285,7 +1285,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                     0.0
                 }
             }
-            runCatching {
+            runCatchingCancellable {
                 SimklRepository.getInstance(this@ExternalPlayerActivity).scrobble(
                     action = action,
                     parentId = parentId,
@@ -1297,7 +1297,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                     tmdbId = tmdbId()
                 )
             }.onFailure { Log.w(TAG, "Simkl scrobble/$action failed", it) }
-            runCatching { scrobbleMdbList(action, progress) }
+            runCatchingCancellable { scrobbleMdbList(action, progress) }
                 .onFailure { Log.w(TAG, "MDBList scrobble/$action failed", it) }
         }
     }
@@ -1327,7 +1327,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         if (trackersMarkedWatched || parentId.isBlank()) return
         trackersMarkedWatched = true
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            runCatching {
+            runCatchingCancellable {
                 val simkl = SimklRepository.getInstance(this@ExternalPlayerActivity)
                 val tmdb = tmdbId()
                 when (parentType.lowercase()) {
@@ -1356,7 +1356,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                     else -> false
                 }
             }.onFailure { Log.w(TAG, "Simkl completion sync failed", it) }
-            runCatching {
+            runCatchingCancellable {
                 if (MdbListClient.apiKey(this@ExternalPlayerActivity).isNotBlank()) {
                     val isMovie = parentType.lowercase() == "movie"
                     MdbListClient.pushWatched(

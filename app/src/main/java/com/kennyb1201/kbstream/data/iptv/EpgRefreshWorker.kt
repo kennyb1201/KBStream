@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.kennyb1201.kbstream.data.reporting.Redaction
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 class EpgRefreshWorker(
     appContext: Context,
@@ -38,7 +39,7 @@ class EpgRefreshWorker(
         val repository = IptvRepository(applicationContext)
         var imported = 0
         epgUrls.forEach { url ->
-            runCatching { repository.importGuide(url) }
+            runCatchingCancellable { repository.importGuide(url) }
                 .onSuccess { imported++ }
                 .onFailure { error ->
                     if (error is kotlinx.coroutines.CancellationException) throw error

@@ -32,6 +32,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 class MainApplication : Application(), SingletonImageLoader.Factory {
 
@@ -140,7 +141,7 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             // as the add-on hosts take, and the steps after it are disk work
             // that must not queue up behind a catalog fetch.
             startupScope.launch {
-                runCatching {
+                runCatchingCancellable {
                     PerfTrace.timedSuspend("startup.catalogWarm") {
                         com.kennyb1201.kbstream.data.addon.AddonManager
                             .getInstance(this@MainApplication)

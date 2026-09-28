@@ -125,7 +125,7 @@ class KBRepository private constructor(context: Context) {
         if (urls.isEmpty()) return emptyList()
 
         return urls.mapNotNull { url ->
-            runCatching {
+            runCatchingCancellable {
                 loadProfile(url, forceRefresh)
             }.onFailure { e ->
                 Log.e(TAG, "Profile load failed url=$url: ${e.message}")
@@ -236,7 +236,7 @@ class KBRepository private constructor(context: Context) {
                 .delete()
         }
         if (isLocalUrl(url)) {
-            runCatchingCancellable {
+            runCatching {
                 File(context.filesDir, LOCAL_DIR)
                     .resolve(url.removePrefix(LOCAL_SCHEME) + ".json")
                     .delete()
@@ -312,17 +312,17 @@ class KBRepository private constructor(context: Context) {
 
     private suspend fun readDiskCache(url: String): DiskEntry? =
         withContext(Dispatchers.IO) {
-            runCatchingCancellable {
+            runCatching {
                 val file = File(context.filesDir, CACHE_DIR).apply { mkdirs() }
                     .resolve(cacheFileFor(url))
-                if (!file.exists()) return@runCatchingCancellable null
+                if (!file.exists()) return@runCatching null
                 val text = file.readText()
                 // Line 1 is the cache timestamp; the profile JSON follows it.
                 val newline = text.indexOf('\n')
-                if (newline <= 0) return@runCatchingCancellable null
-                val ts = text.substring(0, newline).toLongOrNull() ?: return@runCatchingCancellable null
+                if (newline <= 0) return@runCatching null
+                val ts = text.substring(0, newline).toLongOrNull() ?: return@runCatching null
                 val parsed = profileListAdapter.fromJson(text.substring(newline + 1))
-                    ?: return@runCatchingCancellable null
+                    ?: return@runCatching null
                 DiskEntry(ts, parsed)
             }.getOrNull()
         }
@@ -331,7 +331,7 @@ class KBRepository private constructor(context: Context) {
         url: String,
         profiles: List<KBCollectionProfile>
     ): Unit = withContext(Dispatchers.IO) {
-        runCatchingCancellable {
+        runCatching {
             val dir = File(context.filesDir, CACHE_DIR).apply { mkdirs() }
             val tmp = dir.resolve(cacheFileFor(url) + ".tmp")
             val final = dir.resolve(cacheFileFor(url))

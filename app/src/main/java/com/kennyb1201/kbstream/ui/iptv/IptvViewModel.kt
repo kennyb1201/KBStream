@@ -40,6 +40,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
@@ -104,7 +105,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         }
         programSearchJob = viewModelScope.launch {
             delay(250)
-            val hits = runCatching { repository.searchPrograms(query) }.getOrDefault(emptyList())
+            val hits = runCatchingCancellable { repository.searchPrograms(query) }.getOrDefault(emptyList())
             _programSearchResults.value = hits
         }
     }
@@ -900,7 +901,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (!playlistNeedsRefresh && !guideNeedsRefresh) return
         refreshJob = viewModelScope.launch {
             if (playlistNeedsRefresh) {
-                runCatching { refreshPlaylistInBackground() }.onFailure { error ->
+                runCatchingCancellable { refreshPlaylistInBackground() }.onFailure { error ->
                     if (error is CancellationException) throw error
                     reportFailure(_error, error)
                     Log.e(TAG, "BACKGROUND PLAYLIST REFRESH FAILED", error)

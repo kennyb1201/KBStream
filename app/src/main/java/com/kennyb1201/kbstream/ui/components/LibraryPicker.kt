@@ -163,10 +163,10 @@ fun LibraryAddToListDialog(
         var remoteRows = emptyList<LibraryPickerRow>()
         if (mdbConnected) {
             remoteRows = withContext(Dispatchers.IO) {
-                val watchlistCount = runCatching {
+                val watchlistCount = runCatchingCancellable {
                     MdbListClient.getWatchlist(context).size
                 }.getOrDefault(0)
-                val lists = runCatching {
+                val lists = runCatchingCancellable {
                     MdbListClient.getUserLists(context)
                 }.getOrDefault(emptyList())
                 val rowsOut = mutableListOf<LibraryPickerRow>()
@@ -211,16 +211,16 @@ fun LibraryAddToListDialog(
         }
         if (mdbConnected) {
             withContext(Dispatchers.IO) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.getWatchlist(context).any { entry ->
                         matchesEntry(entry, normalizedType, imdbId, tmdbId)
                     }
                 }.getOrDefault(false).let { if (it) member += "MDB_WATCHLIST" }
 
-                runCatching { MdbListClient.getUserLists(context) }
+                runCatchingCancellable { MdbListClient.getUserLists(context) }
                     .getOrDefault(emptyList())
                     .forEach { user ->
-                        val has = runCatching {
+                        val has = runCatchingCancellable {
                             MdbListClient.getListItems(context, user.id).any { entry ->
                                 matchesEntry(entry, normalizedType, imdbId, tmdbId)
                             }
@@ -326,7 +326,7 @@ fun LibraryAddToListDialog(
                 // With a key set, reuse an identically-named MDBList list so
                 // the add mirrors to the account list; otherwise local-only.
                 if (LibraryMirror.mdbListConnected(context)) {
-                    val existing = runCatching {
+                    val existing = runCatchingCancellable {
                         MdbListClient.getUserLists(context)
                     }.getOrDefault(emptyList())
                         .firstOrNull { it.name.equals(name, ignoreCase = true) }
@@ -338,7 +338,7 @@ fun LibraryAddToListDialog(
                             source = com.kennyb1201.kbstream.data.library.LibrarySource.MDBLIST_LIST
                         )
                     } else {
-                        runCatching {
+                        runCatchingCancellable {
                             MdbListClient.createList(context, name)
                         }.getOrNull()?.let {
                             LibraryList(

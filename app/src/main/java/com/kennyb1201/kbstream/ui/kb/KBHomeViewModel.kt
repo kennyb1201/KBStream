@@ -7,6 +7,7 @@ import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,7 +50,7 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
             com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
         viewModelScope.launch {
             val arrangement = KBHomeOrderPrefs.get(getApplication())
-            val collections = runCatching { repository.loadProfiles() }
+            val collections = runCatchingCancellable { repository.loadProfiles() }
                 .getOrDefault(emptyList())
                 .sortedByDescending { it.pinToTop }
             if (

@@ -343,7 +343,7 @@ class LibraryViewModel(
 
             // WATCHLIST merge: Simkl plan-to-watch + MDBList watchlist.
             val simklItems = if (simklConnected) {
-                runCatching { simklRepository.getWatchlistItems() }
+                runCatchingCancellable { simklRepository.getWatchlistItems() }
                     .onFailure {
                         Log.w(
                             TAG,
@@ -356,7 +356,7 @@ class LibraryViewModel(
             }
 
             val mdbListWatchlist = if (mdbListConfigured) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.getWatchlist(appContext).map { entry ->
                         LibraryItem(
                             source = LibrarySource.MDBLIST_WATCHLIST,
@@ -376,7 +376,7 @@ class LibraryViewModel(
             }
 
             val lists = localLists + if (mdbListConfigured) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.getUserLists(appContext).map { list ->
                         LibraryList(
                             id = list.id,
@@ -453,7 +453,7 @@ class LibraryViewModel(
             val items: List<LibraryItem> = if (list.id < 0) {
                 LocalLibraryStore.listItems(appContext, list.id)
             } else {
-                val entries = runCatching {
+                val entries = runCatchingCancellable {
                     MdbListClient.getListItems(appContext, list.id)
                 }.onFailure {
                     Log.w(TAG, "MDBList list items fetch failed: ${it.message}")
@@ -525,7 +525,7 @@ class LibraryViewModel(
                             // Ratings come from the shared TMDB detail cache
                             // (disk + memory), so a title already enriched on
                             // any screen costs nothing here.
-                            val detail = runCatching {
+                            val detail = runCatchingCancellable {
                                 tmdbRepository.fetchEnrichedMetaCached(
                                     imdbId = imdbId ?: "tmdb:${item.tmdbId}",
                                     type = normalizedType

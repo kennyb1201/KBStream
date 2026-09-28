@@ -95,7 +95,7 @@ suspend fun SimklRepository.getWatchedCountsImpl(): SimklWatchedCounts? {
     // reports as watched.
     val watchedShowStatuses = setOf("watching", "completed")
     val shows =
-        runCatching {
+        runCatchingCancellable {
             getAllShowItemsCached(
                 accessToken = accessToken,
                 forceRefresh = true
@@ -104,7 +104,7 @@ suspend fun SimklRepository.getWatchedCountsImpl(): SimklWatchedCounts? {
             ?.count { it.status?.lowercase()?.trim() in watchedShowStatuses }
 
     val movies =
-        runCatching {
+        runCatchingCancellable {
             api.getAllMovieItems(
                 authorization = trackedAuthHeaderFor(accessToken),
                 dateFrom = null,
@@ -482,7 +482,7 @@ suspend fun SimklRepository.getCaughtUpUnreleasedShowsImpl():
             ?: return emptyList()
 
     val body =
-        runCatching {
+        runCatchingCancellable {
             getAllShowItemsCached(
                 accessToken =
                     accessToken

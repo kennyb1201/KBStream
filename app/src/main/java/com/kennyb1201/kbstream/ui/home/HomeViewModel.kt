@@ -1741,7 +1741,7 @@ Log.d(
                 // feed the same way; POST /scrobble/clear drops that session
                 // so the removed title stops resurfacing.
                 if (MdbListClient.isConfigured(getApplication())) {
-                    runCatching {
+                    runCatchingCancellable {
                         MdbListClient.scrobbleClear(
                             getApplication(),
                             isMovie = item.parentType?.lowercase() == "movie",
@@ -1820,7 +1820,7 @@ Log.d(
 
     private fun persistDismissedContinueWatching() {
 
-        runCatchingCancellable {
+        runCatching {
 
             val json =
                 JSONObject()
@@ -2009,7 +2009,7 @@ Log.d(
         }
 
         val candidates =
-            runCatching {
+            runCatchingCancellable {
                 simklRepository.getCaughtUpUnreleasedShows()
             }.getOrElse { e ->
                 Log.w(
@@ -2384,7 +2384,7 @@ Log.d(
 
         viewModelScope.launch {
 
-            runCatching {
+            runCatchingCancellable {
 
                 watchedStatusRepository.markWatchedLocal(
                     id,
@@ -2464,7 +2464,7 @@ Log.d(
 
         viewModelScope.launch {
 
-            runCatching {
+            runCatchingCancellable {
 
                 watchedStatusRepository.markUnwatchedLocal(
                     id,
@@ -3623,7 +3623,7 @@ Log.d(
         // caller that only supplied a poster. Restore the artwork from the
         // cached TMDB metadata so resume cards keep their movie identity.
         if (!isEpisodePlayback && backdropUrl.isNullOrBlank()) {
-            val restoredBackdrop = runCatching {
+            val restoredBackdrop = runCatchingCancellable {
                 tmdbRepository.fetchEnrichedMetaCached(
                     entry.parentId.trim().ifBlank { entry.id.trim() },
                     entry.type
@@ -4217,7 +4217,7 @@ Log.d(
 
         return try {
             val sessions =
-                runCatching { MdbListClient.getPlaybackSessions(appContext) }
+                runCatchingCancellable { MdbListClient.getPlaybackSessions(appContext) }
                     .getOrDefault(emptyList())
 
             val items = sessions
@@ -4280,7 +4280,7 @@ Log.d(
                 // Server-side mirror of the local drop: the completion
                 // push already fired, so the leftover paused session would
                 // otherwise resurface forever.
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.scrobbleClear(
                         appContext,
                         isMovie = false,
@@ -4303,7 +4303,7 @@ Log.d(
         var resolvedEpisode = session.episode
         var resolvedStartPositionMs = 0L
 
-        val detail = runCatching {
+        val detail = runCatchingCancellable {
             tmdbLookupSemaphore.withPermit {
                 tmdbRepository.fetchEnrichedMetaCached(
                     navigationId,

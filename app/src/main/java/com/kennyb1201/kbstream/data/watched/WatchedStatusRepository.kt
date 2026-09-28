@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 class WatchedStatusRepository(
     private val context: Context
@@ -1630,7 +1631,7 @@ class WatchedStatusRepository(
         // and an IMDB-keyed badge for one title used to disagree - the mark
         // only "took" on the surface it was made from - and unmarking it on
         // the other surface removed a key that was never written.
-        val idForms = runCatching {
+        val idForms = runCatchingCancellable {
             watchedIdForms(normalizedId, normalizedType)
         }.getOrDefault(setOf(normalizedId))
         val formKeys = idForms
@@ -1647,7 +1648,7 @@ class WatchedStatusRepository(
         // through here, so a mark made from Home, Search or a rail now
         // behaves like the Detail season/series marks already did (which is
         // why those two never showed the card, but the poster mark did).
-        runCatching {
+        runCatchingCancellable {
             val parents = (idForms + normalizedId).toList()
             val resumeRows = historyDao.getInProgressForParents(parents)
             if (resumeRows.isNotEmpty()) {
@@ -1660,7 +1661,7 @@ class WatchedStatusRepository(
                     .map { it.id }
                     .distinct()
                     .filter { id ->
-                        runCatching { historyDao.getById(id) }.getOrNull() == null
+                        runCatchingCancellable { historyDao.getById(id) }.getOrNull() == null
                     }
 
                 if (removedIds.isNotEmpty()) {
@@ -1803,7 +1804,7 @@ class WatchedStatusRepository(
         val key = cacheKey(normalizedId, normalizedType)
         val now = System.currentTimeMillis()
 
-        val idForms = runCatching { watchedIdForms(normalizedId, normalizedType) }
+        val idForms = runCatchingCancellable { watchedIdForms(normalizedId, normalizedType) }
             .getOrDefault(setOf(normalizedId))
         val formKeys = (idForms.map { form -> cacheKey(form, normalizedType) } + key).toSet()
         val scrubForms = idForms + normalizedId
@@ -1946,7 +1947,7 @@ class WatchedStatusRepository(
         // 2. Then every other id flavor this title is reachable by -
         // unmarking from one surface used to remove a key that was never
         // written and leave the badge on for the other.
-        val idForms = runCatching {
+        val idForms = runCatchingCancellable {
             watchedIdForms(normalizedId, normalizedType)
         }.getOrDefault(setOf(normalizedId))
         val formKeys = (idForms.map { form -> cacheKey(form, normalizedType) } + key).toSet()

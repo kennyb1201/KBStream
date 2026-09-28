@@ -2225,7 +2225,7 @@ class NativePlayerActivity : ComponentActivity() {
         val type = if (parentType.lowercase() == "movie") "movie" else "series"
         val tmdbId = numericId.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         lifecycleScope.launch {
-            val imdbId = runCatching {
+            val imdbId = runCatchingCancellable {
                 withContext(Dispatchers.IO) {
                     TmdbRepository.getInstance(this@NativePlayerActivity)
                         .resolveImdbId(tmdbId, type)
@@ -2320,7 +2320,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (type != "movie" && type != "series") return
         clearLogoLookupStarted = true
         lifecycleScope.launch {
-            val path = runCatching {
+            val path = runCatchingCancellable {
                 withContext(Dispatchers.IO) {
                     TmdbRepository.getInstance(this@NativePlayerActivity)
                         .fetchEnrichedMetaCached(parentId, type)
@@ -2946,7 +2946,7 @@ class NativePlayerActivity : ComponentActivity() {
             historyId.isNotBlank()
         ) {
             lifecycleScope.launch {
-                val savedPositionMs = runCatching {
+                val savedPositionMs = runCatchingCancellable {
                     withContext(Dispatchers.IO) {
                         WatchHistoryDatabase.getInstanceScoped(this@NativePlayerActivity)
                             .watchHistoryDao()
@@ -7960,7 +7960,7 @@ class NativePlayerActivity : ComponentActivity() {
             val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
                 val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
-                val episodes = runCatching {
+                val episodes = runCatchingCancellable {
                     repo.getSeasonEpisodes(tmdbId, target.first, parentId)
                 }.getOrNull()
                 episodes?.firstOrNull { it.episodeNumber == target.second }
@@ -8192,7 +8192,7 @@ class NativePlayerActivity : ComponentActivity() {
             val nextEp: com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode? = withContext(Dispatchers.IO) {
                 val repo = TmdbRepository.getInstance(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId() ?: return@withContext null
-                val episodes = runCatching {
+                val episodes = runCatchingCancellable {
                     repo.getSeasonEpisodes(tmdbId, targetSeason, parentId)
                 }.getOrNull()
                 episodes?.firstOrNull { it.episodeNumber == targetEpisode }
@@ -8554,7 +8554,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Without it the upsert could be aborted partway through exiting the
         // player, leaving Continue Watching stale until the next save.
         lifecycleScope.launch(Dispatchers.IO + NonCancellable) {
-            runCatching {
+            runCatchingCancellable {
                 val dao = WatchHistoryDatabase.getInstanceScoped(this@NativePlayerActivity).watchHistoryDao()
                 val existing = dao.getById(historyId)
                 // Same title, same canonical parent id, whichever id flavor
@@ -8845,7 +8845,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
         simklScrobbleJob?.cancel()
         simklScrobbleJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            val ok = runCatching {
+            val ok = runCatchingCancellable {
                 val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId()
                 simkl.scrobble(
@@ -8861,7 +8861,7 @@ class NativePlayerActivity : ComponentActivity() {
             }.getOrDefault(false)
             // Independent MDBList scrobble — same session events, separate
             // tracker. Mirrors Simkl only when a key is set.
-            runCatching { scrobbleMdbList(action, progress) }
+            runCatchingCancellable { scrobbleMdbList(action, progress) }
                 .onFailure { Log.w(TAG, "MDBList scrobble/$action error: ${it.message}") }
             if (!ok && action == "start") {
                 simklScrobbleActive = false
@@ -8875,7 +8875,7 @@ class NativePlayerActivity : ComponentActivity() {
         simklScrobbleSent = true
         simklSyncJob?.cancel()
         simklSyncJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            val ok = runCatching {
+            val ok = runCatchingCancellable {
                 val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
                 val tmdbId = resolveParentTmdbId()
                 when (parentType.lowercase()) {
@@ -8893,7 +8893,7 @@ class NativePlayerActivity : ComponentActivity() {
             }.getOrDefault(false)
             // Mirror the completion to MDBList (POST /sync/watched) so both
             // trackers record finished movies/episodes.
-            runCatching {
+            runCatchingCancellable {
                 if (MdbListClient.apiKey(this@NativePlayerActivity).isNotBlank()) {
                     val isMovie = parentType.lowercase() == "movie"
                     MdbListClient.pushWatched(

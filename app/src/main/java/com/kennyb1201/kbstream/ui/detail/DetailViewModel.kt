@@ -294,7 +294,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             // so this resolves them (memory + disk cached after the first
             // lookup) - without it a "tmdb:<n>" route could never see history
             // written under the title's "tt..." id.
-            runCatching {
+            runCatchingCancellable {
                 tmdbRepository.resolveImdbId(tmdbId, mediaType)
             }.getOrNull()
                 ?.trim()
@@ -371,7 +371,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 }
 
                 val resolvedItems = rawItems.mapNotNull { (tmdbId, mediaType) ->
-                    val imdb = runCatching {
+                    val imdb = runCatchingCancellable {
                         resolveImdbId(tmdbId, mediaType)
                     }.getOrNull()
 
@@ -481,7 +481,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
          */
         val historyParentIds = localHistoryParentIds(parentId)
 
-        val localResume = runCatching {
+        val localResume = runCatchingCancellable {
             historyDao.getResumeForParents(historyParentIds)
         }.getOrNull()
 
@@ -516,7 +516,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         // Per-episode in-progress map for the episode cards: every card derives
         // its own progress bar / time left from its episodeStreamId instead of
         // only the single latest row.
-        _inProgressByStreamId.value = runCatching {
+        _inProgressByStreamId.value = runCatchingCancellable {
             historyDao.getInProgressForParents(historyParentIds)
         }.getOrDefault(emptyList())
             // Rows arrive newest-first and toMap keeps the LAST entry per key
@@ -541,7 +541,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             }
             .toMap()
 
-        val localCompletedEntries = runCatching {
+        val localCompletedEntries = runCatchingCancellable {
             historyDao.getCompletedForParents(historyParentIds)
         }.getOrDefault(emptyList())
         _completedEpisodeIds.value = localCompletedEntries.map { it.id }.toSet()
@@ -878,7 +878,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     MdbListClient.isConfigured(getApplication())
                 ) {
                     val tmdbShowId = tmdbDetailResult.getOrNull()?.id
-                    runCatching {
+                    runCatchingCancellable {
                         MdbListClient.getWatchedSnapshot(getApplication())
                     }.getOrNull()
                         ?.episodeKeys
@@ -959,7 +959,7 @@ var lastMetaError: Throwable? = null
 val probeResults = metaAddons.map { metaAddon ->
     async {
         val baseUrl = metaAddon.manifestUrl.substringBeforeLast("/manifest.json")
-        val result = runCatching {
+        val result = runCatchingCancellable {
             withTimeoutOrNull(META_PROBE_CALL_TIMEOUT_MS) {
                 repository.getMeta(baseUrl, normalizedType, id)
             }
@@ -1143,7 +1143,7 @@ for ((metaAddon, response, error) in probeResults) {
                     // rather than being left behind to race it.
                     viewModelScope.launch {
                         if (collectionId != null) {
-                            runCatching { tmdbRepository.getCollection(collectionId) }
+                            runCatchingCancellable { tmdbRepository.getCollection(collectionId) }
                                 .onSuccess { collection -> _collection.value = collection }
                         }
                         refreshPosterWatchedStatus(normalizedType)
@@ -1489,7 +1489,7 @@ for ((metaAddon, response, error) in probeResults) {
         // resolution table, so this is free after the first open.
         val imdbIdForSource = imdbId
             .takeIf { it.startsWith("tt", ignoreCase = true) }
-            ?: runCatching { tmdbRepository.resolveImdbId(detail.id, "series") }
+            ?: runCatchingCancellable { tmdbRepository.resolveImdbId(detail.id, "series") }
                 .getOrNull()
         if (imdbIdForSource.isNullOrBlank()) return
 
@@ -1563,7 +1563,7 @@ for ((metaAddon, response, error) in probeResults) {
 
             val lookup = posterLookupKey(tmdbId, normalizedType)
             val imdbId = _resolvedPosterIds.value[lookup]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
                     ?: return@launch
@@ -1572,7 +1572,7 @@ for ((metaAddon, response, error) in probeResults) {
                 _resolvedPosterIds.value = _resolvedPosterIds.value + (lookup to imdbId)
             }
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markWatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
                 Log.e("KBStream", "markPosterWatched failed tmdb=$tmdbId type=$normalizedType", e)
@@ -1602,7 +1602,7 @@ for ((metaAddon, response, error) in probeResults) {
 
             val lookup = posterLookupKey(tmdbId, normalizedType)
             val imdbId = _resolvedPosterIds.value[lookup]
-                ?: runCatching {
+                ?: runCatchingCancellable {
                     resolveImdbId(tmdbId, normalizedType)
                 }.getOrNull()
                     ?: return@launch
@@ -1611,7 +1611,7 @@ for ((metaAddon, response, error) in probeResults) {
                 _resolvedPosterIds.value = _resolvedPosterIds.value + (lookup to imdbId)
             }
 
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markUnwatchedLocal(imdbId, normalizedType)
             }.onFailure { e ->
                 Log.e("KBStream", "markPosterUnwatched failed tmdb=$tmdbId type=$normalizedType", e)
@@ -1706,7 +1706,7 @@ for ((metaAddon, response, error) in probeResults) {
                         completedAt = now
                     )
 
-                runCatching {
+                runCatchingCancellable {
                     historyDao.upsert(row)
                 }.onSuccess {
                     // Mirror the marker itself. The player keys its resume row
@@ -1728,7 +1728,7 @@ for ((metaAddon, response, error) in probeResults) {
             // keeps the badge. Marking a season (or one episode) watched used
             // to leave the resume bar sitting there, because the progress row
             // is a different row from the marker.
-            runCatching {
+            runCatchingCancellable {
                 val parents = localHistoryParentIds(parentId)
 
                 // Captured BEFORE the deletes: these are the rows whose CLOUD
@@ -1818,7 +1818,7 @@ for ((metaAddon, response, error) in probeResults) {
                 simklRepository.isConfigured() &&
                 simklRepository.hasToken()
             ) {
-                runCatching {
+                runCatchingCancellable {
                     simklRepository.pushWatchedSeason(
                         showImdbId = parentId,
                         season = season,
@@ -1851,7 +1851,7 @@ for ((metaAddon, response, error) in probeResults) {
                 simklRepository.isConfigured() &&
                 simklRepository.hasToken()
             ) {
-                runCatching {
+                runCatchingCancellable {
                     simklRepository.deletePlaybackSessionsForParent(
                         parentId = parentId,
                         title = showName.takeIf { it.isNotBlank() },
@@ -1873,7 +1873,7 @@ for ((metaAddon, response, error) in probeResults) {
             // /sync/watched call per batch, episode-level via the nested
             // shows payload.
             if (MdbListClient.isConfigured(getApplication())) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.pushWatchedEpisodes(
                         getApplication(),
                         imdbId = parentId.takeIf { it.startsWith("tt") },
@@ -1928,7 +1928,7 @@ for ((metaAddon, response, error) in probeResults) {
             // 1. Local: drop every completed row for this season, under every
             // id flavor this title is reachable by - a season marked watched
             // from the other flavor would otherwise survive the unmark.
-            runCatching {
+            runCatchingCancellable {
                 historyDao.deleteCompletedForParentsSeason(
                     parentIds = localHistoryParentIds(parentId),
                     season = season
@@ -1973,7 +1973,7 @@ for ((metaAddon, response, error) in probeResults) {
             // marker this path had just set - the poster lost its eye and the
             // badge went bare.
             val hadWholeShowMark =
-                runCatching {
+                runCatchingCancellable {
                     watchedStatusRepository.clearWatchedOverride(
                         parentId,
                         "series"
@@ -1988,7 +1988,7 @@ for ((metaAddon, response, error) in probeResults) {
             if (_simklWatchedEpisodes.value.isNotEmpty() ||
                 _watchedEpisodeKeys.value.isNotEmpty()
             ) {
-                runCatching {
+                runCatchingCancellable {
                     watchedStatusRepository.markPartiallyWatchedLocal(
                         parentId,
                         "series"
@@ -2019,7 +2019,7 @@ for ((metaAddon, response, error) in probeResults) {
                 simklRepository.isConfigured() &&
                 simklRepository.hasToken()
             ) {
-                runCatching {
+                runCatchingCancellable {
                     simklRepository.removeWatchedSeason(
                         showImdbId = parentId,
                         season = season,
@@ -2041,7 +2041,7 @@ for ((metaAddon, response, error) in probeResults) {
             // 5. Mirror the removal to MDBList when a key is set: one
             // bulk /sync/watched/remove call per batch.
             if (MdbListClient.isConfigured(getApplication())) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.removeWatchedEpisodes(
                         getApplication(),
                         imdbId = parentId.takeIf { it.startsWith("tt") },
@@ -2083,7 +2083,7 @@ for ((metaAddon, response, error) in probeResults) {
         // Simkl's per-episode snapshot (a cached read, no extra round trip),
         // minus the episodes just unmarked.
         val localPairs =
-            runCatching {
+            runCatchingCancellable {
                 historyDao.getCompletedForParents(
                     localHistoryParentIds(parentId)
                 )
@@ -2103,7 +2103,7 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
         val simklPairs =
-            runCatching {
+            runCatchingCancellable {
                 simklRepository.getWatchedEpisodesForShowByImdb(
                     imdbId = parentId,
                     tmdbId = showTmdbId
@@ -2134,7 +2134,7 @@ for ((metaAddon, response, error) in probeResults) {
             simklRepository.isConfigured() &&
             simklRepository.hasToken()
         ) {
-            runCatching {
+            runCatchingCancellable {
                 simklRepository.removeWatchedShow(
                     showImdbId = parentId,
                     title = titleOrNull,
@@ -2149,7 +2149,7 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             remainingBySeason.forEach { (season, episodes) ->
-                runCatching {
+                runCatchingCancellable {
                     simklRepository.pushWatchedSeason(
                         showImdbId = parentId,
                         season = season,
@@ -2168,7 +2168,7 @@ for ((metaAddon, response, error) in probeResults) {
         }
 
         if (MdbListClient.isConfigured(appContext)) {
-            runCatching {
+            runCatchingCancellable {
                 MdbListClient.removeWatchedShow(
                     appContext,
                     imdbId = imdbId,
@@ -2183,7 +2183,7 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             remainingBySeason.forEach { (season, episodes) ->
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.pushWatchedEpisodes(
                         appContext,
                         imdbId = imdbId,
@@ -2309,7 +2309,7 @@ for ((metaAddon, response, error) in probeResults) {
                 }
 
             if (rows.isNotEmpty()) {
-                runCatching {
+                runCatchingCancellable {
                     historyDao.upsertAll(
                         rows
                     )
@@ -2332,7 +2332,7 @@ for ((metaAddon, response, error) in probeResults) {
             // 2. The show has nothing left to resume: drop the resume rows and
             // the in-memory copies the hero / episode chips read, so the page
             // stops offering "Resume S5E3" on an episode that is now watched.
-            runCatching {
+            runCatchingCancellable {
                 val parents = localHistoryParentIds(parentId)
 
                 // Every in-progress row for the show, captured before the
@@ -2381,7 +2381,7 @@ for ((metaAddon, response, error) in probeResults) {
 
             // 4. Whole-show mark: local override (poster checkmark) + SIMKL
             // whole-show push + MDBList whole-show push + cross-device sync.
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markWatchedLocal(
                     parentId,
                     "series"
@@ -2396,7 +2396,7 @@ for ((metaAddon, response, error) in probeResults) {
 
             // 5. Drop any paused SIMKL session for the show, or the remote
             // feed re-adds it to Continue Watching on the next refresh.
-            runCatching {
+            runCatchingCancellable {
                 simklRepository.deletePlaybackSessionsForParent(
                     parentId = parentId,
                     title = showName.takeIf { it.isNotBlank() }
@@ -2424,7 +2424,7 @@ for ((metaAddon, response, error) in probeResults) {
                 simklRepository.isConfigured() &&
                 simklRepository.hasToken()
             ) {
-                runCatching {
+                runCatchingCancellable {
                     simklRepository.pushWatchedShow(
                         showImdbId = parentId,
                         title = showName.takeIf { it.isNotBlank() },
@@ -2440,7 +2440,7 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             if (MdbListClient.isConfigured(getApplication())) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.pushWatchedShow(
                         getApplication(),
                         imdbId = parentId.takeIf { it.startsWith("tt") },
@@ -2484,7 +2484,7 @@ for ((metaAddon, response, error) in probeResults) {
                 .map { it.id }
                 .distinct()
                 .filter { id ->
-                    runCatching { historyDao.getById(id) }
+                    runCatchingCancellable { historyDao.getById(id) }
                         .getOrNull() == null
                 }
 
@@ -2511,7 +2511,7 @@ for ((metaAddon, response, error) in probeResults) {
         viewModelScope.launch {
             // 1. Local: every completed row for this show, whatever season or
             // episode numbers they were written with.
-            runCatching {
+            runCatchingCancellable {
                 historyDao.deleteCompletedForParents(
                     localHistoryParentIds(parentId)
                 )
@@ -2536,7 +2536,7 @@ for ((metaAddon, response, error) in probeResults) {
 
             // 3. Whole-show unmark: override removed + SIMKL history delete +
             // MDBList removal.
-            runCatching {
+            runCatchingCancellable {
                 watchedStatusRepository.markUnwatchedLocal(
                     parentId,
                     "series"
@@ -2648,7 +2648,7 @@ for ((metaAddon, response, error) in probeResults) {
 
             // 1. Local: drop the completed row(s) for each targeted episode.
             validEpisodes.forEach { episode ->
-                runCatching {
+                runCatchingCancellable {
                     historyDao.deleteCompletedForParentsSeasonEpisode(
                         parentIds = localHistoryParentIds(parentId),
                         season = season,
@@ -2690,7 +2690,7 @@ for ((metaAddon, response, error) in probeResults) {
             // partial write below, which the override clear would
             // otherwise wipe (see the season path).
             val hadWholeShowMark =
-                runCatching {
+                runCatchingCancellable {
                     watchedStatusRepository.clearWatchedOverride(
                         parentId,
                         "series"
@@ -2705,7 +2705,7 @@ for ((metaAddon, response, error) in probeResults) {
             if (_simklWatchedEpisodes.value.isNotEmpty() ||
                 _watchedEpisodeKeys.value.isNotEmpty()
             ) {
-                runCatching {
+                runCatchingCancellable {
                     watchedStatusRepository.markPartiallyWatchedLocal(
                         parentId,
                         "series"
@@ -2736,7 +2736,7 @@ for ((metaAddon, response, error) in probeResults) {
                 simklRepository.isConfigured() &&
                 simklRepository.hasToken()
             ) {
-                runCatching {
+                runCatchingCancellable {
                     simklRepository.removeWatchedSeason(
                         showImdbId = parentId,
                         season = season,
@@ -2758,7 +2758,7 @@ for ((metaAddon, response, error) in probeResults) {
             // 5. Mirror the removal to MDBList when a key is set: one
             // bulk /sync/watched/remove call per batch.
             if (MdbListClient.isConfigured(getApplication())) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.removeWatchedEpisodes(
                         getApplication(),
                         imdbId = parentId.takeIf { it.startsWith("tt") },

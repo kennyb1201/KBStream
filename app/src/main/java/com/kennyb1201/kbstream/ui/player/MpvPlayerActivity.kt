@@ -592,10 +592,10 @@ class MpvPlayerActivity : ComponentActivity() {
         // Splash art, the same shape as the main player's: backdrop with the
         // clear logo over it, or the name when there is no logo art.
         (backdropUrl ?: itemPoster)?.takeIf { it.isNotBlank() }?.let { art ->
-            runCatchingCancellable { loadingBackdropView?.load(art) }
+            runCatching { loadingBackdropView?.load(art) }
         }
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let { logo ->
-            runCatchingCancellable {
+            runCatching {
                 loadingLogoView?.load(logo)
                 loadingLogoView?.visibility = View.VISIBLE
                 loadingTitle?.visibility = View.GONE
@@ -1783,7 +1783,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun attachExternalSubtitle(uri: Uri) {
         showToast("Loading subtitle\u2026")
         lifecycleScope.launch {
-            val copied = runCatching {
+            val copied = runCatchingCancellable {
                 withContext(Dispatchers.IO) {
                     // Keyed by the document URI, not the clock: picking the same
                     // sidecar twice must reuse one file rather than leave the
@@ -2351,7 +2351,7 @@ class MpvPlayerActivity : ComponentActivity() {
             val target = airedNextEpisodeTarget(
                 context = this@MpvPlayerActivity,
                 target = nextEpisodeTarget(),
-                tmdbId = runCatching { tmdbId() }.getOrNull(),
+                tmdbId = runCatchingCancellable { tmdbId() }.getOrNull(),
                 showId = parentId
             )
             when {
@@ -2400,7 +2400,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // answers - the same order the main player's card uses.
         val initialThumb = backdropUrl ?: itemPoster
         if (!initialThumb.isNullOrBlank()) {
-            runCatchingCancellable { nextUpThumb?.load(initialThumb) }
+            runCatching { nextUpThumb?.load(initialThumb) }
         } else {
             nextUpThumb?.setImageDrawable(null)
         }
@@ -2470,7 +2470,7 @@ class MpvPlayerActivity : ComponentActivity() {
                 runCatchingCancellable { tmdbId() }.getOrNull()
             } ?: return@launch
             val nextEp = withContext(Dispatchers.IO) {
-                runCatching {
+                runCatchingCancellable {
                     TmdbRepository.getInstance(this@MpvPlayerActivity)
                         .getSeasonEpisodes(tmdb, targetSeason, parentId)
                 }.getOrNull()?.firstOrNull { it.episodeNumber == targetEpisode }
@@ -2479,7 +2479,7 @@ class MpvPlayerActivity : ComponentActivity() {
             pendingNextEpisodeName = nextEp.name
             nextUpEpisodeTitle?.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
             nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
-                runCatchingCancellable { nextUpThumb?.load(still) }
+                runCatching { nextUpThumb?.load(still) }
             }
         }
     }
@@ -2510,7 +2510,7 @@ class MpvPlayerActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             val picks: List<BywPick> = withContext(Dispatchers.IO) {
-                val tmdb = runCatching { tmdbId() }.getOrNull()
+                val tmdb = runCatchingCancellable { tmdbId() }.getOrNull()
                     ?: return@withContext emptyList()
                 buildBecauseYouWatchedPicks(
                     this@MpvPlayerActivity,
@@ -2700,7 +2700,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun setupIntroDb() {
         lifecycleScope.launch {
             val stamps = withContext(Dispatchers.IO) {
-                runCatching { fetchIntroDbStamps(parentId, season, episode) }
+                runCatchingCancellable { fetchIntroDbStamps(parentId, season, episode) }
                     .getOrElse { error ->
                         Log.w(TAG, "IntroDB lookup failed", error)
                         emptyList()
@@ -3059,7 +3059,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // NonCancellable: this write must land even while the activity is being
         // torn down, exactly like the main player's exit save.
         lifecycleScope.launch(Dispatchers.IO + NonCancellable) {
-            runCatching {
+            runCatchingCancellable {
                 val dao = WatchHistoryDatabase.getInstanceScoped(this@MpvPlayerActivity)
                     .watchHistoryDao()
                 val existing = dao.getById(historyId)
@@ -3250,7 +3250,7 @@ class MpvPlayerActivity : ComponentActivity() {
         }
         // Independent scope: a stop scrobble has to outlive this activity.
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            runCatching {
+            runCatchingCancellable {
                 SimklRepository.getInstance(this@MpvPlayerActivity).scrobble(
                     action = action,
                     parentId = parentId,
@@ -3262,7 +3262,7 @@ class MpvPlayerActivity : ComponentActivity() {
                     tmdbId = tmdbId()
                 )
             }.onFailure { Log.w(TAG, "Simkl scrobble/$action failed", it) }
-            runCatching { scrobbleMdbList(action, progress) }
+            runCatchingCancellable { scrobbleMdbList(action, progress) }
                 .onFailure { Log.w(TAG, "MDBList scrobble/$action failed", it) }
         }
     }
@@ -3284,7 +3284,7 @@ class MpvPlayerActivity : ComponentActivity() {
         if (trackersMarkedWatched || parentId.isBlank()) return
         trackersMarkedWatched = true
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            runCatching {
+            runCatchingCancellable {
                 val simkl = SimklRepository.getInstance(this@MpvPlayerActivity)
                 val tmdb = tmdbId()
                 when (parentType.lowercase()) {
@@ -3313,7 +3313,7 @@ class MpvPlayerActivity : ComponentActivity() {
                     else -> false
                 }
             }.onFailure { Log.w(TAG, "Simkl completion sync failed", it) }
-            runCatching {
+            runCatchingCancellable {
                 if (MdbListClient.apiKey(this@MpvPlayerActivity).isNotBlank()) {
                     val isMovie = parentType.lowercase() == "movie"
                     MdbListClient.pushWatched(

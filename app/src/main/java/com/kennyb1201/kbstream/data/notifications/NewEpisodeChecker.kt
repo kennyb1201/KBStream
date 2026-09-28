@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.notifications
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
@@ -65,7 +66,7 @@ internal class NewEpisodeChecker(private val context: Context) {
                 return
             }
 
-            val detail = runCatching { tmdb.fetchEnrichedMeta(showId, "series") }.getOrNull()
+            val detail = runCatchingCancellable { tmdb.fetchEnrichedMeta(showId, "series") }.getOrNull()
                 ?: continue
             val last = detail.lastEpisodeToAir ?: continue
             val episodeKey = NewEpisodeRules.episodeKey(last.seasonNumber, last.episodeNumber)
@@ -108,13 +109,13 @@ internal class NewEpisodeChecker(private val context: Context) {
         val db = runCatching { WatchHistoryDatabase.getInstanceScoped(appContext) }.getOrNull()
             ?: return emptyList()
 
-        runCatching { db.watchHistoryDao().getContinueWatchingParentsSnapshot() }
+        runCatchingCancellable { db.watchHistoryDao().getContinueWatchingParentsSnapshot() }
             .getOrNull()
             .orEmpty()
             .filter { it.parentId.isNotBlank() && NewEpisodeRules.isSeriesType(it.type) }
             .forEach { ids.add(it.parentId) }
 
-        runCatching { db.watchedStatusDao().getRefreshTargets() }
+        runCatchingCancellable { db.watchedStatusDao().getRefreshTargets() }
             .getOrNull()
             .orEmpty()
             .filter { it.imdbId.isNotBlank() && NewEpisodeRules.isSeriesType(it.mediaType) }

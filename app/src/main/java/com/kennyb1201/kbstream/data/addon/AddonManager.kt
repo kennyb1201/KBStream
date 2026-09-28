@@ -1187,8 +1187,8 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
         addons.forEach { addon ->
             addonScope.launch {
-                runCatching {
-                    if (activeStoreProfileId() != profileId) return@runCatching
+                runCatchingCancellable {
+                    if (activeStoreProfileId() != profileId) return@runCatchingCancellable
 
                     val manifest = repository.fetchManifest(addon.manifestUrl)
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -130,7 +131,7 @@ object LibraryMirror {
             // MDBList personal list: mirror remotely, no local copy.
             if (mdbListConnected(context)) {
                 scope.launch {
-                    runCatching {
+                    runCatchingCancellable {
                         MdbListClient.addToList(
                             context,
                             list.id,
@@ -196,7 +197,7 @@ object LibraryMirror {
             )
             if (entry.imdbId != null || entry.tmdbId != null) {
                 scope.launch {
-                    runCatching {
+                    runCatchingCancellable {
                         MdbListClient.removeFromWatchlist(context, listOf(entry))
                     }.onFailure { e ->
                         Log.e(TAG, "mdblist removeFromWatchlist failed: ${e.message}", e)
@@ -233,7 +234,7 @@ object LibraryMirror {
         )
         if (entry.imdbId == null && entry.tmdbId == null) return
         scope.launch {
-            runCatching {
+            runCatchingCancellable {
                 MdbListClient.removeFromList(context, listId, listOf(entry))
             }.onFailure { e ->
                 Log.e(TAG, "mdblist removeFromList failed: ${e.message}", e)
@@ -256,7 +257,7 @@ object LibraryMirror {
     private fun launchMirrors(context: Context, scope: CoroutineScope, r: TitleRef) {
         scope.launch {
             if (simklConnected(context)) {
-                runCatching {
+                runCatchingCancellable {
                     SimklRepository.getInstance(context).addToWatchlist(
                         mediaType = r.normalizedType,
                         imdbId = r.imdbId,
@@ -271,7 +272,7 @@ object LibraryMirror {
             }
 
             if (mdbListConnected(context)) {
-                runCatching {
+                runCatchingCancellable {
                     MdbListClient.addToWatchlist(
                         context,
                         listOf(

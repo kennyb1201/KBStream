@@ -163,7 +163,7 @@ class TmdbHeroArtworkRepository(
             }
 
             // Disk cache so resolved artwork survives restarts.
-            val diskCached = runCatching {
+            val diskCached = runCatchingCancellable {
                 tmdbJsonCacheDao?.getByKey(DISK_KEY_PREFIX + key)
             }.getOrNull()
 

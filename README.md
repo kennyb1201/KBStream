@@ -176,14 +176,29 @@ cold-start cost (Application.setup's WorkManager enqueues and Coil loader,
 then the Home rail fan-out) lands in the first seconds.
 
 ```sh
-# with a device attached (adb devices must list it)
+# 1. the device: adb devices must list it (TV: enable developer options and
+#    either USB debugging, or `adb connect <tv-ip>:5555`)
+# 2. signing: the generator INSTALLS the app, and the variant it installs
+#    inherits the release signing config, which is empty unless the KBSTREAM_*
+#    variables are set - point them at the debug keystore (no secrets needed):
+export KBSTREAM_STORE_FILE="$HOME/.android/debug.keystore"
+export KBSTREAM_STORE_PASSWORD=android
+export KBSTREAM_KEY_ALIAS=androiddebugkey
+export KBSTREAM_KEY_PASSWORD=android
+# 3.
 ./gradlew :app:generateBaselineProfile
 ```
+
+(Only do this in the shell you generate from: with those variables set, a local
+`assembleRelease` is debug-signed too. CI supplies its own keystore.)
 
 - `baselineprofile/` is a test-only module that generates it: it drives the app
   on the device and writes `app/src/release/generated/baselineProfiles/baseline-prof.txt`,
   which is committed (`baselineProfile { saveInSrc = true }` in
   `app/build.gradle.kts`).
+- To confirm the profile reached an APK:
+  `unzip -l app/build/outputs/apk/release/app-release.apk | grep baseline` —
+  it ships as `assets/dexopt/baseline.prof`.
 - `androidx.profileinstaller` in the app is what *installs* the profile on the
   versions that need it: Android compiles a profile at install time when Play
   installs the app, and this app installs itself from a GitHub release.
@@ -234,8 +249,11 @@ scripts/           # TMDB id-verification probes used while curating the
                    # size one editor tool call can reach. Their docstrings
                    # carry the byte offsets that measured it.
                    # migrate_runcatching.py moves `runCatching` over suspending
-                   # work to runCatchingCancellable; it reports every call site
-                   # and only rewrites the ones it can prove safe. See
+                   # work to runCatchingCancellable: it rewrites the sites where
+                   # it can prove nothing runs after the expression, and reports
+                   # the rest - a reviewer names the ones that are safe to
+                   # convert with --approve, and the few that must keep plain
+                   # runCatching say so in a comment above them. See
                    # data/RunCatchingCancellable.kt for what the difference is.
 supabase_profiles.sql  # optional dashboard table for inspecting profiles
 docs/              # Supabase RLS + Realtime SQL reference

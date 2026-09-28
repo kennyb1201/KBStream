@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * A randomly chosen, already-aired episode of a show.
@@ -110,7 +111,7 @@ suspend fun randomAiredEpisode(
     if (showId.isBlank()) return@withContext null
 
     val repository = TmdbRepository.getInstance(context.applicationContext)
-    val show = runCatching {
+    val show = runCatchingCancellable {
         repository.fetchEnrichedMetaCached(showId, showType)
     }.getOrNull() ?: return@withContext null
 
@@ -130,7 +131,7 @@ suspend fun randomAiredEpisode(
     val candidates = seasonNumbers.ifEmpty { listOfNotNull(excludeSeason) }
 
     val gathered = candidates.mapNotNull { season ->
-        runCatching {
+        runCatchingCancellable {
             repository.getSeasonEpisodes(tmdbId, season, showId)
         }.getOrNull()
             ?.takeIf { it.isNotEmpty() }

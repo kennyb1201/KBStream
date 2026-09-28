@@ -13,6 +13,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * One-time cross-profile poison sweep (split out of SupabaseSync — that
@@ -187,7 +188,7 @@ internal object PoisonSweep {
             // Same lock as the sweep: both write the same pending prefs and
             // touch the same databases.
             sweepMutex.withLock {
-                val outcome = runCatching {
+                val outcome = runCatchingCancellable {
                     clearInProgressInternal(appCtx, client, isSignedIn, pullNow)
                 }.getOrElse { "failed: ${it.message}" }
                 appCtx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -217,7 +218,7 @@ internal object PoisonSweep {
         // (2) The markers themselves. Partial-only: a completed row is a
         //     checkmark and stays.
         var localMarkers = 0
-        runCatching {
+        runCatchingCancellable {
             val dao = WatchHistoryDatabase.getInstanceScoped(context).watchedStatusDao()
             val partial = dao.getAll().filter { it.isPartiallyWatched && !it.isWatched }
             partial.forEach { dao.deleteByKey(it.key) }
@@ -258,7 +259,7 @@ internal object PoisonSweep {
         //     snapshots as well as from local rows — so a stale one would
         //     defeat the reset and make it look like it did nothing.
         runCatching { MdbListClient.invalidateWatchedSnapshot() }
-        runCatching {
+        runCatchingCancellable {
             WatchHistoryDatabase.getInstance(context).tmdbJsonCacheDao().deleteByKeys(
                 listOf(
                     "$pid/simkl:all_show_items",
@@ -298,7 +299,7 @@ internal object PoisonSweep {
         val appCtx = context.applicationContext
         scope.launch {
             sweepMutex.withLock {
-                runCatching { runInternal(appCtx, client, isSignedIn, pullNow) }
+                runCatchingCancellable { runInternal(appCtx, client, isSignedIn, pullNow) }
                     .onFailure { Log.w(TAG, "poison sweep failed: ${it.message}") }
             }
         }
@@ -329,7 +330,7 @@ internal object PoisonSweep {
                 if (profile.id == activePid) {
                     // Active profile's DB may be open by Room — go through
                     // the DAO instead of raw SQL.
-                    runCatching {
+                    runCatchingCancellable {
                         WatchHistoryDatabase.getInstanceScoped(context)
                             .watchedStatusDao().clearAll()
                     }.onFailure {
@@ -340,7 +341,7 @@ internal object PoisonSweep {
                 }
             }
             // Legacy (pre-profiles) unscoped DB — same cache table.
-            runCatching {
+            runCatchingCancellable {
                 WatchHistoryDatabase.getInstance(context)
                     .watchedStatusDao().clearAll()
             }
@@ -348,7 +349,7 @@ internal object PoisonSweep {
             // mid-flight switch wrote profile A's lists under profile B's
             // key; deleting them forces a clean refetch from each
             // profile's own Simkl account.
-            runCatching {
+            runCatchingCancellable {
                 val keys = buildList {
                     for (profile in profiles) {
                         add("${profile.id}/simkl:all_show_items")
@@ -397,7 +398,7 @@ internal object PoisonSweep {
             // cache wipe — re-drawing the phantom eye badge and re-pushing
             // itself to the cloud. Comparing the profile DBs on this device
             // is the only way to attribute it.
-            runCatching {
+            runCatchingCancellable {
                 val perProfile =
                     orderedPids.map { pid -> pid to localHistoryWrites(context, pid) }
                 val doomed =
@@ -555,7 +556,7 @@ internal object PoisonSweep {
             val historyRowsForLocalScan = cloudHistoryRows
             var localCopiesRemoved = 0
             if (historyRowsForLocalScan != null) {
-                runCatching {
+                runCatchingCancellable {
                     // One read of every profile's local rows, shared by the
                     // two directions below.
                     val perProfile =
@@ -625,7 +626,7 @@ internal object PoisonSweep {
             var markersChecked = pendingParents.isEmpty()
             var markersRemoved = 0
             if (pendingParents.isNotEmpty()) {
-                runCatching {
+                runCatchingCancellable {
                     val wanted = pendingParents
                         .mapNotNull { entry ->
                             val pid = entry.substringBefore('|')
@@ -643,7 +644,7 @@ internal object PoisonSweep {
                     }.filterValues { it.isNotEmpty() }
 
                     val watchedRows = readCloudRows(c, TABLE_WATCHED)
-                    if (watchedRows == null) return@runCatching
+                    if (watchedRows == null) return@runCatchingCancellable
                     val keys = PoisonDetector.orphanedPartialMarkers(
                         watchedRows,
                         orphaned,
@@ -783,7 +784,7 @@ internal object PoisonSweep {
         pid: String
     ): List<PoisonDetector.LocalWrite> {
         if (pid == ProfileManager.activeProfile.value?.id) {
-            return runCatching {
+            return runCatchingCancellable {
                 WatchHistoryDatabase.getInstanceScoped(context)
                     .watchHistoryDao()
                     .getAll()
@@ -873,7 +874,7 @@ internal object PoisonSweep {
     ) {
         if (keys.isEmpty()) return
         if (pid == ProfileManager.activeProfile.value?.id) {
-            runCatching {
+            runCatchingCancellable {
                 val dao = WatchHistoryDatabase.getInstanceScoped(context).watchedStatusDao()
                 keys.forEach { dao.deleteByKey(it) }
             }.onFailure {
@@ -928,7 +929,7 @@ internal object PoisonSweep {
     ) {
         if (ids.isEmpty()) return
         if (pid == ProfileManager.activeProfile.value?.id) {
-            runCatching {
+            runCatchingCancellable {
                 val dao = WatchHistoryDatabase.getInstanceScoped(context).watchHistoryDao()
                 ids.forEach { dao.deleteById(it) }
             }.onFailure {

@@ -107,7 +107,7 @@ class TvmazeAirDateRepository private constructor(context: Context) {
             }
 
             val diskKey = DISK_KEY_PREFIX + id
-            runCatching { cacheDao.getByKey(diskKey) }.getOrNull()?.let { row ->
+            runCatchingCancellable { cacheDao.getByKey(diskKey) }.getOrNull()?.let { row ->
                 if (now - row.updatedAt < DISK_TTL_MS) {
                     runCatching { datesJsonAdapter.fromJson(row.json) }
                         .getOrNull()
@@ -119,7 +119,7 @@ class TvmazeAirDateRepository private constructor(context: Context) {
                 }
             }
 
-            val fetched = runCatching { limiter.withPermit { fetch(id) } }
+            val fetched = runCatchingCancellable { limiter.withPermit { fetch(id) } }
                 .onFailure { error ->
                     Log.i(
                         "KBStream",

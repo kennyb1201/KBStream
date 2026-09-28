@@ -1,5 +1,7 @@
 package com.kennyb1201.kbstream.data.tmdb
 
+import com.kennyb1201.kbstream.data.runCatchingCancellable
+
 /**
  * The "browse this dimension by rail" page loaders (genre / keyword / network /
  * company), split out of [TmdbRepository] — a class that had grown past the
@@ -68,7 +70,7 @@ internal object TmdbRailPages {
         lang: String?
     ): List<StudioItem> {
         val results = when (title) {
-            "MOVIES · RECENT" -> runCatching {
+            "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByGenre(
                     genreId,
                     repo.apiKey,
@@ -80,7 +82,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "MOVIES · POPULAR" -> runCatching {
+            "MOVIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverMovieByGenre(
                     genreId,
                     repo.apiKey,
@@ -92,7 +94,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "MOVIES · TOP RATED" -> runCatching {
+            "MOVIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverMovieByGenre(
                     genreId,
                     repo.apiKey,
@@ -104,7 +106,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "SERIES · RECENT" -> runCatching {
+            "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverTvByGenre(
                     genreId,
                     repo.apiKey,
@@ -116,7 +118,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
-            "SERIES · POPULAR" -> runCatching {
+            "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverTvByGenre(
                     genreId,
                     repo.apiKey,
@@ -128,7 +130,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
-            "SERIES · TOP RATED" -> runCatching {
+            "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverTvByGenre(
                     genreId,
                     repo.apiKey,
@@ -176,7 +178,7 @@ internal object TmdbRailPages {
         lang: String?
     ): List<StudioItem> {
         val results = when (title) {
-            "MOVIES · RECENT" -> runCatching {
+            "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByKeyword(
                     keywordId,
                     repo.apiKey,
@@ -188,7 +190,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "MOVIES · POPULAR" -> runCatching {
+            "MOVIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverMovieByKeyword(
                     keywordId,
                     repo.apiKey,
@@ -200,7 +202,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "MOVIES · TOP RATED" -> runCatching {
+            "MOVIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverMovieByKeyword(
                     keywordId,
                     repo.apiKey,
@@ -212,7 +214,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "SERIES · RECENT" -> runCatching {
+            "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverTvByKeyword(
                     keywordId,
                     repo.apiKey,
@@ -224,7 +226,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
-            "SERIES · POPULAR" -> runCatching {
+            "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverTvByKeyword(
                     keywordId,
                     repo.apiKey,
@@ -236,7 +238,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
-            "SERIES · TOP RATED" -> runCatching {
+            "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverTvByKeyword(
                     keywordId,
                     repo.apiKey,
@@ -302,7 +304,7 @@ internal object TmdbRailPages {
         lang: String?
     ): List<StudioItem> {
         val results = when (title) {
-            "SERIES · RECENT" -> runCatching {
+            "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverByNetwork(
                     networkId,
                     repo.apiKey,
@@ -314,7 +316,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
-            "SERIES · POPULAR" -> runCatching {
+            "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverByNetwork(
                     networkId,
                     repo.apiKey,
@@ -326,7 +328,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
-            "SERIES · TOP RATED" -> runCatching {
+            "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverByNetwork(
                     networkId,
                     repo.apiKey,
@@ -375,7 +377,7 @@ internal object TmdbRailPages {
         lang: String?
     ): List<StudioItem> {
         val results = when (title) {
-            "MOVIES · RECENT" -> runCatching {
+            "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
                     companyId = companyId,
                     apiKey = repo.apiKey,
@@ -387,7 +389,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "MOVIES · POPULAR" -> runCatching {
+            "MOVIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
                     companyId = companyId,
                     apiKey = repo.apiKey,
@@ -399,7 +401,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "MOVIES · TOP RATED" -> runCatching {
+            "MOVIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
                     companyId = companyId,
                     apiKey = repo.apiKey,
@@ -411,7 +413,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "movie") }
 
-            "SERIES · RECENT" -> runCatching {
+            "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
                     companyId = companyId,
                     apiKey = repo.apiKey,
@@ -423,7 +425,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
-            "SERIES · POPULAR" -> runCatching {
+            "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
                     companyId = companyId,
                     apiKey = repo.apiKey,
@@ -435,7 +437,7 @@ internal object TmdbRailPages {
                 ).results
             }.getOrDefault(emptyList()).map { StudioItem(it, "series") }
 
-            "SERIES · TOP RATED" -> runCatching {
+            "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
                     companyId = companyId,
                     apiKey = repo.apiKey,

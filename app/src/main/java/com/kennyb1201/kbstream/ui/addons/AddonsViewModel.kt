@@ -168,7 +168,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
             val now = System.currentTimeMillis()
 
             addons.forEach { addon ->
-                val healthy = runCatching {
+                val healthy = runCatchingCancellable {
                     val manifest = repository.fetchManifest(addon.manifestUrl)
                     manifest.resources.isNotEmpty() || manifest.catalogs.isNotEmpty()
                 }.getOrDefault(false)
@@ -206,7 +206,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         // profile URLs), so the collection slice resolves in a coroutine;
         // the prefs snapshot is synchronous and cheap.
         viewModelScope.launch {
-            val collections = runCatching { kbRepository.loadProfiles() }
+            val collections = runCatchingCancellable { kbRepository.loadProfiles() }
                 .getOrDefault(emptyList())
                 .sortedByDescending { it.pinToTop }
             // Fresh imports have never been arranged anywhere: surface them as
@@ -251,7 +251,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
             _collections.value = _collections.value.copy(
                 statusMessage = "Importing…"
             )
-            val ok = runCatching {
+            val ok = runCatchingCancellable {
                 KBProfilePrefs.addProfileUrl(context, url) &&
                     kbRepository.loadProfileForValidation(url).isNotEmpty()
             }.getOrElse { false }
@@ -287,7 +287,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
             _collections.value = _collections.value.copy(
                 statusMessage = "Importing file…"
             )
-            val result = runCatching {
+            val result = runCatchingCancellable {
                 val pseudoUrl = kbRepository.importLocalProfile(jsonText)
                 val context = getApplication<Application>()
                 if (KBProfilePrefs.addProfileUrl(context, pseudoUrl)) {

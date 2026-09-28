@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
  * One-tap "what is actually going on" report.
@@ -385,7 +386,7 @@ object Diagnostics {
      * lands.
      */
     private suspend fun storageLine(context: Context): String = withContext(Dispatchers.IO) {
-        runCatching {
+        runCatchingCancellable {
             val dataDir = java.io.File(context.applicationInfo.dataDir)
             val cache = WatchHistoryDatabase.getInstance(context).tmdbJsonCacheDao()
             val jsonBytes = cache.totalBytes() ?: 0L

@@ -13,6 +13,7 @@ import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.data.iptv.db.PlaylistEpgMatchEntity
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.reporting.Redaction
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
@@ -116,7 +117,7 @@ class IptvRepository(
         val playlistName = prefs.getString("playlist_name", "").orEmpty()
         val keys = HashSet<String>()
         playlistUrls.forEach { url ->
-            val cached = runCatching { loadCachedPlaylist(url, playlistName) }
+            val cached = runCatchingCancellable { loadCachedPlaylist(url, playlistName) }
                 .getOrNull()
                 ?: return@forEach
             keys.addAll(playlistEpgMatchKeys(cached.channels))
@@ -262,6 +263,13 @@ class IptvRepository(
                 dbName = IptvDatabase.activeFileName(appContext),
                 playlistMatchKeys = playlistGuideMatchKeys()
             )
+            // Plain runCatching, deliberately: `waiter.complete(result)` on the
+            // next line is what releases every other caller that joined this
+            // import (see the activeGuideImports handshake above), so the block
+            // has to hand back a Result even when this coroutine is cancelled -
+            // a rethrow here would leave those joiners awaiting a deferred
+            // nobody completes. The cancellation still propagates:
+            // result.getOrThrow() rethrows it just below.
             val result = runCatching {
                 IptvHttpClient.streamXmltvWithRetry(client, normalizedUrl) { stream ->
                     importer.import(normalizedUrl, stream)
@@ -929,7 +937,7 @@ class IptvRepository(
         return withContext(Dispatchers.IO) {
             val fromMillis = System.currentTimeMillis()
 
-            val indexed = runCatching {
+            val indexed = runCatchingCancellable {
                 ftsPrefixExpression(q)?.let { expression ->
                     Log.d(TAG, "PROGRAM SEARCH indexed terms=\"$expression\"")
                     dao.searchProgramsByTitleFts(ftsSearchQuery(expression, fromMillis, limit))
@@ -942,7 +950,7 @@ class IptvRepository(
             }
             if (!indexed.isNullOrEmpty()) return@withContext indexed
 
-            runCatching {
+            runCatchingCancellable {
                 dao.searchProgramsByTitleLike(likeContainsPattern(q), fromMillis, limit)
             }.getOrElse { t ->
                 Log.w(TAG, "program search failed: ${t.message}")

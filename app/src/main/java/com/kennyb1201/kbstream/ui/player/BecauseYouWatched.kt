@@ -146,7 +146,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
     mediaType: String
 ): List<BywPick> {
     val repo = TmdbRepository.getInstance(ctx)
-    val detail = runCatching {
+    val detail = runCatchingCancellable {
         repo.getDetailByTmdbId(tmdbId, mediaType)
     }.getOrNull() ?: return emptyList()
 
@@ -164,7 +164,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
     // What this profile has already watched (any parent id, completed or
     // started): the ids come back as imdb ids / raw stream ids, so the filter
     // below normalizes through the same tmdb->imdb resolution.
-    val watchedParentIds = runCatching {
+    val watchedParentIds = runCatchingCancellable {
         WatchHistoryDatabase.getInstanceScoped(ctx)
             .watchHistoryDao()
             .getAll()
@@ -221,7 +221,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
     // entry of the saga is the first suggestion.
     val collectionId = detail.belongsToCollection?.id
     if (collectionId != null) {
-        runCatching {
+        runCatchingCancellable {
             repo.getKBCollectionItems(collectionId)
         }.getOrNull().orEmpty()
             .sortedBy { it.releaseDate.orEmpty() }
@@ -311,7 +311,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
     val keywordIds = detail.keywords.list().map { it.id }.take(3)
     if (keywordIds.isNotEmpty()) {
         keywordIds.forEach { kw ->
-            runCatching {
+            runCatchingCancellable {
                 repo.getKeywordItems(kw, mediaType)
             }.getOrNull().orEmpty()
                 .take(6)
@@ -343,7 +343,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
         // Cross-check watch history by tmdb id: history stores imdb ids, so
         // resolve lazily (single lookup per finalist) - candidates whose imdb id
         // matches a watched parent are dropped.
-        val imdb = runCatching {
+        val imdb = runCatchingCancellable {
             repo.resolveImdbId(pick.tmdbId, pick.type)
         }.getOrNull()
         pick.imdbId = imdb

@@ -71,6 +71,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 // ── Settings IA: left nav rail + right content pane ─────────────
 // The old single-scroll screen stacked 7 sections ~10 screens tall on a
@@ -246,7 +247,7 @@ fun SettingsScreen(
     ) { uri ->
         if (uri != null) {
             backupScope.launch {
-                backupStatus = runCatching {
+                backupStatus = runCatchingCancellable {
                     BackupManager.export(context, uri)
                 }.getOrElse { "Export failed: ${it.message}" }
             }
@@ -258,7 +259,7 @@ fun SettingsScreen(
     ) { uri ->
         if (uri != null) {
             backupScope.launch {
-                backupStatus = runCatching {
+                backupStatus = runCatchingCancellable {
                     BackupManager.import(context, uri)
                 }.getOrElse { "Import failed: ${it.message}" }
             }
@@ -270,7 +271,7 @@ fun SettingsScreen(
     ) { uri ->
         if (uri != null) {
             backupScope.launch {
-                backupStatus = runCatching {
+                backupStatus = runCatchingCancellable {
                     BackupManager.import(context, uri)
                 }.getOrElse { "Import failed: ${it.message}" }
             }
@@ -1949,6 +1950,10 @@ fun SettingsScreen(
                 if (clearingHistory) return@SettingsClearHistoryDialog
                 clearingHistory = true
                 backupScope.launch {
+                    // Plain runCatching, deliberately: `clearingHistory = false`
+                    // below has to run even when this coroutine is cancelled, or
+                    // the confirm button stays disabled for the rest of the
+                    // session. A rethrow here would skip that reset.
                     runCatching {
                         // Clear the CLOUD half FIRST, and wait for it. A wipe
                         // that ran after the local clear left a window where
@@ -2278,7 +2283,7 @@ private fun SyncHealthSection() {
         KBCard(
             onClick = {
                 diagnosticsScope.launch {
-                    runCatching {
+                    runCatchingCancellable {
                         val report = com.kennyb1201.kbstream.data.reporting.Diagnostics.build(context)
                         com.kennyb1201.kbstream.data.reporting.Diagnostics
                             .copyToClipboard(context, report)
