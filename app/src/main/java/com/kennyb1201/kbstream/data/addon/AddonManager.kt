@@ -17,7 +17,14 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 
 class AddonManager(
     private val context: Context
@@ -975,6 +982,86 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             }
     }
 
+    /**
+     * Starts the Home catalogs' first pages fetching before Home asks for them.
+     *
+     * A cold start spends its opening second or so composing Home before the
+     * rail build issues a single catalog request, and every request it then
+     * makes is made from scratch. Warming moves that work in front of the
+     * composition instead of behind it.
+     *
+     * It costs no extra traffic when the build arrives: AddonRepository
+     * de-duplicates requests that overlap, so a page already in flight is waited
+     * on rather than fetched a second time - and a cold Home build fetches every
+     * one of these catalogs anyway, so the warm reorders work that was going to
+     * happen rather than adding work. The one case where it does add traffic is
+     * a process started for something other than the UI (a background worker),
+     * where the pages go unread - which is why the warm stays shallow: the first
+     * page of the Home catalogs, nothing deeper.
+     *
+     * Best effort throughout. The rail build is the authority on whether a
+     * catalog works and reports its own failures, so a warm that fails is
+     * silence rather than a second opinion.
+     */
+    suspend fun warmHomeCatalogCache() {
+        // Wait, briefly, for the add-on list: warming before it has loaded would
+        // warm nothing at all.
+        withTimeoutOrNull(WARM_ADDON_WAIT_MS) {
+            installedAddons.first { it.isNotEmpty() }
+        } ?: return
+
+        // The exact shape the rail build asks for, so the in-flight de-dupe in
+        // AddonRepository can match it: the same baseUrl rule, the same first
+        // page, the same add-on + type + catalog identity.
+        val targets =
+            getHomeCatalogConfigurations()
+                .distinctBy { configuration ->
+                    configuration.addonId + "::" +
+                        configuration.catalog.type + "::" +
+                        configuration.catalog.id
+                }
+                .mapNotNull { configuration ->
+                    val baseUrl =
+                        configuration.addonManifestUrl
+                            .removeSuffix("manifest.json")
+                            .removeSuffix("/")
+                    if (baseUrl.isBlank()) {
+                        return@mapNotNull null
+                    }
+                    Triple(baseUrl, configuration.catalog.type, configuration.catalog.id)
+                }
+
+        if (targets.isEmpty()) {
+            return
+        }
+
+        val repository =
+            AddonRepository.getInstance()
+
+        val permits =
+            Semaphore(
+                CATALOG_WARM_CONCURRENCY
+            )
+
+        coroutineScope {
+            targets
+                .map { (baseUrl, type, catalogId) ->
+                    async {
+                        runCatching {
+                            permits.withPermit {
+                                repository.getCatalog(
+                                    baseUrl = baseUrl,
+                                    type = type,
+                                    catalogId = catalogId
+                                )
+                            }
+                        }
+                    }
+                }
+                .awaitAll()
+        }
+    }
+
     /** Force a reload from the ACTIVE profile's store (called on a switch). */
     fun refreshAddons() {
         synchronized(stateLock) {
@@ -1398,6 +1485,21 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         //  - KEY_CONFIG_SIG: fingerprint of the last observed configuration,
         //  - KEY_CONFIG_EDITED_AT: when the user last changed it deliberately,
         //  - KEY_CONFIG_CLOUD_AT: edit stamp of the account copy last adopted.
+        /**
+         * How long [warmHomeCatalogCache] waits for the add-on list to load
+         * before giving up. That list is read off the main thread, so the
+         * process can genuinely start this early; past this the rail build has
+         * begun anyway and there is nothing left to be ahead of.
+         */
+        private const val WARM_ADDON_WAIT_MS = 1_500L
+
+        /**
+         * Requests the catalog warm holds in flight. Deliberately below the
+         * rail build's own cap of six: the warm must never be what that cap
+         * has to share with.
+         */
+        private const val CATALOG_WARM_CONCURRENCY = 4
+
         private const val KEY_CONFIG_SIG = "addons_config_sig"
         private const val KEY_CONFIG_EDITED_AT = "addons_config_edited_at"
         private const val KEY_CONFIG_CLOUD_AT = "addons_config_cloud_at"

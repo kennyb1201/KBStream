@@ -132,6 +132,27 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     .getInstance(this@MainApplication)
                     .maybeRefreshOnLaunch(this@MainApplication)
             }
+            // Home catalog warm: start the Home catalogs' first pages fetching
+            // while the launcher is still putting Home together, so the rail
+            // build inherits the head start instead of issuing every request
+            // itself (see AddonManager.warmHomeCatalogCache). A nested launch of
+            // its own rather than one more step in the chain: it lasts as long
+            // as the add-on hosts take, and the steps after it are disk work
+            // that must not queue up behind a catalog fetch.
+            startupScope.launch {
+                runCatching {
+                    PerfTrace.timedSuspend("startup.catalogWarm") {
+                        com.kennyb1201.kbstream.data.addon.AddonManager
+                            .getInstance(this@MainApplication)
+                            .warmHomeCatalogCache()
+                    }
+                }.onFailure { error ->
+                    CrashReporter.recordNonFatal(
+                        error,
+                        mapOf("source" to "app_create_catalog_warm")
+                    )
+                }
+            }
             // Self-update: quiet GitHub-release check at most every 12h; only
             // downloads when the user accepts the prompt in Settings.
             startupStep("startup.updateCheck", "app_create_update_check") {

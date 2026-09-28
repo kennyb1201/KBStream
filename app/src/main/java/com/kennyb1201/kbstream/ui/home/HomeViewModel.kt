@@ -812,6 +812,14 @@ class HomeViewModel(
     @Volatile
     private var railBuildInFlight = false
 
+    /** Set when a background caller wants a rebuild while one is already running. */
+    @Volatile
+    private var railRebuildQueued = false
+
+    /** Whether the rebuild those callers asked for has to clear the catalog cache. */
+    @Volatile
+    private var railRebuildClearCache = false
+
     /**
      * Bumped on every profile switch. A rail build (or a pagination page)
      * captures it at the start and refuses to publish once it changed, so a
@@ -1561,7 +1569,8 @@ Log.d(
                     // still pass clearCatalogCache = true.
                     loadRailsInternal(
                         forceRefresh = true,
-                        clearCatalogCache = false
+                        clearCatalogCache = false,
+                        coalesce = true
                     )
                 }
         }
@@ -2502,7 +2511,8 @@ Log.d(
 
                 loadRailsInternal(
                     forceRefresh = true,
-                    clearCatalogCache = railsStale
+                    clearCatalogCache = railsStale,
+                    coalesce = true
                 )
             }
         }
@@ -6404,17 +6414,90 @@ private suspend fun calculateEpisodesRemaining(
      * resets the budget; each all-failed attempt consumes one so a device
      * that boots with no network stops instead of retrying forever.
      */
+    /**
+     * Fills in landscape-card artwork for rails that are already on screen.
+     *
+     * Artwork used to be resolved inside each rail's own load, before that rail
+     * could be published, so every item of every row had to come back from TMDB
+     * before the viewer saw anything - a per-item lookup, at six concurrent
+     * requests, standing directly in front of a build whose entire job is to
+     * show rows. The rail is what the viewer is waiting for; its card art is
+     * not. Rails now publish straight away and this fills the art in behind
+     * them, one rail at a time (the items within a rail still resolve in
+     * parallel), which also holds the warm to a rail's worth of requests rather
+     * than a burst of every rail's at once.
+     *
+     * Pinned "Top ... Today" rails take TMDB art or nothing - their own
+     * backgrounds carry burned-in promo text - which is the `tmdbOnly` flag, and
+     * why [RailInfo.pinned] is read here rather than passed down.
+     *
+     * [buildEpoch] is the profile this build belonged to. A rail whose profile
+     * has since been switched away from is left alone, for the same reason the
+     * publish path refuses to repaint it.
+     */
+    private fun warmLandscapeArt(rails: List<Rail>, buildEpoch: Long) {
+        if (rails.isEmpty()) return
+        viewModelScope.launch {
+            for (rail in rails) {
+                val key =
+                    railKeyOf(rail)
+
+                val art =
+                    resolveLandscapeArt(
+                        metas = rail.items,
+                        tmdbOnly = railInfo[key]?.pinned == true
+                    )
+
+                if (art.isEmpty()) continue
+
+                if (buildEpoch != railBuildEpoch) return@launch
+
+                // Union, not replacement: a page fetched while this was
+                // resolving has merged its own art in already, and its items
+                // are not in this map. Replacing would drop that page's art.
+                _rails.update { current ->
+                    current.map { existing ->
+                        if (railKeyOf(existing) == key) {
+                            existing.copy(
+                                landscapeArt = existing.landscapeArt + art
+                            )
+                        } else {
+                            existing
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private var railLoadRetriesLeft = RAIL_LOAD_RETRY_MAX_ATTEMPTS
 
     private suspend fun loadRailsInternal(
         forceRefresh: Boolean,
-        clearCatalogCache: Boolean = forceRefresh
+        clearCatalogCache: Boolean = forceRefresh,
+        coalesce: Boolean = false
     ) {
 
         if (
             !forceRefresh &&
             _rails.value.isNotEmpty()
         ) {
+            return
+        }
+
+        // A background caller that wants a rebuild while one is already running
+        // does not queue a second full build behind it. It records that a rebuild
+        // is wanted and returns; the build that is running runs it once, at the
+        // end (see the tail of this function). Every add-on change, dynamic-
+        // catalog refresh and resume used to queue its own full build, so a cold
+        // start whose add-on state changed mid-build paid for all of them.
+        //
+        // Only the fire-and-forget callers pass this. A caller that has to know
+        // its rebuild happened - a manual refresh, a profile switch, a retry -
+        // leaves it false and still waits for a build of its own.
+        if (coalesce && railBuildInFlight) {
+            railRebuildQueued = true
+            railRebuildClearCache = railRebuildClearCache || clearCatalogCache
             return
         }
 
@@ -6671,6 +6754,16 @@ private suspend fun calculateEpisodesRemaining(
                 _rails.value =
                     finalRails.distinctBy { railKeyOf(it) }
 
+                // The rows are on screen; now fill in their landscape art. This
+                // used to happen inside each rail's own load, before the rail
+                // could be published at all (see warmLandscapeArt).
+                if (landscapeCards) {
+                    warmLandscapeArt(
+                        _rails.value,
+                        buildEpochAtStart
+                    )
+                }
+
                 // Freshness stamp for onHomeResumed()'s stale-rails guard.
                 railsBuiltAtMs = System.currentTimeMillis()
 
@@ -6766,6 +6859,20 @@ private suspend fun calculateEpisodesRemaining(
                 loadRailsInternal(
                     forceRefresh = false,
                     clearCatalogCache = true
+                )
+            }
+
+            // ...and the rebuild a background caller asked for while this one was
+            // running. Once, here, outside the lock - the same shape as the retry
+            // above, and for the same reason: what the queue used to hold was one
+            // full build list per caller.
+            if (railRebuildQueued) {
+                railRebuildQueued = false
+                val clearCache = railRebuildClearCache
+                railRebuildClearCache = false
+                loadRailsInternal(
+                    forceRefresh = true,
+                    clearCatalogCache = clearCache
                 )
             }
 
@@ -6884,11 +6991,10 @@ private suspend fun calculateEpisodesRemaining(
                 items = filtered,
                 catalogId = pending.catalogId,
                 baseUrl = pending.baseUrl,
-                landscapeArt = if (landscapeCards) {
-                    resolveLandscapeArt(filtered)
-                } else {
-                    emptyMap()
-                }
+                // Left empty here and filled in once the rail is on screen:
+                // artwork is not what the viewer is waiting for (see
+                // warmLandscapeArt).
+                landscapeArt = emptyMap()
             )
 
         railInfo[railKeyOf(rail)] =
@@ -7024,11 +7130,8 @@ private suspend fun calculateEpisodesRemaining(
                             items = filtered,
                             catalogId = if (tv) "top_kids_shows" else "top_kids_movies",
                             baseUrl = null,
-                            landscapeArt = if (landscapeCards) {
-                                resolveLandscapeArt(filtered, tmdbOnly = true)
-                            } else {
-                                emptyMap()
-                            }
+                            // Filled in after publication: see warmLandscapeArt.
+                            landscapeArt = emptyMap()
                         )
 
                         railInfo[railKeyOf(rail)] = RailInfo(
@@ -7124,14 +7227,9 @@ private suspend fun calculateEpisodesRemaining(
                                     items = filteredMetas,
                                     catalogId = catalogId,
                                     baseUrl = baseUrl,
-                                    landscapeArt = if (landscapeCards) {
-                                        resolveLandscapeArt(
-                                            filteredMetas,
-                                            tmdbOnly = true
-                                        )
-                                    } else {
-                                        emptyMap()
-                                    }
+                                    // Filled in after publication: see
+                                    // warmLandscapeArt.
+                                    landscapeArt = emptyMap()
                                 )
 
                             railInfo[railKeyOf(rail)] =
@@ -7470,7 +7568,8 @@ private suspend fun calculateEpisodesRemaining(
             runCatching {
                 loadRailsInternal(
                     forceRefresh = true,
-                    clearCatalogCache = true
+                    clearCatalogCache = true,
+                    coalesce = true
                 )
             }
         }
