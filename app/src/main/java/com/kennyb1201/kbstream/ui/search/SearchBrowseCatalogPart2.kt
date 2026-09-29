@@ -1186,3 +1186,51 @@ val KIDS_BROWSE_CATEGORIES: List<BrowseCategory> = listOf(
     BrowseCategory("decades", "Decades", KIDS_DECADES),
     BrowseCategory("collections", "Collections", emptyList())
 )
+
+/**
+ * The chip names one browse category draws from, per mode.
+ *
+ * The NAMES are the contract, not the entries above: the kids sidebar ships
+ * its keyword and collection categories deliberately EMPTY, and the resolver
+ * fills them at runtime, so the kids/adult split has to survive as a name list
+ * rather than as a prebuilt chip list — see [browseEntriesFor].
+ */
+internal fun browseNamesFor(categoryKey: String, isKidsMode: Boolean): List<String>? =
+    when (categoryKey) {
+        "keywords" ->
+            if (isKidsMode) KIDS_KEYWORD_NAMES else BROWSE_KEYWORD_NAMES
+        "collections" ->
+            if (isKidsMode) {
+                KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA
+            } else {
+                BROWSE_COLLECTION_NAMES
+            }
+        else -> null
+    }
+
+/**
+ * Drops the resolved entries a browse mode must not see.
+ *
+ * ONE name-lookup pass serves both modes - the kids lists stopped being strict
+ * subsets of the standard ones when the kids-only franchises landed, and the
+ * disk cache stores that union under a single timestamp - so BOTH publish
+ * paths hold the other mode's names and each has to filter back down to its
+ * own. The resolver did not, which is what put 330 adult-only tags (zombie,
+ * vampire, serial killer, ...) and 267 adult-only collections (Star Wars, The
+ * Terminator, Mad Max, ...) into a kids profile's Browse menu: the kids
+ * sidebar rendered the union, and the standard sidebar rendered the kids-only
+ * tags back at it.
+ *
+ * Categories with no mode-specific list (genres, services, studios, decades)
+ * are curated per mode in the category lists themselves, so they pass through
+ * untouched. Order is preserved either way: the union is built
+ * adult-list-first and that curated order is what the strip shows.
+ */
+internal fun browseEntriesFor(
+    categoryKey: String,
+    entries: List<BrowseEntry>,
+    isKidsMode: Boolean
+): List<BrowseEntry> {
+    val allowed = browseNamesFor(categoryKey, isKidsMode)?.toSet() ?: return entries
+    return entries.filter { it.name in allowed }
+}

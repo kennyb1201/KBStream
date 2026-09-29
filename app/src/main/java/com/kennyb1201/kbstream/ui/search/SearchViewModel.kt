@@ -1183,16 +1183,16 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     var isKidsMode: Boolean = false
         private set
 
-    /** Chip name lists for the current mode (the resolver unions both). */
+    /**
+     * Chip name lists for the current mode (the resolver unions both). The
+     * lists themselves live with the catalog, in [browseNamesFor], so that
+     * the publish pass below filters by exactly the set these advertise.
+     */
     private fun activeKeywordNames(): List<String> =
-        if (isKidsMode) KIDS_KEYWORD_NAMES else BROWSE_KEYWORD_NAMES
+        browseNamesFor("keywords", isKidsMode).orEmpty()
 
     private fun activeCollectionNames(): List<String> =
-        if (isKidsMode) {
-            KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA
-        } else {
-            BROWSE_COLLECTION_NAMES
-        }
+        browseNamesFor("collections", isKidsMode).orEmpty()
 
     private fun baseBrowseCategories(): List<BrowseCategory> =
         if (isKidsMode) kidsBrowseCategories() else BROWSE_CATEGORIES
@@ -1467,8 +1467,16 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         publishBrowseCategories(
             baseBrowseCategories().map { category ->
                 when (category.key) {
-                    "keywords" -> category.copy(entries = keywordEntries)
-                    "collections" -> category.copy(entries = collectionEntries)
+                    // Filtered, never the raw union: one resolve pass serves
+                    // both modes, so publishing it whole hands a kids profile
+                    // the adult half of the list (see [browseEntriesFor]).
+                    "keywords" -> category.copy(
+                        entries = browseEntriesFor("keywords", keywordEntries, isKidsMode)
+                    )
+                    "collections" -> category.copy(
+                        entries =
+                            browseEntriesFor("collections", collectionEntries, isKidsMode)
+                    )
                     else -> category
                 }
             }
@@ -1526,10 +1534,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
             // The cache is keyed by name and holds the union of both modes'
             // lists, so a mode flip just re-filters it onto the active chips.
-            val activeKeywords = activeKeywordNames().toSet()
-            val activeCollections = activeCollectionNames().toSet()
-            val keywordsForMode = keywords.filter { it.name in activeKeywords }
-            val collectionsForMode = collections.filter { it.name in activeCollections }
+            val keywordsForMode = browseEntriesFor("keywords", keywords, isKidsMode)
+            val collectionsForMode =
+                browseEntriesFor("collections", collections, isKidsMode)
 
             // "Fresh" means recent AND substantially complete (>= 90% of the
             // name lists resolved): a cache written while TMDB was

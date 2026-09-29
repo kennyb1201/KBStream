@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.search
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,10 +24,21 @@ import org.junit.Test
  *  4. Every keyword name is the EXACT name TMDB's /search/keyword answers
  *     with — the resolver accepts an exact-name hit only, so a misspelling
  *     is not a wrong rail, it is a chip that opens nothing.
+ *
+ *  5. The union resolve and the disk cache only ever RENDER the active mode's
+ *     own names (see [browseEntriesFor]). Invariants 1-4 all inspect the
+ *     LISTS, so none of them says anything about what a kids profile is
+ *     handed at runtime — the resolver once published the raw union, which
+ *     put every adult tag and every adult collection into the kids Browse
+ *     menu.
  */
 class SearchBrowseCatalogKidsTest {
 
     private fun names(entries: List<BrowseEntry>) = entries.map { it.name.trim() }
+
+    /** Stand-in ids: [browseEntriesFor] keys on the name, which is the chip. */
+    private fun chips(labels: List<String>): List<BrowseEntry> =
+        labels.distinct().mapIndexed { index, label -> BrowseEntry(index + 1, label) }
 
     // ── cache-contract invariants ───────────────────────────────────
 
@@ -348,5 +360,86 @@ class SearchBrowseCatalogKidsTest {
             "children's houses still on the standard studios strip: $leaked",
             leaked.isEmpty()
         )
+    }
+
+    // ── the kids/adult split at PUBLISH time ─────────────────────────
+
+    @Test
+    fun `a kids sidebar is never handed an adult-only tag`() {
+        // Reported: a kids profile's Keywords menu was "almost all the adult
+        // stuff". One name lookup serves both modes, so the resolver and the
+        // disk cache both hold the UNION, and the kids pane only gets its own
+        // list back because it is filtered when it is published.
+        val union = BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES
+        val shown = browseEntriesFor("keywords", chips(union), isKidsMode = true)
+        val kids = KIDS_KEYWORD_NAMES.toSet()
+        assertTrue(
+            "adult-only tags reach a kids profile: " +
+                shown.map { it.name }.filterNot { it in kids }.take(10),
+            shown.all { it.name in kids }
+        )
+        // The assertion above only means something while the lists differ.
+        assertTrue(
+            "the adult and kids keyword lists no longer differ",
+            shown.size < union.distinct().size
+        )
+    }
+
+    @Test
+    fun `a kids sidebar is never handed an adult-only collection`() {
+        val union =
+            BROWSE_COLLECTION_NAMES + KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA
+        val shown = browseEntriesFor("collections", chips(union), isKidsMode = true)
+        val kids = (KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA).toSet()
+        assertTrue(
+            "adult-only collections reach a kids profile: " +
+                shown.map { it.name }.filterNot { it in kids }.take(10),
+            shown.all { it.name in kids }
+        )
+        assertTrue(
+            "the adult and kids collection lists no longer differ",
+            shown.size < union.distinct().size
+        )
+    }
+
+    @Test
+    fun `an adult sidebar is not handed the kids-only tags`() {
+        // The union cuts both ways: the seventh wave's kids-only names must
+        // not appear on the standard strip either.
+        val union = BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES
+        val shown = browseEntriesFor("keywords", chips(union), isKidsMode = false)
+        val adult = BROWSE_KEYWORD_NAMES.toSet()
+        assertTrue(
+            "kids-only tags reach an adult profile: " +
+                shown.map { it.name }.filterNot { it in adult }.take(10),
+            shown.all { it.name in adult }
+        )
+    }
+
+    @Test
+    fun `a mode flip re-slices the one cached union`() {
+        // Both modes are served from a single resolve and a single cache
+        // entry, so switching profile must re-slice, never re-resolve: every
+        // resolved name has to land on exactly one of the two sides.
+        val union = (BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES).distinct()
+        val resolved = chips(union)
+        val forKids = browseEntriesFor("keywords", resolved, isKidsMode = true).map { it.name }
+        val forAdults = browseEntriesFor("keywords", resolved, isKidsMode = false).map { it.name }
+        assertEquals(
+            "every resolved keyword belongs to exactly one mode",
+            union.size,
+            (forKids + forAdults).distinct().size
+        )
+    }
+
+    @Test
+    fun `categories curated per mode are passed through untouched`() {
+        // Genres, services, studios and decades carry their split in the
+        // category lists themselves, so the publish filter must not touch
+        // them - and must never silently empty a category it does not own.
+        val genres = chips(listOf("Comedy", "Drama"))
+        assertEquals(genres, browseEntriesFor("genres", genres, isKidsMode = true))
+        assertEquals(genres, browseEntriesFor("genres", genres, isKidsMode = false))
+        assertEquals(genres, browseEntriesFor("decades", genres, isKidsMode = true))
     }
 }
