@@ -89,6 +89,10 @@ object AppPreferences {
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
+    // Which settings pane to reopen on, by SettingsPane name. Device-local on
+    // purpose: the pane someone was last reading says nothing about the
+    // account, and syncing it would drag a phone's "Data & Backup" onto the TV.
+    private const val KEY_LAST_SETTINGS_PANE = "last_settings_pane"
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, PREFS_NAME),
@@ -1230,6 +1234,15 @@ object AppPreferences {
     fun setBadgesAboveFile(context: Context, above: Boolean) {
         prefs(context).edit().putBoolean(KEY_BADGES_ABOVE_FILE, above).apply()
         syncDisplayPrefsBlob(context)
+    }
+
+    // ── Settings: the pane the rail should reopen on ─────────────────
+    /** A [com.kennyb1201.kbstream.ui.settings.SettingsPane] name, or null. */
+    fun getLastSettingsPane(context: Context): String? =
+        prefs(context).getString(KEY_LAST_SETTINGS_PANE, null)
+
+    fun setLastSettingsPane(context: Context, pane: String) {
+        prefs(context).edit().putString(KEY_LAST_SETTINGS_PANE, pane).apply()
     }
 
     /**

@@ -80,17 +80,97 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 // The old single-scroll screen stacked 7 sections ~10 screens tall on a
 // TV. Two panes now: a narrow D-pad-friendly rail on the left jumps
 // straight to a section; the right pane shows one section at a time.
-internal enum class SettingsPane(val label: String) {
-    INTEGRATIONS("Integrations"),
-    PLAYBACK("Playback"),
-    INTERFACE("Interface"),
-    HIDDEN("Hidden Titles"),
-    VIDEO("Video & Audio"),
-    LANGUAGE("Language"),
-    SUBTITLES("Subtitles"),
-    DATA("Data & Backup"),
-    SYNC("Sync"),
-    ABOUT("About")
+/**
+ * Rail grouping.
+ *
+ * Ten flat rows told the user nothing about which entries were playback and
+ * which were app plumbing, and the one no one remembers (Hidden Titles) sat
+ * between two unrelated ones. These headings are drawn between the clusters
+ * on the rail, in this order.
+ */
+internal enum class SettingsGroup(val label: String) {
+    LIBRARY("Library & Sources"),
+    PLAYBACK("Playback & Picture"),
+    APP("App")
+}
+
+/**
+ * One settings pane: its rail label, the group it sits under, and a one-line
+ * blurb shown under the rail heading (and again under the pane title) so a TV
+ * viewer knows what is inside before opening it.
+ *
+ * Declared group-major, and that ORDER is load-bearing: the rail draws a
+ * group heading whenever the group changes while walking the list, so a pane
+ * left in the wrong place would print its heading a second time. See
+ * SettingsPaneTest.
+ */
+internal enum class SettingsPane(
+    val label: String,
+    val group: SettingsGroup,
+    val blurb: String
+) {
+    INTEGRATIONS(
+        "Integrations",
+        SettingsGroup.LIBRARY,
+        "Profiles, add-ons, accounts and API keys"
+    ),
+    HIDDEN(
+        "Hidden Titles",
+        SettingsGroup.LIBRARY,
+        "Titles you hid from every screen"
+    ),
+    PLAYBACK(
+        "Playback",
+        SettingsGroup.PLAYBACK,
+        "Auto-play, skipping, binge grouping and stream picks"
+    ),
+    VIDEO(
+        "Video & Audio",
+        SettingsGroup.PLAYBACK,
+        "Buffer, player engine, Dolby Vision and picture-in-picture"
+    ),
+    LANGUAGE(
+        "Language",
+        SettingsGroup.PLAYBACK,
+        "Preferred audio and subtitle language"
+    ),
+    SUBTITLES(
+        "Subtitles",
+        SettingsGroup.PLAYBACK,
+        "Caption size, background and position"
+    ),
+    INTERFACE(
+        "Interface",
+        SettingsGroup.APP,
+        "Home rails, posters, theme and notifications"
+    ),
+    DATA(
+        "Data & Backup",
+        SettingsGroup.APP,
+        "Backup, restore, caches and clearing history"
+    ),
+    SYNC(
+        "Sync",
+        SettingsGroup.APP,
+        "Cloud sync health and what has been uploaded"
+    ),
+    ABOUT(
+        "About",
+        SettingsGroup.APP,
+        "Version, build and the in-app updater"
+    );
+
+    companion object {
+        /**
+         * A pane name read back from prefs, falling back to the first pane.
+         *
+         * Pure so the fallback is unit-tested: a name written by a build that
+         * has since dropped a pane must not take out the screen the user opens
+         * to fix things.
+         */
+        internal fun fromStored(raw: String?): SettingsPane =
+            entries.firstOrNull { it.name == raw?.trim() } ?: entries.first()
+    }
 }
 
 @Composable
@@ -241,7 +321,11 @@ fun SettingsScreen(
     var subsKeyInput by remember { mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context)) }
     var subsKeySaved by remember { mutableStateOf(false) }
 
-    var selectedPane by remember { mutableStateOf(SettingsPane.INTEGRATIONS) }
+    // Reopen on the pane last read (device-local, deliberately not synced):
+    // the rail is ten panes deep and the one being tuned is rarely the first.
+    var selectedPane by remember {
+        mutableStateOf(SettingsPane.fromStored(AppPreferences.getLastSettingsPane(context)))
+    }
 
     val backupScope = rememberCoroutineScope()
 
@@ -325,11 +409,15 @@ fun SettingsScreen(
         ) {
             SettingsNavRail(
                 selected = selectedPane,
-                onSelect = { selectedPane = it }
+                onSelect = { pane ->
+                    selectedPane = pane
+                    AppPreferences.setLastSettingsPane(context, pane.name)
+                }
             )
         }
         SettingsContentHost(
-            title = selectedPane.label
+            title = selectedPane.label,
+            blurb = selectedPane.blurb
         ) {
                 if (selectedPane == SettingsPane.INTEGRATIONS) {
 
@@ -1980,7 +2068,11 @@ private fun SettingsNavRail(
     selected: SettingsPane,
     onSelect: (SettingsPane) -> Unit
 ) {
-    var focusedIndex by remember { mutableIntStateOf(-1) }
+    // The pane whose blurb the rail shows under its heading. On a TV the
+    // description has to arrive BEFORE a pane is opened, and a second line on
+    // every row pushed the rail past a 1080p screen, so it lives up here.
+    var focusedPane by remember { mutableStateOf<SettingsPane?>(null) }
+    val railHint = focusedPane ?: selected
     // TV entry point: focus lands on the first rail item once. Selecting a
     // pane must NOT move focus — the user stays on the rail to keep browsing.
     val firstItemFocus = remember { FocusRequester() }
@@ -1998,21 +2090,50 @@ private fun SettingsNavRail(
         Text(
             text = "SETTINGS",
             color = KBAccent,
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(bottom = 18.dp)
+            style = MaterialTheme.typography.headlineMedium
         )
-        SettingsPane.entries.forEachIndexed { index, pane ->
-            val selectedHere = pane == selected
-            val itemModifier = if (index == 0) {
-                Modifier.focusRequester(firstItemFocus)
-            } else {
-                Modifier
+        Text(
+            text = railHint.blurb,
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 6.dp, bottom = 18.dp)
+        )
+        // Group heading drawn inline, before the first row of each group. One
+        // flat pass over the panes leaves the row layout and its braces below
+        // untouched, and because the panes are declared group-major each
+        // heading prints exactly once. The rail already scrolls (see the
+        // wrapper in SettingsScreen), so the extra rows stay reachable.
+        var drawnGroup: SettingsGroup? = null
+        SettingsPane.entries.forEach { pane ->
+            if (pane.group != drawnGroup) {
+                drawnGroup = pane.group
+                Text(
+                    text = pane.group.label.uppercase(),
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(start = 14.dp, top = 12.dp, bottom = 2.dp)
+                )
             }
+            val selectedHere = pane == selected
             KBCard(
                 onClick = { onSelect(pane) },
-                modifier = itemModifier
+                modifier = Modifier
                     .fillMaxWidth()
-                    .onFocusChanged { focusedIndex = if (it.isFocused) index else -1 }
+                    .then(
+                        // The top row is where the TV entry focus lands; every
+                        // other row is one D-pad press away.
+                        if (pane == SettingsPane.entries.first()) {
+                            Modifier.focusRequester(firstItemFocus)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .onFocusChanged { focusState ->
+                        // Only ever SET the hint: the row being left reports
+                        // isFocused = false after the new row has already set
+                        // its own, so clearing here would blank it mid-walk.
+                        if (focusState.isFocused) focusedPane = pane
+                    }
             ) {
                 Row(
                     modifier = Modifier
@@ -2054,6 +2175,9 @@ private fun SettingsNavRail(
 @Composable
 private fun SettingsContentHost(
     title: String,
+    // What the pane holds, in the same words the rail used to sell it: the
+    // pane then reads as a continuation of the rail rather than a new page.
+    blurb: String,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     // No focus stealing here: switching panes keeps focus on the rail.
@@ -2080,7 +2204,13 @@ private fun SettingsContentHost(
             text = title.uppercase(),
             color = KBAccent,
             style = MaterialTheme.typography.headlineSmall,
-            modifier = Modifier.padding(bottom = 8.dp)
+            modifier = Modifier.padding(bottom = 2.dp)
+        )
+        Text(
+            text = blurb,
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(bottom = 14.dp)
         )
         content()
     }
