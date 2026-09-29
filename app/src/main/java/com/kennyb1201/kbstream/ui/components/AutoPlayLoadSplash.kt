@@ -36,7 +36,6 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
-import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
@@ -114,7 +113,16 @@ fun AutoPlayLoadSplash(
 
                 Text(
                     text = subtitle,
-                    color = KBTextLo,
+                    // KBTextHi, not the dim tone this started as. Nothing here
+                    // is scrimmed: the backdrop is whatever widescreen art the
+                    // title has, and a mid-grey subtitle on a bright or busy
+                    // frame is the one piece of text on the splash a viewer
+                    // cannot read - reported from the field on the
+                    // "Finding sources" hand-off, which is the splash most
+                    // people ever see. Hierarchy is carried by size and weight
+                    // (headlineMedium vs bodyMedium) instead of by dimming a
+                    // line that has to sit on artwork.
+                    color = KBTextHi,
                     style = MaterialTheme.typography.bodyMedium
                 )
             }
