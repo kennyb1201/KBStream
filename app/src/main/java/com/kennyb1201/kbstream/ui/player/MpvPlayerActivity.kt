@@ -182,6 +182,10 @@ class MpvPlayerActivity : ComponentActivity() {
     }
 
     private var surface: MpvPlayerView? = null
+    // Panel refresh-rate matching (Settings → Playback → Match Content Frame
+    // Rate), created the first time mpv reports a rate and null when the
+    // setting is off — which is what makes the call sites no-ops.
+    private var frameRateMatcher: FrameRateMatcher? = null
     private var loadingContainer: View? = null
     private var loadingTitle: TextView? = null
     private var loadingSubtitle: TextView? = null
@@ -648,6 +652,16 @@ class MpvPlayerActivity : ComponentActivity() {
                 "The stream may be offline, or the source may have changed. " +
                     "Switch player to try this in ExoPlayer, or press Back to exit."
             )
+        }
+        view.onVideoFrameRateChanged = { fps ->
+            // The same setting the main player reads, applied from the rate mpv
+            // reports (see FrameRateMatcher). Created here rather than up
+            // front because the mode it restores has to be captured before any
+            // switch, and this is the first moment a switch is possible.
+            if (frameRateMatcher == null && AppPreferences.getMatchFrameRate(this@MpvPlayerActivity)) {
+                frameRateMatcher = FrameRateMatcher(this@MpvPlayerActivity)
+            }
+            frameRateMatcher?.onContentFrameRate(fps)
         }
 
         setupControls()
@@ -3577,12 +3591,21 @@ class MpvPlayerActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) requestAudioFocus()
+        // Coming back to a session whose panel mode was restored on the way out
+        // (see onStop): mpv reported its rate when the file loaded, which has
+        // already happened, so it is re-offered here rather than waited for.
+        surface?.videoFrameRate()?.let { fps -> frameRateMatcher?.onContentFrameRate(fps) }
     }
 
     override fun onStop() {
         super.onStop()
         // mpv is paused just below, so guide writes may proceed again.
         EpgWriteGate.setPlayerActive(false)
+        // Paused and off screen, so the panel goes back to the mode the rest of
+        // the TV interface expects and onStart asks for it again on the way
+        // back. Deliberately not in onPause: Picture-in-Picture keeps the video
+        // running, and the matched rate is still the right one there.
+        frameRateMatcher?.release()
         handler.removeCallbacks(hideControlsRunnable)
         if (playerSwitchStarted) {
             // Another engine has been launched and this Activity stays in the
@@ -3625,6 +3648,10 @@ class MpvPlayerActivity : ComponentActivity() {
         // Safety net for a player that never reached onStop: leaving this
         // set would hold guide writes back for the life of the process.
         EpgWriteGate.setPlayerActive(false)
+        // Safety net for a session destroyed without a stop of its own;
+        // release() is a no-op once onStop has already restored the panel.
+        frameRateMatcher?.release()
+        frameRateMatcher = null
         trickplay?.release()
         trickplay = null
         sleepTimerSection?.release()

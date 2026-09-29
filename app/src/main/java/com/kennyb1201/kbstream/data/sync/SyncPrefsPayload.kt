@@ -149,11 +149,13 @@ object PrefsPayloadBuilder {
 
     /**
      * Decoder/playback prefs that must NEVER sync: they describe what THIS
-     * device can decode, so importing another device's choices would select a
-     * decoder the viewer's TV may not have. Nothing here is consulted at
-     * runtime — [SYNCED_PREF_KEYS] is an allow-list, so a key cannot leave the
-     * device without being on it — and SyncScopeTest walks this list against
-     * that one, which is what gives the exclusions teeth.
+     * device can decode — or, for `match_frame_rate`, what its panel can
+     * display — so importing another device's choices would select a decoder
+     * the viewer's TV may not have, or ask a panel for a mode it does not
+     * report. Nothing here is consulted at runtime — [SYNCED_PREF_KEYS] is an
+     * allow-list, so a key cannot leave the device without being on it — and
+     * SyncScopeTest walks this list against that one, which is what gives the
+     * exclusions teeth.
      */
     internal val EXCLUDED_PREF_KEYS = setOf(
         "default_buffer_mode",
@@ -170,7 +172,8 @@ object PrefsPayloadBuilder {
         "dv_convert_p7_to_81",
         "dv_convert_p5_to_81",
         "dv_p5_gles_correction",
-        "default_aspect_ratio"
+        "default_aspect_ratio",
+        "match_frame_rate"                 // which refresh rates this panel can do
     )
 
     const val KEY_DISPLAY_PREFS = "display_prefs"

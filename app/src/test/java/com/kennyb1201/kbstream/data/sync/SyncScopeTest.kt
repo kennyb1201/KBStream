@@ -41,4 +41,20 @@ class SyncScopeTest {
             "force_software_decoder" in excluded
         )
     }
+
+    @Test
+    fun `frame-rate matching stays per-device`() {
+        // A TCL panel and a Fire TV Stick do not report the same modes, so a
+        // synced choice would have one device asking for a mode the other does
+        // not have. The pref is device-local, next to the decoder choices it
+        // sits beside rather than with the display preferences.
+        assertTrue(
+            "match_frame_rate must be excluded",
+            "match_frame_rate" in PrefsPayloadBuilder.EXCLUDED_PREF_KEYS
+        )
+        assertFalse(
+            "match_frame_rate must not sync",
+            "match_frame_rate" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        )
+    }
 }

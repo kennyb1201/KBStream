@@ -38,6 +38,10 @@ object AppPreferences {
     private const val KEY_STILL_THERE_EPISODES = "still_there_episodes"
     private const val KEY_FORCE_SOFTWARE_DECODER = "force_software_decoder"
     private const val KEY_ENABLE_TUNNELING = "enable_tunneling"
+    // Matching the panel's refresh rate to the content. Device-local: what a
+    // box's display can do is a property of that box, exactly like the decoder
+    // choices it sits beside (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    private const val KEY_MATCH_FRAME_RATE = "match_frame_rate"
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_PLAYER_ENGINE = "player_engine" // see PLAYER_ENGINE_* / PlayerEngine
     private const val KEY_MPV_FOR_ANIME = "mpv_for_anime" // see getMpvForAnime / AnimeDetect
@@ -452,6 +456,16 @@ object AppPreferences {
 
     fun setEnableTunneling(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_ENABLE_TUNNELING, enabled).apply()
+    }
+
+    // ── Match Content Frame Rate ────────────────────────────────────
+    // Off by default: it changes what the whole panel does, so it is opted into
+    // (see FrameRateMatcher).
+    fun getMatchFrameRate(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_MATCH_FRAME_RATE, false)
+
+    fun setMatchFrameRate(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_MATCH_FRAME_RATE, enabled).apply()
     }
 
     // ── Force software decoder (legacy) ──────────────────────────────

@@ -638,6 +638,11 @@ class NativePlayerActivity : ComponentActivity() {
 
     // Views
     private lateinit var playerView: KBPlayerView
+    // Panel refresh-rate matching (Settings → Playback → Match Content Frame
+    // Rate). Created once per activity, before the player can report a video
+    // track, and null when the setting is off — which is what makes every call
+    // site below a no-op rather than a check repeated at each one.
+    private var frameRateMatcher: FrameRateMatcher? = null
     private lateinit var p5VideoGlesView: P5VideoGlesView
     // Whether P5 color correction via GLES is currently active
     private lateinit var liveBadge: TextView
@@ -4903,6 +4908,12 @@ class NativePlayerActivity : ComponentActivity() {
                 playWhenReady = !fromActorReturn
             }
 
+            // One instance per activity (see FrameRateMatcher): the mode it
+            // restores on the way out has to be the one from before any
+            // switch, so a rebuilt player must not hand it a second one.
+            if (frameRateMatcher == null && AppPreferences.getMatchFrameRate(this@NativePlayerActivity)) {
+                frameRateMatcher = FrameRateMatcher(this@NativePlayerActivity)
+            }
             player.addListener(createPlayerListener())
             player.addAnalyticsListener(createAnalyticsListener())
             // Subtitles render through SubtitleCueHandler (below) so the
@@ -5249,6 +5260,12 @@ class NativePlayerActivity : ComponentActivity() {
                     val fmt = group.getTrackFormat(i)
                     if (group.type == C.TRACK_TYPE_VIDEO) {
                         videoTrackPresent = true
+                        // Offer the panel the content's own rate, the earliest
+                        // point it is known. A track that reports none carries
+                        // media3's NO_VALUE, which the matcher refuses — so an
+                        // unmeasured track leaves the panel alone instead of
+                        // switching it to something arbitrary.
+                        frameRateMatcher?.onContentFrameRate(fmt.frameRate.toDouble())
                         val codec = fmt.codecs.orEmpty()
                         val colorInfo = fmt.colorInfo
                         streamWidth = fmt.width
@@ -9190,6 +9207,11 @@ class NativePlayerActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         EpgWriteGate.setPlayerActive(false)
+        // Playback is over for this screen, so the panel goes back to the mode
+        // the rest of the TV interface expects. Deliberately not in onPause:
+        // Picture-in-Picture leaves the video running, and the matched rate is
+        // still the right one there.
+        frameRateMatcher?.release()
         // Release session & player early so the next NativePlayerActivity
         // doesn't collide with a stale MediaSession ID.
         handler.removeCallbacksAndMessages(null)
@@ -9261,6 +9283,10 @@ class NativePlayerActivity : ComponentActivity() {
         // Safety net for a player that never reached onStop's counterpart:
         // leaving this set would hold guide writes back forever.
         EpgWriteGate.setPlayerActive(false)
+        // release() is a no-op once onStop has already put the panel back, so
+        // this is only the safety net for a player destroyed without stopping.
+        frameRateMatcher?.release()
+        frameRateMatcher = null
         p5VideoGlesView.release()
         trickplay?.release()
         trickplay = null

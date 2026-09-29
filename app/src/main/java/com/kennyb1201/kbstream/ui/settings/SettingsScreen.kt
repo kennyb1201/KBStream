@@ -205,6 +205,7 @@ fun SettingsScreen(
     }
     var autoSkipIntro by remember { mutableStateOf(AppPreferences.getAutoSkipIntro(context)) }
     var autoSkipCredits by remember { mutableStateOf(AppPreferences.getAutoSkipCredits(context)) }
+    var matchFrameRate by remember { mutableStateOf(AppPreferences.getMatchFrameRate(context)) }
     var bingeGroupPrefer by remember { mutableStateOf(AppPreferences.getBingeGroupPrefer(context)) }
     var bingeGroupReuse by remember { mutableStateOf(AppPreferences.getBingeGroupReuse(context)) }
     var bingeGroupFallback by remember { mutableStateOf(AppPreferences.getBingeGroupFallback(context)) }
@@ -1453,6 +1454,18 @@ fun SettingsScreen(
                     onToggle = {
                         autoSkipCredits = it
                         AppPreferences.setAutoSkipCredits(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Match Content Frame Rate",
+                    description = "Ask the TV to switch its refresh rate to match the title \u2014 24 Hz for film, 50 Hz for 25 fps \u2014 which is what removes the stutter from slow pans. The picture blanks for a moment while the TV re-syncs, and the panel is put back when playback ends. Only the displays that report a matching mode can do it; on the rest this changes nothing. Set per device, so it does not follow your profile to another TV.",
+                    checked = matchFrameRate,
+                    onToggle = {
+                        matchFrameRate = it
+                        AppPreferences.setMatchFrameRate(context, it)
                     }
                 )
 

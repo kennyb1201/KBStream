@@ -100,6 +100,16 @@ class MpvPlayerView @JvmOverloads constructor(
     /** The file never opened, or mpv gave up on it. */
     var onPlaybackError: ((String) -> Unit)? = null
 
+    /**
+     * The video track's frame rate, once mpv knows one.
+     *
+     * Offered to whatever matches the panel to the content (see
+     * [FrameRateMatcher]). Fires at most twice per file — once when it loads,
+     * and again if the video output is reconfigured — because the rate is a
+     * property of the file, not of playback.
+     */
+    var onVideoFrameRateChanged: ((Double) -> Unit)? = null
+
     private var initialized = false
     private var released = false
 
@@ -971,6 +981,9 @@ class MpvPlayerView @JvmOverloads constructor(
             MPVLib.MPV_EVENT_FILE_LOADED -> {
                 fileLoaded = true
                 applyPendingSeek()
+                // The container's rate is known from here, so a panel switch
+                // happens before the first frame rather than over it.
+                publishVideoFrameRate()
                 val title = getPropertyStringOrNull("media-title")
                 Log.i(
                     TAG,
@@ -990,6 +1003,9 @@ class MpvPlayerView @JvmOverloads constructor(
 
             MPVLib.MPV_EVENT_VIDEO_RECONFIG -> {
                 Log.i(TAG, "MPV video reconfigured: ${loadedFileDiagnostics()}")
+                // Second chance: a stream whose headers carried no rate reports
+                // one once the first frames have been decoded.
+                publishVideoFrameRate()
             }
         }
     }
@@ -1112,6 +1128,30 @@ class MpvPlayerView @JvmOverloads constructor(
 
     private fun getPropertyBooleanOrNull(name: String): Boolean? =
         runCatching { MPVLib.getPropertyBoolean(name) }.getOrNull()
+
+    private fun getPropertyDoubleOrNull(name: String): Double? =
+        runCatching { MPVLib.getPropertyDouble(name) }.getOrNull()
+
+    /**
+     * The video track's frame rate in fps, or null when mpv has reported none
+     * (an audio-only file, or headers that have not been parsed yet).
+     *
+     * Three names are tried because they answer slightly different questions
+     * and not every build exposes all of them: `container-fps` is what the
+     * container declares, `video-params/container-fps` is the same figure read
+     * off the video parameter tree, and `estimated-vf-fps` is what mpv has
+     * measured while decoding. For ordinary content all three agree, which is
+     * all a display match needs.
+     */
+    fun videoFrameRate(): Double? =
+        getPropertyDoubleOrNull("container-fps")
+            ?: getPropertyDoubleOrNull("video-params/container-fps")
+            ?: getPropertyDoubleOrNull("estimated-vf-fps")
+
+    /** Offers [videoFrameRate] to the observer, when it has a value yet. */
+    private fun publishVideoFrameRate() {
+        videoFrameRate()?.let { fps -> post { onVideoFrameRateChanged?.invoke(fps) } }
+    }
 
     /**
      * mpv wants a language list ("en,eng"), the app stores a BCP-47 tag
