@@ -43,6 +43,7 @@ import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.hideTarget
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -266,6 +267,23 @@ fun CollectionScreen(
                 title = part.title
                     ?: part.name
                     ?: "",
+                // The part's TMDB id plus the IMDB one this screen already
+                // resolved for the badge, so the add reaches the trackers.
+                libraryTarget = LibraryAddTarget(
+                    mediaType = "movie",
+                    imdbId = resolvedIds[
+                        viewModel.lookupKey(part.id, "movie")
+                    ],
+                    tmdbId = part.id,
+                    title = part.title
+                        ?: part.name
+                        ?: "Untitled",
+                    year = (part.releaseDate)
+                        ?.take(4)?.toIntOrNull(),
+                    posterUrl = part.posterPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { TmdbRepository.POSTER_BASE + it }
+                ),
                 hideTarget = hideTarget(
                     part.title ?: part.name ?: "",
                     "movie",

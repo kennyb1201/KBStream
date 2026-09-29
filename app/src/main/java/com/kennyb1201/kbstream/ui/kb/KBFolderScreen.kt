@@ -14,6 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.kb.KBContentItem
+import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
@@ -104,6 +106,7 @@ fun KBFolderScreen(
             "series", "tv" -> "series"
             else -> "movie"
         }
+        val menuIds = LibraryIds.split(item.id)
         val menuWatched = item.id.takeIf { it.startsWith("tt") }?.let { imdbId ->
             viewModel.watchedKey(imdbId, normalizedType) in watchedKeys
         } ?: item.tmdbId?.let { tmdbId ->
@@ -112,6 +115,20 @@ fun KBFolderScreen(
         } ?: false
         PosterContextMenu(
             title = item.title ?: "Untitled",
+            // A KB row carries whatever its add-on sent: an IMDB id, a
+            // "tmdb:123" id, or a stream key with the title id in its head
+            // (LibraryIds strips that). When the head is a TMDB id, the one
+            // this screen already resolved for the watched badge supplies the
+            // IMDB half, so the add reaches the trackers.
+            libraryTarget = LibraryAddTarget(
+                mediaType = normalizedType,
+                imdbId = menuIds.imdbId
+                    ?: item.tmdbId?.let { resolvedIds["$normalizedType::$it"] },
+                tmdbId = menuIds.tmdbId ?: item.tmdbId,
+                title = item.title ?: "Untitled",
+                year = item.year?.take(4)?.toIntOrNull(),
+                posterUrl = item.posterUrl
+            ),
             hideTarget = hideTarget(
                 item.title ?: "Untitled",
                 item.type,

@@ -7,6 +7,8 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
@@ -17,10 +19,34 @@ import kotlinx.coroutines.launch
  * Watch) and/or the MDBList watchlist when those accounts are connected.
  * Remote mirrors are best-effort — a tracker outage never blocks or
  * undoes the local save.
+ *
+ * Every remote call runs on [mirrorScope], never on the caller's scope: a
+ * library action is started from a menu that closes as it fires, so the
+ * caller's scope is the one thing the mirrors cannot use. See the scope's
+ * own doc for what that cost when they did.
  */
 object LibraryMirror {
 
     private const val TAG = "LIBRARY_MIRROR"
+
+    /**
+     * The scope the tracker mirrors run on.
+     *
+     * Deliberately not the caller's. An add is started by a long-press menu,
+     * and that menu (and the dialog behind it) is gone — and its composition
+     * scope cancelled — the instant the row is pressed. A mirror launched on
+     * the caller's scope is therefore racing a cancellation it usually loses:
+     * the local write lands (it is the next statement) while the Simkl and
+     * MDBList adds it was supposed to fire never leave the device, and the
+     * menu has already closed, so nothing says so. That is what "I added it to
+     * my watchlist and nothing showed up" looked like from the sofa.
+     *
+     * This scope is process-lifetime and its job is a [SupervisorJob], so one
+     * tracker failing never takes the other with it — the same shape
+     * MdbListClient's session scope and the startup scope use.
+     */
+    private val mirrorScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Simkl is signed in, so adds will mirror to its watchlist too. */
     fun simklConnected(context: Context): Boolean {
@@ -75,15 +101,14 @@ object LibraryMirror {
     }
 
     /**
-     * Saves the title to the local My List, then fires the remote mirrors
-     * in [scope]. Mirrors fire even when the local list already had the
-     * title, so a previously partial sync (title on one tracker but not
-     * the other) heals on a repeat add. Returns true when the title was
-     * newly added locally.
+     * Saves the title to the local My List, then fires the remote mirrors.
+     * Mirrors fire even when the local list already had the title, so a
+     * previously partial sync (title on one tracker but not the other)
+     * heals on a repeat add. Returns true when the title was newly added
+     * locally.
      */
     fun addToLibrary(
         context: Context,
-        scope: CoroutineScope,
         mediaType: String,
         imdbId: String?,
         tmdbId: Int?,
@@ -103,7 +128,7 @@ object LibraryMirror {
             posterUrl = r.posterUrl
         )
 
-        launchMirrors(context, scope, r)
+        launchMirrors(context, r)
         return added
     }
 
@@ -114,10 +139,9 @@ object LibraryMirror {
      * not possible — local ids are negative — so this only fires for real
      * MDBList ids chosen from the picker).
      */
-    fun addToList(
+    suspend fun addToList(
         context: Context,
-        scope: CoroutineScope,
-        list: LibraryList,
+        listId: Int,
         mediaType: String,
         imdbId: String?,
         tmdbId: Int?,
@@ -127,44 +151,43 @@ object LibraryMirror {
     ): Boolean {
         val r = ref(mediaType, imdbId, tmdbId, title, year, posterUrl) ?: return false
 
-        val added = if (list.id > 0) {
-            // MDBList personal list: mirror remotely, no local copy.
-            if (mdbListConnected(context)) {
-                scope.launch {
-                    runCatchingCancellable {
-                        MdbListClient.addToList(
-                            context,
-                            list.id,
-                            listOf(
-                                MdbListEntry(
-                                    title = r.title,
-                                    mediaType = r.normalizedType,
-                                    year = r.year,
-                                    poster = r.posterUrl,
-                                    imdbId = r.mdbImdbId,
-                                    tmdbId = r.tmdbId
-                                )
-                            )
+        if (listId > 0) {
+            // MDBList personal list: remote only, no local copy. The caller
+            // waits for the POST because this is the case that used to report
+            // success unconditionally: the row ticked "ADDED ✓" and the add
+            // was fired off on the dialog's scope, so a rejection by MDBList
+            // (or the dialog closing) looked exactly like a save.
+            if (!mdbListConnected(context)) return false
+            return runCatchingCancellable {
+                MdbListClient.addToList(
+                    context,
+                    listId,
+                    listOf(
+                        MdbListEntry(
+                            title = r.title,
+                            mediaType = r.normalizedType,
+                            year = r.year,
+                            poster = r.posterUrl,
+                            imdbId = r.mdbImdbId,
+                            tmdbId = r.tmdbId
                         )
-                    }.onFailure { e ->
-                        Log.e(TAG, "mdblist addToList failed: ${e.message}", e)
-                    }
-                }
-            }
-            mdbListConnected(context)
-        } else {
-            LocalLibraryStore.addToLocalList(
-                context,
-                listId = list.id,
-                mediaType = r.normalizedType,
-                imdbId = r.imdbId,
-                tmdbId = r.tmdbId,
-                title = r.title,
-                year = r.year,
-                posterUrl = r.posterUrl
-            )
+                    )
+                )
+            }.onFailure { e ->
+                Log.e(TAG, "mdblist addToList failed: ${e.message}", e)
+            }.getOrDefault(false)
         }
-        return added
+
+        return LocalLibraryStore.addToLocalList(
+            context,
+            listId = listId,
+            mediaType = r.normalizedType,
+            imdbId = r.imdbId,
+            tmdbId = r.tmdbId,
+            title = r.title,
+            year = r.year,
+            posterUrl = r.posterUrl
+        )
     }
 
     /**
@@ -174,7 +197,6 @@ object LibraryMirror {
      */
     fun removeFromLibrary(
         context: Context,
-        scope: CoroutineScope,
         mediaType: String,
         imdbId: String?,
         tmdbId: Int?
@@ -196,7 +218,7 @@ object LibraryMirror {
                 tmdbId = tmdbId
             )
             if (entry.imdbId != null || entry.tmdbId != null) {
-                scope.launch {
+                mirrorScope.launch {
                     runCatchingCancellable {
                         MdbListClient.removeFromWatchlist(context, listOf(entry))
                     }.onFailure { e ->
@@ -213,7 +235,6 @@ object LibraryMirror {
     /** Removes from one MDBList personal list (ids only; best-effort). */
     fun removeFromMdbList(
         context: Context,
-        scope: CoroutineScope,
         listId: Int,
         mediaType: String,
         imdbId: String?,
@@ -233,7 +254,7 @@ object LibraryMirror {
             tmdbId = tmdbId
         )
         if (entry.imdbId == null && entry.tmdbId == null) return
-        scope.launch {
+        mirrorScope.launch {
             runCatchingCancellable {
                 MdbListClient.removeFromList(context, listId, listOf(entry))
             }.onFailure { e ->
@@ -254,8 +275,8 @@ object LibraryMirror {
     }
 
     /** Watchlist mirrors for one add (Simkl plan-to-watch + MDBList). */
-    private fun launchMirrors(context: Context, scope: CoroutineScope, r: TitleRef) {
-        scope.launch {
+    private fun launchMirrors(context: Context, r: TitleRef) {
+        mirrorScope.launch {
             if (simklConnected(context)) {
                 runCatchingCancellable {
                     SimklRepository.getInstance(context).addToWatchlist(

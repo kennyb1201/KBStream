@@ -257,7 +257,6 @@ class LibraryViewModel(
                 LibrarySource.LOCAL -> {
                     LibraryMirror.removeFromLibrary(
                         context = appContext,
-                        scope = viewModelScope,
                         mediaType = item.mediaType,
                         imdbId = item.imdbId,
                         tmdbId = item.tmdbId
@@ -283,7 +282,6 @@ class LibraryViewModel(
                 LibrarySource.MDBLIST_WATCHLIST -> {
                     LibraryMirror.removeFromLibrary(
                         context = appContext,
-                        scope = viewModelScope,
                         mediaType = item.mediaType,
                         imdbId = item.imdbId,
                         tmdbId = item.tmdbId
@@ -299,7 +297,6 @@ class LibraryViewModel(
                     val listId = item.listId ?: return@launch
                     LibraryMirror.removeFromMdbList(
                         context = appContext,
-                        scope = viewModelScope,
                         listId = listId,
                         mediaType = item.mediaType,
                         imdbId = item.imdbId,

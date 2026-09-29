@@ -41,8 +41,10 @@ import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibraryMirror
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
@@ -132,9 +134,33 @@ fun LibraryAddToListDialog(
     var rows by remember { mutableStateOf<List<LibraryPickerRow>>(emptyList()) }
     var memberships by remember { mutableStateOf<Set<String>>(emptySet()) }
     var doneLabels by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var failedLabels by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showCreateField by remember { mutableStateOf(false) }
     var newListName by remember { mutableStateOf("") }
     var loadingLists by remember { mutableStateOf(true) }
+
+    /**
+     * The target every row of this dialog actually adds, with the IMDB id
+     * resolved from the TMDB one when the calling screen only knew the latter.
+     *
+     * This is the whole fix for "I picked my list and my watchlist and nothing
+     * showed up": a browse screen (actor, studio/network, genre, decade,
+     * collection) knows a TMDB id and nothing else, and every tracker mirror
+     * keyed off the pair it was handed rather than resolving the other half.
+     * The ticks, the adds and the mirrors all read the same pair from here.
+     */
+    var target by remember {
+        mutableStateOf(
+            LibraryAddTarget(
+                mediaType = mediaType,
+                imdbId = imdbId,
+                tmdbId = tmdbId,
+                title = title,
+                year = year,
+                posterUrl = posterUrl
+            )
+        )
+    }
 
     val normalizedType = when (mediaType.lowercase()) {
         "tv", "series" -> "series"
@@ -153,6 +179,13 @@ fun LibraryAddToListDialog(
     }
 
     LaunchedEffect(Unit) {
+        // Resolve before anything below reads an id: the ticks, the adds and
+        // the tracker mirrors must all key off the same pair.
+        val resolved = LibraryAdds.resolve(context, target)
+        target = resolved
+        val imdb = resolved.imdbId
+        val tmdb = resolved.tmdbId
+
         // Local rows are instant; remote lists load best-effort in the
         // background so the dialog opens immediately.
         val localLists = LocalLibraryStore.userLists(context)
@@ -201,19 +234,19 @@ fun LibraryAddToListDialog(
         // Membership check: local My List synchronously; MDBList rows via
         // one items fetch per list (capped, fail-soft).
         val member = mutableSetOf<String>()
-        if (LocalLibraryStore.isInMyList(context, normalizedType, imdbId, tmdbId)) {
+        if (LocalLibraryStore.isInMyList(context, normalizedType, imdb, tmdb)) {
             member += "MY_LIST"
         }
         localLists.forEach { list ->
             val has = LocalLibraryStore.listItems(context, list.id)
-                .any { LocalLibraryStore.matches(it, normalizedType, imdbId, tmdbId) }
+                .any { LocalLibraryStore.matches(it, normalizedType, imdb, tmdb) }
             if (has) member += "local:${list.id}"
         }
         if (mdbConnected) {
             withContext(Dispatchers.IO) {
                 runCatchingCancellable {
                     MdbListClient.getWatchlist(context).any { entry ->
-                        matchesEntry(entry, normalizedType, imdbId, tmdbId)
+                        matchesEntry(entry, normalizedType, imdb, tmdb)
                     }
                 }.getOrDefault(false).let { if (it) member += "MDB_WATCHLIST" }
 
@@ -222,7 +255,7 @@ fun LibraryAddToListDialog(
                     .forEach { user ->
                         val has = runCatchingCancellable {
                             MdbListClient.getListItems(context, user.id).any { entry ->
-                                matchesEntry(entry, normalizedType, imdbId, tmdbId)
+                                matchesEntry(entry, normalizedType, imdb, tmdb)
                             }
                         }.getOrDefault(false)
                         if (has) member += "mdb:${user.id}"
@@ -249,72 +282,32 @@ fun LibraryAddToListDialog(
 
     fun addRow(row: LibraryPickerRow) {
         val key = rowKey(row)
-        scope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                when {
-                    row.isMyList -> LibraryMirror.addToLibrary(
-                        context = context,
-                        scope = scope,
-                        mediaType = normalizedType,
-                        imdbId = imdbId,
-                        tmdbId = tmdbId,
-                        title = title,
-                        year = year,
-                        posterUrl = posterUrl
-                    )
-
-                    row.isMdbListWatchlist -> {
-                        if (!LibraryMirror.mdbListConnected(context)) {
-                            false
-                        } else {
-                            runCatchingCancellable {
-                                com.kennyb1201.kbstream.data.mdblist.MdbListClient.addToWatchlist(
-                                    context,
-                                    listOf(
-                                        com.kennyb1201.kbstream.data.mdblist.MdbListEntry(
-                                            title = title,
-                                            mediaType = normalizedType,
-                                            year = year,
-                                            poster = posterUrl,
-                                            imdbId = imdbId?.takeIf { it.startsWith("tt") },
-                                            tmdbId = tmdbId
-                                        )
-                                    )
-                                )
-                            }.getOrDefault(false)
-                        }
-                    }
-
-                    row.list != null && row.list.id > 0 -> LibraryMirror.addToList(
-                        context = context,
-                        scope = scope,
-                        list = row.list,
-                        mediaType = normalizedType,
-                        imdbId = imdbId,
-                        tmdbId = tmdbId,
-                        title = title,
-                        year = year,
-                        posterUrl = posterUrl
-                    )
-
-                    row.list != null -> LocalLibraryStore.addToLocalList(
-                        context,
-                        listId = row.list.id,
-                        mediaType = normalizedType,
-                        imdbId = imdbId,
-                        tmdbId = tmdbId,
-                        title = title,
-                        year = year,
-                        posterUrl = posterUrl
-                    )
-
-                    else -> false
+        // Off the dialog's own scope, not on it: the row can be dismissed (or
+        // the Back key pressed) while the add is still resolving an id, and an
+        // add that dies with the dialog is the one failure this dialog cannot
+        // show — the row it happened on is gone.
+        //
+        // Every outcome is then reported on the row it came from. A row that
+        // neither ticks nor says it failed is the shape this dialog used to
+        // have for the most common failure of all - a target with no id the
+        // far end accepted - and from the sofa that is indistinguishable from
+        // the press not registering at all.
+        LibraryAdds.runAdd(
+            onResult = { ok ->
+                if (ok) {
+                    doneLabels = doneLabels + key
+                    memberships = memberships + key
+                    failedLabels = failedLabels - key
+                } else {
+                    failedLabels = failedLabels + key
                 }
             }
-            if (ok) {
-                doneLabels = doneLabels + key
-                memberships = memberships + key
-            }
+        ) {
+            LibraryAdds.addToRow(
+                context = context,
+                row = row,
+                target = target
+            )
         }
     }
 
@@ -410,15 +403,18 @@ fun LibraryAddToListDialog(
                     val key = rowKey(row)
                     val member = key in memberships
                     val justDone = key in doneLabels
+                    val failed = key in failedLabels
                     PickerRow(
                         label = row.label,
                         sublabel = row.sublabel,
                         trailing = when {
+                            failed -> "COULDN'T ADD"
                             justDone -> "ADDED ✓"
                             member -> "✓"
                             else -> null
                         },
                         trailingAccent = justDone,
+                        trailingError = failed,
                         onClick = { addRow(row) },
                         modifier = if (rows.indexOf(row) == 0) {
                             Modifier.focusRequester(focusRequester)
@@ -464,6 +460,7 @@ private fun PickerRow(
     sublabel: String,
     trailing: String?,
     trailingAccent: Boolean,
+    trailingError: Boolean = false,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -546,7 +543,11 @@ private fun PickerRow(
                     text = it,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.Bold,
-                    color = if (trailingAccent) KBAccent else KBTextLo,
+                    color = when {
+                        trailingError -> KBDanger
+                        trailingAccent -> KBAccent
+                        else -> KBTextLo
+                    },
                     modifier = Modifier.padding(start = 10.dp)
                 )
             }
@@ -606,7 +607,7 @@ private fun PickerAction(
 
 /** MDBList membership test shared by the dialog's row badges. */
 private fun matchesEntry(
-    entry: com.kennyb1201.kbstream.data.mdblist.MdbListEntry,
+    entry: MdbListEntry,
     mediaType: String,
     imdbId: String?,
     tmdbId: Int?

@@ -41,6 +41,8 @@ import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
@@ -302,8 +304,20 @@ fun CatalogGridScreen(
         val isWatched =
             viewModel.watchedKey(target.id, target.type) in watchedKeys
 
+        // Same split the rail menu uses: a grid item's id is "tmdb:123" on a
+        // TMDB-sourced catalog and "tt12345" on an add-on one.
+        val gridIds = LibraryIds.split(target.id)
+
         PosterContextMenu(
             title = target.name,
+            libraryTarget = LibraryAddTarget(
+                mediaType = target.type,
+                imdbId = gridIds.imdbId,
+                tmdbId = gridIds.tmdbId,
+                title = target.name,
+                year = target.yearOrNull,
+                posterUrl = target.poster
+            ),
             hideTarget = hideTarget(
                 target.name,
                 target.type,

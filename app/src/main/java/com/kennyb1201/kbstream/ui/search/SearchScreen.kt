@@ -37,7 +37,6 @@ import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.data.library.LibraryIds
-import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -137,11 +136,6 @@ fun SearchScreen(
     }
     var categoryChipMenu by remember {
         mutableStateOf<BrowseCategory?>(null)
-    }
-
-    // "Add to list…" picker target (title + which lists to offer).
-    var addToListTarget by remember {
-        mutableStateOf<LibraryAddTarget?>(null)
     }
 
     var lastPosterFocusRequester by remember {
@@ -514,14 +508,19 @@ fun SearchScreen(
             // ("tt12345"). Split the id so an IMDB-keyed result still gets a
             // real library badge, and so the picker below can actually add it.
             val resultIds = LibraryIds.split(result.id)
-            val resultInLibrary = viewModel.isInLocalLibrary(
-                result.type,
-                resultIds.imdbId,
-                resultIds.tmdbId
-            )
 
             PosterContextMenu(
                 title = result.name,
+                // The same id pair the tile's badge uses, so a search result
+                // adds to My List and to the trackers exactly like a rail card.
+                libraryTarget = LibraryAddTarget(
+                    mediaType = result.type,
+                    imdbId = resultIds.imdbId,
+                    tmdbId = resultIds.tmdbId,
+                    title = result.name,
+                    year = result.year,
+                    posterUrl = result.poster
+                ),
                 hideTarget = hideTarget(
                     result.name,
                     result.type,
@@ -533,42 +532,6 @@ fun SearchScreen(
                     )
                 ),
                 actions = listOf(
-                    PosterContextAction(
-                        label = if (resultInLibrary) {
-                            "In Library ✓"
-                        } else {
-                            "Add to Library"
-                        },
-                        description = if (resultInLibrary) {
-                            "Already on this profile's My List"
-                        } else {
-                            "Save to My List" +
-                                (if (viewModel.simklConnectedForLibrary()) ", Simkl" else "") +
-                                (if (viewModel.mdbListConnectedForLibrary()) " and MDBList" else "")
-                        }
-                    ) {
-                        val selected = result
-                        menuResult = null
-                        if (!resultInLibrary) {
-                            viewModel.addToLibrary(selected)
-                        }
-                        lastPosterFocusRequester?.requestFocus()
-                    },
-                    PosterContextAction(
-                        label = "Add to list…",
-                        description = "Pick a personal list or watchlist"
-                    ) {
-                        val selected = result
-                        menuResult = null
-                        addToListTarget = LibraryAddTarget(
-                            mediaType = selected.type,
-                            imdbId = resultIds.imdbId,
-                            tmdbId = resultIds.tmdbId,
-                            title = selected.name,
-                            year = selected.year,
-                            posterUrl = selected.poster
-                        )
-                    },
                     PosterContextAction(
                         label = "Go to Details",
                         description = "Open this title's detail page"
@@ -651,17 +614,6 @@ fun SearchScreen(
             )
         }
 
-        addToListTarget?.let { target ->
-            LibraryAddToListDialog(
-                mediaType = target.mediaType,
-                imdbId = target.imdbId,
-                tmdbId = target.tmdbId,
-                title = target.title,
-                year = target.year,
-                posterUrl = target.posterUrl,
-                onDismiss = { addToListTarget = null }
-            )
-        }
     }
 }
 

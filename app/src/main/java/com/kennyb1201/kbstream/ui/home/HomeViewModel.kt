@@ -16,8 +16,6 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
-import com.kennyb1201.kbstream.data.library.LibraryMirror
-import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
@@ -2451,100 +2449,6 @@ Log.d(
                 )
             }
         }
-    }
-
-    /** Simkl is signed in, so long-press adds will mirror there too. */
-    fun simklConnectedForLibrary(): Boolean =
-        LibraryMirror.simklConnected(getApplication())
-
-    /** MDBList API key is set, so long-press adds will mirror there too. */
-    fun mdbListConnectedForLibrary(): Boolean =
-        LibraryMirror.mdbListConnected(getApplication())
-
-    /**
-     * True when the title is already on this profile's local My List.
-     * Accepts either id form (imdb or tmdb) so the check matches however
-     * the entry was saved.
-     */
-    fun isInLocalLibrary(mediaType: String, imdbId: String?, tmdbId: Int?): Boolean {
-        val appContext = getApplication<Application>()
-        return (tmdbId != null &&
-            LocalLibraryStore.isInMyList(appContext, mediaType, null, tmdbId)) ||
-            (imdbId != null &&
-                LocalLibraryStore.isInMyList(appContext, mediaType, imdbId, null))
-    }
-
-    /**
-     * Long-press "Add to Library" on a catalog poster: saves to this
-     * profile's local My List, then mirrors to the Simkl and/or MDBList
-     * watchlists when connected (best-effort; local write always wins).
-     *
-     * A catalog is not obliged to send a release year - the pinned "Top
-     * Today" rails send none at all - so a missing one is resolved first
-     * (see [resolveLibraryFacts]). The row is then complete the moment it
-     * lands, rather than only once the Library tab's own enrichment pass has
-     * been round, and the tracker mirrors carry the year too.
-     */
-    fun addToLibrary(
-        mediaType: String,
-        imdbId: String?,
-        tmdbId: Int?,
-        title: String,
-        year: Int? = null,
-        posterUrl: String? = null
-    ) {
-        viewModelScope.launch {
-            val facts = resolveLibraryFacts(mediaType, imdbId, tmdbId, year)
-            LibraryMirror.addToLibrary(
-                context = getApplication(),
-                scope = viewModelScope,
-                mediaType = mediaType,
-                imdbId = facts.imdbId,
-                tmdbId = facts.tmdbId,
-                title = title,
-                year = facts.year,
-                posterUrl = posterUrl
-            )
-        }
-    }
-
-    /** The facts a library entry needs that its catalog may not have sent. */
-    private data class LibraryFacts(
-        val imdbId: String?,
-        val tmdbId: Int?,
-        val year: Int?
-    )
-
-    /**
-     * Fills in the TMDB id and the release year for a library add.
-     *
-     * Skipped outright when both are already known, which is every
-     * TMDB-sourced rail: only a catalog that sends neither pays for the
-     * lookup, and that lookup is the cached TMDB detail the pinned rails'
-     * own artwork and the Kids Mode ceiling already read, so it is normally
-     * a memory hit rather than a request.
-     */
-    private suspend fun resolveLibraryFacts(
-        mediaType: String,
-        imdbId: String?,
-        tmdbId: Int?,
-        year: Int?
-    ): LibraryFacts {
-        if (year != null && tmdbId != null) return LibraryFacts(imdbId, tmdbId, year)
-
-        val rawId = imdbId?.takeIf { it.isNotBlank() }
-            ?: tmdbId?.takeIf { it > 0 }?.let { "tmdb:$it" }
-            ?: return LibraryFacts(imdbId, tmdbId, year)
-
-        val detail = runCatchingCancellable {
-            tmdbRepository.fetchEnrichedMetaCached(rawId, mediaType)
-        }.getOrNull() ?: return LibraryFacts(imdbId, tmdbId, year)
-
-        return LibraryFacts(
-            imdbId = imdbId,
-            tmdbId = tmdbId ?: detail.id.takeIf { it > 0 },
-            year = year ?: detail.releaseYear()?.toIntOrNull()
-        )
     }
 
     /**

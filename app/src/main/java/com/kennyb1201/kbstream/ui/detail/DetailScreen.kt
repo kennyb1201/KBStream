@@ -116,7 +116,6 @@ import com.kennyb1201.kbstream.ui.components.formatRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
-import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.PlayFromBeginningSelection
@@ -363,11 +362,6 @@ fun DetailScreen(
         mutableStateOf<PosterMenuTarget?>(
             null
         )
-    }
-
-    // "Add to list…" picker target (title + which lists to offer).
-    var addToListTarget by remember {
-        mutableStateOf<LibraryAddTarget?>(null)
     }
 
     var lastPosterFocusRequester by remember {
@@ -3385,13 +3379,24 @@ fun DetailScreen(
                             ) in watchedKeys
                         } == true
 
-                    val inLibrary = viewModel.isInLocalLibrary(
-                        target.mediaType.lowercase(),
-                        target.tmdbId
-                    )
-
                     PosterContextMenu(
                         title = target.name.ifBlank { "Untitled" },
+                        // The recommendation's TMDB id plus the IMDB one this
+                        // screen already resolved for the poster badge, so an
+                        // add from a recommendation reaches the trackers with
+                        // the pair they key off instead of a TMDB id alone.
+                        libraryTarget = LibraryAddTarget(
+                            mediaType = target.mediaType,
+                            imdbId = resolvedPosterIds[
+                                viewModel.posterLookupKey(
+                                    target.tmdbId,
+                                    menuMediaType
+                                )
+                            ],
+                            tmdbId = target.tmdbId,
+                            title = target.name.ifBlank { "Untitled" },
+                            posterUrl = viewModel.currentPosterUrl()
+                        ),
                         hideTarget = hideTarget(
                             target.name.ifBlank { "Untitled" },
                             target.mediaType,
@@ -3407,50 +3412,6 @@ fun DetailScreen(
                             )
                         ),
                         actions = listOf(
-                            PosterContextAction(
-                                label = if (inLibrary) {
-                                    "In Library ✓"
-                                } else {
-                                    "Add to Library"
-                                },
-                                description = if (inLibrary) {
-                                    "Already on this profile's My List"
-                                } else {
-                                    "Save to My List" +
-                                        (if (viewModel.simklConnectedForLibrary()) {
-                                            ", Simkl"
-                                        } else { "" }) +
-                                        (if (viewModel.mdbListConnectedForLibrary()) {
-                                            " and MDBList"
-                                        } else { "" })
-                                }
-                            ) {
-                                val selected = target
-                                posterMenu = null
-                                if (!inLibrary) {
-                                    viewModel.addToLibrary(
-                                        selected.mediaType,
-                                        selected.tmdbId,
-                                        selected.name.ifBlank { "Untitled" }
-                                    )
-                                }
-                                lastPosterFocusRequester?.requestFocus()
-                            },
-                            PosterContextAction(
-                                label = "Add to list…",
-                                description = "Pick a personal list or watchlist"
-                            ) {
-                                val selected = target
-                                posterMenu = null
-                                addToListTarget = LibraryAddTarget(
-                                    mediaType = selected.mediaType,
-                                    imdbId = null,
-                                    tmdbId = selected.tmdbId,
-                                    title = selected.name.ifBlank { "Untitled" },
-                                    posterUrl = viewModel.currentPosterUrl()
-                                )
-                                lastPosterFocusRequester?.requestFocus()
-                            },
                             PosterContextAction(
                                 label = "Go to Details",
                                 description = "Open this title's detail page"
@@ -3501,18 +3462,6 @@ fun DetailScreen(
                         onDismiss = {
                             dismissPosterMenu()
                         }
-                    )
-                }
-
-                addToListTarget?.let { target ->
-                    LibraryAddToListDialog(
-                        mediaType = target.mediaType,
-                        imdbId = target.imdbId,
-                        tmdbId = target.tmdbId,
-                        title = target.title,
-                        year = target.year,
-                        posterUrl = target.posterUrl,
-                        onDismiss = { addToListTarget = null }
                     )
                 }
 

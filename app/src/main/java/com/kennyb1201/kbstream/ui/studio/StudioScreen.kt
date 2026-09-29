@@ -62,7 +62,6 @@ import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
-import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -133,11 +132,6 @@ fun StudioScreen(
         mutableStateOf<StudioItem?>(
             null
         )
-    }
-
-    // "Add to list…" picker target (title + which lists to offer).
-    var addToListTarget by remember {
-        mutableStateOf<LibraryAddTarget?>(null)
     }
 
     var lastRailFocusRequester by remember {
@@ -327,6 +321,30 @@ fun StudioScreen(
                 title = studioItem.item.title
                     ?: studioItem.item.name
                     ?: "",
+                // The same lookup the poster badge uses gives the IMDB id this
+                // screen already resolved, so an add fired from here reaches
+                // the trackers with the pair they key off instead of a TMDB id
+                // alone. Everything else the menu needs (the title, the year,
+                // the artwork) is on the row itself.
+                libraryTarget = LibraryAddTarget(
+                    mediaType = menuMediaType,
+                    imdbId = resolvedIds[
+                        viewModel.lookupKey(
+                            studioItem.item.id,
+                            menuMediaType
+                        )
+                    ],
+                    tmdbId = studioItem.item.id,
+                    title = studioItem.item.title
+                        ?: studioItem.item.name
+                        ?: "Untitled",
+                    year = (studioItem.item.releaseDate
+                        ?: studioItem.item.firstAirDate)
+                        ?.take(4)?.toIntOrNull(),
+                    posterUrl = studioItem.item.posterPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { TmdbRepository.POSTER_BASE + it }
+                ),
                 hideTarget = hideTarget(
                     studioItem.item.title
                         ?: studioItem.item.name
@@ -380,45 +398,11 @@ fun StudioScreen(
                             )
                         }
                         lastRailFocusRequester?.requestFocus()
-                    },
-                    PosterContextAction(
-                        label = "Add to list…",
-                        description = "Pick a personal list or watchlist"
-                    ) {
-                        val selected = studioItem
-                        menuItem = null
-                        addToListTarget = LibraryAddTarget(
-                            mediaType = selected.mediaType,
-                            imdbId = null,
-                            tmdbId = selected.item.id,
-                            title = selected.item.title
-                                ?: selected.item.name
-                                ?: "Untitled",
-                            year = (selected.item.releaseDate
-                                ?: selected.item.firstAirDate)
-                                ?.take(4)?.toIntOrNull(),
-                            posterUrl = selected.item.posterPath
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { TmdbRepository.POSTER_BASE + it }
-                        )
-                        lastRailFocusRequester?.requestFocus()
                     }
                 ),
                 onDismiss = {
                     dismissRailMenu()
                 }
-            )
-        }
-
-        addToListTarget?.let { target ->
-            LibraryAddToListDialog(
-                mediaType = target.mediaType,
-                imdbId = target.imdbId,
-                tmdbId = target.tmdbId,
-                title = target.title,
-                year = target.year,
-                posterUrl = target.posterUrl,
-                onDismiss = { addToListTarget = null }
             )
         }
     }

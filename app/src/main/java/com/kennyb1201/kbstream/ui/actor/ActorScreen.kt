@@ -65,7 +65,6 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
-import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -122,11 +121,6 @@ fun ActorScreen(
         mutableStateOf<TmdbPersonCredit?>(
             null
         )
-    }
-
-    // "Add to list…" picker target (title + which lists to offer).
-    var addToListTarget by remember {
-        mutableStateOf<LibraryAddTarget?>(null)
     }
 
     var lastCreditFocusRequester by remember {
@@ -502,6 +496,31 @@ fun ActorScreen(
                             title = credit.title
                                 ?: credit.name
                                 ?: "",
+                            // The role's own ids, so the add reaches the
+                            // trackers with the pair they key off: the IMDB id
+                            // this screen already resolved for the badge, plus
+                            // the TMDB id the credit carries.
+                            libraryTarget = LibraryAddTarget(
+                                mediaType = menuMediaType ?: "movie",
+                                imdbId = resolvedCreditIds[
+                                    viewModel.creditLookupKey(
+                                        credit.id,
+                                        menuMediaType ?: "movie"
+                                    )
+                                ],
+                                tmdbId = credit.id,
+                                title = credit.title
+                                    ?: credit.name
+                                    ?: "Untitled",
+                                year = (credit.releaseDate
+                                    ?: credit.firstAirDate)
+                                    ?.take(4)?.toIntOrNull(),
+                                posterUrl = credit.posterPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let {
+                                        TmdbRepository.POSTER_BASE + it
+                                    }
+                            ),
                             hideTarget = hideTarget(
                                 credit.title
                                     ?: credit.name
@@ -560,45 +579,11 @@ fun ActorScreen(
                                         )
                                     }
                                     lastCreditFocusRequester?.requestFocus()
-                                },
-                                PosterContextAction(
-                                    label = "Add to list…",
-                                    description = "Pick a personal list or watchlist"
-                                ) {
-                                    val selected = credit
-                                    menuCredit = null
-                                    addToListTarget = LibraryAddTarget(
-                                        mediaType = selected.mediaType ?: "movie",
-                                        imdbId = null,
-                                        tmdbId = selected.id,
-                                        title = selected.title
-                                            ?: selected.name
-                                            ?: "Untitled",
-                                        year = (selected.releaseDate
-                                            ?: selected.firstAirDate)
-                                            ?.take(4)?.toIntOrNull(),
-                                        posterUrl = selected.posterPath
-                                            ?.takeIf { it.isNotBlank() }
-                                            ?.let { TmdbRepository.POSTER_BASE + it }
-                                    )
-                                    lastCreditFocusRequester?.requestFocus()
                                 }
                             ),
                             onDismiss = {
                                 dismissCreditMenu()
                             }
-                        )
-                    }
-
-                    addToListTarget?.let { target ->
-                        LibraryAddToListDialog(
-                            mediaType = target.mediaType,
-                            imdbId = target.imdbId,
-                            tmdbId = target.tmdbId,
-                            title = target.title,
-                            year = target.year,
-                            posterUrl = target.posterUrl,
-                            onDismiss = { addToListTarget = null }
                         )
                     }
                 }

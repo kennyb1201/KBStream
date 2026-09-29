@@ -59,6 +59,7 @@ import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
+import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -342,6 +343,18 @@ private fun LibraryItemMenu(
     PosterContextMenu(
         title = item.title,
         subtitle = subtitle,
+        // A row here is already in the library, so the add row reads
+        // "In Library ✓" — but it still carries "Add to list…", which is how a
+        // title saved from a tracker gets into a personal list without going
+        // back to the poster it came from.
+        libraryTarget = LibraryAddTarget(
+            mediaType = item.mediaType,
+            imdbId = item.imdbId,
+            tmdbId = item.tmdbId,
+            title = item.title,
+            year = item.year,
+            posterUrl = item.posterUrl
+        ),
         hideTarget = hideTarget(
             item.title,
             item.mediaType,

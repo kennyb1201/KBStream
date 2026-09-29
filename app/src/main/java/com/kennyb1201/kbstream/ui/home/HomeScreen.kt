@@ -112,7 +112,6 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
-import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
@@ -2452,11 +2451,6 @@ fun HomeScreen(
         mutableStateOf<PosterMenuTarget?>(null)
     }
 
-    // "Add to list…" picker target (title + which lists to offer).
-    var addToListTarget by remember {
-        mutableStateOf<LibraryAddTarget?>(null)
-    }
-
     fun dismissPosterMenu() {
         posterMenu = null
         lastPosterFocusRequester?.requestFocus()
@@ -3487,14 +3481,20 @@ fun HomeScreen(
             // the badge and the add off the same id, so a title saved from
             // an add-on rail still shows "In Library ✓" here.
             val railIds = LibraryIds.split(target.meta.id)
-            val railInLibrary = viewModel.isInLocalLibrary(
-                target.meta.type,
-                railIds.imdbId,
-                railIds.tmdbId
-            )
 
             PosterContextMenu(
                 title = target.meta.name,
+                // The same id pair the poster's own "In Library ✓" badge is
+                // read from, now handed to the shared rows: the add and the
+                // badge can no longer disagree about which title this is.
+                libraryTarget = LibraryAddTarget(
+                    mediaType = target.meta.type,
+                    imdbId = railIds.imdbId,
+                    tmdbId = railIds.tmdbId,
+                    title = target.meta.name,
+                    year = target.meta.yearOrNull,
+                    posterUrl = target.meta.poster
+                ),
                 hideTarget = hideTarget(
                     target.meta.name,
                     target.meta.type,
@@ -3506,49 +3506,6 @@ fun HomeScreen(
                     )
                 ),
                 actions = listOf(
-                    PosterContextAction(
-                        label = if (railInLibrary) {
-                            "In Library ✓"
-                        } else {
-                            "Add to Library"
-                        },
-                        description = if (railInLibrary) {
-                            "Already on this profile's My List"
-                        } else {
-                            "Save to My List" +
-                                (if (viewModel.simklConnectedForLibrary()) ", Simkl" else "") +
-                                (if (viewModel.mdbListConnectedForLibrary()) " and MDBList" else "")
-                        }
-                    ) {
-                        val selected = target
-                        posterMenu = null
-                        if (!railInLibrary) {
-                            viewModel.addToLibrary(
-                                mediaType = selected.meta.type,
-                                imdbId = railIds.imdbId,
-                                tmdbId = railIds.tmdbId,
-                                title = selected.meta.name,
-                                year = selected.meta.yearOrNull,
-                                posterUrl = selected.meta.poster
-                            )
-                        }
-                        lastPosterFocusRequester?.requestFocus()
-                    },
-                    PosterContextAction(
-                        label = "Add to list…",
-                        description = "Pick a personal list or watchlist"
-                    ) {
-                        val selected = target
-                        posterMenu = null
-                        addToListTarget = LibraryAddTarget(
-                            mediaType = selected.meta.type,
-                            imdbId = railIds.imdbId,
-                            tmdbId = railIds.tmdbId,
-                            title = selected.meta.name,
-                            year = selected.meta.yearOrNull,
-                            posterUrl = selected.meta.poster
-                        )
-                    },
                     PosterContextAction(
                         label = "Open in Grid",
                         description = "Browse this whole catalog as a poster grid"
@@ -3589,17 +3546,6 @@ fun HomeScreen(
             )
         }
 
-        addToListTarget?.let { target ->
-            LibraryAddToListDialog(
-                mediaType = target.mediaType,
-                imdbId = target.imdbId,
-                tmdbId = target.tmdbId,
-                title = target.title,
-                year = target.year,
-                posterUrl = target.posterUrl,
-                onDismiss = { addToListTarget = null }
-            )
-        }
     }
 }
 

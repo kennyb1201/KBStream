@@ -27,6 +27,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.key.Key
@@ -333,13 +334,40 @@ fun PosterContextMenu(
      * Adds the destructive "Hide" row that removes it from every screen; see
      * [hideTarget] and [HiddenTitles].
      */
-    hideTarget: HideTarget? = null
+    hideTarget: HideTarget? = null,
+    /**
+     * The title's library rows: "Add to Library" and "Add to list…".
+     *
+     * Passing the title's ids gives this menu both rows, in the place and with
+     * the behaviour every other menu in the app has them (see [LibraryAdds]),
+     * which is the point of them living here rather than being spelled out at
+     * each of the ~15 call sites: a long press on a poster means the same thing
+     * wherever it happens.
+     *
+     * Null means the menu must not offer them, and only two kinds of menu are
+     * in that position: the Continue Watching card, which is one in-progress
+     * episode of a show whose own poster carries both rows, and the detail
+     * screen's season and episode menus, which play one specific episode
+     * rather than being about a title at all. Every menu about a title — any
+     * poster, any rail, any search result — passes it.
+     */
+    libraryTarget: LibraryAddTarget? = null
 ) {
     val context = LocalContext.current
 
     // Every screen's poster menu shares this one channel, so the confirmation
     // for a destructive action lands in the same place app-wide.
     val feedback = rememberKBFeedback()
+
+    // Library rows' state. Whether the title is already saved is read as the
+    // menu is composed — it only exists while it is open, so the answer is as
+    // fresh as the card that was pressed. The add itself runs on
+    // [LibraryAdds]'s own scope, because the menu is dismissed as the row is
+    // pressed; see `LibraryAdds.runAdd`.
+    val librarySaved = libraryTarget != null && LibraryAdds.inMyList(context, libraryTarget)
+    var libraryPickTarget by remember {
+        mutableStateOf<LibraryAddTarget?>(null)
+    }
 
     val firstRowFocusRequester = remember {
         FocusRequester()
@@ -393,6 +421,50 @@ fun PosterContextMenu(
     // their wording and their position; menus with no "Go to Details" at all,
     // such as the browse chips, get no row.
     val rows = buildList {
+        // The library rows come first on every menu that carries them, so
+        // "Add to Library" is where it has always been on the menus that had
+        // it and in the same place on the ones that have just gained it.
+        //
+        // "In Library ✓" is a state, not a different action: pressing it again
+        // re-runs the add, which is how a title whose tracker mirror failed
+        // earlier heals (the local write is idempotent, and the mirrors fire
+        // whether or not it changed anything). The confirmation goes to the
+        // app's shared feedback channel, because a menu row that saves a title
+        // while saying nothing at all is indistinguishable from a row that
+        // failed.
+        libraryTarget?.let { target ->
+            add(
+                PosterContextAction(
+                    label = if (librarySaved) "In Library ✓" else "Add to Library",
+                    description = if (librarySaved) {
+                        "Already on this profile's My List"
+                    } else {
+                        "Save to My List" + LibraryAdds.mirrorSuffix(context)
+                    }
+                ) {
+                    LibraryAdds.add(context, target) { added ->
+                        feedback.show(
+                            text = if (added) {
+                                "Added to My List: ${target.title}"
+                            } else {
+                                "Couldn't add ${target.title}"
+                            },
+                            isError = !added
+                        )
+                    }
+                    onDismiss()
+                }
+            )
+            add(
+                PosterContextAction(
+                    label = "Add to list…",
+                    description = "Pick a personal list or watchlist"
+                ) {
+                    libraryPickTarget = target
+                }
+            )
+        }
+
         val alreadyOffered =
             actions.any { it.label == "Play Manually" }
         val alreadyOfferedFromBeginning =
@@ -521,6 +593,11 @@ fun PosterContextMenu(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            // The picker is this menu's own second stage, and while it is open
+            // the menu and its scrim step out of the way rather than sitting
+            // dimmed behind it. The picker is a dialog window of its own, so
+            // nothing composed under here can take a press while it is up.
+            .alpha(if (libraryPickTarget == null) 1f else 0f)
             .focusGroup()
             .background(KBVoid.copy(alpha = 0.60f))
             .onPreviewKeyEvent { event ->
@@ -690,6 +767,24 @@ fun PosterContextMenu(
                 }
             }
         }
+    }
+
+    // The picker behind the row above, hosted here so a menu can never offer
+    // "Add to list…" without it. Ten per-screen copies meant ten chances for
+    // one to be composed somewhere its own row's dismissal took it with it.
+    libraryPickTarget?.let { target ->
+        LibraryAddToListDialog(
+            mediaType = target.mediaType,
+            imdbId = target.imdbId,
+            tmdbId = target.tmdbId,
+            title = target.title,
+            year = target.year,
+            posterUrl = target.posterUrl,
+            onDismiss = {
+                libraryPickTarget = null
+                onDismiss()
+            }
+        )
     }
 }
 
