@@ -7,17 +7,20 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Mic
@@ -379,6 +382,18 @@ internal fun SearchHero(
 // focused poster borders + glow never get cut off at the first/last item.
 internal val SEARCH_RAIL_EDGE_PADDING = 20.dp
 
+// Browse-submenu lazy grid. The cell floor is wide enough that the longest
+// curated name - "The Sisterhood of the Traveling Pants Collection", 48
+// characters - wraps onto a second line instead of being ellipsised away,
+// which is the trade a uniform-cell grid makes for laziness.
+private val SUBMENU_CHIP_MIN_WIDTH = 216.dp
+
+// The grid is a lazy scroll container sitting inside the screen's LazyColumn,
+// so its height must be definite: an unbounded (infinite) height would make
+// Compose refuse to measure it. Tall enough to read as the submenu's own
+// scroll surface, short enough to leave the page above it in view.
+private val SUBMENU_CHIP_MAX_HEIGHT = 360.dp
+
 @Composable
 internal fun SearchBrowseBrowser(
     viewModel: SearchViewModel,
@@ -397,7 +412,7 @@ internal fun SearchBrowseBrowser(
     // out of. The matching chip renders with grabInitialFocus so the TV
     // focus system lands on it (which also scrolls it into view); the
     // stored chip is cleared once consumed so later recompositions don't
-    // steal focus back. Consumption is tracked inside SubmenuChipFlowRow
+    // steal focus back. Consumption is tracked inside SubmenuChipGrid
     // (scoped to the submenu that actually rendered the chip).
     val returnChip = viewModel.browseReturnChip
 
@@ -427,10 +442,11 @@ internal fun SearchBrowseBrowser(
         }
 
         // Submenu chips for the active category; each opens a dedicated
-        // discover screen (Tag / Studio / Collection / Decade). Wrapped
-        // FlowRow, not one long scrolling row: the big submenus (91 entries
-        // in Services & Networks) would otherwise need 90 D-pad right-presses
-        // to reach the end — wrapped rows let focus move straight DOWN.
+        // discover screen (Tag / Studio / Collection / Decade). Wrapped rows,
+        // not one long scrolling row: the big submenus (387 keywords, 279
+        // collections after the 2026-09 expansion) would otherwise need a
+        // D-pad right-press per chip to reach the end — wrapped rows let
+        // focus move straight DOWN.
         val category = activeCategory
         if (category != null) {
             if (submenuLoading) {
@@ -444,10 +460,7 @@ internal fun SearchBrowseBrowser(
                     )
                 )
             } else if (category.entries.isNotEmpty()) {
-                // Horizontal edge padding matches the category strip /
-                // poster rails so chip borders never clip at the screen
-                // edge; the 10.dp top gap mirrors the old row spacing.
-                SubmenuChipFlowRow(
+                SubmenuChipGrid(
                     entries = category.entries,
                     categoryKey = category.key,
                     onEntryClicked = viewModel::onBrowseEntryClicked,
@@ -463,15 +476,22 @@ internal fun SearchBrowseBrowser(
 }
 
 /**
- * Wrapped multi-row chip grid for the browse submenu (FlowRow). One long
- * horizontal row stops scaling once a category holds dozens of entries:
- * the Fire TV D-pad would need a right-press per chip to reach the far
- * end. Wrapping into rows keeps every entry a few presses away, and
+ * Wrapped multi-row chip grid for the browse submenu, composed lazily.
+ *
+ * One long horizontal row stops scaling once a category holds dozens of
+ * entries: the Fire TV D-pad would need a right-press per chip to reach the
+ * far end. Wrapping into rows keeps every entry a few presses away, and
  * vertical D-pad movement walks the rows naturally.
+ *
+ * This used to be a FlowRow, which wraps just as well but builds EVERY chip
+ * on the frame the submenu opens. With the 2026-09 curated expansion the big
+ * submenus hold hundreds of entries (387 keywords, 279 collections), so
+ * opening one composed hundreds of focusable Cards at once and stuttered. A
+ * lazy grid composes only the cells on screen, so the cost no longer grows
+ * with the list.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SubmenuChipFlowRow(
+private fun SubmenuChipGrid(
     entries: List<BrowseEntry>,
     categoryKey: String,
     onEntryClicked: (String, BrowseEntry) -> Unit,
@@ -487,32 +507,62 @@ private fun SubmenuChipFlowRow(
     // strip's first chip again.
     var returnChipConsumed by remember(returnChip) { mutableStateOf(false) }
 
-    FlowRow(
+    val gridState = rememberLazyGridState()
+    val armedIndex = returnChip
+        ?.takeIf { !returnChipConsumed && it.first == categoryKey }
+        ?.second
+
+    // A lazy grid composes only the cells it shows, so a returning chip deep
+    // in a big submenu is NOT in the composition when the submenu re-opens:
+    // its grabInitialFocus effect would never run and focus would fall back
+    // to the first chip instead of the one the viewer left. Scroll the grid
+    // to it first; the chip's own effect then places focus once it composes.
+    LaunchedEffect(armedIndex) {
+        if (armedIndex != null && armedIndex in entries.indices) {
+            runCatching { gridState.scrollToItem(armedIndex) }
+        }
+    }
+
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = SUBMENU_CHIP_MIN_WIDTH),
+        state = gridState,
+        // Horizontal edge padding matches the category strip / poster rails
+        // so chip borders never clip at the screen edge, and the top/bottom
+        // room is load-bearing: a lazy grid clips its own viewport, so a
+        // focused chip's scale-up and glow would be sliced flat along the
+        // first and last row without it.
+        contentPadding = PaddingValues(
+            top = 10.dp,
+            bottom = 18.dp,
+            start = SEARCH_RAIL_EDGE_PADDING,
+            end = SEARCH_RAIL_EDGE_PADDING
+        ),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .padding(
-                top = 10.dp,
-                start = SEARCH_RAIL_EDGE_PADDING,
-                end = SEARCH_RAIL_EDGE_PADDING
-            ),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+            .heightIn(max = SUBMENU_CHIP_MAX_HEIGHT)
     ) {
-        entries.forEachIndexed { entryIndex, entry ->
-            val isReturnChip = !returnChipConsumed &&
-                returnChip?.first == categoryKey &&
-                returnChip?.second == entryIndex
+        itemsIndexed(
+            items = entries,
+            // The same identity the hide feature keys a chip by
+            // ("category\u0001name"): names are unique within a category, so
+            // two cells can never share a key (which a lazy grid rejects)
+            // and a chip keeps its identity across a re-resolve.
+            key = { _, entry -> BrowseChipVisibility.key(categoryKey, entry.name) }
+        ) { entryIndex, entry ->
             SearchChip(
                 label = entry.name,
                 onClick = { onEntryClicked(categoryKey, entry) },
                 onLongClick = onEntryLongClick?.let { handler ->
                     { handler(categoryKey, entry) }
                 },
-                grabInitialFocus = isReturnChip,
+                grabInitialFocus = armedIndex == entryIndex,
                 onInitialFocusConsumed = {
                     returnChipConsumed = true
                     onReturnChipConsumed()
-                }
+                },
+                labelMaxLines = 2
             )
         }
     }
@@ -549,7 +599,11 @@ internal fun SearchChip(
     onInitialFocusConsumed: (() -> Unit)? = null,
     // Long press (hold Select/Enter) opens the caller's context menu, e.g.
     // Hide on a browse chip. Null keeps a plain select-only chip.
-    onLongClick: (() -> Unit)? = null
+    onLongClick: (() -> Unit)? = null,
+    // Browse-submenu chips sit in a fixed-width lazy grid cell, so a long
+    // curated name wraps onto a second line rather than being ellipsised
+    // away. Every other chip is one line.
+    labelMaxLines: Int = 1
 ) {
     var focused by remember { mutableStateOf(false) }
     // Return-chip restore: when this chip is the one that opened the
@@ -604,7 +658,7 @@ internal fun SearchChip(
     ) {
         Text(
             text = label,
-            maxLines = 1,
+            maxLines = labelMaxLines,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
