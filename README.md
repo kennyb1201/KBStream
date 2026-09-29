@@ -32,7 +32,12 @@ EPG).
   installed external player (VLC, MX Player, Kodi), can be chosen for a title
   or from either in-player bar: the stream is handed over while KBStream keeps
   the session, so watch history, Continue Watching, scrobbling and both
-  end-of-episode panels behave exactly as they do in-app.
+  end-of-episode panels behave exactly as they do in-app. Both engines can
+  match the panel's refresh rate to the content — the app switches to the
+  display mode that is a whole multiple of the frame rate, so 24 fps film stops
+  juddering on a 60 Hz panel (Settings → Playback → Match Content Frame Rate,
+  off by default). Scrub previews are read from the player's own cache instead
+  of opening a second connection to the stream.
 - **Profiles** — multiple per-device profiles with avatars, optional PIN
   locks, and full cross-device sync (history, watched state, addons,
   settings) via Supabase with row-level security.
@@ -45,6 +50,12 @@ EPG).
   parent-PIN override where relevant.
 - **Integrations** — Simkl (watch history sync + live scrobbling),
   MDBList ratings, IPTV (M3U + XMLTV EPG), YouTube trailers.
+- **Diagnostics** — Settings → About → Copy diagnostics writes a report of the
+  build, device, account and sync health, and of where this session's time
+  went: the slowest operations, ranked by name. Network time is filed under the
+  service that owns the endpoint (TMDB, Simkl, MDBList, Supabase, IPTV) or
+  under the addon that owns it, and an endpoint that is nothing but a literal
+  address keeps that address beside its label, so a slow call stays fixable.
 
 ## Building
 
@@ -108,8 +119,9 @@ prebuilt video extensions cannot.
 
 ## Running tests
 
-JVM unit tests cover the Kids Mode rating matrix, legacy value migration,
-and the kids catalog invariants:
+JVM unit tests cover the Kids Mode rating matrix, legacy value migration, the
+kids catalog invariants, the player's refresh-rate matching, and the background
+workers' retry policies:
 
 ```sh
 ./gradlew testDebugUnitTest
@@ -143,6 +155,12 @@ contained in the commit being published, so an old build can never be offered
 as an upgrade. The commit check stays inert until a release published by this
 workflow is in place (the guard step says so in the log); the versionCode check
 applies from the first publish.
+
+A publish also writes the notes the app shows. The release body *is* the
+update text: the workflow composes it from the commit subjects between the
+published build and this one — capped, and taken from the same `gitSha` the
+guard reads — and Settings → Check for updates renders that body under the
+version line.
 
 ## Linting
 
@@ -230,7 +248,9 @@ app/src/main/java/com/kennyb1201/kbstream/
   domain/          # stream engine (ranking, auto-select)
   ui/              # Compose for Android TV screens (home, detail, player,
                    # search, profiles, settings, addons, IPTV, streams)
-  work/            # background workers (EPG refresh, Simkl sync, addons)
+  work/            # background workers (EPG refresh, Simkl sync, addons), plus
+                   # WorkPolicies: the retry and reminder-arming decisions they
+                   # make, which is the part of this package a JVM test can reach
 baselineprofile/   # baseline profile generator (test-only module, ships nothing)
 app/schemas/       # exported Room schema JSON, one per released watch-history
                    # version: the record a Migration is reviewed against.
