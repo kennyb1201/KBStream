@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.kb
 
+import com.kennyb1201.kbstream.data.OrderedRailPublisher
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
@@ -26,7 +27,9 @@ import kotlinx.coroutines.withContext
  * paid Trakt API app) degrades to an empty rail.
  *
  * All source kinds for a folder load in parallel; a failing source degrades
- * to an empty rail instead of failing the folder.
+ * to an empty rail instead of failing the folder. Each rail is handed to the
+ * caller's `onRail` the moment it is ready (see [loadFolderRails]), in the
+ * folder's source order rather than the order the sources happen to finish.
  */
 class KBContentLoader(context: android.content.Context) {
 
@@ -40,24 +43,55 @@ class KBContentLoader(context: android.content.Context) {
         private const val MAX_ITEMS_PER_SOURCE = 40
     }
 
-    /** Every source of a folder, in parallel, in the folder's source order. */
-    suspend fun loadFolderRails(folder: KBFolder): List<KBRail> =
+    /**
+     * Every source of a folder, in parallel, in the folder's source order.
+     *
+     * [onRail] is optional and, when given, is handed each rail as soon as that
+     * rail's source has answered instead of leaving the whole folder behind the
+     * slowest source. A folder is a fan-out over many kinds of source - TMDB
+     * discover queries, TMDB lists, collections, addon catalogs - and those are
+     * not uniformly fast: the one that runs last is routinely the one that
+     * decided when anything appeared at all. Rails are announced in source
+     * order (see [OrderedRailPublisher]), so a rail that is still loading never
+     * lets a later one jump above it and shift the rows under the viewer, and a
+     * source that comes back empty is stepped over without holding up the ones
+     * behind it.
+     */
+    suspend fun loadFolderRails(
+        folder: KBFolder,
+        onRail: (suspend (rail: KBRail) -> Unit)? = null
+    ): List<KBRail> =
         withContext(Dispatchers.IO) {
+            val sources = dedupeSources(
+                folder.sources.ifEmpty { folder.catalogSources.map { it.toSource() } }
+            )
+
             supervisorScope {
-                dedupeSources(folder.sources.ifEmpty { folder.catalogSources.map { it.toSource() } })
-                    .mapIndexed { index, source ->
-                        async {
-                            val items = loadSource(source)
-                            KBRail(
+                val rails = arrayOfNulls<KBRail>(sources.size)
+                val publisher = onRail?.let { announce ->
+                    OrderedRailPublisher<KBRail>(sources.size) { _, rail -> announce(rail) }
+                }
+
+                sources.mapIndexed { index, source ->
+                    async {
+                        val items = loadSource(source)
+                        if (items.isEmpty()) {
+                            publisher?.report(index, null)
+                        } else {
+                            val rail = KBRail(
                                 sourceId = source.id ?: "${folder.id}:$index",
                                 title = railTitleFor(source),
                                 providerLabel = source.providerLabel(),
                                 items = items
                             )
+                            rails[index] = rail
+                            publisher?.report(index, rail)
                         }
                     }
+                }
                     .awaitAll()
-                    .filter { it.items.isNotEmpty() }
+
+                rails.filterNotNull()
             }
         }
 

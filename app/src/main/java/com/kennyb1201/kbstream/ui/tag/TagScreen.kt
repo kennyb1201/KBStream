@@ -138,8 +138,17 @@ fun TagScreen(
         viewModel.load(id, isKeyword, type)
     }
 
+    // The rails stream in one at a time, so this effect re-runs after the first
+    // one lands; [focusPlaced] keeps that from pulling focus back to the first
+    // card every time another rail arrives behind the viewer. A new load
+    // (opening another genre/keyword) resets it, so the fresh page still takes
+    // focus once its first rail is on screen.
+    var focusPlaced by remember { mutableStateOf(false) }
     LaunchedEffect(sections, isLoading) {
-        if (!isLoading && sections.any { it.items.isNotEmpty() }) {
+        if (isLoading) {
+            focusPlaced = false
+        } else if (!focusPlaced && sections.any { it.items.isNotEmpty() }) {
+            focusPlaced = true
             delay(100)
             runCatching { firstItemFocusRequester.requestFocus() }
         }

@@ -37,11 +37,18 @@ internal object TmdbRailPages {
         }
     }
 
+    /**
+     * [deepen] = false asks for page 1 alone: it is the fast path a screen's
+     * first frame is built from (see `streamBrowseSections`), and the rows it
+     * fetches are cached under the same request key the deepening pass then
+     * reads, so asking twice costs one request.
+     */
     suspend fun genrePage(
         repo: TmdbRepository,
         genreId: Int,
         title: String,
-        page: Int
+        page: Int,
+        deepen: Boolean = true
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
@@ -51,7 +58,8 @@ internal object TmdbRailPages {
 
         return repo.finishDeepRailPage(
             page = page,
-            cacheKey = "genre|$genreId|$title|$lang"
+            cacheKey = "genre|$genreId|$title|$lang",
+            deepen = deepen
         ) { p ->
             genrePageItems(repo, genreId, title, p, lang)
         }
@@ -151,7 +159,8 @@ internal object TmdbRailPages {
         repo: TmdbRepository,
         keywordId: Int,
         title: String,
-        page: Int
+        page: Int,
+        deepen: Boolean = true
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
@@ -161,7 +170,8 @@ internal object TmdbRailPages {
 
         return repo.finishDeepRailPage(
             page = page,
-            cacheKey = "keyword|$keywordId|$title|$lang"
+            cacheKey = "keyword|$keywordId|$title|$lang",
+            deepen = deepen
         ) { p ->
             keywordPageItems(repo, keywordId, title, p, lang)
         }
@@ -271,7 +281,8 @@ internal object TmdbRailPages {
         networkId: Int,
         title: String,
         page: Int,
-        companyId: Int? = null
+        companyId: Int? = null,
+        deepen: Boolean = true
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
@@ -280,13 +291,14 @@ internal object TmdbRailPages {
         val lang = repo.browseLanguage()
 
         if (title.startsWith("MOVIES")) {
-            return companyId?.let { companyPage(repo, it, title, page) }
+            return companyId?.let { companyPage(repo, it, title, page, deepen) }
                 ?: TagRailPage(emptyList(), false)
         }
 
         return repo.finishDeepRailPage(
             page = page,
-            cacheKey = "network|$networkId|$title|$lang"
+            cacheKey = "network|$networkId|$title|$lang",
+            deepen = deepen
         ) { p ->
             networkPageItems(repo, networkId, title, p, lang)
         }
@@ -349,7 +361,8 @@ internal object TmdbRailPages {
         repo: TmdbRepository,
         companyId: Int,
         title: String,
-        page: Int
+        page: Int,
+        deepen: Boolean = true
     ): TagRailPage {
         if (repo.apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
@@ -359,7 +372,8 @@ internal object TmdbRailPages {
 
         return repo.finishDeepRailPage(
             page = page,
-            cacheKey = "company|$companyId|$title|$lang"
+            cacheKey = "company|$companyId|$title|$lang",
+            deepen = deepen
         ) { p ->
             companyPageItems(repo, companyId, title, p, lang)
         }

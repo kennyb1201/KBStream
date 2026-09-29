@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.ui.tag.RailPagingState
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,6 +24,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * ViewModel for the Decade screen (Screen.Decade): TMDB discover rails for
@@ -117,6 +119,20 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
     private var currentDecadeStart: Int? = null
 
     // Genre chip filter: when non-null, rails re-run with the selected
+    /**
+     * The rail load in flight, if any. A decade screen's rails stream in (see
+     * `streamBrowseSections`), so a load outlives the call that started it -
+     * a genre chip, or a second decade, replaces the one before it.
+     */
+    private var loadJob: Job? = null
+
+    /**
+     * Which load owns the state. Bumped by every [load], so rails arriving
+     * from a replaced load are dropped instead of being written over the
+     * newer load's.
+     */
+    private var loadGeneration = 0
+
     // genre ANDed onto the decade's year window.
     private var currentGenreId: Int? = null
     private val _browseGenres = MutableStateFlow<List<TmdbGenre>>(emptyList())
@@ -159,7 +175,25 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
             _browseGenres.value = tmdbRepository.getBrowseGenres()
         }
 
-        viewModelScope.launch {
+        loadJob?.cancel()
+        val generation = ++loadGeneration
+
+        // Rails are published by their index in the screen's rail order (see
+        // streamBrowseSections), so the growing page is held as slots rather
+        // than appended to as it arrives.
+        val slots = ConcurrentHashMap<Int, StudioSection>()
+
+        val onSection: suspend (Int, StudioSection) -> Unit = { index, section ->
+            if (generation == loadGeneration) {
+                slots[index] = section
+                _sections.value = slots.entries.sortedBy { it.key }.map { it.value }
+                // The skeleton goes as soon as there is a rail to look at: the
+                // rest of the page keeps filling in behind the viewer.
+                _isLoading.value = false
+            }
+        }
+
+        loadJob = viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
             _sections.value = emptyList()
@@ -171,11 +205,14 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                 val result = if (genreId != null) {
                     tmdbRepository.getInitialCrossGenreSections(
                         base = CrossBase("decade", decadeStart),
-                        genreId = genreId
+                        genreId = genreId,
+                        onSection = onSection
                     )
                 } else {
-                    tmdbRepository.getInitialDecadeSections(decadeStart)
+                    tmdbRepository.getInitialDecadeSections(decadeStart, onSection)
                 }
+
+                if (generation != loadGeneration) return@launch
 
                 _sections.value = result
                 _pagingStates.value = result.associate { section ->
@@ -186,10 +223,12 @@ class DecadeViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load decade"
+                if (generation == loadGeneration) {
+                    _error.value = e.message ?: "Failed to load decade"
+                }
                 Log.e("DECADE_VM", "load failed for decade $decadeStart", e)
             } finally {
-                _isLoading.value = false
+                if (generation == loadGeneration) _isLoading.value = false
             }
 
             val loadedSections = _sections.value

@@ -11,6 +11,7 @@ import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +25,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import java.util.concurrent.ConcurrentHashMap
 
 data class StudioRailPagingState(
     val nextPage: Int = 2,
@@ -135,6 +137,24 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private var currentNetworkIsCompany: Boolean = false
     private var currentOriginalsCompanyId: Int? = null
 
+    /**
+     * The rail load currently in flight, if any.
+     *
+     * A browse screen's rails stream in (see `streamBrowseSections`), which
+     * means a load outlives the call that started it: tapping a genre chip, or
+     * opening a second network while the first is still filling in, starts a
+     * new load while the old one is still mid-flight. Cancelling the old one
+     * stops work for a screen nobody is looking at any more.
+     */
+    private var loadJob: Job? = null
+
+    /**
+     * Which load owns the state. Bumped by every [load]; a rail or a header
+     * fragment that arrives from an older load is dropped instead of being
+     * written over the newer load's rails (every write in [load] checks this).
+     */
+    private var loadGeneration = 0
+
     // Genre chip filter: when non-null, rails re-run with the selected
     // genre ANDed onto the screen's base dimension (provider / network /
     // company, whichever the browse entry carries).
@@ -239,7 +259,26 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val serviceRoute = providerId != null ||
             (originalsCompanyId != null && !isNetwork)
 
-        viewModelScope.launch {
+        loadJob?.cancel()
+        val generation = ++loadGeneration
+
+        // Rails are published by their index in the screen's rail order (see
+        // streamBrowseSections), so the growing page is held as slots rather
+        // than appended to as it arrives.
+        val slots = ConcurrentHashMap<Int, StudioSection>()
+
+        val onSection: suspend (Int, StudioSection) -> Unit = { index, section ->
+            if (generation == loadGeneration) {
+                slots[index] = section
+                _sections.value = slots.entries.sortedBy { it.key }.map { it.value }
+                // The skeleton goes as soon as there is a rail to look at: the
+                // rest of the page keeps filling in behind the viewer instead
+                // of holding the whole screen back for its slowest rail.
+                _isLoading.value = false
+            }
+        }
+
+        loadJob = viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
             _sections.value = emptyList()
@@ -284,7 +323,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     genreId != null && crossBase != null ->
                         tmdbRepository.getInitialCrossGenreSections(
                             base = crossBase,
-                            genreId = genreId
+                            genreId = genreId,
+                            onSection = onSection
                         )
                     // Service pages discover through watch-provider rails
                     // (movies + series) instead of network/company rails.
@@ -295,13 +335,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                             providerId = providerId,
                             networkOrCompanyId = networkOrCompanyId,
                             networkIsCompany = networkIsCompany,
-                            originalsCompanyId = originalsCompanyId
+                            originalsCompanyId = originalsCompanyId,
+                            onSection = onSection
                         )
                     isNetwork ->
-                        tmdbRepository.getByNetwork(id, companyId = originalsCompanyId)
+                        tmdbRepository.getByNetwork(
+                            id,
+                            companyId = originalsCompanyId,
+                            onSection = onSection
+                        )
                     else ->
-                        tmdbRepository.getByCompany(id)
+                        tmdbRepository.getByCompany(id, onSection)
                 }
+
+                // A load that was replaced while it ran must not write over the
+                // rails the newer one has already published.
+                if (generation != loadGeneration) return@launch
 
                 _sections.value = result
                 _pagingStates.value = result.associate { section ->
@@ -312,16 +361,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load studio"
+                if (generation == loadGeneration) {
+                    _error.value = e.message ?: "Failed to load studio"
+                }
                 Log.e("STUDIO_VM", "load failed for id=$id isNetwork=$isNetwork", e)
             }
 
             // Collected last: the rails are what the screen is for, so they
             // own the loading state, while the header art/blurb have been in
             // flight alongside them and land in the same frame.
-            _logoUrls.value = logoDeferred.await()
-            _companyInfo.value = detailDeferred.await()
-            _isLoading.value = false
+            val logos = logoDeferred.await()
+            val detail = detailDeferred.await()
+            if (generation == loadGeneration) {
+                _logoUrls.value = logos
+                _companyInfo.value = detail
+                _isLoading.value = false
+            }
 
             val loadedSections = _sections.value
             if (loadedSections.isNotEmpty()) {

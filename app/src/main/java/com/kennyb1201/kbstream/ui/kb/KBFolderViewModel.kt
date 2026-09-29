@@ -418,6 +418,23 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
     private val tmdbRailSources = mutableMapOf<String, TmdbRailPageSource>()
     private var currentFolderId: String? = null
 
+    /**
+     * The folder load currently in flight, if any.
+     *
+     * A folder's rails stream in (see `KBContentLoader.loadFolderRails`), so a
+     * load outlives the call that started it: opening a second folder while the
+     * first is still filling in starts a new load over a screen nobody is
+     * looking at any more. Cancelling the old one stops that work.
+     */
+    private var loadJob: Job? = null
+
+    /**
+     * Which load owns the state. Bumped by every [load]; a rail that arrives
+     * from an older load is dropped instead of being appended to the newer
+     * folder's rows.
+     */
+    private var loadGeneration = 0
+
     private data class TmdbRailPageSource(
         val kind: Kind,
         val tmdbId: Int?,
@@ -469,33 +486,75 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
             isLoading = true
         )
 
-        viewModelScope.launch {
+        loadJob?.cancel()
+        val generation = ++loadGeneration
+
+        loadJob = viewModelScope.launch {
             try {
-                val rails = contentLoader.loadFolderRails(folder)
-                registerTmdbRailSources(folder, rails)
+                // Rails stream in: each one is appended the moment its source
+                // answers, so the folder draws its first rail instead of
+                // holding the whole screen behind its slowest source. They are
+                // announced in source order (see OrderedRailPublisher), so a
+                // late rail never lands above one that is still loading.
+                val rails = contentLoader.loadFolderRails(folder) { rail ->
+                    publishRail(folder, rail, generation)
+                }
+
+                if (generation != loadGeneration) return@launch
+
                 _state.value = _state.value.copy(
                     rails = rails,
                     isLoading = false,
-                    pagingStates = rails.associate { rail ->
-                        rail.sourceId to KBRailPagingState(
-                            hasMore = tmdbRailSources.containsKey(rail.sourceId) &&
-                                rail.items.size >= PAGE_SIZE
-                        )
-                    },
                     error = if (rails.isEmpty()) {
                         "Nothing to show in \"${folder.title}\" yet."
                     } else {
                         null
                     }
                 )
-                resolveAndPreload(rails)
+                // No resolve pass over the finished set: every rail already
+                // resolved its own ids as it landed (see [publishRail]), and
+                // re-running the whole folder here would ask TMDB again for
+                // whatever was still mid-flight.
             } catch (e: Exception) {
+                if (generation != loadGeneration) return@launch
                 Log.e("KB_FOLDER_VM", "load failed: ${e.message}", e)
                 _state.value = _state.value.copy(
                     isLoading = false,
                     error = "Couldn't load this folder."
                 )
             }
+        }
+    }
+
+    /**
+     * One streamed rail: append it, register its paging source and let the
+     * skeleton clear, then resolve the ids it needs in the background.
+     *
+     * Deliberately cheap and free of suspension: it runs while the loader holds
+     * the ordering lock, so anything awaited here would hold up the rails behind
+     * it - which is the wait this whole path exists to remove.
+     */
+    private fun publishRail(folder: KBFolder, rail: KBRail, generation: Int) {
+        if (generation != loadGeneration) return
+
+        registerTmdbRailSources(folder, listOf(rail))
+
+        _state.value = _state.value.copy(
+            rails = _state.value.rails + rail,
+            isLoading = false,
+            pagingStates = _state.value.pagingStates +
+                (
+                    rail.sourceId to KBRailPagingState(
+                        hasMore = tmdbRailSources.containsKey(rail.sourceId) &&
+                            rail.items.size >= PAGE_SIZE
+                    )
+                    )
+        )
+
+        // Off the publish path: the badges for this rail fill in behind the
+        // viewer while the rails after it are still being fetched.
+        viewModelScope.launch {
+            if (generation == loadGeneration) resolveAndPreload(listOf(rail))
         }
     }
 

@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -20,6 +21,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.supervisorScope
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import java.util.concurrent.ConcurrentHashMap
 
 data class RailPagingState(
     val nextPage: Int = 2,
@@ -112,6 +114,21 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
     private var currentId: Int? = null
     private var currentIsKeyword: Boolean = false
 
+    /**
+     * The rail load in flight, if any. A genre or keyword screen's rails
+     * stream in (see `streamBrowseSections`), so a load outlives the call that
+     * started it - opening a second genre while the first still fills in runs
+     * both, and the older one is stopped here.
+     */
+    private var loadJob: Job? = null
+
+    /**
+     * Which load owns the state. Bumped by every [load], so rails and paging
+     * state arriving from a replaced load are dropped instead of being written
+     * over the newer load's.
+     */
+    private var loadGeneration = 0
+
     fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
@@ -125,7 +142,25 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
         currentId = id
         currentIsKeyword = isKeyword
 
-        viewModelScope.launch {
+        loadJob?.cancel()
+        val generation = ++loadGeneration
+
+        // Rails are published by their index in the screen's rail order (see
+        // streamBrowseSections), so the growing page is held as slots rather
+        // than appended to as it arrives.
+        val slots = ConcurrentHashMap<Int, StudioSection>()
+
+        val onSection: suspend (Int, StudioSection) -> Unit = { index, section ->
+            if (generation == loadGeneration) {
+                slots[index] = section
+                _sections.value = slots.entries.sortedBy { it.key }.map { it.value }
+                // The skeleton goes as soon as there is a rail to look at: the
+                // rest of the page keeps filling in behind the viewer.
+                _isLoading.value = false
+            }
+        }
+
+        loadJob = viewModelScope.launch {
             _isLoading.value = true
             _error.value = null
             _sections.value = emptyList()
@@ -134,10 +169,12 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
 
             try {
                 val result = if (isKeyword) {
-                    tmdbRepository.getByKeyword(id)
+                    tmdbRepository.getByKeyword(id, onSection)
                 } else {
-                    tmdbRepository.getByGenre(id)
+                    tmdbRepository.getByGenre(id, onSection)
                 }
+
+                if (generation != loadGeneration) return@launch
 
                 _sections.value = result
                 _pagingStates.value = result.associate { section ->
@@ -148,10 +185,12 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } catch (e: Exception) {
-                _error.value = e.message ?: "Failed to load tag"
+                if (generation == loadGeneration) {
+                    _error.value = e.message ?: "Failed to load tag"
+                }
                 Log.e("TAG_VM", "load failed", e)
             } finally {
-                _isLoading.value = false
+                if (generation == loadGeneration) _isLoading.value = false
             }
 
             val loadedSections = _sections.value

@@ -331,6 +331,27 @@ class TmdbRepository private constructor(context: Context) :
         return items
     }
 
+    /**
+     * Short-TTL memory cache for the RAW `/collection/{id}` response.
+     *
+     * The Collection screen is opened from a title's "Belongs to collection"
+     * row - and building that row has just fetched this exact payload. Without
+     * a cache the screen paid a second identical round-trip for data already in
+     * hand, holding its whole page behind a skeleton until it returned.
+     *
+     * The RAW detail is what is stored, not the finished result: [getCollection]
+     * applies the active profile's kids ceiling and the digital-release filter
+     * below it, so caching the filtered version would hand one profile's page to
+     * the next.
+     */
+    private val collectionCache =
+        ConcurrentHashMap<Int, Pair<Long, TmdbCollectionDetail>>()
+
+    private val collectionCacheTtlMs = 10L * 60L * 1000L
+
+    /** Bound so a long browse cannot grow the map without end. */
+    private val collectionCacheMaxEntries = 64
+
     private val detailJsonAdapter: JsonAdapter<TmdbDetail> by lazy {
         moshi.adapter(TmdbDetail::class.java)
     }
@@ -962,8 +983,19 @@ class TmdbRepository private constructor(context: Context) :
     suspend fun getCollection(collectionId: Int): TmdbCollectionDetail? {
         if (apiKey.isBlank()) return null
 
-        val detail =
-            runCatchingCancellable { api.getCollection(collectionId, apiKey) }.getOrNull()
+        val now = System.currentTimeMillis()
+
+        val detail = collectionCache[collectionId]
+            ?.takeIf { (storedAt, _) -> now - storedAt < collectionCacheTtlMs }
+            ?.second
+            ?: runCatchingCancellable { api.getCollection(collectionId, apiKey) }
+                .getOrNull()
+                ?.also { fetched ->
+                    if (collectionCache.size > collectionCacheMaxEntries) {
+                        collectionCache.clear()
+                    }
+                    collectionCache[collectionId] = now to fetched
+                }
                 ?: return null
 
         // Kids Mode first: a kids profile never sees franchise pages whose
@@ -1339,51 +1371,47 @@ class TmdbRepository private constructor(context: Context) :
         return null
     }
 
-    suspend fun getByCompany(companyId: Int): List<StudioSection> =
-        getInitialCompanySections(companyId)
+    suspend fun getByCompany(
+        companyId: Int,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> = getInitialCompanySections(companyId, onSection)
 
+    /**
+     * Rail titles a genre / keyword / studio page loads, in display order —
+     * the same six every one of those screens draws, which is also why they
+     * share one list and one loader shape.
+     */
+    private val STANDARD_BROWSE_TITLES = listOf(
+        "MOVIES · RECENT",
+        "MOVIES · POPULAR",
+        "MOVIES · TOP RATED",
+        "SERIES · RECENT",
+        "SERIES · POPULAR",
+        "SERIES · TOP RATED"
+    )
 
     // The six rail fetches used to run serially, making screen load time
     // the SUM of all round-trips. In parallel it is just the slowest one
     // (~6x faster wall clock). Sections keep the original render order and
     // a failed rail still drops out (listOfNotNull semantics kept).
-    suspend fun getInitialGenreSections(genreId: Int): List<StudioSection> = coroutineScope {
-        val pages = listOf(
-            async { getGenreRailPage(genreId, "MOVIES · RECENT", 1) },
-            async { getGenreRailPage(genreId, "MOVIES · POPULAR", 1) },
-            async { getGenreRailPage(genreId, "MOVIES · TOP RATED", 1) },
-            async { getGenreRailPage(genreId, "SERIES · RECENT", 1) },
-            async { getGenreRailPage(genreId, "SERIES · POPULAR", 1) },
-            async { getGenreRailPage(genreId, "SERIES · TOP RATED", 1) }
-        ).awaitAll()
-        listOfNotNull(
-            pages[0].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · RECENT", it) },
-            pages[1].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · POPULAR", it) },
-            pages[2].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · TOP RATED", it) },
-            pages[3].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · RECENT", it) },
-            pages[4].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
-            pages[5].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
-        )
+    //
+    // [onSection] is the screen watching the rails arrive as they are built
+    // (see [streamBrowseSections]): rails reach it in display order and page 1
+    // reaches it before the deepening, so the page draws its first rail
+    // instead of waiting for its slowest.
+    suspend fun getInitialGenreSections(
+        genreId: Int,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> = streamBrowseSections(STANDARD_BROWSE_TITLES, onSection) { title, deepen ->
+        getGenreRailPage(genreId, title, 1, deepen)
     }
 
     // Same parallelization as getInitialGenreSections.
-    suspend fun getInitialKeywordSections(keywordId: Int): List<StudioSection> = coroutineScope {
-        val pages = listOf(
-            async { getKeywordRailPage(keywordId, "MOVIES · RECENT", 1) },
-            async { getKeywordRailPage(keywordId, "MOVIES · POPULAR", 1) },
-            async { getKeywordRailPage(keywordId, "MOVIES · TOP RATED", 1) },
-            async { getKeywordRailPage(keywordId, "SERIES · RECENT", 1) },
-            async { getKeywordRailPage(keywordId, "SERIES · POPULAR", 1) },
-            async { getKeywordRailPage(keywordId, "SERIES · TOP RATED", 1) }
-        ).awaitAll()
-        listOfNotNull(
-            pages[0].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · RECENT", it) },
-            pages[1].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · POPULAR", it) },
-            pages[2].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · TOP RATED", it) },
-            pages[3].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · RECENT", it) },
-            pages[4].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
-            pages[5].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
-        )
+    suspend fun getInitialKeywordSections(
+        keywordId: Int,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> = streamBrowseSections(STANDARD_BROWSE_TITLES, onSection) { title, deepen ->
+        getKeywordRailPage(keywordId, title, 1, deepen)
     }
 
     // Same parallelization as getInitialGenreSections.
@@ -1396,35 +1424,21 @@ class TmdbRepository private constructor(context: Context) :
      */
     suspend fun getInitialNetworkSections(
         networkId: Int,
-        companyId: Int? = null
-    ): List<StudioSection> = coroutineScope {
-        val titles = TmdbRailPages.networkRailTitles(companyId)
-        val pages = titles.map { title ->
-            async { getNetworkRailPage(networkId, title, 1, companyId) }
-        }.awaitAll()
-        titles.mapIndexed { index, title ->
-            pages[index].items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
-        }.filterNotNull()
+        companyId: Int? = null,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> = streamBrowseSections(
+        TmdbRailPages.networkRailTitles(companyId),
+        onSection
+    ) { title, deepen ->
+        getNetworkRailPage(networkId, title, 1, companyId, deepen)
     }
 
     // Same parallelization as getInitialGenreSections.
-    suspend fun getInitialCompanySections(companyId: Int): List<StudioSection> = coroutineScope {
-        val pages = listOf(
-            async { getCompanyRailPage(companyId, "MOVIES · RECENT", 1) },
-            async { getCompanyRailPage(companyId, "MOVIES · POPULAR", 1) },
-            async { getCompanyRailPage(companyId, "MOVIES · TOP RATED", 1) },
-            async { getCompanyRailPage(companyId, "SERIES · RECENT", 1) },
-            async { getCompanyRailPage(companyId, "SERIES · POPULAR", 1) },
-            async { getCompanyRailPage(companyId, "SERIES · TOP RATED", 1) }
-        ).awaitAll()
-        listOfNotNull(
-            pages[0].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · RECENT", it) },
-            pages[1].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · POPULAR", it) },
-            pages[2].items.takeIf { it.isNotEmpty() }?.let { StudioSection("MOVIES · TOP RATED", it) },
-            pages[3].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · RECENT", it) },
-            pages[4].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · POPULAR", it) },
-            pages[5].items.takeIf { it.isNotEmpty() }?.let { StudioSection("SERIES · TOP RATED", it) }
-        )
+    suspend fun getInitialCompanySections(
+        companyId: Int,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> = streamBrowseSections(STANDARD_BROWSE_TITLES, onSection) { title, deepen ->
+        getCompanyRailPage(companyId, title, 1, deepen)
     }
 
     // ------------------------------------------------------------------
@@ -1458,7 +1472,8 @@ class TmdbRepository private constructor(context: Context) :
         base: CrossBase,
         genreId: Int,
         title: String,
-        page: Int
+        page: Int,
+        deepen: Boolean = true
     ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
@@ -1521,7 +1536,8 @@ class TmdbRepository private constructor(context: Context) :
             mediaType = if (isTv) "tv" else "movie",
             sortBy = sortBy,
             filters = filters,
-            page = page
+            page = page,
+            deepen = deepen
         )
 
         val filtered =
@@ -1542,8 +1558,9 @@ class TmdbRepository private constructor(context: Context) :
      */
     suspend fun getInitialCrossGenreSections(
         base: CrossBase,
-        genreId: Int
-    ): List<StudioSection> = coroutineScope {
+        genreId: Int,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> {
         val titles = when (base.kind) {
             "decade" -> DECADE_RAIL_TITLES
             // Same rail set when a genre chip is active — the genre filter
@@ -1551,12 +1568,9 @@ class TmdbRepository private constructor(context: Context) :
             "network" -> TmdbRailPages.networkRailTitles(base.companyId)
             else -> SERVICE_RAIL_TITLES
         }
-        val pages = titles.map { title ->
-            async { getCrossGenreRailPage(base, genreId, title, 1) }
-        }.awaitAll()
-        titles.mapIndexed { index, title ->
-            pages[index].items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
-        }.filterNotNull()
+        return streamBrowseSections(titles, onSection) { title, deepen ->
+            getCrossGenreRailPage(base, genreId, title, 1, deepen)
+        }
     }
 
     /**
@@ -1812,6 +1826,15 @@ class TmdbRepository private constructor(context: Context) :
      * the reported [TagRailPage.nextPage] is the first page not merged yet.
      * Paging past page 1 is untouched: a "load more" fetches exactly the page
      * it asked for.
+     *
+     * [deepen] = false is the same rail without the deepening: page 1, filtered
+     * and finished exactly as the last page of a deepened rail would be. It is
+     * what a streamed screen publishes first (see `streamBrowseSections`) so
+     * the rail is on screen after one round-trip instead of three while the
+     * deepening pass runs behind it. It reports `nextPage = 2` — the same value
+     * a rail that needed no deepening reports — because the deepening pass
+     * that follows starts from page 2, and only a paging request the user
+     * actually makes moves past it.
      */
     internal suspend fun finishDeepRailPage(
         page: Int,
@@ -1820,6 +1843,7 @@ class TmdbRepository private constructor(context: Context) :
          * [cachedRailPage] can reuse it; null disables caching.
          */
         cacheKey: String? = null,
+        deepen: Boolean = true,
         load: suspend (Int) -> List<StudioItem>
     ): TagRailPage = coroutineScope {
         val first = cachedRailPage(cacheKey, page, load)
@@ -1827,7 +1851,7 @@ class TmdbRepository private constructor(context: Context) :
             return@coroutineScope finishRailPage(first, nextPage = page + 1)
         }
 
-        if (first.size >= RAIL_DEPTH_TARGET_ITEMS) {
+        if (!deepen || first.size >= RAIL_DEPTH_TARGET_ITEMS) {
             return@coroutineScope finishRailPage(first, nextPage = 2)
         }
 
@@ -1863,7 +1887,8 @@ class TmdbRepository private constructor(context: Context) :
         mediaType: String,
         sortBy: String,
         filters: com.kennyb1201.kbstream.data.kb.KBFilters,
-        page: Int
+        page: Int,
+        deepen: Boolean = true
     ): Pair<List<StudioItem>, Int> = coroutineScope {
         val itemType = if (mediaType.equals("tv", ignoreCase = true)) "series" else "movie"
 
@@ -1891,7 +1916,7 @@ class TmdbRepository private constructor(context: Context) :
         val first = load(page)
         if (page != 1) return@coroutineScope first to (page + 1)
 
-        if (first.size >= RAIL_DEPTH_TARGET_ITEMS) {
+        if (!deepen || first.size >= RAIL_DEPTH_TARGET_ITEMS) {
             return@coroutineScope first.distinctBy { it.item.id } to 2
         }
 
@@ -1916,21 +1941,37 @@ class TmdbRepository private constructor(context: Context) :
         merged.distinctBy { it.item.id } to next
     }
 
-    suspend fun getGenreRailPage(genreId: Int, title: String, page: Int): TagRailPage =
-        TmdbRailPages.genrePage(this, genreId, title, page)
+    suspend fun getGenreRailPage(
+        genreId: Int,
+        title: String,
+        page: Int,
+        deepen: Boolean = true
+    ): TagRailPage =
+        TmdbRailPages.genrePage(this, genreId, title, page, deepen)
 
-    suspend fun getKeywordRailPage(keywordId: Int, title: String, page: Int): TagRailPage =
-        TmdbRailPages.keywordPage(this, keywordId, title, page)
+    suspend fun getKeywordRailPage(
+        keywordId: Int,
+        title: String,
+        page: Int,
+        deepen: Boolean = true
+    ): TagRailPage =
+        TmdbRailPages.keywordPage(this, keywordId, title, page, deepen)
 
     suspend fun getNetworkRailPage(
         networkId: Int,
         title: String,
         page: Int,
-        companyId: Int? = null
-    ): TagRailPage = TmdbRailPages.networkPage(this, networkId, title, page, companyId)
+        companyId: Int? = null,
+        deepen: Boolean = true
+    ): TagRailPage = TmdbRailPages.networkPage(this, networkId, title, page, companyId, deepen)
 
-    suspend fun getCompanyRailPage(companyId: Int, title: String, page: Int): TagRailPage =
-        TmdbRailPages.companyPage(this, companyId, title, page)
+    suspend fun getCompanyRailPage(
+        companyId: Int,
+        title: String,
+        page: Int,
+        deepen: Boolean = true
+    ): TagRailPage =
+        TmdbRailPages.companyPage(this, companyId, title, page, deepen)
 
     /**
      * Keyword id lookup for the Search browse browser: TMDB's search/keyword
@@ -1954,7 +1995,8 @@ class TmdbRepository private constructor(context: Context) :
         decadeStart: Int,
         mediaType: String,
         sortBy: String,
-        page: Int
+        page: Int,
+        deepen: Boolean = true
     ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
         val decadeEnd = decadeStart + 9
@@ -1981,7 +2023,8 @@ class TmdbRepository private constructor(context: Context) :
             mediaType = if (isTv) "tv" else "movie",
             sortBy = sortBy,
             filters = filters,
-            page = page
+            page = page,
+            deepen = deepen
         )
 
         // A discover page caps at 20 items; a full page means more exist.
@@ -2006,7 +2049,8 @@ class TmdbRepository private constructor(context: Context) :
         providerId: Int?,
         networkOrCompanyId: Int?,
         networkIsCompany: Boolean,
-        page: Int
+        page: Int,
+        deepen: Boolean = true
     ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
         val isTv = mediaType.equals("tv", ignoreCase = true)
@@ -2063,7 +2107,8 @@ class TmdbRepository private constructor(context: Context) :
             mediaType = if (isTv) "tv" else "movie",
             sortBy = sortBy,
             filters = filters,
-            page = page
+            page = page,
+            deepen = deepen
         )
 
         // A discover page caps at 20 items; a full page means more exist.
@@ -2085,20 +2130,23 @@ class TmdbRepository private constructor(context: Context) :
         "SERIES · TOP RATED"
     )
 
-    suspend fun getInitialDecadeSections(decadeStart: Int): List<StudioSection> = coroutineScope {
-        val pages = DECADE_RAIL_TITLES.map { title ->
-            async { getDecadeRailPage(decadeStart, title, 1) }
-        }.awaitAll()
-        DECADE_RAIL_TITLES.mapIndexed { index, title ->
-            pages[index].items.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
-        }.filterNotNull()
+    suspend fun getInitialDecadeSections(
+        decadeStart: Int,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> = streamBrowseSections(DECADE_RAIL_TITLES, onSection) { title, deepen ->
+        getDecadeRailPage(decadeStart, title, 1, deepen)
     }
 
     /**
      * One page of one decade rail, keyed off the rail title the same way
      * the genre/keyword rail pages are ("MOVIES · POPULAR", ...).
      */
-    suspend fun getDecadeRailPage(decadeStart: Int, title: String, page: Int): TagRailPage {
+    suspend fun getDecadeRailPage(
+        decadeStart: Int,
+        title: String,
+        page: Int,
+        deepen: Boolean = true
+    ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
         val parts = title.split("·").map { it.trim() }
@@ -2113,7 +2161,7 @@ class TmdbRepository private constructor(context: Context) :
             else -> return TagRailPage(emptyList(), false)
         }
 
-        val result = getDecadeSectionPage(decadeStart, mediaType, sortBy, page)
+        val result = getDecadeSectionPage(decadeStart, mediaType, sortBy, page, deepen)
         val filtered =
             if (isDigitalFilterEnabled()) {
                 filterByHomeAvailability(result.items) { it.item.id to it.mediaType }
@@ -2162,41 +2210,51 @@ class TmdbRepository private constructor(context: Context) :
         providerId: Int?,
         networkOrCompanyId: Int? = null,
         networkIsCompany: Boolean = false,
-        originalsCompanyId: Int? = null
-    ): List<StudioSection> = coroutineScope {
-        val networkOriginals = async {
-            if (networkOrCompanyId != null && !networkIsCompany) {
-                runCatchingCancellable { getNetworkRailPage(networkOrCompanyId, "SERIES · RECENT", 1) }
-                    .getOrNull()
-            } else {
-                null
-            }
+        originalsCompanyId: Int? = null,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> {
+        // Both ORIGINALS titles are listed whether or not this page can serve
+        // them: a page without the id returns an empty rail, which drops out of
+        // the list exactly as the old build-a-list-and-filter-the-empties
+        // assembly did, and the rails behind it keep their positions.
+        val titles = buildList {
+            add("ORIGINALS · SERIES")
+            add("ORIGINALS · MOVIES")
+            addAll(SERVICE_RAIL_TITLES)
         }
-        val companyOriginals = async {
-            if (originalsCompanyId != null) {
-                runCatchingCancellable { getCompanyRailPage(originalsCompanyId, "MOVIES · RECENT", 1) }
-                    .getOrNull()
-            } else {
-                null
-            }
-        }
-        val providerPages = SERVICE_RAIL_TITLES.map { title ->
-            async {
-                providerId?.let { runCatchingCancellable { getServiceRailPage(it, title, 1) }.getOrNull() }
-            }
-        }.awaitAll()
 
-        val sections = mutableListOf<StudioSection>()
-        networkOriginals.await()?.items?.takeIf { it.isNotEmpty() }?.let {
-            sections.add(StudioSection("ORIGINALS · SERIES", it))
+        // Every service rail swallows its own failure (as it always has): one
+        // unreachable discover query means that rail is missing from the page,
+        // not that the whole service screen fails.
+        return streamBrowseSections(titles, onSection) { title, deepen ->
+            runCatchingCancellable {
+                when (title) {
+                    "ORIGINALS · SERIES" ->
+                        if (networkOrCompanyId != null && !networkIsCompany) {
+                            getNetworkRailPage(
+                                networkOrCompanyId,
+                                "SERIES · RECENT",
+                                1,
+                                null,
+                                deepen
+                            )
+                        } else {
+                            TagRailPage(emptyList(), false)
+                        }
+
+                    "ORIGINALS · MOVIES" ->
+                        if (originalsCompanyId != null) {
+                            getCompanyRailPage(originalsCompanyId, "MOVIES · RECENT", 1, deepen)
+                        } else {
+                            TagRailPage(emptyList(), false)
+                        }
+
+                    else -> providerId
+                        ?.let { getServiceRailPage(it, title, 1, deepen = deepen) }
+                        ?: TagRailPage(emptyList(), false)
+                }
+            }.getOrDefault(TagRailPage(emptyList(), false))
         }
-        companyOriginals.await()?.items?.takeIf { it.isNotEmpty() }?.let {
-            sections.add(StudioSection("ORIGINALS · MOVIES", it))
-        }
-        SERVICE_RAIL_TITLES.mapIndexed { index, title ->
-            providerPages[index]?.items?.takeIf { it.isNotEmpty() }?.let { StudioSection(title, it) }
-        }.filterNotNull().let { sections.addAll(it) }
-        sections
     }
 
     suspend fun getServiceRailPage(
@@ -2205,7 +2263,8 @@ class TmdbRepository private constructor(context: Context) :
         page: Int,
         networkOrCompanyId: Int? = null,
         networkIsCompany: Boolean = false,
-        originalsCompanyId: Int? = null
+        originalsCompanyId: Int? = null,
+        deepen: Boolean = true
     ): TagRailPage {
         if (apiKey.isBlank()) return TagRailPage(emptyList(), false)
 
@@ -2228,10 +2287,10 @@ class TmdbRepository private constructor(context: Context) :
             }
             if (companyId != null) {
                 val railTitle = (if (isMoviesRail) "MOVIES" else "SERIES") + " \u00B7 RECENT"
-                return getCompanyRailPage(companyId, railTitle, page)
+                return getCompanyRailPage(companyId, railTitle, page, deepen)
             }
             if (!networkIsCompany && networkOrCompanyId != null) {
-                return getNetworkRailPage(networkOrCompanyId, "SERIES \u00B7 RECENT", page)
+                return getNetworkRailPage(networkOrCompanyId, "SERIES \u00B7 RECENT", page, null, deepen)
             }
             return TagRailPage(emptyList(), false)
         }
@@ -2248,7 +2307,8 @@ class TmdbRepository private constructor(context: Context) :
             providerId = providerId,
             networkOrCompanyId = null,
             networkIsCompany = false,
-            page = page
+            page = page,
+            deepen = deepen
         )
         val filtered =
             if (isDigitalFilterEnabled()) {
@@ -2267,17 +2327,24 @@ class TmdbRepository private constructor(context: Context) :
         .getOrDefault(emptyList())
     }
 
-    suspend fun getByGenre(genreId: Int): List<StudioSection> =
-        getInitialGenreSections(genreId)
+    suspend fun getByGenre(
+        genreId: Int,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> =
+        getInitialGenreSections(genreId, onSection)
 
-    suspend fun getByKeyword(keywordId: Int): List<StudioSection> =
-        getInitialKeywordSections(keywordId)
+    suspend fun getByKeyword(
+        keywordId: Int,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
+    ): List<StudioSection> =
+        getInitialKeywordSections(keywordId, onSection)
 
     suspend fun getByNetwork(
         networkId: Int,
-        companyId: Int? = null
+        companyId: Int? = null,
+        onSection: (suspend (Int, StudioSection) -> Unit)? = null
     ): List<StudioSection> =
-        getInitialNetworkSections(networkId, companyId)
+        getInitialNetworkSections(networkId, companyId, onSection)
 
     /**
      * Logo candidates, in id order, for a network or company page that has no
