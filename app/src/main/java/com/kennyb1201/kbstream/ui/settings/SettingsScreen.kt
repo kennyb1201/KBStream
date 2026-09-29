@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -417,7 +420,8 @@ fun SettingsScreen(
         }
         SettingsContentHost(
             title = selectedPane.label,
-            blurb = selectedPane.blurb
+            blurb = selectedPane.blurb,
+            scrollable = selectedPane != SettingsPane.HIDDEN
         ) {
                 if (selectedPane == SettingsPane.INTEGRATIONS) {
 
@@ -2178,6 +2182,11 @@ private fun SettingsContentHost(
     // What the pane holds, in the same words the rail used to sell it: the
     // pane then reads as a continuation of the rail rather than a new page.
     blurb: String,
+    // False for the one pane that is itself a lazy scroll container (Hidden
+    // Titles). A verticalScroll hands its content an unbounded height, and a
+    // LazyColumn measured against that throws, so that pane scrolls itself
+    // and this host only lays it out.
+    scrollable: Boolean = true,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     // No focus stealing here: switching panes keeps focus on the rail.
@@ -2188,7 +2197,7 @@ private fun SettingsContentHost(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(scroll)
+            .then(if (scrollable) Modifier.verticalScroll(scroll) else Modifier)
             .padding(start = 40.dp, end = 64.dp, top = 32.dp, bottom = 40.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -2905,7 +2914,7 @@ private fun NavigationRow(
  * ids they were hidden under.
  */
 @Composable
-private fun HiddenTitlesSection() {
+private fun androidx.compose.foundation.layout.ColumnScope.HiddenTitlesSection() {
     val context = LocalContext.current
     val entries by HiddenTitles.entries.collectAsStateWithLifecycle()
 
@@ -2931,49 +2940,72 @@ private fun HiddenTitlesSection() {
         color = KBTextHi,
         style = MaterialTheme.typography.bodySmall
     )
-    Spacer(modifier = Modifier.height(6.dp))
 
-    entries.forEach { entry ->
-        KBCard(
-            onClick = { HiddenTitles.unhide(context, entry.keys) },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(KBSurfaceRaised, KBShapeChip)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+    // Lazy, because this is the app's only list that grows with use: a heavy
+    // hider has hundreds of rows here, and composing every one of them to
+    // draw the six that fit is the same waste the browse submenu had. The
+    // count stays above the list and the list scrolls under it, which is why
+    // this pane opts out of the host's scroll (see SettingsContentHost):
+    // weight(1f) can only hand the lazy column a definite height because
+    // nothing here is unbounded.
+    LazyColumn(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = PaddingValues(top = 6.dp, bottom = 8.dp)
+    ) {
+        items(
+            items = entries,
+            // Entries never share a key - hide() merges on overlap - so this
+            // is already unique; the timestamp is the tie-break if a corrupt
+            // blob ever repeats one, because a duplicate key is a hard crash
+            // in a lazy list.
+            key = { entry -> entry.at.toString() + "\u0001" + entry.keys.joinToString("\u0001") }
+        ) { entry ->
+            KBCard(
+                onClick = { HiddenTitles.unhide(context, entry.keys) },
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(KBSurfaceRaised, KBShapeChip)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = entry.title.ifBlank { "Untitled" },
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            text = if (entry.mediaType == "series") "Series" else "Movie",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
                     Text(
-                        text = entry.title.ifBlank { "Untitled" },
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Text(
-                        text = if (entry.mediaType == "series") "Series" else "Movie",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.labelSmall
+                        text = "SHOW",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 12.dp)
                     )
                 }
-                Text(
-                    text = "SHOW",
-                    color = KBAccent,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(start = 12.dp)
-                )
             }
         }
-        Spacer(modifier = Modifier.height(8.dp))
+
+        // The only door out of the hidden state rides the list rather than
+        // sitting under it, so it can never be pushed off the bottom of a
+        // pane whose whole point is being reachable.
+        item(key = "unhide-all") {
+            NavigationRow(
+                label = "Show everything again",
+                description = "Unhide all ${entries.size} of them",
+                onClick = { HiddenTitles.unhideAll(context) }
+            )
+        }
     }
-
-    Spacer(modifier = Modifier.height(4.dp))
-
-    NavigationRow(
-        label = "Show everything again",
-        description = "Unhide all ${entries.size} of them",
-        onClick = { HiddenTitles.unhideAll(context) }
-    )
 }
