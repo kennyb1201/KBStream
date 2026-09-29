@@ -24,6 +24,42 @@ object CrashReporter {
     /** How many non-fatals are retained for the diagnostics export. */
     private const val MAX_RECENT = 10
 
+    /**
+     * True only inside a JVM unit test, false in every build that ships.
+     *
+     * Robolectric is a `testImplementation` dependency, so its classes are on
+     * the unit-test classpath and in no APK - which makes loading one a
+     * reliable "am I a test?" probe. In a shipped build it is a single failed
+     * class lookup.
+     *
+     * Reporting sites use it to refuse to report. CI passes SENTRY_DSN at
+     * workflow level, so `testDebugUnitTest` bakes the PRODUCTION DSN into the
+     * debug variant - the same variant `assembleDebug` ships - and a
+     * Robolectric test that boots MainApplication would otherwise initialize
+     * the real Sentry client and send this JVM's caught exceptions to the live
+     * project. One CI test run did exactly that: roughly 400 events across six
+     * issues, every one of them tagged `device=robolectric` and attributed to
+     * the release being built, which is how test noise came to rank above the
+     * real device crashes on the dashboard.
+     */
+    internal fun isJvmUnitTest(): Boolean =
+        runCatching { Class.forName("org.robolectric.Robolectric") }.isSuccess
+
+    /**
+     * Whether this process should initialize Sentry at all.
+     *
+     * Two independent refusals: a build with no DSN baked in does not report,
+     * and neither does a JVM unit test even though one IS baked in - CI passes
+     * SENTRY_DSN at workflow level, so `testDebugUnitTest` compiles it into the
+     * debug variant. See [isJvmUnitTest] for what that cost when it was
+     * missing.
+     *
+     * Pure in [dsn] so the truth table is testable without a DSN and without
+     * standing up the SDK.
+     */
+    internal fun shouldInitCrashReporting(dsn: String): Boolean =
+        dsn.isNotBlank() && !isJvmUnitTest()
+
     /** One retained non-fatal, as shown in Settings → Sync diagnostics. */
     data class RecentError(val atMs: Long, val source: String, val summary: String)
 

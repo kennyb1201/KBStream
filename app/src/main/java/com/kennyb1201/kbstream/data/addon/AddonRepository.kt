@@ -46,6 +46,16 @@ private val sharedAddonLogging =
         }
     }
 
+/**
+ * Concurrent requests this client allows per add-on host.
+ *
+ * This is the transport budget Home's rail build draws on, so an app-side gate
+ * that sits below it (see HomeViewModel.MAX_CONCURRENT_CATALOG_REQUESTS) is
+ * the queue rather than the network, and raising this number alone buys
+ * nothing. Named so the two cannot drift apart.
+ */
+internal const val ADDON_MAX_REQUESTS_PER_HOST = 12
+
 private val sharedAddonClient: OkHttpClient by lazy {
     BaseHttpClient.derived {
         dispatcher(
@@ -53,7 +63,7 @@ private val sharedAddonClient: OkHttpClient by lazy {
                 // Catalog-only addons like AIOMetadata expose ~12 search
                 // catalogs that are probed in parallel; the default 5
                 // requests-per-host cap would queue them into 3 waves.
-                maxRequestsPerHost = 12
+                maxRequestsPerHost = ADDON_MAX_REQUESTS_PER_HOST
             }
         )
         // HTTP disk cache: catalog responses survive app restarts, so a warm

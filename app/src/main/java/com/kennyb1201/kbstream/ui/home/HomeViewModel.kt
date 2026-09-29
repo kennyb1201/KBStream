@@ -837,8 +837,22 @@ class HomeViewModel(
             MAX_CONCURRENT_CATALOG_REQUESTS
         )
 
-    // Caps parallel TMDB release-date lookups for the digital filter.
-    private val tmdbFilterSemaphore = Semaphore(permits = 4)
+    /**
+     * Caps parallel TMDB release-date lookups for the digital filter.
+     *
+     * This one gates first paint rather than background work: the filter walks
+     * a rail's items one lookup at a time, and every catalog rail waits for the
+     * pinned batch's filter before it publishes, so its width lands in
+     * home.pinned. A field report measured home.pinned at 3.6s for just two
+     * catalogs - the same figure the 23-catalog fan-out took - which is what
+     * named this semaphore as the cost the two share. A Top Today rail is
+     * ~20-50 items, so four at a time was several seconds of pure queueing.
+     *
+     * Deliberately below the TMDB client's own per-host budget
+     * (TmdbHttpClient.MAX_REQUESTS_PER_HOST is 12), so a filtering rail cannot
+     * occupy the whole host and leave a hero or Detail lookup behind it.
+     */
+    private val tmdbFilterSemaphore = Semaphore(permits = 8)
 
     // Caps parallel TMDB artwork lookups for landscape cards.
     private val landscapeArtSemaphore = Semaphore(permits = 6)
@@ -7863,8 +7877,20 @@ private suspend fun calculateEpisodesRemaining(
         private const val TMDB_MAX_CONCURRENT_LOOKUPS =
             5
 
-        private const val MAX_CONCURRENT_CATALOG_REQUESTS =
-            6
+        /**
+         * Concurrent catalog requests a rail build keeps in flight.
+         *
+         * Sized to the add-on client's own per-host budget
+         * (com.kennyb1201.kbstream.data.addon.ADDON_MAX_REQUESTS_PER_HOST), not
+         * below it. While this sat at 6 the transport could run twice as many
+         * catalog fetches as the app would ever hand it, so the build - not the
+         * network - was the queue: on a field report addon.catalog averaged
+         * 603ms over 117 calls, and 23 catalogs per Home six at a time is four
+         * waves where two will do. The pinned rails share this semaphore
+         * through fetchCatalogThrottled, so it covers pagination too.
+         */
+        internal const val MAX_CONCURRENT_CATALOG_REQUESTS =
+            12
 
         // How many items a TMDB-sourced rail (the kids picks) keeps from its
         // single discover page. Addon catalogs no longer cap the first page:

@@ -198,8 +198,10 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
 
     /**
      * Crash reporting via Sentry. Only initializes when a DSN was baked into
-     * the build (SENTRY_DSN in local.properties or the CI environment);
-     * without one the app behaves exactly as before.
+     * the build (SENTRY_DSN in local.properties or the CI environment) AND
+     * this process is not a JVM unit test (see CrashReporter.isJvmUnitTest);
+     * without either, the app behaves exactly as before and a Robolectric run
+     * cannot report into the production project.
      *
      * Native (NDK) crashes are covered by this same call, and deliberately so:
      * `io.sentry:sentry-android` depends on `io.sentry:sentry-android-ndk`,
@@ -223,7 +225,9 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
      * names.
      */
     private fun initCrashReporting() {
-        if (BuildConfig.SENTRY_DSN.isBlank()) return
+        // Refuses for a build with no DSN baked in, and for any JVM unit test
+        // even when one is - see CrashReporter.shouldInitCrashReporting.
+        if (!CrashReporter.shouldInitCrashReporting(BuildConfig.SENTRY_DSN)) return
         SentryAndroid.init(this) { options ->
             options.dsn = BuildConfig.SENTRY_DSN
             // Build identity on every event: crash reports aggregate per

@@ -1485,11 +1485,19 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         private const val WARM_ADDON_WAIT_MS = 1_500L
 
         /**
-         * Requests the catalog warm holds in flight. Deliberately below the
-         * rail build's own cap of six: the warm must never be what that cap
-         * has to share with.
+         * Requests the catalog warm holds in flight.
+         *
+         * Not a second budget competing with the rail build's: the warm and the
+         * rail build ask for the SAME catalogs, and AddonRepository.getCatalog
+         * collapses the duplicates into one request per catalog. So this is the
+         * width at which those shared requests get issued first, and whatever
+         * head start the warm takes the rail build inherits; holding it under
+         * the rail build's own cap bought nothing and only throttled the set
+         * both of them wait on. A field report put startup.catalogWarm at 4.7s
+         * - this cap's wave count - with every rail build queued behind those
+         * same requests.
          */
-        private const val CATALOG_WARM_CONCURRENCY = 4
+        internal const val CATALOG_WARM_CONCURRENCY = 8
 
         private const val KEY_CONFIG_SIG = "addons_config_sig"
         private const val KEY_CONFIG_EDITED_AT = "addons_config_edited_at"
