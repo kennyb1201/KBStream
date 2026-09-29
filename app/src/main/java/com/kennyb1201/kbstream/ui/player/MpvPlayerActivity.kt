@@ -298,7 +298,7 @@ class MpvPlayerActivity : ComponentActivity() {
     // headers. None of it goes through mpv - the preview is a second ExoPlayer
     // that reads the stream itself (see TrickplayFrames) - so switching engines
     // does not change what a scrub looks like.
-    private var trickplay: TrickplayFrames? = null
+    private var trickplay: MpvScrubPreviews? = null
     private var trickplayOverlay: TrickplayOverlay? = null
 
     /** The view the card tracks, when the frame being asked for has one. */
@@ -1336,10 +1336,18 @@ class MpvPlayerActivity : ComponentActivity() {
         handler.removeCallbacks(trickplayCardHider)
         handler.postDelayed(trickplayCardHider, TRICKPLAY_WAIT_MS)
         trickplayAnchorView = anchorView
-        val frames = trickplay ?: TrickplayFrames(
+        // No second player and no second connection: this engine can be asked
+        // for the picture it is already showing, so a preview is a screenshot of
+        // the frame the viewer is scrubbing over (see MpvScrubPreviews). The
+        // position is read per attempt rather than captured once, because
+        // whether the player has ARRIVED at the position being previewed is the
+        // whole gate - it is true while the remote's held LEFT/RIGHT seeks, and
+        // false for the span of a seek-bar drag, which deliberately does not
+        // move the player until the finger comes up.
+        val frames = trickplay ?: MpvScrubPreviews(
             activity = this,
-            url = currentUrl,
-            headers = streamHeaders,
+            playerPositionMs = { surface?.positionMs() ?: 0L },
+            captureTo = { path -> surface?.screenshotToFile(path) },
             onUnavailable = { reason -> noticeNoScrubPreviews(reason) }
         ) { _, frame ->
             if (trickplayWanted) {

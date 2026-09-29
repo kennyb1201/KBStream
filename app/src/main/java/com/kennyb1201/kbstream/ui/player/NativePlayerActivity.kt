@@ -4180,6 +4180,25 @@ class NativePlayerActivity : ComponentActivity() {
             // whose marker lives only in the query is fetched through the HLS
             // source instead of the progressive extractors.
             resolvedMimeType = resolveMimeType(currentUrl),
+            // Where the main player has read to, sampled per call. This is what
+            // keeps the preview cache-only (see TrickplayFrames): bytes up to
+            // here arrived through the shared disk cache, so a frame for them is
+            // a local read and cannot open the second connection a debrid link
+            // will not give. A position the player has not reached is waited for
+            // rather than fetched, which is also why this cannot be a snapshot -
+            // it is read again on every deferred attempt.
+            cacheWindow = {
+                val player = exoPlayer
+                if (player == null) {
+                    null
+                } else {
+                    TrickplayWindow(
+                        playheadMs = player.currentPosition,
+                        bufferedMs = player.bufferedPosition,
+                        durationMs = player.duration.takeIf { it > 0 } ?: 0L
+                    )
+                }
+            },
             onUnavailable = { reason -> noticeNoScrubPreviews(reason) }
         ) { _, frame ->
             if (trickplayWanted) {

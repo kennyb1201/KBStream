@@ -56,6 +56,12 @@ import java.util.concurrent.TimeUnit
  *    the hosts this app plays from - debrid links, usenet - commonly allow a
  *    link exactly one, in which case the connection does not fail but hangs,
  *    and no frame is ever produced. See [buildPreview].
+ *
+ *    That requirement is enforced rather than intended: the preview decodes a
+ *    bucket only once the main player has already read it
+ *    ([trickplayServableFromCache]), so this pipeline opens no connection of
+ *    its own, ever. A miss used to fall through to upstream, which is a second
+ *    connection by definition - see that function for what it cost.
  *  - **No audio.** Audio tracks are disabled in the track selection rather than
  *    muted, so the audio decoder is never instantiated at all.
  *  - **No HD.** Frames are captured at [TRICKPLAY_CAPTURE_WIDTH] and the
@@ -73,6 +79,16 @@ internal class TrickplayFrames(
     private val url: String,
     private val headers: Map<String, String>,
     private val resolvedMimeType: String? = null,
+    /**
+     * Where the main player has read to, sampled per call.
+     *
+     * A lambda rather than a snapshot because the answer changes underneath a
+     * single scrub: the position the viewer pressed for is read by the main
+     * player over the next second or two, and that arrival is exactly what the
+     * deferred attempt in [deferForCache] is waiting for. Null means the main
+     * player cannot be read at all right now, which is treated as "not yet".
+     */
+    private val cacheWindow: () -> TrickplayWindow?,
     private val onUnavailable: (reason: String) -> Unit = {},
     private val onFrame: (bucketMs: Long, frame: Bitmap) -> Unit
 ) {
@@ -95,6 +111,21 @@ internal class TrickplayFrames(
 
     /** True between asking the player for a position and either frame or failure. */
     private var awaitingFrame = false
+
+    /**
+     * The bucket the pipeline is waiting for the cache to cover, if any, and
+     * the deadline for that wait.
+     *
+     * Kept together because they are set and cleared together: a wait that
+     * outlives its bucket would decode a frame for a position the viewer has
+     * already left, and one that never expires would hold the retry timer for
+     * the rest of the film.
+     */
+    private var deferredBucket: Long? = null
+    private var deferUntilMs = 0L
+
+    /** Whether the session has already reported waiting on the cache. */
+    private var deferRecorded = false
 
     /** Uptime when the extraction now in flight was asked for, for its latency. */
     private var askedAtMs = 0L
@@ -163,6 +194,16 @@ internal class TrickplayFrames(
         if (disabled || released || awaitingFrame) return
         val bucket = wantedBucket ?: return
         if (cache.get(bucket) != null) return
+        // Cache-only by construction: decode what the main player has already
+        // read, and nothing else. Those bytes are on disk, so this read cannot
+        // open the second connection the feature exists to avoid - and a bucket
+        // that is not covered yet is waited for rather than fetched.
+        val window = cacheWindow()
+        if (window == null || !trickplayServableFromCache(bucket, window)) {
+            deferForCache(bucket)
+            return
+        }
+        cancelDefer()
         inFlightBucket = bucket
         awaitingFrame = true
         askedAtMs = SystemClock.uptimeMillis()
@@ -214,11 +255,14 @@ internal class TrickplayFrames(
         // the main player opened the same stream in 2058ms beside it.
         //
         // Through the cache, scrubbing near the playhead (which is what
-        // scrubbing is) reads bytes the main player has already stored. No
-        // second connection is opened at all, so there is nothing to contend
-        // for; and outside the cached range the upstream still serves it, with
-        // FLAG_IGNORE_CACHE_ON_ERROR so a cache problem can never be what stops
-        // the frame.
+        // scrubbing is) reads bytes the main player has already stored - and
+        // nothing outside that range is ever decoded, because
+        // [trickplayServableFromCache] admits a bucket only once the main player
+        // has read it. So there is no miss to fall through to, and no
+        // connection to contend for. The upstream is still wired - a cache needs
+        // one to be a cache - but a bucket that reaches this player is inside
+        // the cached range by construction, and FLAG_IGNORE_CACHE_ON_ERROR keeps
+        // a cache fault from being what stops the frame.
         //
         // The cache key has to match the main player's or the entries are
         // missed rather than shared. Both wrap the same URL string with the
@@ -332,6 +376,7 @@ internal class TrickplayFrames(
     private fun deliver(bucket: Long, frame: Bitmap) {
         awaitingFrame = false
         inFlightBucket = null
+        cancelDefer()
         handler.removeCallbacks(timeoutRunnable)
         // Into the diagnostics trace as well as onto the screen: "I never see a
         // thumbnail" is answered differently by "none was ever decoded" and
@@ -366,6 +411,7 @@ internal class TrickplayFrames(
         if (!awaitingFrame) return
         awaitingFrame = false
         inFlightBucket = null
+        cancelDefer()
         handler.removeCallbacks(timeoutRunnable)
         failures++
         PerfTrace.record(
@@ -384,7 +430,9 @@ internal class TrickplayFrames(
             PerfTrace.record("trickplay.off", 0L, ok = false)
             disabled = true
             teardown()
-            onUnavailable(if (permanent) NO_DECODER_NOTICE else NO_FRAMES_NOTICE)
+            onUnavailable(
+                if (permanent) NO_DECODER_NOTICE else TRICKPLAY_NO_FRAMES_NOTICE
+            )
             return
         }
         // Retried only when the viewer has already dragged somewhere else. A
@@ -395,6 +443,63 @@ internal class TrickplayFrames(
 
     private val timeoutRunnable = Runnable {
         if (awaitingFrame) fail(inFlightBucket, timeoutReason())
+    }
+
+    /**
+     * The deferred check: the main player may have read past the bucket since the
+     * last one, which is the only thing that can change the answer.
+     *
+     * It does not run through [startNext]'s guards by accident - the pipeline
+     * being torn down, released or already busy all end it - and it cannot
+     * outlive [deferUntilMs].
+     */
+    private val cacheRetry = Runnable { startNext() }
+
+    /**
+     * [bucket] is not decodable yet because the main player has not read it.
+     *
+     * Not a failure and not counted as one: nothing was attempted, nothing was
+     * spent, and the bytes are usually a second away because the main player is
+     * already fetching exactly that region - it seeked there when the viewer
+     * pressed. So instead of failing the press, the pipeline waits, checking on
+     * [TRICKPLAY_RETRY_MS] until [TRICKPLAY_WAIT_MS] has passed: the same
+     * window the card is armed for, so a wait that outlives the viewer's
+     * attention ends with it rather than decoding a frame nobody is waiting for.
+     */
+    private fun deferForCache(bucket: Long) {
+        inFlightBucket = null
+        awaitingFrame = false
+        val now = SystemClock.uptimeMillis()
+        if (deferredBucket != bucket) {
+            deferredBucket = bucket
+            deferUntilMs = now + TRICKPLAY_WAIT_MS
+            // Once a session, not once per bucket and certainly not once per
+            // check: this is re-evaluated several times a second for as long as
+            // the viewer sits on a position the player has not read, and one
+            // line per check would push every other sample out of the trace
+            // ring. How far short the first one fell is the number a report
+            // wants, so it goes in as the measured value - and a session whose
+            // every bucket lands here is the map case for a preview that can
+            // never be served locally.
+            if (!deferRecorded) {
+                deferRecorded = true
+                val buffered = cacheWindow()?.bufferedMs ?: bucket
+                PerfTrace.record(
+                    "trickplay.defer:cold",
+                    (bucket - buffered).coerceAtLeast(0L),
+                    ok = false
+                )
+            }
+        }
+        handler.removeCallbacks(cacheRetry)
+        if (now < deferUntilMs) handler.postDelayed(cacheRetry, TRICKPLAY_RETRY_MS)
+    }
+
+    /** Stops waiting for bytes: something else is happening now. */
+    private fun cancelDefer() {
+        deferredBucket = null
+        deferUntilMs = 0L
+        handler.removeCallbacks(cacheRetry)
     }
 
     /**
@@ -451,6 +556,7 @@ internal class TrickplayFrames(
     private fun teardown() {
         awaitingFrame = false
         inFlightBucket = null
+        cancelDefer()
         handler.removeCallbacks(timeoutRunnable)
         runCatching { preview?.setVideoSurface(null) }
         runCatching { preview?.release() }
@@ -512,14 +618,14 @@ internal class TrickplayFrames(
          */
         const val NO_DECODER_NOTICE =
             "Scrub previews need a second video decoder and this device has none spare"
-        const val NO_FRAMES_NOTICE =
-            "No scrub preview thumbnails were available for this video"
 
-        /** Capture size: 16:9, a sixth of a 1080p screen, ~0.5 MB a frame. */
-        const val TRICKPLAY_CAPTURE_WIDTH = 480
-        const val TRICKPLAY_CAPTURE_HEIGHT = 270
-
-        /** Two, so a frame that arrives while one is being read is not dropped. */
+        /**
+         * Two, so a frame that arrives while one is being read is not dropped.
+         *
+         * The capture SIZE is not here: it is [TRICKPLAY_CAPTURE_WIDTH] and
+         * [TRICKPLAY_CAPTURE_HEIGHT], shared with the libmpv path because both
+         * produce frames for the same card.
+         */
         const val TRICKPLAY_CAPTURE_IMAGES = 2
 
         const val DEFAULT_USER_AGENT =

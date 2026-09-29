@@ -390,4 +390,177 @@ class TrickplayTest {
         assertEquals("ended", trickplayPlayerState(Player.STATE_ENDED))
         assertEquals("unknown", trickplayPlayerState(-1))
     }
+
+    // ── what the preview is allowed to decode ───────────────────────────────
+
+    private fun window(
+        playhead: Long,
+        buffered: Long,
+        duration: Long = 0L
+    ) = TrickplayWindow(playheadMs = playhead, bufferedMs = buffered, durationMs = duration)
+
+    @Test
+    fun `a position the main player has read is decodable from the cache`() {
+        // The ordinary scrub: the viewer presses RIGHT, the main player seeks
+        // there and fills ahead of it, and the preview decodes out of the bytes
+        // that read just put on disk. It reads nothing of its own.
+        val at = 1_200_000L
+
+        assertTrue(
+            trickplayServableFromCache(at, window(playhead = at, buffered = at + 8_000L))
+        )
+    }
+
+    @Test
+    fun `a position the main player has not read is not decodable`() {
+        // The field report: the scrub lands where the cache does not reach, and
+        // the old pipeline read it upstream instead - a second connection to a
+        // source that allows exactly one, which hangs rather than fails, with
+        // the main player's own loads starved while it does.
+        val at = 1_200_000L
+
+        assertFalse(
+            "no runway past the bucket means the read would leave the cache",
+            trickplayServableFromCache(at, window(playhead = at, buffered = at + 1_000L))
+        )
+        assertFalse(
+            "a buffer short of the bucket has not read it at all",
+            trickplayServableFromCache(
+                at,
+                window(playhead = at - TRICKPLAY_BUCKET_MS, buffered = at - 1L)
+            )
+        )
+    }
+
+    @Test
+    fun `the runway is what the preview's own read needs`() {
+        assertFalse(
+            trickplayServableFromCache(
+                bucket,
+                window(bucket, bucket + TRICKPLAY_CACHE_RUNWAY_MS - 1L)
+            )
+        )
+        assertTrue(
+            trickplayServableFromCache(bucket, window(bucket, bucket + TRICKPLAY_CACHE_RUNWAY_MS))
+        )
+        // ...and it has to FIT the buffer the main player itself keeps: the
+        // low-latency profile fills 5 s ahead, so a wider requirement would
+        // leave IPTV-shaped VOD with no previews at all.
+        assertTrue("runway must fit inside the low-latency buffer", TRICKPLAY_CACHE_RUNWAY_MS < 5_000L)
+    }
+
+    @Test
+    fun `nothing ahead of the playhead is decoded`() {
+        // Buffered bytes past the playhead are on disk, but nobody pressed for
+        // them: a preview is for the position the viewer lands on.
+        val playhead = 600_000L
+
+        assertFalse(
+            trickplayServableFromCache(
+                playhead + TRICKPLAY_BUCKET_MS,
+                window(playhead, playhead + 30_000L)
+            )
+        )
+    }
+
+    @Test
+    fun `a file read to the end is decodable right up to it`() {
+        // The last bucket has no runway left to give, and needs none: there is
+        // nothing past the end of the file for a read to reach for. A title
+        // whose length is NOT on the bucket grid is what needs the rule - a
+        // length that is leaves its last bucket a whole bucket short of the end,
+        // which the ordinary runway already covers.
+        val duration = 2_702_000L
+        val last = trickplayBucket(duration - 1L)
+
+        assertTrue(
+            trickplayServableFromCache(
+                last,
+                window(playhead = duration, buffered = duration, duration = duration)
+            )
+        )
+        assertFalse(
+            "without the end of the file that bucket has no runway",
+            trickplayServableFromCache(
+                last,
+                window(playhead = duration, buffered = duration, duration = 0L)
+            )
+        )
+    }
+
+    @Test
+    fun `a scrub resolves to either a local read or a wait, never a connection`() {
+        // The pair that makes it safe to be strict: the position the viewer
+        // pressed for decodes from the cache; anything the player has not read
+        // is deferred (TrickplayFrames), so no press spends a connection.
+        val playhead = 900_000L
+        val buffered = playhead + 12_000L
+
+        assertTrue(
+            trickplayServableFromCache(trickplayBucket(playhead), window(playhead, buffered))
+        )
+        assertFalse(
+            trickplayServableFromCache(
+                trickplayBucket(playhead + 600_000L),
+                window(playhead, buffered)
+            )
+        )
+    }
+
+    // ── decoding a capture down to a card ──────────────────────────────────
+
+    @Test
+    fun `a full resolution capture is decoded at a fraction`() {
+        // The libmpv path screenshots at the file's own resolution, so this is
+        // the difference between a 0.5 MB frame and a 31 MB one on a box whose
+        // whole Java heap is 192 MB.
+        assertEquals(8, trickplaySampleSize(3840, 2160))
+        assertEquals(4, trickplaySampleSize(1920, 1080))
+        assertEquals(2, trickplaySampleSize(1280, 720))
+    }
+
+    @Test
+    fun `the sample is the widest fraction that still fills the card`() {
+        // Not merely "small enough": a frame narrower than the card would be
+        // upscaled by the overlay, so the closest power of two on the safe side
+        // is the one that keeps the frame sharp for what it costs.
+        val widths = listOf(3840, 2560, 1920, 1440, 1280, 1024, 960, 854, 720, 640, 480, 320)
+
+        for (width in widths) {
+            val sample = trickplaySampleSize(width, width * 9 / 16)
+            assertTrue(
+                "sample for $width must be a power of two, was $sample",
+                sample > 0 && (sample and (sample - 1)) == 0
+            )
+            // A source narrower than the card is sampled whole and upscaled by
+            // the overlay: there is nothing to discard without throwing pixels
+            // away, so the rule is "never sample below the card unless the
+            // source is already below it".
+            assertTrue(
+                "$width/$sample is narrower than the card",
+                width / sample >= TRICKPLAY_CAPTURE_WIDTH || width < TRICKPLAY_CAPTURE_WIDTH
+            )
+            if (sample > 1) {
+                assertTrue(
+                    "$width would have fit at ${sample * 2}",
+                    width / (sample * 2) < TRICKPLAY_CAPTURE_WIDTH
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a source at or below the card size is not sampled away`() {
+        assertEquals(1, trickplaySampleSize(TRICKPLAY_CAPTURE_WIDTH, TRICKPLAY_CAPTURE_HEIGHT))
+        assertEquals(1, trickplaySampleSize(320, 180))
+    }
+
+    @Test
+    fun `nonsense dimensions decode whole rather than not at all`() {
+        // A capture whose bounds did not parse must still produce a bitmap: the
+        // alternative here is a preview that silently never appears.
+        assertEquals(1, trickplaySampleSize(0, 0))
+        assertEquals(1, trickplaySampleSize(-1920, 1080))
+        assertEquals(1, trickplaySampleSize(1920, 1080, targetWidth = 0))
+    }
 }

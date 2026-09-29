@@ -35,6 +35,62 @@ internal const val TRICKPLAY_BUCKET_MS = 10_000L
 internal const val TRICKPLAY_CACHE_FRAMES = 6
 
 /**
+ * The size a preview frame is captured at: 16:9, a sixth of a 1080p screen,
+ * ~0.5 MB a frame.
+ *
+ * Shared by both engines because both feed the same card, and the two reach it
+ * differently. The secondary decoder is TOLD this size - the capture surface is
+ * 480x270, so a frame costs a bitmap copy rather than a full-size frame at
+ * LAN-bitrate cost. libmpv cannot be told anything of the sort: a screenshot is
+ * the file's own resolution, so [trickplaySampleSize] decodes down to here
+ * instead.
+ */
+internal const val TRICKPLAY_CAPTURE_WIDTH = 480
+internal const val TRICKPLAY_CAPTURE_HEIGHT = 270
+
+/**
+ * What the viewer is told when previews were attempted and produced nothing.
+ *
+ * Shared by both engines, because it is the same sentence: a viewer on a TV
+ * cannot tell a silent feature from a broken one, and "were any frames ever
+ * produced" is a question the diagnostics answer either way. The secondary
+ * decoder has a second notice of its own — a decoder the device could not spare
+ * is a different fault with a different fix — and libmpv has none, since it has
+ * no second decoder to report.
+ */
+internal const val TRICKPLAY_NO_FRAMES_NOTICE =
+    "No scrub preview thumbnails were available for this video"
+
+/**
+ * How much of the program the MAIN player must have already read past
+ * [bucketMs] before the preview may decode it.
+ *
+ * This is the number that makes the preview cache-only, so it is a bound on
+ * what the preview player is going to read, not a guess about the cache: the
+ * preview seeks to the sync frame at or before the bucket, so its read starts
+ * at or behind the bucket and runs forward from there. Four seconds of runway
+ * covers filling the preview's own minimum buffer (1.5 s) from a cache hit on
+ * an ordinary GOP, and it still fits inside the main player's own buffer - the
+ * low-latency profile fills only 5 s ahead, so a wider requirement would leave
+ * IPTV-shaped VOD with no previews at all. See [trickplayServableFromCache].
+ */
+internal const val TRICKPLAY_CACHE_RUNWAY_MS = 4_000L
+
+/**
+ * How often a preview that is waiting on the player looks again.
+ *
+ * Both engines wait, for the same reason and on the same clock. The secondary
+ * decoder waits for the main player to have READ the bytes it wants (it only
+ * ever decodes out of the disk cache - see [trickplayServableFromCache]);
+ * libmpv waits for the seek it just issued to land, so that the frame it
+ * screenshots is the position the viewer picked rather than the one before it.
+ * Either way the wait is a second or so, and looking on a timer is what turns
+ * "no thumbnail at the position you pressed for" into "the thumbnail for that
+ * position, once the player has it anyway".
+ */
+internal const val TRICKPLAY_RETRY_MS = 400L
+
+/**
  * How long an extraction may take before it counts as a failure.
  *
  * Generous on purpose: the first frame of a new position has to re-open the
@@ -137,6 +193,30 @@ internal fun trickplayBucket(positionMs: Long): Long =
     if (positionMs <= 0L) 0L else (positionMs / TRICKPLAY_BUCKET_MS) * TRICKPLAY_BUCKET_MS
 
 /**
+ * The `inSampleSize` that decodes a capture down to about [targetWidth].
+ *
+ * For the engine that screenshots its own output there is no capture size to
+ * choose: the file is whatever resolution the video is, so a 4K release writes
+ * a 3840x2160 image that the card then draws at 480px wide. Decoding that whole
+ * thing costs a ~31 MB bitmap on a box with a 192 MB heap - for a thumbnail -
+ * so it is decoded at a fraction instead.
+ *
+ * Powers of two only, because that is all `BitmapFactory` honors without extra
+ * work, and they land well: 3840 and 1920 both divide to exactly 480, and 1280
+ * to 640. Never below 1, and never so far that the frame has no pixels left.
+ */
+internal fun trickplaySampleSize(
+    width: Int,
+    height: Int,
+    targetWidth: Int = TRICKPLAY_CAPTURE_WIDTH
+): Int {
+    if (width <= 0 || height <= 0 || targetWidth <= 0) return 1
+    var sample = 1
+    while (width / (sample * 2) >= targetWidth) sample *= 2
+    return sample
+}
+
+/**
  * Whether a frame the preview player is showing right now can be filed under
  * [bucketMs].
  *
@@ -150,6 +230,54 @@ internal fun trickplayFrameFits(
     positionMs: Long,
     windowMs: Long = TRICKPLAY_ACCEPT_WINDOW_MS
 ): Boolean = abs(positionMs - bucketMs) <= windowMs
+
+/**
+ * Where the main player has read to: the only part of the program the preview
+ * may decode.
+ *
+ * [bufferedMs] is the end of the main player's buffer, and its bytes arrived
+ * through the shared disk cache, so a read inside it is served from disk and
+ * opens nothing. [durationMs] is only needed for the end of a file, where there
+ * is no runway left to require (see [trickplayServableFromCache]).
+ */
+internal data class TrickplayWindow(
+    val playheadMs: Long,
+    val bufferedMs: Long,
+    val durationMs: Long
+)
+
+/**
+ * Whether [bucketMs] can be decoded out of the disk cache alone.
+ *
+ * Until this existed the preview read through the cache and *fell through to
+ * upstream on a miss* - which is the second connection the feature is built to
+ * avoid, on sources that allow exactly one (debrid links, usenet) and hang
+ * rather than refuse. A field report is what that costs: five extractions, all
+ * five of them at positions outside the cached range, every one of them ending
+ * at the 6 s budget with `player=buffering images=0` and two `ERROR_CODE_TIMEOUT`
+ * - no thumbnail ever produced, the main player's own loads starved while they
+ * tried (`stalls=5/6707ms`, `http` worst 9.6 s), and "scrubbing takes forever to
+ * load back up".
+ *
+ * So the rule is not "prefer the cache" but "the cache or nothing": a bucket is
+ * decoded only when the main player has already read it, and anything else is
+ * left to arrive later ([TRICKPLAY_RETRY_MS]) or not at all. A viewer
+ * scrubbing to a position the player has not reached yet gets the time bubble
+ * they had before the feature existed, and never a stall to pay for it.
+ */
+internal fun trickplayServableFromCache(
+    bucketMs: Long,
+    window: TrickplayWindow,
+    runwayMs: Long = TRICKPLAY_CACHE_RUNWAY_MS
+): Boolean {
+    // Ahead of the playhead was never asked for, and its bytes have not been
+    // read at all on a file the player is still filling.
+    if (bucketMs > window.playheadMs) return false
+    // A file read through to the end has no runway left to give and needs none:
+    // there is nothing past the end for a read to reach for.
+    if (window.durationMs > 0L && window.bufferedMs >= window.durationMs) return true
+    return window.bufferedMs - bucketMs >= runwayMs
+}
 
 /**
  * Whether the idle release may give the preview decoder back now.
