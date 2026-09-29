@@ -162,9 +162,15 @@ fun LandscapeCard(
             // same on a 210dp Home rail and on a wider row; and over a shadow,
             // because it lands on whatever a backdrop happens to be - a white
             // numeral on a bright sky is not a numeral anyone can read.
+            //
+            // 0.22 rather than the original 0.26: it is a label on the
+            // artwork, not a headline, and at 0.26 a 210dp rail drew it ~55dp
+            // tall, which read as the latter and competed with the backdrop it
+            // sits on. The bounds move with it so the scaling still holds from
+            // the narrowest rail to the widest row.
             if (rank != null) {
                 val rankSize = with(LocalDensity.current) {
-                    (maxWidth * 0.26f).coerceIn(30.dp, 56.dp).toSp()
+                    (maxWidth * 0.22f).coerceIn(26.dp, 48.dp).toSp()
                 }
                 Text(
                     text = rank.toString(),
