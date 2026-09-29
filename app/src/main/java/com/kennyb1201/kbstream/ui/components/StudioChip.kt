@@ -39,7 +39,8 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 fun StudioChip(
     name: String,
     logoPath: String?,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val cardShape = KBShapeChip
 
@@ -82,7 +83,7 @@ fun StudioChip(
                 elevation = KBFocusGlow
             )
         ),
-        modifier = Modifier
+        modifier = modifier
             .width(120.dp)
             .height(54.dp)
             .padding(end = 8.dp)

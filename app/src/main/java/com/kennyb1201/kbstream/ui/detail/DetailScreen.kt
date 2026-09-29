@@ -30,6 +30,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -179,6 +180,74 @@ private sealed interface PeopleRowItem {
     data object Separator : PeopleRowItem
 }
 
+/**
+ * The key the people rail gives one card. Shared by the rail and the record a
+ * drill-down leaves behind, because the two have to agree or Back cannot find
+ * the card again.
+ */
+private fun personRowKey(member: TmdbCastMember): String =
+    "person${member.id}${member.character.orEmpty()}"
+
+/**
+ * Keys of the rails a drill-down off this page can open from. [GENRE_ROW_KEY]
+ * is the one that lives in the fixed header above the detail list rather than
+ * as an item of it: it needs a name for the same reason the others do, so the
+ * rail's own identity - never the position it happened to have - is what the
+ * reveal looks for.
+ */
+private const val GENRE_ROW_KEY = "genrerow"
+private const val KEYWORDS_ROW_KEY = "keywordsrow"
+private const val PEOPLE_ROW_KEY = "peoplerow"
+private const val NETWORK_ROW_KEY = "networkrow"
+private const val PRODUCTION_ROW_KEY = "productionrow"
+private const val COLLECTION_ROW_KEY = "collectionrow"
+private const val RECS_ROW_KEY = "recsrow"
+
+/** How many times the rail reveal and the focus request are retried. */
+private const val RETURN_FOCUS_STEPS = 15
+
+/** Delay between those retries, long enough for a frame to be laid out. */
+private const val RETURN_FOCUS_DELAY_MS = 40L
+
+/**
+ * Scrolls the detail list until the item keyed [rowKey] is on screen, trying
+ * [hintIndex] first and then stepping outwards from it.
+ *
+ * Two things have to be waited for, because the list is lazy and the page
+ * composes it in pieces: the list having been measured at all - until then a
+ * scroll request has nothing to apply to - and the rail being composed, since
+ * a card that is not composed has no FocusRequester to take the focus. The
+ * index recorded on the way out is tried first, because the sections above a
+ * rail do not normally change between two visits; the steps outwards are what
+ * pick the rail up when one of them gained or lost an item while the
+ * drill-down was open. The rail's own key is the anchor, never the position.
+ */
+private suspend fun LazyListState.revealRail(rowKey: String, hintIndex: Int): Boolean {
+    var waited = 0
+    while (layoutInfo.totalItemsCount == 0 && waited < RETURN_FOCUS_STEPS) {
+        delay(RETURN_FOCUS_DELAY_MS)
+        waited++
+    }
+
+    val hint = hintIndex.coerceAtLeast(0)
+    val candidates =
+        buildList {
+            add(hint)
+            for (delta in 1..8) {
+                if (hint - delta >= 0) add(hint - delta)
+                add(hint + delta)
+            }
+        }
+
+    for (index in candidates) {
+        runCatching { scrollToItem(index) }
+        delay(RETURN_FOCUS_DELAY_MS)
+        if (layoutInfo.visibleItemsInfo.any { it.key == rowKey }) return true
+    }
+
+    return false
+}
+
 private enum class EpisodeFocusEdge { START, END }
 
 private data class EpisodeTransitionState(
@@ -188,7 +257,14 @@ private data class EpisodeTransitionState(
 private data class PosterMenuTarget(
     val tmdbId: Int,
     val mediaType: String,
-    val name: String
+    val name: String,
+    /**
+     * The rail card this poster is, for the menu's "Go to Details": the record
+     * is raised when the action runs rather than when the menu opens, so a
+     * menu dismissed on any other action leaves nothing behind. Null for a
+     * menu raised from somewhere with no rail to return to.
+     */
+    val returnTarget: DetailReturnTarget? = null
 )
 
 private data class SeasonMenuTarget(
@@ -417,7 +493,60 @@ fun DetailScreen(
     val episodesRowState = rememberLazyListState()
     val seasonRowState = rememberLazyListState()
     val detailListState = rememberLazyListState()
+    // Every rail a drill-down off this page can be opened from, each with the
+    // scroll state and the per-card requesters a return needs: the rail is put
+    // back on screen, scrolled to the card that was pressed, and that card
+    // takes the focus by requester - a rail that is not composing it has
+    // nothing for a plain requestFocus to land on. One requester map serves
+    // them all: the key a card is filed under names its rail.
+    val genreRowState = rememberLazyListState()
+    val keywordsRowState = rememberLazyListState()
+    val peopleRowState = rememberLazyListState()
+    val networkRowState = rememberLazyListState()
+    val productionRowState = rememberLazyListState()
+    val collectionRowState = rememberLazyListState()
+    val recsRowState = rememberLazyListState()
+    val railFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
     val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
+
+    /**
+     * Where a card of the rail keyed [rowKey] sits right now: the record a
+     * return is rebuilt from, and the index of the rail itself as it stands,
+     * so the rail can be put back on screen (see [DetailReturnFocus]).
+     */
+    fun returnTargetFor(
+        rowKey: String,
+        targetKey: String,
+        itemIndex: Int
+    ): DetailReturnTarget =
+        DetailReturnTarget(
+            detailKey = "$type:$id",
+            targetKey = targetKey,
+            rowKey = rowKey,
+            rowIndex = detailListState.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.key == rowKey }?.index ?: -1,
+            itemIndex = itemIndex
+        )
+
+    /**
+     * Remembers the rail card a drill-down is being opened from, so backing
+     * out of it lands back on that card instead of the play button.
+     */
+    fun rememberReturnTarget(rowKey: String, targetKey: String, itemIndex: Int) {
+        DetailReturnFocus.record(returnTargetFor(rowKey, targetKey, itemIndex))
+    }
+
+    // The card a drill-down off this page was opened from, read once as the
+    // page composes; null on an ordinary open (see [DetailReturnFocus]).
+    var returnTarget by remember { mutableStateOf<DetailReturnTarget?>(null) }
+    LaunchedEffect(type, id) {
+        returnTarget = DetailReturnFocus.consume("$type:$id")
+    }
+
+    // Set once a return has been honoured, so the page's own auto-focus (the
+    // resume episode) does not pull the focus back out of the rail the viewer
+    // just returned to when a slow episode list lands a moment later.
+    var restoredReturnFocus by remember { mutableStateOf(false) }
     val episodeFocusRequesters =
         remember { mutableMapOf<Pair<Int, Int>, FocusRequester>() }
     var episodeTransitionState by remember {
@@ -1363,6 +1492,65 @@ fun DetailScreen(
                 }
             }
 
+            // A rail on this page opened a drill-down: an actor page, a
+            // network or production-company page, a genre or keyword chip, or a
+            // title off the collection / More Like This rail. Coming back, the
+            // page has
+            // been rebuilt from scratch - its scroll offset, its focus and the
+            // restorer that remembered which card was selected are all gone -
+            // so the rail is put back on screen and the card that was pressed
+            // takes the focus again. Reopening at the top with the play button
+            // focused loses the viewer's place in the rail they were working
+            // through.
+            LaunchedEffect(returnTarget, isLoading, tmdbDetail, collection) {
+                val target = returnTarget ?: return@LaunchedEffect
+                if (isLoading || tmdbDetail == null) return@LaunchedEffect
+
+                val rowState = when (target.rowKey) {
+                    GENRE_ROW_KEY -> genreRowState
+                    KEYWORDS_ROW_KEY -> keywordsRowState
+                    PEOPLE_ROW_KEY -> peopleRowState
+                    NETWORK_ROW_KEY -> networkRowState
+                    PRODUCTION_ROW_KEY -> productionRowState
+                    COLLECTION_ROW_KEY -> collectionRowState
+                    RECS_ROW_KEY -> recsRowState
+                    else -> return@LaunchedEffect
+                }
+
+                // The rail owns the focus from here, so the resume-episode
+                // focus below must leave it alone (see the flag's declaration).
+                restoredReturnFocus = true
+
+                // The genre chips are the one rail in the fixed header above
+                // the list, so there is nothing to scroll them into view.
+                val onScreen =
+                    target.rowKey == GENRE_ROW_KEY ||
+                        detailListState.revealRail(target.rowKey, target.rowIndex)
+
+                if (onScreen) {
+                    if (target.itemIndex >= 0) {
+                        runCatching { rowState.scrollToItem(target.itemIndex) }
+                    }
+
+                    var attempts = 0
+                    var focused = false
+                    while (!focused && attempts < RETURN_FOCUS_STEPS) {
+                        val requester = railFocusRequesters[target.targetKey]
+                        focused =
+                            requester != null &&
+                                runCatching { requester.requestFocus() }.isSuccess
+                        if (!focused) {
+                            delay(RETURN_FOCUS_DELAY_MS)
+                        }
+                        attempts++
+                    }
+                }
+
+                // Read once, whatever came of it: a later update to the detail
+                // must not scroll the page out from under the viewer.
+                returnTarget = null
+            }
+
             // Continue Watching / Up Next deep-links auto-resume playback
             // once the metadata (and episodes, for series) are ready, so the
             // streams screen gets the rich backdrop/clearlogo/overview/cast
@@ -1806,13 +1994,26 @@ fun DetailScreen(
                                         }
                                     }
                             ) {
-                                items(
+                                itemsIndexed(
                                     tmdbGenres,
-                                    key = { it.id }
-                                ) { genre ->
+                                    key = { _, genre -> genre.id }
+                                ) { genreIndex, genre ->
+                                    val chipKey = "genre:${genre.id}"
+                                    val chipFocusRequester =
+                                        remember(genre.id) {
+                                            FocusRequester()
+                                        }
+                                    railFocusRequesters[chipKey] =
+                                        chipFocusRequester
+
                                     GenreChip(
                                         name = genre.name,
                                         onClick = {
+                                            rememberReturnTarget(
+                                                GENRE_ROW_KEY,
+                                                chipKey,
+                                                genreIndex
+                                            )
                                             onNavigateTag(
                                                 genre.id,
                                                 genre.name,
@@ -1820,9 +2021,13 @@ fun DetailScreen(
                                                 type
                                             )
                                         },
-                                        modifier = Modifier.padding(
-                                            end = 8.dp
-                                        )
+                                        modifier = Modifier
+                                            .focusRequester(
+                                                chipFocusRequester
+                                            )
+                                            .padding(
+                                                end = 8.dp
+                                            )
                                     )
                                 }
                             }
@@ -2133,13 +2338,26 @@ fun DetailScreen(
                                             }
                                         }
                                 ) {
-                                    items(
+                                    itemsIndexed(
                                         keywords,
-                                        key = { it.id }
-                                    ) { kw ->
+                                        key = { _, kw -> kw.id }
+                                    ) { keywordIndex, kw ->
+                                        val chipKey = "keyword:${kw.id}"
+                                        val chipFocusRequester =
+                                            remember(kw.id) {
+                                                FocusRequester()
+                                            }
+                                        railFocusRequesters[chipKey] =
+                                            chipFocusRequester
+
                                         KeywordChip(
                                             name = kw.name,
                                             onClick = {
+                                                rememberReturnTarget(
+                                                    KEYWORDS_ROW_KEY,
+                                                    chipKey,
+                                                    keywordIndex
+                                                )
                                                 onNavigateTag(
                                                     kw.id,
                                                     kw.name,
@@ -2147,8 +2365,11 @@ fun DetailScreen(
                                                     type
                                                 )
                                             },
-                                            modifier =
-                                                Modifier.padding(
+                                            modifier = Modifier
+                                                .focusRequester(
+                                                    chipFocusRequester
+                                                )
+                                                .padding(
                                                     end = 6.dp
                                                 )
                                         )
@@ -2412,6 +2633,7 @@ fun DetailScreen(
                                                             !episodesLoading &&
                                                             episodes.isNotEmpty() &&
                                                             !userManuallyChangedSeason &&
+                                                            !restoredReturnFocus &&
                                                             episodeTransitionState.edge ==
                                                                 null
                                                         ) {
@@ -2813,29 +3035,51 @@ fun DetailScreen(
                                         .focusGroup()
                                         .focusRestorer()
                                 ) {
-                                    items(
+                                    itemsIndexed(
                                         items = peopleItems,
-                                        key = { person ->
+                                        key = { _, person ->
                                             when (person) {
                                                 is PeopleRowItem.Person ->
-                                                    "person${person.member.id}${person.member.character.orEmpty()}"
+                                                    personRowKey(person.member)
 
                                                 PeopleRowItem.Separator ->
                                                     "peopleseparator"
                                             }
                                         }
-                                    ) { person ->
+                                    ) { personIndex, person ->
                                         when (person) {
-                                            is PeopleRowItem.Person ->
+                                            is PeopleRowItem.Person -> {
+                                                val cardKey =
+                                                    personRowKey(person.member)
+                                                val cardFocusRequester =
+                                                    remember(
+                                                        person.member.id,
+                                                        person.member.character
+                                                    ) {
+                                                        FocusRequester()
+                                                    }
+                                                railFocusRequesters[cardKey] =
+                                                    cardFocusRequester
+
                                                 CastCard(
                                                     member =
                                                         person.member,
                                                     onClick = {
+                                                        rememberReturnTarget(
+                                                            PEOPLE_ROW_KEY,
+                                                            cardKey,
+                                                            personIndex
+                                                        )
                                                         onNavigateActor(
                                                             person.member.id
                                                         )
-                                                    }
+                                                    },
+                                                    modifier = Modifier
+                                                        .focusRequester(
+                                                            cardFocusRequester
+                                                        )
                                                 )
+                                            }
 
                                             PeopleRowItem.Separator ->
                                                 PeopleSeparatorCard()
@@ -2948,20 +3192,35 @@ fun DetailScreen(
                                             }
                                         }
                                 ) {
-                                    items(
+                                    itemsIndexed(
                                         networks,
-                                        key = { it.id }
-                                    ) { n ->
+                                        key = { _, n -> n.id }
+                                    ) { networkIndex, n ->
+                                        val chipKey = "network:${n.id}"
+                                        val chipFocusRequester =
+                                            remember(n.id) { FocusRequester() }
+                                        railFocusRequesters[chipKey] =
+                                            chipFocusRequester
+
                                         StudioChip(
                                             name = n.name,
                                             logoPath = n.logoPath,
                                             onClick = {
+                                                rememberReturnTarget(
+                                                    NETWORK_ROW_KEY,
+                                                    chipKey,
+                                                    networkIndex
+                                                )
                                                 onNavigateStudio(
                                                     n.id,
                                                     n.name,
                                                     true
                                                 )
-                                            }
+                                            },
+                                            modifier = Modifier
+                                                .focusRequester(
+                                                    chipFocusRequester
+                                                )
                                         )
                                     }
                                 }
@@ -2999,20 +3258,35 @@ fun DetailScreen(
                                         .focusGroup()
                                         .focusRestorer()
                                 ) {
-                                    items(
+                                    itemsIndexed(
                                         companies,
-                                        key = { it.id }
-                                    ) { c ->
+                                        key = { _, c -> c.id }
+                                    ) { companyIndex, c ->
+                                        val chipKey = "company:${c.id}"
+                                        val chipFocusRequester =
+                                            remember(c.id) { FocusRequester() }
+                                        railFocusRequesters[chipKey] =
+                                            chipFocusRequester
+
                                         StudioChip(
                                             name = c.name,
                                             logoPath = c.logoPath,
                                             onClick = {
+                                                rememberReturnTarget(
+                                                    PRODUCTION_ROW_KEY,
+                                                    chipKey,
+                                                    companyIndex
+                                                )
                                                 onNavigateStudio(
                                                     c.id,
                                                     c.name,
                                                     false
                                                 )
-                                            }
+                                            },
+                                            modifier = Modifier
+                                                .focusRequester(
+                                                    chipFocusRequester
+                                                )
                                         )
                                     }
                                 }
@@ -3115,10 +3389,10 @@ fun DetailScreen(
                                         .focusGroup()
                                         .focusRestorer()
                                 ) {
-                                    items(
+                                    itemsIndexed(
                                         collectionParts,
-                                        key = { it.id }
-                                    ) { part ->
+                                        key = { _, part -> part.id }
+                                    ) { partIndex, part ->
                                         // Focus requester for restoring focus
                                         // after the long-press menu dismisses.
                                         val requester = remember(
@@ -3126,6 +3400,8 @@ fun DetailScreen(
                                         ) {
                                             FocusRequester()
                                         }
+                                        val partKey = "collection:${part.id}"
+                                        railFocusRequesters[partKey] = requester
 
                                         PosterGridCard(
                                             posterPath =
@@ -3176,6 +3452,11 @@ fun DetailScreen(
                                                     if (
                                                         imdbId != null
                                                     ) {
+                                                        rememberReturnTarget(
+                                                            COLLECTION_ROW_KEY,
+                                                            partKey,
+                                                            partIndex
+                                                        )
                                                         onNavigateDetail(
                                                             "movie",
                                                             imdbId
@@ -3190,7 +3471,13 @@ fun DetailScreen(
                                                     PosterMenuTarget(
                                                         tmdbId = part.id,
                                                         mediaType = "movie",
-                                                        name = part.title ?: ""
+                                                        name = part.title ?: "",
+                                                        returnTarget =
+                                                            returnTargetFor(
+                                                                COLLECTION_ROW_KEY,
+                                                                partKey,
+                                                                partIndex
+                                                            )
                                                     )
                                             },
                                             modifier = Modifier
@@ -3252,10 +3539,10 @@ fun DetailScreen(
                                         .focusGroup()
                                         .focusRestorer()
                                 ) {
-                                    items(
+                                    itemsIndexed(
                                         recs.take(30),
-                                        key = { it.id }
-                                    ) { rec ->
+                                        key = { _, rec -> rec.id }
+                                    ) { recIndex, rec ->
                                         // Focus requester for restoring focus
                                         // after the long-press menu dismisses.
                                         val requester = remember(
@@ -3263,6 +3550,8 @@ fun DetailScreen(
                                         ) {
                                             FocusRequester()
                                         }
+                                        val recKey = "rec:${rec.id}"
+                                        railFocusRequesters[recKey] = requester
 
                                         PosterGridCard(
                                             posterPath =
@@ -3316,6 +3605,11 @@ fun DetailScreen(
                                                     if (
                                                         imdbId != null
                                                     ) {
+                                                        rememberReturnTarget(
+                                                            RECS_ROW_KEY,
+                                                            recKey,
+                                                            recIndex
+                                                        )
                                                         onNavigateDetail(
                                                             type,
                                                             imdbId
@@ -3332,7 +3626,13 @@ fun DetailScreen(
                                                         mediaType = type,
                                                         name = rec.title
                                                             ?: rec.name
-                                                            ?: ""
+                                                            ?: "",
+                                                        returnTarget =
+                                                            returnTargetFor(
+                                                                RECS_ROW_KEY,
+                                                                recKey,
+                                                                recIndex
+                                                            )
                                                     )
                                             },
                                             modifier = Modifier
@@ -3418,6 +3718,9 @@ fun DetailScreen(
                             ) {
                                 val selected = target
                                 posterMenu = null
+                                selected.returnTarget?.let {
+                                    DetailReturnFocus.record(it)
+                                }
                                 scope.launch {
                                     val imdbId = viewModel
                                         .resolveImdbId(
@@ -4058,7 +4361,8 @@ private fun SeasonRow(
 @Composable
 private fun CastCard(
     member: TmdbCastMember,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     var isFocused by remember {
         mutableStateOf(false)
@@ -4141,7 +4445,7 @@ private fun CastCard(
                     elevation = KBFocusGlowSmall
                 )
             ),
-            modifier = Modifier
+            modifier = modifier
                 .size(88.dp)
                 .onFocusChanged {
                     isFocused = it.isFocused
