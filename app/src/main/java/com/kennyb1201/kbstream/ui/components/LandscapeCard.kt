@@ -15,11 +15,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,6 +38,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.OswaldFamily
 
 /**
  * Landscape (16:9) rail card for the Home "Landscape Cards" toggle: a
@@ -40,6 +48,12 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  * itself is missing — mirroring PosterCard's degradation ladder.
  * Focus treatment (border/glow/scale) comes from KBCard, identical to
  * PosterCard, so the two card shapes mix cleanly in the D-pad order.
+ *
+ * [rank] is the pinned "Top ... Today" numbering: the card's position in a row
+ * that is a standing rather than a browse order. Those rows are served TMDB
+ * artwork, which carries no number (see `LandscapeArtRequest.tmdbOnly`), so the
+ * number is drawn here — top-left, the one corner the logo, the title and the
+ * watched badge do not already own.
  */
 @Composable
 fun LandscapeCard(
@@ -51,7 +65,8 @@ fun LandscapeCard(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
-    isPartiallyWatched: Boolean = false
+    isPartiallyWatched: Boolean = false,
+    rank: Int? = null
 ) {
     val context = LocalContext.current
     var hasError by remember(backdropUrl) { mutableStateOf(false) }
@@ -141,6 +156,42 @@ fun LandscapeCard(
                         )
                     )
             )
+
+            // The rank, on a row that is a standing ("Top Movies Today").
+            // Scaled to the card rather than fixed, so the numeral reads the
+            // same on a 210dp Home rail and on a wider row; and over a shadow,
+            // because it lands on whatever a backdrop happens to be - a white
+            // numeral on a bright sky is not a numeral anyone can read.
+            if (rank != null) {
+                val rankSize = with(LocalDensity.current) {
+                    (maxWidth * 0.26f).coerceIn(30.dp, 56.dp).toSp()
+                }
+                Text(
+                    text = rank.toString(),
+                    color = KBTextHi,
+                    fontFamily = OswaldFamily,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = rankSize,
+                    style = TextStyle(
+                        shadow = Shadow(
+                            color = KBVoid,
+                            offset = Offset(2f, 2f),
+                            blurRadius = 12f
+                        )
+                    ),
+                    // Artwork, like the clearlogo beside it, but this one is
+                    // information: labelled rather than left as a stray digit.
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(start = 12.dp, top = 4.dp)
+                        // `this` is load-bearing: the composable's own
+                        // contentDescription parameter is in scope here and
+                        // would otherwise be the thing being assigned to.
+                        .clearAndSetSemantics {
+                            this.contentDescription = "Rank $rank"
+                        }
+                )
+            }
 
             if (showLogo) {
                 AsyncImage(

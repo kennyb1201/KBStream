@@ -20,6 +20,11 @@ import org.junit.Test
  * at all: cards quietly fall back to their add-on backdrop, and every rebuild
  * re-resolves artwork the app had already resolved. These pin the shape rather
  * than the mechanism; if it ever has to change, the failure is the point.
+ *
+ * The rank a pinned "Top ... Today" row shows is pinned the same way, for the
+ * same reason: the card that draws the number and the rail that declares itself
+ * a ranking are in different files, and a number on a row that is not a standing
+ * is a lie about the row.
  */
 class LandscapeArtTest {
 
@@ -231,5 +236,35 @@ class LandscapeArtTest {
         val entry = landscapeArtEntry(tmdbArt = blank, request = request())
         assertNull(entry.first)
         assertNull(entry.second)
+    }
+
+    // ── the number a ranked row shows ───────────────────────────────────────
+
+    @Test
+    fun `a ranked rail numbers its cards from one`() {
+        assertEquals(1, landscapeRank(ranked = true, index = 0))
+        assertEquals(2, landscapeRank(ranked = true, index = 1))
+        assertEquals((1..10).toList(), (0 until 10).map { landscapeRank(true, it) })
+    }
+
+    @Test
+    fun `an unranked rail numbers nothing`() {
+        // Every row that is not a standing - a genre row, a discovery row, an
+        // add-on's own catalog - keeps its artwork clean. A "3" on one of them
+        // would be a claim the row never made.
+        assertNull(landscapeRank(ranked = false, index = 0))
+        assertNull(landscapeRank(ranked = false, index = 9))
+    }
+
+    @Test
+    fun `the number is the card's place on screen, so nothing is skipped`() {
+        // The rank is read off the items the viewport is showing, not off what
+        // the add-on sent: a title the digital-release filter or the kids
+        // ceiling dropped leaves no gap, and 1..N keeps matching the row.
+        val survivors = listOf("kept-a", "kept-b", "kept-c", "kept-d")
+        assertEquals(
+            listOf(1, 2, 3, 4),
+            survivors.mapIndexed { index, _ -> landscapeRank(ranked = true, index = index) }
+        )
     }
 }

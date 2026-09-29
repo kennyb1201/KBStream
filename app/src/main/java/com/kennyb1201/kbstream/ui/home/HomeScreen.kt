@@ -116,6 +116,7 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddToListDialog
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
+import com.kennyb1201.kbstream.ui.components.landscapeRank
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
@@ -3150,12 +3151,12 @@ fun HomeScreen(
                                             horizontalArrangement =
                                                 Arrangement.spacedBy(0.dp)
                                         ) {
-                                            items(
+                                            itemsIndexed(
                                                 items = rail.items,
-                                                key = {
-                                                    "${it.type}:${it.id}"
+                                                key = { _, meta ->
+                                                    "${meta.type}:${meta.id}"
                                                 }
-                                            ) { meta ->
+                                            ) { index, meta ->
 
                                                 val requester = remember {
                                                     FocusRequester()
@@ -3259,6 +3260,13 @@ fun HomeScreen(
                                                             contentDescription = meta.name,
                                                             isWatched = watched,
                                                             isPartiallyWatched = watchedPartially,
+                                                            // A pinned "Top ... Today" row
+                                                            // numbers its cards; no other
+                                                            // rail has a standing to show.
+                                                            rank = landscapeRank(
+                                                                rail.ranked,
+                                                                index
+                                                            ),
                                                             onClick = {
                                                                 selectHero(meta)
                                                                 onItemClick(meta)

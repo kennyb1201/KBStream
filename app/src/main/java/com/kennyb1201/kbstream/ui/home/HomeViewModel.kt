@@ -134,7 +134,20 @@ data class Rail(
     // Landscape-card artwork per item id ("movie:tmdb:603" style key):
     // resolved backdrop + clearlogo, filled when the landscape toggle is
     // on. Poster mode never reads these.
-    val landscapeArt: Map<String, Pair<String?, String?>> = emptyMap()
+    val landscapeArt: Map<String, Pair<String?, String?>> = emptyMap(),
+    // Draw each card's position as a rank number, the way a "Top 10" row
+    // reads. Only the pinned "Top ... Today" rows (and their kids-profile
+    // stand-ins) are rankings: every other rail arrives in an order the add-on
+    // chose to be browsed, not one it claims is a standing.
+    //
+    // The number is the rail's own order and not a field of the item, because
+    // the add-on sends its ranking as the order of its catalog and these rails
+    // keep it. That same artwork is the reason the number is not simply shown
+    // with it: the pinned backdrops carry a burned-in logo, which is what made
+    // these rows TMDB-art rows in the first place (see
+    // LandscapeArtRequest.tmdbOnly), and TMDB art has no number on it. So the
+    // card draws it, or it is not shown at all.
+    val ranked: Boolean = false
 )
 
 enum class UpNextBadge {
@@ -7410,7 +7423,9 @@ private suspend fun calculateEpisodesRemaining(
                                     if (tv) "top_kids_shows" else "top_kids_movies",
                                     if (tv) "series" else "movie"
                                 )
-                            ] ?: emptyMap()
+                            ] ?: emptyMap(),
+                            // "Top Kids Movies" is a standing too.
+                            ranked = true
                         )
 
                         railInfo[railKeyOf(rail)] = RailInfo(
@@ -7508,7 +7523,11 @@ private suspend fun calculateEpisodesRemaining(
                                     baseUrl = baseUrl,
                                     landscapeArt = previousLandscapeArt[
                                         railKeyOf(TOP_TODAY_ADDON_NAME, catalogId, type)
-                                    ] ?: emptyMap()
+                                    ] ?: emptyMap(),
+                                    // The row is a ranking - "Top Movies
+                                    // Today" - and the add-on states it in
+                                    // the order it sends.
+                                    ranked = true
                                 )
 
                             railInfo[railKeyOf(rail)] =

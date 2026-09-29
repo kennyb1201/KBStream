@@ -64,6 +64,23 @@ internal fun landscapeArtKey(type: String, id: String): String =
 internal fun MetaPreview.landscapeArtKey(): String = landscapeArtKey(type, id)
 
 /**
+ * The number a landscape card shows at [index] of a rail, or null when the rail
+ * is not a ranking and the card shows none.
+ *
+ * The rank of a title is its position in the rail, not a field of the item: the
+ * add-on sends its ranking as the order of its catalog ("Top Movies Today"
+ * arrives ranked, first to tenth), and every rail keeps the order it was given.
+ * It is read off the items *on screen* rather than off what the add-on sent, so
+ * a title the digital-release filter or the kids ceiling dropped leaves no gap:
+ * the numbers stay contiguous and keep matching the row the viewer is reading.
+ *
+ * Only the pinned rows are rankings - see `Rail.ranked` for which ones and why
+ * they cannot simply show the ranking their own artwork carries.
+ */
+internal fun landscapeRank(ranked: Boolean, index: Int): Int? =
+    if (ranked) index + 1 else null
+
+/**
  * One item to resolve artwork for.
  *
  * The two screens hold different item types (Home's [MetaPreview], the folder
