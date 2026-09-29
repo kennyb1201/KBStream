@@ -154,6 +154,14 @@ object AppUpdater {
     /** Byte spacing for progress when the server sends no Content-Length. */
     private const val UNKNOWN_TOTAL_STEP_BYTES = 4L * 1024 * 1024
 
+    /**
+     * How much of the release body the update row shows. The publish workflow
+     * writes a commit list into it and Settings renders it under the version
+     * line, where an unbounded body would push the Install action off the
+     * screen — so the text is cut here rather than trusted to stay short.
+     */
+    private const val MAX_NOTES_CHARS = 800
+
     private val AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000L
 
     private const val REQUEST_CODE_INSTALL = 4242
@@ -331,7 +339,7 @@ object AppUpdater {
                 state.value = UpdateState.Available(
                     versionName = meta.versionName,
                     versionCode = meta.versionCode,
-                    notes = release.optString("body").orEmpty(),
+                    notes = releaseNotes(release),
                     downloadUrl = apkAsset.getString("browser_download_url"),
                     sizeBytes = apkAsset.optLong("size", -1L),
                     sha256 = meta.sha256
@@ -532,6 +540,24 @@ object AppUpdater {
     private fun assets(release: JSONObject): List<JSONObject> {
         val arr = release.getJSONArray("assets")
         return (0 until arr.length()).map { arr.getJSONObject(it) }
+    }
+
+    /**
+     * The release body, as the update row's notes.
+     *
+     * Trimmed, with the literal `null` org.json hands back for a release that
+     * has no body at all treated as no notes — otherwise the row would offer
+     * to install the word "null". Clamped to [MAX_NOTES_CHARS] for the reason
+     * that constant documents.
+     */
+    private fun releaseNotes(release: JSONObject): String {
+        val body = release.optString("body", "").trim()
+        if (body.isEmpty() || body == "null") return ""
+        return if (body.length <= MAX_NOTES_CHARS) {
+            body
+        } else {
+            body.take(MAX_NOTES_CHARS).trimEnd() + "…"
+        }
     }
 
     /** Latest non-prerelease release JSON, or null when none exists (404). */

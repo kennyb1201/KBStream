@@ -50,6 +50,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -2518,6 +2519,10 @@ private fun UpdateRow() {
     // here too (row shows "Update available").
     val context = LocalContext.current
     val updateState by AppUpdater.state.collectAsStateWithLifecycle()
+    // What the release says changed, from the release body the publish
+    // workflow writes into it (see AppUpdater.releaseNotes). Blank for a
+    // release with no body, which is why every use below is guarded.
+    val notes = (updateState as? AppUpdater.UpdateState.Available)?.notes.orEmpty()
     val label = when (val s = updateState) {
         is AppUpdater.UpdateState.Available ->
             "Update available — ${s.versionName} (build ${s.versionCode})"
@@ -2579,6 +2584,16 @@ private fun UpdateRow() {
                         color = KBTextLo,
                         style = MaterialTheme.typography.labelSmall
                     )
+                    if (notes.isNotBlank()) {
+                        Text(
+                            text = notes,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 6.dp)
+                        )
+                    }
                 }
                 if (updateState is AppUpdater.UpdateState.Available) {
                     Icon(

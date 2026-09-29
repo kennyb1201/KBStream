@@ -419,6 +419,45 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
+      # The release body IS the update-notes text: AppUpdater reads it into
+      # UpdateState.Available.notes and Settings renders it above the Install
+      # action. It used to be a fixed sentence naming the commit, which carried
+      # nothing a user could act on - so a published build now lists the commits
+      # it contains, taken from the same published gitSha the guard above reads.
+      - name: Compose release notes
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          HEAD_SHA="$(git rev-parse HEAD)"
+          NOTES_FILE=/tmp/release-notes.md
+          # The guard step already downloaded this; absent means no release has
+          # ever been published, in which case there is no "since" to list.
+          PREVIOUS_SHA="$(jq -r '.gitSha // ""' /tmp/published/metadata.json 2>/dev/null || true)"
+          # A cap, because this is rendered in a Settings row: a publish after a
+          # long gap would otherwise paste the whole repository into it.
+          LIMIT=20
+          CHANGES=""
+          if [[ -n "$PREVIOUS_SHA" && "$PREVIOUS_SHA" != "$HEAD_SHA" ]] &&
+             git merge-base --is-ancestor "$PREVIOUS_SHA" "$HEAD_SHA" 2>/dev/null; then
+            TOTAL="$(git rev-list --count --no-merges "$PREVIOUS_SHA..$HEAD_SHA")"
+            CHANGES="$(git log --no-merges --pretty=format:'- %s' "$PREVIOUS_SHA..$HEAD_SHA" | head -n "$LIMIT")"
+            if (( TOTAL > LIMIT )); then
+              CHANGES="${CHANGES}"$'\n'"...and $(( TOTAL - LIMIT )) more."
+            fi
+          fi
+          {
+            if [[ -n "$CHANGES" ]]; then
+              echo "What's new in this build:"
+              echo
+              echo "$CHANGES"
+            else
+              echo "Automated build from commit ${HEAD_SHA}."
+            fi
+            echo
+            echo "Install from the app: Settings -> Check for updates."
+          } > "$NOTES_FILE"
+          cat "$NOTES_FILE"
+
       - name: Prepare metadata
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
@@ -445,7 +484,7 @@ jobs:
         run: |
           gh release create latest \
             --title "KBStream 0.2.${GITHUB_RUN_NUMBER} (build ${GITHUB_RUN_NUMBER})" \
-            --notes "Automated build from commit ${GITHUB_SHA}. Install from the app: Settings → Check for updates." \
+            --notes-file /tmp/release-notes.md \
             --latest
           gh release upload latest \
             app/build/outputs/apk/release/*.apk \
