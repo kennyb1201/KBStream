@@ -37,10 +37,13 @@ class SimklSyncWorker(
                 "Periodic sync completed; attempted=${refreshResult.attempted} changed=${refreshResult.changed} refreshedCount=${refreshResult.refreshedCount} success=${refreshResult.success} error=${refreshResult.errorMessage}"
             )
 
-            when {
-                !refreshResult.attempted -> Result.success()
-                refreshResult.success -> Result.success()
-                else -> Result.retry()
+            // Done (including "there was nothing to refresh") versus retry is
+            // WorkPolicies' call. This round has no give-up ceiling: a failed
+            // refresh is transient, and the next tick is hours away.
+            if (WorkPolicies.simklSyncOutcome(refreshResult) == WorkPolicies.Outcome.Retry) {
+                Result.retry()
+            } else {
+                Result.success()
             }
         } catch (e: Exception) {
             Log.e(TAG, "Periodic Simkl sync failed: ${e.message}", e)

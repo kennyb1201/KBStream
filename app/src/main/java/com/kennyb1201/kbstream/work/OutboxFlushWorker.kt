@@ -34,15 +34,20 @@ class OutboxFlushWorker(
         // this process, so the client is building and the session restoring;
         // flushOutboxWhenReady waits for both before flushing.
         return try {
-            if (SupabaseSync.flushOutboxWhenReady(applicationContext)) {
-                Result.success()
-            } else if (runAttemptCount >= MAX_ATTEMPTS) {
+            val flushed = SupabaseSync.flushOutboxWhenReady(applicationContext)
+            when (WorkPolicies.outboxFlushOutcome(flushed, runAttemptCount)) {
+                WorkPolicies.Outcome.Done -> Result.success()
+                WorkPolicies.Outcome.Retry -> Result.retry()
                 // Still signed-out or still offline after several tries: stop
                 // waking up. The rows stay in `sync_outbox`, so the next app
                 // launch (or the next stranded flush) picks them up.
-                Result.success()
-            } else {
-                Result.retry()
+                WorkPolicies.Outcome.GiveUp -> {
+                    Log.i(
+                        TAG,
+                        "outbox still stranded after $runAttemptCount attempt(s); rows stay queued"
+                    )
+                    Result.success()
+                }
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -57,9 +62,6 @@ class OutboxFlushWorker(
 
         /** Unique name so repeated enqueues coalesce into one pending flush. */
         const val WORK_NAME = "sync_outbox_flush"
-
-        /** Bounded wakeups before giving up; the rows persist regardless. */
-        private const val MAX_ATTEMPTS = 3
 
         /**
          * Enqueue one network-gated flush. Safe to call from any thread and

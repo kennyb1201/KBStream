@@ -59,10 +59,11 @@ class ReminderWorker(
             }
             val now = System.currentTimeMillis()
             IptvReminderStore.load(IptvReminderStore.prefsFor(context)).forEach { reminder ->
-                // Already-started programs are the guide banner's job; arming
-                // them would announce something the user is already late for.
-                if (ReminderRules.isStale(reminder.endUtcMillis, now)) return@forEach
-                if (reminder.startUtcMillis > now) arm(context, reminder.key, reminder.startUtcMillis)
+                // WorkPolicies decides what is still worth arming: a program
+                // that already started (or one that has ended) is not.
+                if (WorkPolicies.shouldArmReminder(reminder.startUtcMillis, reminder.endUtcMillis, now)) {
+                    arm(context, reminder.key, reminder.startUtcMillis)
+                }
             }
         }
 
