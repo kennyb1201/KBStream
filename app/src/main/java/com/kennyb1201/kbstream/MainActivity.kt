@@ -11,7 +11,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -29,6 +32,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -97,8 +101,10 @@ import com.kennyb1201.kbstream.ui.tag.TagScreen
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBStreamTheme
 import com.kennyb1201.kbstream.ui.theme.KBSurface
+import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -2351,7 +2357,38 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
         }
     }
 
-    if (available == null || hidden || suppressForPlayback) return
+    // Once the user has said yes, every later phase has to keep reporting: the
+    // download percentage and the installer handoff are the only answer to
+    // "is it doing anything?", and an install that lands is announced on the
+    // launch AFTER it (AppUpdater.confirmInstallOnLaunch), so this dialog is
+    // often the first thing the relaunched app draws. The dismiss gate and the
+    // playback guard exist to soften an *uninvited* offer, so neither applies
+    // past the tap.
+    var installStarted by remember { mutableStateOf(false) }
+    LaunchedEffect(updateState) {
+        when (updateState) {
+            is AppUpdater.UpdateState.Downloading,
+            is AppUpdater.UpdateState.ReadyToInstall -> installStarted = true
+            else -> Unit
+        }
+    }
+
+    val downloading = updateState as? AppUpdater.UpdateState.Downloading
+    val installing = updateState as? AppUpdater.UpdateState.ReadyToInstall
+    val installed = updateState as? AppUpdater.UpdateState.Updated
+    val failed = updateState as? AppUpdater.UpdateState.Failed
+    // A failure only reaches the viewer when it is one they caused: a
+    // launch-time check that cannot reach GitHub is reported in Settings, in
+    // the row it belongs to. Throwing a dialog at someone who pressed nothing
+    // is what this filter is for.
+    val phase = when {
+        downloading != null -> UpdatePhase.Downloading
+        installing != null -> UpdatePhase.Installing
+        installed != null -> UpdatePhase.Installed
+        installStarted && failed != null -> UpdatePhase.Failed
+        available != null && !hidden && !suppressForPlayback -> UpdatePhase.Offer
+        else -> null
+    } ?: return
 
     Dialog(onDismissRequest = { }) {
         Column(
@@ -2361,58 +2398,204 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
                 .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                 .padding(22.dp)
         ) {
-            Text(
-                text = "UPDATE AVAILABLE",
-                color = KBAccent,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = "KBStream ${available.versionName} (build ${available.versionCode}) " +
-                    "is ready to install.",
-                color = KBTextLo,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 8.dp)
-            )
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.padding(top = 18.dp)
-            ) {
-                KBCard(onClick = {
-                    // No dismissPopup here: if the download/install fails the
-                    // popup must re-offer this version on the next launch.
-                    hidden = true
-                    AppUpdater.downloadAndInstall(context, available)
-                }) {
-                    Text(
-                        text = "INSTALL NOW",
-                        color = KBAccent,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+            when (phase) {
+                UpdatePhase.Offer -> available?.let { offer ->
+                    UpdateDialogTitle("UPDATE AVAILABLE")
+                    UpdateDialogBody(
+                        "KBStream ${offer.versionName} (build ${offer.versionCode}) " +
+                            "is ready to install."
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(top = 18.dp)
+                    ) {
+                        KBCard(onClick = {
+                            // No dismissPopup here: if the download/install
+                            // fails the popup must re-offer this version on
+                            // the next launch.
+                            hidden = true
+                            AppUpdater.downloadAndInstall(context, offer)
+                        }) {
+                            UpdateDialogButton("INSTALL NOW", KBAccent, bold = true)
+                        }
+                        KBCard(onClick = {
+                            hidden = true
+                            AppUpdater.dismissPopup(context, offer)
+                        }) {
+                            UpdateDialogButton("LATER", KBTextHi)
+                        }
+                    }
+                    UpdateDialogFootnote(
+                        "Downloads in the background - the progress stays on this " +
+                            "screen, and Android's installer opens when it's ready."
                     )
                 }
-                KBCard(onClick = {
-                    hidden = true
-                    AppUpdater.dismissPopup(context, available)
-                }) {
-                    Text(
-                        text = "LATER",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+
+                UpdatePhase.Downloading -> downloading?.let { s ->
+                    UpdateDialogTitle("DOWNLOADING UPDATE")
+                    UpdateDialogBody(
+                        "KBStream ${s.versionName} (build ${s.versionCode}) - ${s.percent}%"
                     )
+                    UpdateProgressBar(s.percent / 100f)
+                    Text(
+                        text = updateBytesLabel(s),
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(top = 10.dp)
+                    )
+                    UpdateDialogFootnote(
+                        "Leave KBStream open. Android's installer opens by itself " +
+                            "when the download finishes."
+                    )
+                }
+
+                UpdatePhase.Installing -> installing?.let { s ->
+                    UpdateDialogTitle("INSTALLING UPDATE")
+                    UpdateDialogBody(
+                        "Android is replacing KBStream with " +
+                            "${s.versionName} (build ${s.versionCode})."
+                    )
+                    UpdateProgressBar(1f)
+                    UpdateDialogFootnote(
+                        "Confirm Android's prompt if it appears. KBStream restarts " +
+                            "itself when the install finishes."
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(top = 18.dp)
+                    ) {
+                        KBCard(onClick = { AppUpdater.acknowledge() }) {
+                            UpdateDialogButton("HIDE", KBTextHi)
+                        }
+                    }
+                }
+
+                UpdatePhase.Installed -> installed?.let { s ->
+                    UpdateDialogTitle("UPDATE INSTALLED")
+                    UpdateDialogBody(
+                        "KBStream ${s.versionName} (build ${s.versionCode}) is " +
+                            "installed and running."
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(top = 18.dp)
+                    ) {
+                        KBCard(onClick = { AppUpdater.acknowledge() }) {
+                            UpdateDialogButton("DONE", KBAccent, bold = true)
+                        }
+                    }
+                }
+
+                UpdatePhase.Failed -> failed?.let { s ->
+                    UpdateDialogTitle("UPDATE FAILED")
+                    UpdateDialogBody(s.message)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.padding(top = 18.dp)
+                    ) {
+                        KBCard(onClick = {
+                            // Un-hide first: the dismissed flag is keyed to a
+                            // versionCode that has not changed, so the retry's
+                            // fresh offer would otherwise stay hidden.
+                            hidden = false
+                            AppUpdater.acknowledge()
+                            AppUpdater.checkForUpdate(context)
+                        }) {
+                            UpdateDialogButton("TRY AGAIN", KBAccent, bold = true)
+                        }
+                        KBCard(onClick = { AppUpdater.acknowledge() }) {
+                            UpdateDialogButton("CLOSE", KBTextHi)
+                        }
+                    }
                 }
             }
-            Text(
-                text = "Downloads in the background - the app relaunches when done.",
-                color = KBTextLo.copy(alpha = 0.7f),
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(top = 14.dp)
+        }
+    }
+}
+
+/** Which face the update dialog is showing. */
+private enum class UpdatePhase { Offer, Downloading, Installing, Installed, Failed }
+
+@Composable
+private fun UpdateDialogTitle(text: String) {
+    Text(
+        text = text,
+        color = KBAccent,
+        style = MaterialTheme.typography.headlineSmall,
+        fontWeight = FontWeight.SemiBold
+    )
+}
+
+@Composable
+private fun UpdateDialogBody(text: String) {
+    Text(
+        text = text,
+        color = KBTextLo,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier.padding(top = 8.dp)
+    )
+}
+
+@Composable
+private fun UpdateDialogFootnote(text: String) {
+    Text(
+        text = text,
+        color = KBTextLo.copy(alpha = 0.7f),
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier.padding(top = 14.dp)
+    )
+}
+
+@Composable
+private fun UpdateDialogButton(text: String, color: Color, bold: Boolean = false) {
+    Text(
+        text = text,
+        color = color,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = if (bold) FontWeight.Bold else null,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+    )
+}
+
+/**
+ * Download progress bar. Hand-rolled rather than Material's: a download is the
+ * only countable operation the app shows, and the bar has to take the TV
+ * theme's own accent and surface instead of a phone-shaped component's.
+ */
+@Composable
+private fun UpdateProgressBar(fraction: Float) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 16.dp)
+            .height(6.dp)
+            .background(KBSurfaceRaised, KBShapePill)
+    ) {
+        if (fraction > 0f) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth(fraction.coerceAtMost(1f))
+                    .fillMaxHeight()
+                    .background(KBAccent, KBShapePill)
             )
         }
     }
 }
+
+/**
+ * "53.2 MB of 126.4 MB", or just the running total when the server sent no
+ * Content-Length and there is no denominator to quote.
+ */
+private fun updateBytesLabel(s: AppUpdater.UpdateState.Downloading): String =
+    if (s.totalBytes > 0) {
+        "${updateMb(s.downloadedBytes)} of ${updateMb(s.totalBytes)}"
+    } else {
+        updateMb(s.downloadedBytes)
+    }
+
+private fun updateMb(bytes: Long): String =
+    if (bytes >= 1_048_576) "%.1f MB".format(bytes / 1_048_576.0)
+    else "${bytes / 1024} KB"
 
 @Composable
 private fun ExitConfirmDialog(

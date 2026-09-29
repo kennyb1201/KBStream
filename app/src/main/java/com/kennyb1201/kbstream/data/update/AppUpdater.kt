@@ -50,6 +50,15 @@ import java.util.concurrent.TimeUnit
  * via adb), it falls back to the system ACTION_INSTALL_PACKAGE prompt. On
  * success the system relaunches KBStream — the app process is killed during
  * an install, and the confirmation activity relaunches us afterward.
+ *
+ * Reporting an install is therefore split across two launches, because the
+ * process that starts one never lives to see how it ended: before the handoff
+ * the target version is written to prefs ([recordPendingInstall]), and every
+ * later launch checks whether the running build is that version
+ * ([confirmInstallOnLaunch]) and raises a one-shot [UpdateState.Updated]. That
+ * marker is also what makes the download leg visible at all — [UpdateState]
+ * carries percent and byte counts, so the UI can show the fetch and the
+ * install instead of going silent the moment the user taps Install.
  */
 object AppUpdater {
 
@@ -73,10 +82,47 @@ object AppUpdater {
             val sha256: String? = null
         ) : UpdateState
 
-        data class Downloading(val percent: Int) : UpdateState
-        data class ReadyToInstall(val apkFile: File) : UpdateState
+        /**
+         * The APK is being fetched. [downloadedBytes]/[totalBytes] are carried
+         * alongside the percentage so the UI can show real amounts ("53 of
+         * 126 MB") instead of a bar with no scale — [totalBytes] is -1 when
+         * the server sent no Content-Length, in which case the byte count is
+         * the only honest thing to show.
+         */
+        data class Downloading(
+            val percent: Int,
+            val downloadedBytes: Long = 0L,
+            val totalBytes: Long = -1L,
+            /** Version being fetched, so the dialog can keep naming it. */
+            val versionName: String = "",
+            val versionCode: Long = 0L
+        ) : UpdateState
+
+        /**
+         * Downloaded and handed to the system installer. This is the state an
+         * install sits in while Android runs it — and it is where the user
+         * sees progress at all, because a successful install kills this
+         * process without ever reporting back to it.
+         */
+        data class ReadyToInstall(
+            val apkFile: File,
+            val versionName: String = "",
+            val versionCode: Long = 0L
+        ) : UpdateState
+
         data object UpToDate : UpdateState
         data class Failed(val message: String) : UpdateState
+
+        /**
+         * One-shot confirmation that an install landed: the build named here
+         * is the one now running.
+         *
+         * An install kills this process, so the session that started it can
+         * never report success — the launch *after* it is the only place that
+         * can, which is why [confirmInstallOnLaunch] raises this from a marker
+         * written before the handoff. Consumed once by the UI, then Idle.
+         */
+        data class Updated(val versionName: String, val versionCode: Long) : UpdateState
     }
 
     private const val REPO_OWNER = "kennyb1201"
@@ -87,6 +133,27 @@ object AppUpdater {
     private const val KEY_LAST_CHECK_MS = "last_check_ms"
     /** versionCode the user dismissed the update banner for (no re-nagging). */
     private const val KEY_DISMISSED_CODE = "dismissed_version_code"
+
+    /**
+     * The install handed to the system installer: which version, and when.
+     * Written before the handoff and read by the next launch, which is the
+     * only place an install's success can be observed (see
+     * [confirmInstallOnLaunch]).
+     */
+    private const val KEY_PENDING_INSTALL_CODE = "pending_install_code"
+    private const val KEY_PENDING_INSTALL_NAME = "pending_install_name"
+    private const val KEY_PENDING_INSTALL_AT = "pending_install_at"
+
+    /**
+     * How long a handoff stays claimable. After this the marker cannot be
+     * assumed to describe what the user just launched into — a prompt waved
+     * away and forgotten must not announce a success weeks later.
+     */
+    private const val PENDING_INSTALL_TTL_MS = 7L * 24 * 60 * 60 * 1000
+
+    /** Byte spacing for progress when the server sends no Content-Length. */
+    private const val UNKNOWN_TOTAL_STEP_BYTES = 4L * 1024 * 1024
+
     private val AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000L
 
     private const val REQUEST_CODE_INSTALL = 4242
@@ -127,7 +194,22 @@ object AppUpdater {
                 }
                 PackageInstaller.STATUS_SUCCESS -> {
                     // App was replaced; the process dies around now. Nothing
-                    // to clean up — cache is wiped on the next run.
+                    // to clean up — the next launch reads the pending-install
+                    // marker and reports the result.
+                }
+                // The two ways a user-facing install stops short. Both are
+                // the user's own action (or the device's policy), so they get
+                // a sentence instead of the installer's raw status text.
+                PackageInstaller.STATUS_FAILURE_ABORTED -> {
+                    Log.i(TAG, "install cancelled by the user")
+                    state.value = UpdateState.Failed("Install cancelled")
+                }
+                PackageInstaller.STATUS_FAILURE_BLOCKED -> {
+                    Log.w(TAG, "install blocked by the device")
+                    state.value = UpdateState.Failed(
+                        "This device blocked the install. Allow KBStream to install " +
+                            "updates, then try again."
+                    )
                 }
                 else -> {
                     val message =
@@ -261,17 +343,33 @@ object AppUpdater {
     }
 
     fun downloadAndInstall(context: Context, available: UpdateState.Available) {
-        state.value = UpdateState.Downloading(0)
+        state.value = UpdateState.Downloading(
+            percent = 0,
+            versionName = available.versionName,
+            versionCode = available.versionCode
+        )
         scope.launch {
             try {
                 val dir = File(context.cacheDir, UPDATES_DIR).apply { mkdirs() }
                 dir.listFiles()?.forEach { it.delete() }
+                // Whatever was pending is being replaced by this download.
+                clearPendingInstall(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE))
                 val apk = File(
                     dir,
                     "kbstream-${available.versionName}-build${available.versionCode}.apk"
                 )
-                download(available.downloadUrl, apk, available.sha256)
-                state.value = UpdateState.ReadyToInstall(apk)
+                download(
+                    url = available.downloadUrl,
+                    target = apk,
+                    expectedSha256 = available.sha256,
+                    versionName = available.versionName,
+                    versionCode = available.versionCode
+                )
+                state.value = UpdateState.ReadyToInstall(
+                    apkFile = apk,
+                    versionName = available.versionName,
+                    versionCode = available.versionCode
+                )
                 installApk(context, apk)
             } catch (t: Throwable) {
                 state.value = UpdateState.Failed(t.message ?: "Download failed")
@@ -290,6 +388,10 @@ object AppUpdater {
         // start would then fail refresh-token reuse detection and sign the
         // user out.
         com.kennyb1201.kbstream.data.sync.SupabaseSync.persistSessionBeforeProcessExit()
+        // Remember what is being installed BEFORE the handoff: whether this
+        // install works is only knowable from the next launch, and this marker
+        // is what lets that launch say so.
+        recordPendingInstall(context, apk)
         try {
             sessionInstall(context, apk)
         } catch (denied: SecurityException) {
@@ -297,6 +399,86 @@ object AppUpdater {
         } catch (denied: IllegalStateException) {
             intentInstall(context, apk)
         }
+    }
+
+    /**
+     * Called once per launch, before any update check: if the running build is
+     * at least the one that was handed to the installer, that install landed —
+     * raise a one-shot [UpdateState.Updated] so the UI can say so, and clear
+     * the marker.
+     *
+     * Silent when the handoff is still pending (the prompt is waiting, or the
+     * user waved it away) and when the marker is older than
+     * [PENDING_INSTALL_TTL_MS]. Reads the package manager, so a failure there
+     * leaves the marker alone rather than guessing.
+     */
+    fun confirmInstallOnLaunch(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val pendingCode = prefs.getLong(KEY_PENDING_INSTALL_CODE, 0L)
+        if (pendingCode <= 0L) return
+        val stampedAt = prefs.getLong(KEY_PENDING_INSTALL_AT, 0L)
+        if (System.currentTimeMillis() - stampedAt > PENDING_INSTALL_TTL_MS) {
+            clearPendingInstall(prefs)
+            return
+        }
+        val installed = runCatching { installedVersionCode(context) }.getOrNull() ?: return
+        if (installed < pendingCode) return // handed off, not landed yet
+        val versionName = prefs.getString(KEY_PENDING_INSTALL_NAME, null).orEmpty()
+        clearPendingInstall(prefs)
+        state.value = UpdateState.Updated(
+            versionName = versionName.ifBlank { "build $pendingCode" },
+            versionCode = installed
+        )
+    }
+
+    /**
+     * Consumes a state the user has finished with — the one-shot [Updated]
+     * confirmation, an [ReadyToInstall] handoff they want off the screen (the
+     * package-installer fallback reports nothing back, so that dialog would
+     * otherwise have no way out), or a [Failed] they have read. A no-op for
+     * everything else: [Available], [Downloading] and [Checking] are states
+     * the app owns, not the user.
+     */
+    fun acknowledge() {
+        when (state.value) {
+            is UpdateState.Updated,
+            is UpdateState.ReadyToInstall,
+            is UpdateState.Failed -> state.value = UpdateState.Idle
+            else -> Unit
+        }
+    }
+
+    /**
+     * Records the build being handed to the installer, keyed off the staged
+     * file's own name (`kbstream-<versionName>-build<versionCode>.apk` — the
+     * name [downloadAndInstall] writes, and the one CI publishes). A name that
+     * carries no build number is left unrecorded: there is nothing to verify
+     * against later, and a guess would announce the wrong version.
+     *
+     * Internal, with [atMs] injectable, so the confirmation's two-sided
+     * contract (report a landed install, stay quiet about a pending or expired
+     * one) can be pinned without an installer.
+     */
+    internal fun recordPendingInstall(
+        context: Context,
+        apk: File,
+        atMs: Long = System.currentTimeMillis()
+    ) {
+        val code = BUILD_NUMBER.find(apk.name)?.groupValues?.get(1)?.toLongOrNull() ?: return
+        val name = apk.name.removePrefix("kbstream-").substringBefore("-build")
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putLong(KEY_PENDING_INSTALL_CODE, code)
+            .putString(KEY_PENDING_INSTALL_NAME, name)
+            .putLong(KEY_PENDING_INSTALL_AT, atMs)
+            .apply()
+    }
+
+    private fun clearPendingInstall(prefs: android.content.SharedPreferences) {
+        prefs.edit()
+            .remove(KEY_PENDING_INSTALL_CODE)
+            .remove(KEY_PENDING_INSTALL_NAME)
+            .remove(KEY_PENDING_INSTALL_AT)
+            .apply()
     }
 
     // ── Internals ──────────────────────────────────────────────────
@@ -414,7 +596,13 @@ object AppUpdater {
      * deletes the file and throws, so a tampered or truncated download can
      * never reach the installer.
      */
-    private fun download(url: String, target: File, expectedSha256: String?) {
+    private fun download(
+        url: String,
+        target: File,
+        expectedSha256: String?,
+        versionName: String,
+        versionCode: Long
+    ) {
         val request = Request.Builder().url(url).build()
         val digest = java.security.MessageDigest.getInstance("SHA-256")
         client.newCall(request).execute().use { response ->
@@ -423,6 +611,7 @@ object AppUpdater {
             val total = body.contentLength()
             var done = 0L
             var lastPercent = -1
+            var lastEmitBytes = 0L
             body.byteStream().use { input ->
                 target.outputStream().use { output ->
                     val buffer = ByteArray(64 * 1024)
@@ -432,12 +621,26 @@ object AppUpdater {
                         output.write(buffer, 0, read)
                         digest.update(buffer, 0, read)
                         done += read
-                        if (total > 0) {
-                            val percent = (done * 100 / total).toInt()
-                            if (percent != lastPercent) {
-                                lastPercent = percent
-                                state.value = UpdateState.Downloading(percent)
-                            }
+                        // With a known size, one emission per whole percent (a
+                        // hundredth of the window). Without one the percentage
+                        // would never move at all, so fall back to byte spacing
+                        // and let the UI show the running total instead.
+                        val percent = if (total > 0) (done * 100 / total).toInt() else 0
+                        val emit = if (total > 0) {
+                            percent != lastPercent
+                        } else {
+                            done - lastEmitBytes >= UNKNOWN_TOTAL_STEP_BYTES
+                        }
+                        if (emit) {
+                            lastPercent = percent
+                            lastEmitBytes = done
+                            state.value = UpdateState.Downloading(
+                                percent = percent,
+                                downloadedBytes = done,
+                                totalBytes = total,
+                                versionName = versionName,
+                                versionCode = versionCode
+                            )
                         }
                     }
                 }

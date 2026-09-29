@@ -2377,6 +2377,8 @@ private fun UpdateRow() {
         is AppUpdater.UpdateState.ReadyToInstall ->
             "Update ready — installing…"
         is AppUpdater.UpdateState.Checking -> "Checking for updates…"
+        is AppUpdater.UpdateState.Updated ->
+            "Updated to ${s.versionName} (build ${s.versionCode})"
         is AppUpdater.UpdateState.Failed -> "Update check failed — tap to retry"
         AppUpdater.UpdateState.UpToDate -> "You're up to date — check again"
         AppUpdater.UpdateState.Idle -> "Check for updates"
@@ -2388,6 +2390,8 @@ private fun UpdateRow() {
             "Fetching the new APK — the app relaunches when done"
         is AppUpdater.UpdateState.ReadyToInstall ->
             "Handing the file to the system installer…"
+        is AppUpdater.UpdateState.Updated ->
+            "The last install finished — this is the new build"
         is AppUpdater.UpdateState.Failed ->
             s.message
         else -> "KBStream updates are published with each build"
@@ -2400,6 +2404,7 @@ private fun UpdateRow() {
                         AppUpdater.downloadAndInstall(context, s)
                     is AppUpdater.UpdateState.Downloading,
                     is AppUpdater.UpdateState.Checking,
+                    is AppUpdater.UpdateState.Updated,
                     is AppUpdater.UpdateState.ReadyToInstall -> Unit
                     else -> AppUpdater.checkForUpdate(context)
                 }

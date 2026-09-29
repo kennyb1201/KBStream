@@ -154,6 +154,14 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     )
                 }
             }
+            // Self-update: if an install was handed to the system installer
+            // before this process existed, say whether it landed. Runs first
+            // so the confirmation outranks the 12h check below (which is a
+            // no-op while that confirmation is the current update state).
+            startupStep("startup.updateConfirm", "app_create_update_confirm") {
+                com.kennyb1201.kbstream.data.update.AppUpdater
+                    .confirmInstallOnLaunch(this@MainApplication)
+            }
             // Self-update: quiet GitHub-release check at most every 12h; only
             // downloads when the user accepts the prompt in Settings.
             startupStep("startup.updateCheck", "app_create_update_check") {
