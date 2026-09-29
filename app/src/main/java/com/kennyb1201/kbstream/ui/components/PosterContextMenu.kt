@@ -339,7 +339,7 @@ fun PosterContextMenu(
      * The title's library rows: "Add to Library" and "Add to list…".
      *
      * Passing the title's ids gives this menu both rows, in the place and with
-     * the behaviour every other menu in the app has them (see [LibraryAdds]),
+     * the behavior every other menu in the app has them (see [LibraryAdds]),
      * which is the point of them living here rather than being spelled out at
      * each of the ~15 call sites: a long press on a poster means the same thing
      * wherever it happens.

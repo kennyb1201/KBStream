@@ -6,7 +6,7 @@ import androidx.room.PrimaryKey
 
 
 /**
- * One programme in a guide.
+ * One program in a guide.
  *
  * [sourceId] points at [EpgSourceEntity] rather than carrying the guide URL.
  * The URL is a long string that used to sit on every row AND lead the composite

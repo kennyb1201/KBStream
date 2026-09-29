@@ -151,7 +151,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
 
     // "Because you watched Ted Lasso" came back all talk shows: the cast tier
     // takes each person's top works by popularity, and a guest spot on a nightly
-    // talk show out-popularises every scripted credit they have. Same for TMDB's
+    // talk show out-popularizes every scripted credit they have. Same for TMDB's
     // own recommendation blob now and then. Drop the unscripted formats - unless
     // the title being watched IS one, in which case they are exactly the right
     // suggestion.

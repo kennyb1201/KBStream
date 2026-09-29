@@ -51,7 +51,7 @@ import java.util.concurrent.TimeUnit
  *  - **No addon stack.** The preview reads with the playback headers through the
  *    main player's `SimpleCache`, and none of the rest of its stack (the DV
  *    re-write, the HDR10+ stripping, the YouTube chunked source). The cache is
- *    not an optimisation here but a requirement: without it the preview opens a
+ *    not an optimization here but a requirement: without it the preview opens a
  *    SECOND connection to a source that is already serving the main player, and
  *    the hosts this app plays from - debrid links, usenet - commonly allow a
  *    link exactly one, in which case the connection does not fail but hangs,

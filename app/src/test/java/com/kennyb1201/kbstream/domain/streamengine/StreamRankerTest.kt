@@ -138,7 +138,7 @@ class StreamRankerTest {
         val webrip = stream("Some Film 2024 1080p WEBRip x265", url = "https://host/webrip.mkv")
         val cam = stream("Some Film 2024 1080p CAM", url = "https://host/cam.mkv")
 
-        // WEBRip was penalised by the same rule as CAM, which pushed good web
+        // WEBRip was penalized by the same rule as CAM, which pushed good web
         // releases below unlabeled ones.
         assertEquals(listOf(webrip, cam), order(cam, webrip))
     }

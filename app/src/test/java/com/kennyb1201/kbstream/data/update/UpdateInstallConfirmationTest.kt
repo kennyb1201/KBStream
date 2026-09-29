@@ -147,7 +147,7 @@ class UpdateInstallConfirmationTest {
         AppUpdater.acknowledge()
         assertEquals(AppUpdater.UpdateState.Idle, AppUpdater.state.value)
 
-        AppUpdater.state.value = AppUpdater.UpdateState.Failed("Install cancelled")
+        AppUpdater.state.value = AppUpdater.UpdateState.Failed("Install canceled")
         AppUpdater.acknowledge()
         assertEquals(AppUpdater.UpdateState.Idle, AppUpdater.state.value)
     }

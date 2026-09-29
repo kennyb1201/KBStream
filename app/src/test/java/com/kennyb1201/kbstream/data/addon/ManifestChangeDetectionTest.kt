@@ -203,7 +203,7 @@ class ManifestChangeDetectionTest {
 
     private fun manifest(
         catalogs: List<ManifestCatalog> = listOf(catalog()),
-        description: String? = "A catalogue",
+        description: String? = "A catalog",
         logo: String? = "https://l/logo.png",
         icon: String? = null,
         types: List<String> = listOf("movie"),
@@ -226,7 +226,7 @@ class ManifestChangeDetectionTest {
         catalogs: List<ManifestCatalog> = listOf(catalog()),
         name: String = "BingeCat",
         customName: String? = null,
-        description: String? = "A catalogue",
+        description: String? = "A catalog",
         logo: String? = "https://l/logo.png",
         types: List<String> = listOf("movie"),
         idPrefixes: List<String>? = listOf("tt"),

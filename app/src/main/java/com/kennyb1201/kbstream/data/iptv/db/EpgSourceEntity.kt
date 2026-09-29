@@ -20,7 +20,7 @@ import androidx.room.PrimaryKey
  *
  * Storing it once turns both back into a small integer: ~60 bytes per row in
  * the table and ~55 in the index become a one-to-two byte varint. Nothing about
- * the guide's behaviour changes — a playlist may configure several guide URLs
+ * the guide's behavior changes — a playlist may configure several guide URLs
  * and programs from all of them coexist, which is exactly why the identity
  * needs to live somewhere; it just no longer needs to live in 600,000 copies.
  *

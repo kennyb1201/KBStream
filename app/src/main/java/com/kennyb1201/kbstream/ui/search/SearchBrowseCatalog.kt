@@ -682,7 +682,7 @@ val BROWSE_NETWORKS = listOf(
     // Fourth wave (2026-09) — ids resolved via flagship-show probes
     // (/search/tv -> /tv/{id}.networks; TMDB has NO network search endpoint,
     // so /search/network 404s), then confirmed with a RECENT discover
-    // replica. Each parenthesised date is that probe's newest series, so
+    // replica. Each parenthesized date is that probe's newest series, so
     // archive-only pages (Logo, AXS TV, CMT, TV Land) are deliberate
     // archive pages rather than a broken list:
     //   Travel Channel 209 (2023), Nat Geo Wild 1043 (2026), Smithsonian

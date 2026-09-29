@@ -71,7 +71,7 @@ object StreamRanker {
      * what a viewer means by "a problematic stream".
      *
      * WEBRip is deliberately NOT in this group. It is an ordinary source, and
-     * penalising it the way a CAM is penalised pushed good web releases below
+     * penalizing it the way a CAM is penalized pushed good web releases below
      * unlabeled ones.
      */
     private val UNWATCHABLE_RELEASE =

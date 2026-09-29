@@ -230,7 +230,7 @@ object EpisodeMatch {
      * front of the viewer.
      *
      * [runtimeMinutes] is the requested episode's own length, used only to read
-     * a size: without one, a pack is recognised by the way it names itself
+     * a size: without one, a pack is recognized by the way it names itself
      * instead (see [isSeasonPack]).
      *
      * With no episode in the request (a movie, a live channel) this is the

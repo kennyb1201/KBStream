@@ -34,7 +34,7 @@ object LibraryMirror {
      *
      * Deliberately not the caller's. An add is started by a long-press menu,
      * and that menu (and the dialog behind it) is gone — and its composition
-     * scope cancelled — the instant the row is pressed. A mirror launched on
+     * scope canceled — the instant the row is pressed. A mirror launched on
      * the caller's scope is therefore racing a cancellation it usually loses:
      * the local write lands (it is the next statement) while the Simkl and
      * MDBList adds it was supposed to fire never leave the device, and the

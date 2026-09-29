@@ -543,7 +543,7 @@ fun DetailScreen(
         returnTarget = DetailReturnFocus.consume("$type:$id")
     }
 
-    // Set once a return has been honoured, so the page's own auto-focus (the
+    // Set once a return has been honored, so the page's own auto-focus (the
     // resume episode) does not pull the focus back out of the rail the viewer
     // just returned to when a slow episode list lands a moment later.
     var restoredReturnFocus by remember { mutableStateOf(false) }

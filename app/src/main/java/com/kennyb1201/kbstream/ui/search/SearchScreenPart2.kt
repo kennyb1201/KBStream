@@ -384,7 +384,7 @@ internal val SEARCH_RAIL_EDGE_PADDING = 20.dp
 
 // Browse-submenu lazy grid. The cell floor is wide enough that the longest
 // curated name - "The Sisterhood of the Traveling Pants Collection", 48
-// characters - wraps onto a second line instead of being ellipsised away,
+// characters - wraps onto a second line instead of being ellipsized away,
 // which is the trade a uniform-cell grid makes for laziness.
 private val SUBMENU_CHIP_MIN_WIDTH = 216.dp
 
@@ -601,7 +601,7 @@ internal fun SearchChip(
     // Hide on a browse chip. Null keeps a plain select-only chip.
     onLongClick: (() -> Unit)? = null,
     // Browse-submenu chips sit in a fixed-width lazy grid cell, so a long
-    // curated name wraps onto a second line rather than being ellipsised
+    // curated name wraps onto a second line rather than being ellipsized
     // away. Every other chip is one line.
     labelMaxLines: Int = 1
 ) {

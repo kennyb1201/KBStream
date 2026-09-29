@@ -201,8 +201,8 @@ object AppUpdater {
                 // the user's own action (or the device's policy), so they get
                 // a sentence instead of the installer's raw status text.
                 PackageInstaller.STATUS_FAILURE_ABORTED -> {
-                    Log.i(TAG, "install cancelled by the user")
-                    state.value = UpdateState.Failed("Install cancelled")
+                    Log.i(TAG, "install canceled by the user")
+                    state.value = UpdateState.Failed("Install canceled")
                 }
                 PackageInstaller.STATUS_FAILURE_BLOCKED -> {
                     Log.w(TAG, "install blocked by the device")

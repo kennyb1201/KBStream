@@ -141,17 +141,17 @@ internal fun hasKnockoutDetail(pixels: IntArray, width: Int, height: Int): Boole
         val index = queue.removeFirst()
         val x = index % width
         val y = index / width
-        for (neighbour in intArrayOf(
+        for (neighbor in intArrayOf(
             if (x > 0) index - 1 else -1,
             if (x < width - 1) index + 1 else -1,
             if (y > 0) index - width else -1,
             if (y < height - 1) index + width else -1
         )) {
-            if (neighbour >= 0 && transparent(neighbour % width, neighbour / width) &&
-                !reached[neighbour]
+            if (neighbor >= 0 && transparent(neighbor % width, neighbor / width) &&
+                !reached[neighbor]
             ) {
-                reached[neighbour] = true
-                queue.addLast(neighbour)
+                reached[neighbor] = true
+                queue.addLast(neighbor)
             }
         }
     }

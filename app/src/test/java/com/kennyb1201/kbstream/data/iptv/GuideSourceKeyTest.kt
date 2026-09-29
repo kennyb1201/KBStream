@@ -111,8 +111,8 @@ class GuideSourceKeyTest {
     fun `each guide reads back only its own programs`() = runBlocking {
         val a = dao.ensureSourceId(guideA)
         val b = dao.ensureSourceId(guideB)
-        dao.insertPrograms(programs(a, 2, title = "A-programme"))
-        dao.insertPrograms(programs(b, 2, title = "B-programme"))
+        dao.insertPrograms(programs(a, 2, title = "A-program"))
+        dao.insertPrograms(programs(b, 2, title = "B-program"))
 
         val fromA = dao.getProgramsForChannelsInWindow(
             sourceUrl = guideA,
@@ -131,8 +131,8 @@ class GuideSourceKeyTest {
 
         assertEquals(2, fromA.size)
         assertEquals(2, fromB.size)
-        assertTrue(fromA.all { it.title == "A-programme" })
-        assertTrue(fromB.all { it.title == "B-programme" })
+        assertTrue(fromA.all { it.title == "A-program" })
+        assertTrue(fromB.all { it.title == "B-program" })
     }
 
     @Test
@@ -230,7 +230,7 @@ class GuideSourceKeyTest {
         sourceId: Long,
         count: Int,
         idPrefix: String = "ch",
-        title: String = "programme"
+        title: String = "program"
     ): List<EpgProgramEntity> = (0 until count).map { index ->
         EpgProgramEntity(
             sourceId = sourceId,

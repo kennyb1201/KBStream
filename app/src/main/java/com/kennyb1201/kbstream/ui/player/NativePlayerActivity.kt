@@ -9420,7 +9420,7 @@ class NativePlayerActivity : ComponentActivity() {
             PlaybackException.ERROR_CODE_TIMEOUT -> {
                 // "No internet connection." was the blanket answer here, and the
                 // diagnostics export has since falsified it: a capture taken
-                // while this card was on screen had sync live, catalogue
+                // while this card was on screen had sync live, catalog
                 // fetches still landing, and 13 sources retrieved from the very
                 // add-on the stream came from. One host had failed, not the
                 // television's network. Naming it is the difference between

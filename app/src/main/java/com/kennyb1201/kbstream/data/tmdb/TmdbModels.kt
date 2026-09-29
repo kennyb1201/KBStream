@@ -224,7 +224,7 @@ data class TmdbKeywords(
 /**
  * TMDB TV genre ids for unscripted / variety formats: news, reality, soap,
  * talk. Cast members of a scripted show guest on these constantly and they
- * are perpetually airing, so they out-popularise — and get recommended
+ * are perpetually airing, so they out-popularize — and get recommended
  * above — everything an actor is actually known for.
  */
 val UNSCRIPTED_TV_GENRES = setOf(10763, 10764, 10766, 10767)
@@ -389,7 +389,7 @@ data class TmdbPersonCredit(
     @Json(name = "vote_count") val voteCount: Int? = null,
     // Talk / news / reality / soap. "Because you watched Ted Lasso" filled up
     // with talk shows before this was parsed: cast members guest on them, and
-    // nothing on TMDB out-popularises a nightly talk show, so the cast tier's
+    // nothing on TMDB out-popularizes a nightly talk show, so the cast tier's
     // "top works by popularity" returned The Tonight Show.
     @Json(name = "genre_ids") val genreIds: List<Int>? = null
 )

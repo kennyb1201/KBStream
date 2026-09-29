@@ -250,7 +250,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     // inferred from a source's "[declared != requested]"
                     // bracket: when nothing in the list declares an episode
                     // there is no bracket at all, and the one block per episode
-                    // is otherwise indistinguishable from its neighbours.
+                    // is otherwise indistinguishable from its neighbors.
                     (requestedEpisode?.let { " for S%02dE%02d".format(it.first, it.second) } ?: "") +
                     ", top $RANK_REPORT_TOP:"
             )

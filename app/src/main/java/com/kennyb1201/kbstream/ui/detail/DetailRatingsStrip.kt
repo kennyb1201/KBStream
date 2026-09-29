@@ -78,8 +78,8 @@ private val MyAnimeListTint = Color(0xFF4E7BF0)
  * [tmdbFallback] is TMDB's own vote_average, and it is used ONLY when MDBList
  * sent no TMDB figure - which is every title when no MDBList key is set. The
  * detail screen deliberately keeps TMDB's score out of the meta add-on line,
- * where it would be labelled "IMDb x.x" (see DetailViewModel's meta build),
- * so the chip labelled TMDB is where it belongs: a title whose catalog and
+ * where it would be labeled "IMDb x.x" (see DetailViewModel's meta build),
+ * so the chip labeled TMDB is where it belongs: a title whose catalog and
  * trackers sent no rating at all still shows its audience score instead of an
  * empty row.
  */

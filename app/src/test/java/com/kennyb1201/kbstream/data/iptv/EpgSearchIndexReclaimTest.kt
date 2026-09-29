@@ -112,7 +112,7 @@ class EpgSearchIndexReclaimTest {
             EpgProgramEntity(
                 sourceId = sourceId,
                 channelId = "ch$index",
-                title = "programme $index",
+                title = "program $index",
                 description = null,
                 category = null,
                 startUtcMillis = index * 1_000L,

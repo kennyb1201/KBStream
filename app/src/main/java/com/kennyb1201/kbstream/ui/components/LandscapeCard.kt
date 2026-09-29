@@ -180,7 +180,7 @@ fun LandscapeCard(
                         )
                     ),
                     // Artwork, like the clearlogo beside it, but this one is
-                    // information: labelled rather than left as a stray digit.
+                    // information: labeled rather than left as a stray digit.
                     modifier = Modifier
                         .align(Alignment.TopStart)
                         .padding(start = 12.dp, top = 4.dp)

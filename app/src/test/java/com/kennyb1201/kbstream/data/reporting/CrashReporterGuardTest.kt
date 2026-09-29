@@ -39,7 +39,7 @@ class CrashReporterGuardTest {
 
     @Test
     fun `a build with no DSN does not initialize crash reporting`() {
-        // Unchanged behaviour: without a DSN the app must be silent, test or not.
+        // Unchanged behavior: without a DSN the app must be silent, test or not.
         assertFalse(CrashReporter.shouldInitCrashReporting(""))
         assertFalse(CrashReporter.shouldInitCrashReporting("   "))
     }

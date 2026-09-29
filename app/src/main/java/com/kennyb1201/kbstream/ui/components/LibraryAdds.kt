@@ -39,7 +39,7 @@ import kotlinx.coroutines.withContext
  *
  * All of it runs on [scope], never on the caller's. A menu is dismissed the
  * instant one of these is pressed, so anything started on the menu's own
- * composition scope is cancelled before it can resolve an id or reach a
+ * composition scope is canceled before it can resolve an id or reach a
  * tracker — which is exactly how an add could tick, close, and change nothing.
  */
 internal object LibraryAdds {
@@ -47,7 +47,7 @@ internal object LibraryAdds {
     /**
      * Process-lifetime, like [LibraryMirror]'s mirror scope and for the same
      * reason: the thing that started the work is gone a frame later. The
-     * [SupervisorJob] keeps one add's failure from cancelling the next one.
+     * [SupervisorJob] keeps one add's failure from canceling the next one.
      */
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
