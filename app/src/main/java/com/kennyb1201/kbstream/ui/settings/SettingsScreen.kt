@@ -84,7 +84,7 @@ internal enum class SettingsPane(val label: String) {
     INTEGRATIONS("Integrations"),
     PLAYBACK("Playback"),
     INTERFACE("Interface"),
-    HIDDEN("Hidden titles"),
+    HIDDEN("Hidden Titles"),
     VIDEO("Video & Audio"),
     LANGUAGE("Language"),
     SUBTITLES("Subtitles"),
