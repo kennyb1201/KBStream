@@ -99,7 +99,23 @@ private val sharedAddonClient: OkHttpClient by lazy {
         addInterceptor(sharedAddonLogging)
         // Per-service request timing for the diagnostics perf block. Read-only
         // (it only inspects the host), so it cannot change behavior.
-        addInterceptor(NetworkTraceInterceptor())
+        //
+        // The resolver is what makes an addon identifiable: a self-hosted addon
+        // is often reached by bare address, and the host-derived label for that
+        // ("http.132") says nothing about which addon spent the time. Resolved
+        // per call rather than captured, so re-adding or renaming an addon is
+        // picked up without rebuilding this file-scope client — and null-safe,
+        // because a client can be built before an app context is attached
+        // (unit tests), where the host label is the right answer anyway.
+        addInterceptor(
+            NetworkTraceInterceptor(
+                addonNameForHost = { host ->
+                    AppContextHolder.appContext?.let { appContext ->
+                        AddonManager.getInstance(appContext).addonNameForHost(host)
+                    }
+                }
+            )
+        )
     }
 }
 

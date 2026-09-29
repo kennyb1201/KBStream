@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.reporting
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -44,6 +45,32 @@ class NetworkTraceInterceptorTest {
         ).forEach { host ->
             assertFalse("$host is a name", isIpLiteralHost(host))
         }
+    }
+
+    /**
+     * The perf summary prints one line per label, so an addon name has to
+     * survive being typed by a person: free text, spaces, punctuation, and
+     * whatever length they felt like.
+     */
+    @Test
+    fun `an addon name becomes a label-safe slug`() {
+        assertEquals("aiostreams", addonSlug("AIOStreams"))
+        assertEquals("aiostreams-self-hosted", addonSlug("AIOStreams (self-hosted)"))
+        assertEquals("elfhosted-aio", addonSlug("  ElfHosted / AIO  "))
+        assertEquals("addon-3", addonSlug("addon 3"))
+    }
+
+    @Test
+    fun `a name with nothing usable falls back rather than emptying the label`() {
+        // "http.addon." alone would be a label with no addon in it.
+        assertEquals("addon", addonSlug(""))
+        assertEquals("addon", addonSlug("  ***  "))
+    }
+
+    @Test
+    fun `a very long name is capped`() {
+        // One line of the report, not a paragraph of it.
+        assertTrue(addonSlug("a".repeat(200)).length <= 24)
     }
 
     @Test

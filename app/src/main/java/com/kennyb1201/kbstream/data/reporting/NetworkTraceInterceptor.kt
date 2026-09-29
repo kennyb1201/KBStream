@@ -5,29 +5,46 @@ import okhttp3.Interceptor
 import okhttp3.Response
 
 /**
- * Times every HTTP call the app makes and files it under a short service
- * label (tmdb / simkl / addons / iptv / youtube / …), so the diagnostics dump
- * can answer "where does the time actually go" without a profiler on the TV.
+ * Times every HTTP call the app makes and files it under a short label
+ * (tmdb / simkl / youtube / addon.<name> / …), so the diagnostics dump can
+ * answer "where does the time actually go" without a profiler on the TV.
  *
  * One interceptor is shared by each client (see the `addInterceptor` wiring
  * in the TMDB, Simkl, addon and IPTV clients); it only reads the host, so
  * adding it cannot change request behavior.
  *
- * A host that is a bare address gets one shared label instead of one built
- * from its first octet: `132.226.4.9` used to file as `http.132`, a name that
- * named nothing, so the slowest endpoint in a capture could not be identified
- * from the report at all. It is now `http.ip`, and [PerfTrace.recordHost]
- * carries the address alongside it so the dump says which one it was.
+ * Two labels exist because the host alone does not identify the caller:
+ *
+ *  - **addon traffic is named after the addon**, not after its host. Addons
+ *    are user-supplied and a self-hosted one is commonly reached by bare
+ *    address, so the host label for it was `http.132` — a name that named
+ *    nothing about which addon spent the time. [addonNameForHost] resolves the
+ *    installed addon for the host; the addon client is the only client that
+ *    installs one.
+ *  - **a bare address gets one shared label**, `http.ip`, with the address
+ *    recorded beside it by [PerfTrace.recordHost], so the endpoint can be
+ *    identified and given a name.
  */
-internal class NetworkTraceInterceptor : Interceptor {
+internal class NetworkTraceInterceptor(
+    /**
+     * The installed addon answering on [host], or null when none is — see
+     * `AddonManager.addonNameForHost`. Supplied by the addon client, which is
+     * the only one whose hosts belong to an addon; every other client leaves it
+     * null and keeps the host-derived label.
+     */
+    private val addonNameForHost: (String) -> String? = { null }
+) : Interceptor {
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
         val host = request.url.host
         val label = labelFor(host)
-        // Only for the labels whose name does not already say where they went:
-        // "http.tmdb" describes itself, "http.ip" does not.
-        if (label == IP_LABEL) PerfTrace.recordHost(label, host)
+        // Only the labels that do not name their own destination carry the
+        // host: "http.tmdb" describes itself, "http.ip" does not, and for an
+        // addon it is the address someone may want to replace with a name.
+        if (label == IP_LABEL || label.startsWith(ADDON_PREFIX)) {
+            PerfTrace.recordHost(label, host)
+        }
         val started = SystemClock.elapsedRealtime()
         var ok = true
         try {
@@ -42,20 +59,50 @@ internal class NetworkTraceInterceptor : Interceptor {
         }
     }
 
-    private fun labelFor(host: String): String = when {
+    private fun labelFor(host: String): String {
+        knownServiceLabel(host)?.let { return it }
+        addonNameForHost(host)?.let { name -> return ADDON_PREFIX + addonSlug(name) }
+        return if (isIpLiteralHost(host)) IP_LABEL
+        else "http." + host.removePrefix("www.").substringBefore('.')
+    }
+
+    /** The app's own API hosts, which are never addon hosts. */
+    private fun knownServiceLabel(host: String): String? = when {
         host.contains("themoviedb") || host.contains("tmdb") -> "http.tmdb"
         host.contains("simkl") -> "http.simkl"
         host.contains("youtube") || host.contains("googlevideo") || host.contains("ytimg") ->
             "http.youtube"
         host.contains("opensubtitles") -> "http.subtitles"
-        isIpLiteralHost(host) -> IP_LABEL
-        else -> "http." + host.removePrefix("www.").substringBefore('.')
+        else -> null
     }
 
     private companion object {
         const val IP_LABEL = "http.ip"
+        const val ADDON_PREFIX = "http.addon."
     }
 }
+
+/**
+ * Label-safe form of an addon's name: `AIOStreams (self-hosted)` becomes
+ * `aiostreams-self-hosted`.
+ *
+ * Addon names are free text the user typed, so everything but letters and
+ * digits collapses to a single dash and runs are trimmed. The label is printed
+ * once per ranked line in the summary and nowhere else, so the length is capped
+ * to keep an accidental paragraph out of the report; a name with nothing usable
+ * in it at all falls back to `addon` rather than producing a bare prefix.
+ */
+internal fun addonSlug(name: String): String {
+    val slug = name.lowercase()
+        .map { character -> if (character.isLetterOrDigit()) character else '-' }
+        .joinToString("")
+        .split('-')
+        .filter { it.isNotEmpty() }
+        .joinToString("-")
+    return slug.take(MAX_SLUG_LENGTH).ifEmpty { "addon" }
+}
+
+private const val MAX_SLUG_LENGTH = 24
 
 /**
  * Whether [host] is a bare address rather than a name — an IPv4 dotted quad, or

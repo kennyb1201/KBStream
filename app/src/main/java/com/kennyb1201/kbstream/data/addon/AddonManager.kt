@@ -110,6 +110,34 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         _installedAddons.asStateFlow()
 
     /**
+     * The name to show for the addon whose manifest is served from [host], or
+     * null when no installed addon answers there.
+     *
+     * Exists for the diagnostics perf block: addon traffic is filed under the
+     * ADDON's name rather than its host, because a self-hosted addon is
+     * commonly reached by a bare address and the host-derived label for one
+     * ("http.132") said nothing about which addon spent the time. The
+     * overridden name is preferred, so a rename is what the report shows.
+     *
+     * Reads the same [installedAddons] the UI does, so a re-add or a rename is
+     * picked up on the next call. Called from the network stack: one pass over
+     * a handful of addons, no I/O, no lock of its own.
+     *
+     * When several addons share a host — two AIOStreams configurations on one
+     * box, which is a supported way to run it — the first installed one is the
+     * name reported. The time is attributed to the right host either way; only
+     * which of its addons it belongs to is a guess, and the label is a
+     * diagnostic rather than anything the app acts on.
+     */
+    fun addonNameForHost(host: String): String? {
+        if (host.isBlank()) return null
+        val addon = _installedAddons.value.firstOrNull { installed ->
+            hostOfUrl(installed.manifestUrl).equals(host, ignoreCase = true)
+        } ?: return null
+        return addon.customName?.takeIf { it.isNotBlank() } ?: addon.name
+    }
+
+    /**
      * Orders meta addon candidates for a given raw id so probes hit the most
      * likely source first:
      *
@@ -1532,6 +1560,29 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
                 }
         }
     }
+}
+
+/**
+ * The host part of [url], lower-cased, or null when the string carries none.
+ *
+ * Hand-rolled rather than okhttp's `toHttpUrlOrNull` because this module
+ * handles manifest URLs as strings throughout (see the baseUrl rule in
+ * `refreshHomeCatalogs`), and so the rule lives in one place a unit test can
+ * pin. It only has to be right about the addresses an addon can be installed
+ * under, which includes the bare ones: an IPv6 literal keeps its brackets off,
+ * userinfo and the port are dropped, and a port on its own ("aiostreams.lan:3000")
+ * is not the host.
+ */
+internal fun hostOfUrl(url: String): String? {
+    val afterScheme = url.substringAfter("://", missingDelimiterValue = url)
+    val authority = afterScheme.substringBefore('/').substringBefore('?').substringBefore('#')
+    val hostPart = authority.substringAfterLast('@')
+    val host = if (hostPart.startsWith("[")) {
+        hostPart.substringAfter('[').substringBefore(']')
+    } else {
+        hostPart.substringBefore(':')
+    }
+    return host.trim().lowercase().ifEmpty { null }
 }
 
 /**
