@@ -140,6 +140,69 @@ internal fun planManifestMerge(
 }
 
 /**
+ * Whether [manifest] would actually change what is stored for [installed].
+ *
+ * The background refresh decides with this whether to apply a fetched manifest
+ * at all, because a no-op apply dirties prefs and queues a pointless cloud
+ * upload. It used to decide with a hand-picked subset — the addon's name and
+ * version, its resource set, and each catalog's (`type`, `id`, `name`) — and
+ * skip the apply when every one of those matched. But the apply itself
+ * ([AddonManager.updateAddonFromManifest]) writes MORE than that: the addon's
+ * description, types, idPrefixes and logo, and each catalog's `showInHome` /
+ * `isSearch` hints. A manifest that changed only one of those was therefore
+ * refused by the background path while the manual "Refresh addons" accepted it,
+ * because that path applies unconditionally — which is exactly the shape of
+ * "the add-on never updates on its own, but pressing Refresh fixes it".
+ *
+ * So this compares the fields the apply writes and nothing else. What the USER
+ * owns is deliberately excluded: custom names, Home visibility toggles and rail
+ * order are inherited by [planManifestMerge], so a renamed or hidden rail can
+ * never make a manifest look changed.
+ *
+ * The three resource/id lists compare as SETS. Their order is not meaningful
+ * here — `types` is a capability filter and `idPrefixes` orders probes BETWEEN
+ * addons, not within one — so a manifest that merely reordered them should not
+ * trigger an apply on every launch.
+ */
+internal fun manifestChangesInstalledAddon(
+    installed: InstalledAddon,
+    manifest: AddonManifest
+): Boolean {
+    if (manifest.name != installed.name) return true
+    if (manifest.version != installed.version) return true
+    if (manifest.description != installed.description) return true
+    if ((manifest.logo ?: manifest.icon) != installed.logo) return true
+    if (manifest.types.toSet() != installed.types.toSet()) return true
+    if ((manifest.idPrefixes ?: emptyList()).toSet() !=
+        (installed.idPrefixes ?: emptyList()).toSet()
+    ) {
+        return true
+    }
+    if (manifest.resources.toSet() != installed.resources.toSet()) return true
+
+    return catalogSignatures(manifest.catalogs) != catalogSignatures(installed.catalogs)
+}
+
+/**
+ * The MANIFEST-owned fields of each catalog, as comparable tokens.
+ *
+ * [ManifestCatalog.customName], [ManifestCatalog.showOnHome] and
+ * [ManifestCatalog.order] are absent on purpose: they belong to the user and
+ * the merge carries them across a refresh, so including them would make every
+ * renamed rail look permanently changed.
+ */
+private fun catalogSignatures(catalogs: List<ManifestCatalog>): Set<String> =
+    catalogs.mapTo(mutableSetOf()) { catalog ->
+        listOf(
+            catalog.type,
+            catalog.id,
+            catalog.name,
+            catalog.showInHomeHint?.toString() ?: "-",
+            catalog.isSearchCatalog?.toString() ?: "-"
+        ).joinToString("\u0000")
+    }
+
+/**
  * Apply the catalog manager's Show All / Hide All to one addon's catalogs.
  *
  * Search placeholders are returned untouched: they are hidden from the manager

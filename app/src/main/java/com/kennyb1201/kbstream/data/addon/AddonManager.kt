@@ -1192,26 +1192,16 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
                     val manifest = repository.fetchManifest(addon.manifestUrl)
 
-                    // Change detection: skip saving when nothing visible to
-                    // the user actually changed. id/name/version plus the
-                    // catalog (type,id,name) set and resource set cover the
-                    // fields the rest of the app renders.
-                    val catalogsChanged =
-                        manifest.catalogs.map { "${it.type}:${it.id}:${it.name}" }
-                            .toSet() !=
-                            addon.catalogs.map { "${it.type}:${it.id}:${it.name}" }
-                                .toSet()
-                    val resourcesChanged =
-                        manifest.resources.toSet() != addon.resources.toSet()
-                    val versionChanged =
-                        manifest.version != addon.version
-                    val nameChanged =
-                        manifest.name != addon.name
+                    // Change detection: skip saving when nothing the apply
+                    // would write actually changed. The comparison has to
+                    // cover EVERY field the apply writes and nothing the user
+                    // owns, or a real manifest update is silently dropped here
+                    // while the manual "Refresh addons" (which applies
+                    // unconditionally) picks it up — see
+                    // [manifestChangesInstalledAddon].
+                    val changed = manifestChangesInstalledAddon(addon, manifest)
 
-                    val unchanged = !catalogsChanged && !resourcesChanged &&
-                        !versionChanged && !nameChanged
-
-                    if (unchanged) {
+                    if (!changed) {
                         Log.d(TAG_AUTO_UPDATE, "unchanged: ${addon.id}")
                     } else {
                         applyMutex.withLock {
