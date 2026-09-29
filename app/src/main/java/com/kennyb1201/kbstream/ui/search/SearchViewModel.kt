@@ -1464,25 +1464,25 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             }.awaitAll().filterNotNull()
         }
 
+        // The union is wrapped the moment it exists: from here the only way
+        // out of it is [ResolvedBrowseCatalog.forMode]. Handing the two raw
+        // lists to publishBrowseCategories is what put the adult half of both
+        // menus into a kids profile's Browse strip.
+        val catalog = ResolvedBrowseCatalog(keywordEntries, collectionEntries)
+        val (keywordsForMode, collectionsForMode) = catalog.forMode(isKidsMode)
+
         publishBrowseCategories(
             baseBrowseCategories().map { category ->
                 when (category.key) {
-                    // Filtered, never the raw union: one resolve pass serves
-                    // both modes, so publishing it whole hands a kids profile
-                    // the adult half of the list (see [browseEntriesFor]).
-                    "keywords" -> category.copy(
-                        entries = browseEntriesFor("keywords", keywordEntries, isKidsMode)
-                    )
-                    "collections" -> category.copy(
-                        entries =
-                            browseEntriesFor("collections", collectionEntries, isKidsMode)
-                    )
+                    "keywords" -> category.copy(entries = keywordsForMode)
+                    "collections" -> category.copy(entries = collectionsForMode)
                     else -> category
                 }
             }
         )
         _browseSubmenuLoading.value = false
-        saveBrowseCatalogCache(keywordEntries, collectionEntries)
+        val (allKeywords, allCollections) = catalog.pairsForCache()
+        saveBrowseCatalogCache(allKeywords, allCollections)
     }
 
     /**
@@ -1533,10 +1533,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             if (keywords.isEmpty() && collections.isEmpty()) return
 
             // The cache is keyed by name and holds the union of both modes'
-            // lists, so a mode flip just re-filters it onto the active chips.
-            val keywordsForMode = browseEntriesFor("keywords", keywords, isKidsMode)
-            val collectionsForMode =
-                browseEntriesFor("collections", collections, isKidsMode)
+            // lists, so a mode flip just re-slices it onto the active chips,
+            // through the same accessor the resolver publishes with.
+            val (keywordsForMode, collectionsForMode) =
+                ResolvedBrowseCatalog(keywords, collections).forMode(isKidsMode)
 
             // "Fresh" means recent AND substantially complete (>= 90% of the
             // name lists resolved): a cache written while TMDB was

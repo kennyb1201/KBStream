@@ -26,11 +26,15 @@ import org.junit.Test
  *     is not a wrong rail, it is a chip that opens nothing.
  *
  *  5. The union resolve and the disk cache only ever RENDER the active mode's
- *     own names (see [browseEntriesFor]). Invariants 1-4 all inspect the
- *     LISTS, so none of them says anything about what a kids profile is
- *     handed at runtime — the resolver once published the raw union, which
- *     put every adult tag and every adult collection into the kids Browse
- *     menu.
+ *     own names, through [ResolvedBrowseCatalog.forMode] — the union's only
+ *     accessor (see [browseEntriesFor] for the slicing rule itself).
+ *     Invariants 1-4 all inspect the LISTS, so none of them says anything
+ *     about what a kids profile is handed at runtime: the resolver once
+ *     published the raw union, which put every adult tag and every adult
+ *     collection into the kids Browse menu. That the publish paths still go
+ *     through the value is pinned by BrowseCatalogPublishContractTest, which
+ *     reads the ViewModel's source — a raw list and a sliced one are the same
+ *     type, so no test here could tell them apart.
  */
 class SearchBrowseCatalogKidsTest {
 
@@ -441,5 +445,83 @@ class SearchBrowseCatalogKidsTest {
         assertEquals(genres, browseEntriesFor("genres", genres, isKidsMode = true))
         assertEquals(genres, browseEntriesFor("genres", genres, isKidsMode = false))
         assertEquals(genres, browseEntriesFor("decades", genres, isKidsMode = true))
+    }
+
+    // ── the resolved union as a value ────────────────────────────────
+
+    private fun union(): ResolvedBrowseCatalog =
+        ResolvedBrowseCatalog(
+            keywords = chips(BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES),
+            collections = chips(
+                BROWSE_COLLECTION_NAMES + KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA
+            )
+        )
+
+    @Test
+    fun `a kids profile reaches only kids names through the union value`() {
+        // One resolve and one cache entry serve both modes, so the union has
+        // to exist - but a publish path must not be able to reach it. The
+        // resolver used to hand its two raw lists straight to
+        // publishBrowseCategories; with the union held in a value whose only
+        // accessor is forMode(...), publishing it whole is no longer
+        // expressible, only forgettable about a type that says otherwise.
+        val (keywords, collections) = union().forMode(isKidsMode = true)
+
+        val kidsKeywords = KIDS_KEYWORD_NAMES.toSet()
+        val kidsCollections = (KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA).toSet()
+        assertTrue(
+            "adult-only tags reach a kids profile: " +
+                keywords.map { it.name }.filterNot { it in kidsKeywords }.take(10),
+            keywords.isNotEmpty() && keywords.all { it.name in kidsKeywords }
+        )
+        assertTrue(
+            "adult-only collections reach a kids profile: " +
+                collections.map { it.name }.filterNot { it in kidsCollections }.take(10),
+            collections.isNotEmpty() && collections.all { it.name in kidsCollections }
+        )
+    }
+
+    @Test
+    fun `an adult profile reaches only adult names through the union value`() {
+        val (keywords, collections) = union().forMode(isKidsMode = false)
+
+        val adultKeywords = BROWSE_KEYWORD_NAMES.toSet()
+        val adultCollections = BROWSE_COLLECTION_NAMES.toSet()
+        assertTrue(
+            "kids-only tags reach an adult profile: " +
+                keywords.map { it.name }.filterNot { it in adultKeywords }.take(10),
+            keywords.isNotEmpty() && keywords.all { it.name in adultKeywords }
+        )
+        assertTrue(
+            "kids-only collections reach an adult profile: " +
+                collections.map { it.name }.filterNot { it in adultCollections }.take(10),
+            collections.isNotEmpty() && collections.all { it.name in adultCollections }
+        )
+    }
+
+    @Test
+    fun `only the cache write sees the whole union`() {
+        // Pinned on purpose: storing the union whole is what lets a mode flip
+        // re-slice instead of re-resolving, so pairsForCache has to keep
+        // handing back every resolved name. The guard that stops a PUBLISH
+        // from using it is BrowseCatalogPublishContractTest, which reads the
+        // ViewModel's own source.
+        val catalog = union()
+        val (cachedKeywords, cachedCollections) = catalog.pairsForCache()
+
+        assertEquals(chips(BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES), cachedKeywords)
+        assertEquals(
+            chips(BROWSE_COLLECTION_NAMES + KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA),
+            cachedCollections
+        )
+
+        // ...and the union really is more than either slice, or the two
+        // assertions above would also pass on a catalog that had lost a
+        // mode's names on the way in.
+        val (kidsKeywords, _) = catalog.forMode(isKidsMode = true)
+        assertTrue(
+            "the cache must hold more than the kids slice",
+            cachedKeywords.size > kidsKeywords.size
+        )
     }
 }

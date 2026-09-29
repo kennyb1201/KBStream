@@ -1234,3 +1234,34 @@ internal fun browseEntriesFor(
     val allowed = browseNamesFor(categoryKey, isKidsMode)?.toSet() ?: return entries
     return entries.filter { it.name in allowed }
 }
+
+/**
+ * The resolved keyword and collection ids for BOTH modes, as one value.
+ *
+ * One name-lookup pass serves both menus and the disk cache is written under a
+ * single timestamp, so the union genuinely has to exist. What must not exist is
+ * a way to PUBLISH it: [forMode] is the only accessor, and everything it hands
+ * back is already sliced to the active mode's own names. The resolver used to
+ * pass its two raw lists straight to `publishBrowseCategories`, which is how
+ * 330 adult-only tags and 267 adult-only collections reached a kids profile's
+ * Browse strip — a union that can only leave through a mode slice cannot be
+ * published whole by accident.
+ *
+ * [pairsForCache] is the one deliberate exception: storing the union is the
+ * whole point of the union. It is named for the only caller that should ever
+ * reach for it, so a publish site using it reads wrong at a glance.
+ */
+internal class ResolvedBrowseCatalog(
+    private val keywords: List<BrowseEntry>,
+    private val collections: List<BrowseEntry>
+) {
+
+    /** The active mode's keywords and collections, in that order. */
+    fun forMode(isKidsMode: Boolean): Pair<List<BrowseEntry>, List<BrowseEntry>> =
+        browseEntriesFor("keywords", keywords, isKidsMode) to
+            browseEntriesFor("collections", collections, isKidsMode)
+
+    /** Disk-cache write only: the cache stores the union on purpose. */
+    fun pairsForCache(): Pair<List<BrowseEntry>, List<BrowseEntry>> =
+        keywords to collections
+}
