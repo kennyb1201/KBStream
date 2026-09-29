@@ -8,6 +8,16 @@ import androidx.room.RawQuery
 import androidx.room.Transaction
 import androidx.sqlite.db.SupportSQLiteQuery
 
+/**
+ * Guide storage.
+ *
+ * Every guide row references its source by INTEGER id ([EpgSourceEntity]) rather
+ * than repeating the source URL — see that class for what the string cost. The
+ * API here is still keyed by URL, because that is the only thing callers have:
+ * each query resolves it with the uncorrelated scalar subquery
+ * `(SELECT id FROM epg_sources WHERE url = :sourceUrl)`, which SQLite evaluates
+ * once and then uses the `sourceId` index for. No caller has to know an id.
+ */
 @Dao
 interface IptvDao {
 
@@ -27,10 +37,47 @@ interface IptvDao {
         matches: List<PlaylistEpgMatchEntity>
     )
 
-    @Query("DELETE FROM epg_channels WHERE sourceUrl = :sourceUrl")
+    // ── Guide source identity ───────────────────────────────────────
+
+    /**
+     * Inserts [source], or nothing when its URL is already known. Returns the
+     * new row id, or -1 when the unique `url` index rejected it.
+     */
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertSource(source: EpgSourceEntity): Long
+
+    @Query("SELECT id FROM epg_sources WHERE url = :url")
+    suspend fun sourceIdOf(url: String): Long?
+
+    /**
+     * The id of [url]'s source row, creating it if this is the first write for
+     * that guide. The insert-then-select shape is what makes this safe to call
+     * from concurrent imports: the URL is UNIQUE, so whoever loses the race
+     * reads the winner's id instead of creating a second one.
+     *
+     * The failure message deliberately carries no URL: a guide URL can be an
+     * Xtream account's credentials, and this string reaches logs and Sentry.
+     */
+    @Transaction
+    suspend fun ensureSourceId(url: String): Long {
+        val normalized = url.trim()
+        val inserted = insertSource(EpgSourceEntity(url = normalized))
+        if (inserted != -1L) return inserted
+        return sourceIdOf(normalized) ?: error("guide source row not found after insert")
+    }
+
+    // ── Guide rows ──────────────────────────────────────────────────
+
+    @Query(
+        "DELETE FROM epg_channels " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)"
+    )
     suspend fun deleteChannelsBySource(sourceUrl: String)
 
-    @Query("DELETE FROM epg_programs WHERE sourceUrl = :sourceUrl")
+    @Query(
+        "DELETE FROM epg_programs " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)"
+    )
     suspend fun deleteProgramsBySource(sourceUrl: String)
 
     @Query("DELETE FROM cached_playlist_channels WHERE playlistUrl = :playlistUrl")
@@ -131,25 +178,44 @@ interface IptvDao {
         }
     }
 
-    @Query("SELECT EXISTS(SELECT 1 FROM epg_channels WHERE sourceUrl = :sourceUrl LIMIT 1)")
+    @Query(
+        "SELECT EXISTS(SELECT 1 FROM epg_channels " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl) LIMIT 1)"
+    )
     suspend fun hasChannelsForSource(sourceUrl: String): Boolean
 
-    @Query("UPDATE epg_channels SET sourceUrl = :newUrl WHERE sourceUrl = :oldUrl")
+    @Query(
+        "UPDATE epg_channels " +
+            "SET sourceId = (SELECT id FROM epg_sources WHERE url = :newUrl) " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :oldUrl)"
+    )
     suspend fun rekeyChannelsSource(oldUrl: String, newUrl: String)
 
-    @Query("UPDATE epg_programs SET sourceUrl = :newUrl WHERE sourceUrl = :oldUrl")
+    @Query(
+        "UPDATE epg_programs " +
+            "SET sourceId = (SELECT id FROM epg_sources WHERE url = :newUrl) " +
+            "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :oldUrl)"
+    )
     suspend fun rekeyProgramsSource(oldUrl: String, newUrl: String)
 
     /**
      * Atomic import promotion: a successful parse staged rows under a
      * temporary source key; this moves them onto the real one inside a
      * single transaction, so readers never observe an empty or partially
-     * imported guide. Re-keying is a plain UPDATE on the sourceUrl column
+     * imported guide. Re-keying is a plain UPDATE on the `sourceId` column
      * (no row reload into memory), and the live rows were already cleared
      * inside this same transaction so the composite keys never collide.
+     *
+     * Both source rows are ensured first: the staging key is created by the
+     * import that is being promoted, and the live key may be brand new on a
+     * first import — a re-key to or from a missing id would silently move
+     * nothing (SQLite evaluates the subquery to NULL and matches no rows).
      */
     @Transaction
     suspend fun swapStagedGuideIntoLive(sourceUrl: String, stagingUrl: String) {
+        ensureSourceId(sourceUrl)
+        ensureSourceId(stagingUrl)
+
         clearGuideBySource(sourceUrl)
 
         rekeyChannelsSource(oldUrl = stagingUrl, newUrl = sourceUrl)
@@ -160,7 +226,7 @@ interface IptvDao {
         """
         SELECT *
         FROM epg_channels
-        WHERE sourceUrl = :sourceUrl
+        WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
         """
     )
     suspend fun getChannelsBySource(sourceUrl: String): List<EpgChannelEntity>
@@ -185,7 +251,7 @@ interface IptvDao {
                     ORDER BY startUtcMillis ASC
                 ) AS rowNumber
             FROM epg_programs
-            WHERE sourceUrl = :sourceUrl
+            WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
               AND endUtcMillis > :windowStart
               AND startUtcMillis < :windowEnd
               AND channelId IN (:channelIds)
@@ -224,7 +290,7 @@ interface IptvDao {
                     ORDER BY startUtcMillis DESC
                 ) AS rowNumber
             FROM epg_programs
-            WHERE sourceUrl = :sourceUrl
+            WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
               AND endUtcMillis <= :nowMillis
               AND endUtcMillis > :windowStart
               AND channelId IN (:channelIds)
@@ -263,7 +329,7 @@ interface IptvDao {
                     ORDER BY startUtcMillis ASC
                 ) AS rowNumber
             FROM epg_programs
-            WHERE sourceUrl = :sourceUrl
+            WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
               AND endUtcMillis > :windowStart
               AND startUtcMillis < :windowEnd
               AND channelId IN (:channelIds)
@@ -292,7 +358,7 @@ interface IptvDao {
      * `likeContainsPattern`, which escapes `%`, `_` and `\` so those are
      * matched literally; the ESCAPE clause must match that escaping.
      *
-     * Deliberately NOT filtered by sourceUrl or channel: the caller drops
+     * Deliberately NOT filtered by source or channel: the caller drops
      * hits whose channel is hidden and maps the rest through the guide's own
      * channel list, which is the only place that knows what is visible.
      * SQLite's LIKE is case-insensitive for ASCII, so no COLLATE is needed.

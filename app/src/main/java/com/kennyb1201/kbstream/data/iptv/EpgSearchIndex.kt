@@ -58,8 +58,20 @@ object EpgSearchIndex {
                     "CREATE VIRTUAL TABLE IF NOT EXISTS `$TABLE` USING FTS4(`title`)"
                 )
             }
+            // An index whose programs are gone is a destructive migration that
+            // did not take it along (see [drop]). It cannot answer anything —
+            // the search joins back to `epg_programs` — but it is still holding
+            // a copy of every title the old guide had, which is the space the
+            // migration was there to reclaim. Both checks are O(1) (an EXISTS
+            // with LIMIT 1), so this costs nothing on the normal open.
+            val rebuilt = !created && hasRows(db, TABLE) && !hasRows(db, CONTENT_TABLE)
+            if (rebuilt) {
+                Log.w(TAG, "INDEX ORPHANED by a destructive migration — rebuilding")
+                db.execSQL("DROP TABLE IF EXISTS `$TABLE`")
+                db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `$TABLE` USING FTS4(`title`)")
+            }
             createTriggers(db)
-            if (created) {
+            if (created || rebuilt) {
                 // Programs imported before this index existed are not covered
                 // by the triggers, so index the existing rows now.
                 db.execSQL(
@@ -72,6 +84,36 @@ object EpgSearchIndex {
             // Also catches the (unlikely) case of an SQLite build without
             // FTS4: the search then keeps using the LIKE scan.
             Log.e(TAG, "INDEX UNAVAILABLE — guide search falls back to LIKE", t)
+        }
+    }
+
+    /**
+     * Removes the index and its triggers.
+     *
+     * Called when Room performs a destructive migration. That is the one path
+     * that drops `epg_programs` WITHOUT going through SQLite's own drop of this
+     * table, because a virtual table created by raw SQL is not part of Room's
+     * schema: the programs go and the index — a standalone FTS4 table, so it
+     * holds a second copy of every title plus its own term index — stays behind
+     * holding all of them. That is tens of megabytes per guide that the
+     * migration was supposed to reclaim, still on disk and now unreachable, and
+     * the backfill below would never run over it again (it only fires when the
+     * table is first created).
+     *
+     * Dropping it here means `ensure()` sees no table on the following open,
+     * rebuilds an empty index over the new (empty) programs table, and the
+     * maintenance pass VACUUMs the space back.
+     */
+    fun drop(db: SupportSQLiteDatabase) {
+        runCatching { db.execSQL("DROP TABLE IF EXISTS `$TABLE`") }
+            .onFailure { Log.w(TAG, "index drop failed: ${it.message}") }
+        runCatching { dropTriggers(db) }
+            .onFailure { Log.w(TAG, "trigger drop failed: ${it.message}") }
+    }
+
+    private fun dropTriggers(db: SupportSQLiteDatabase) {
+        listOf("ai", "ad", "au").forEach { suffix ->
+            db.execSQL("DROP TRIGGER IF EXISTS ${TABLE}_$suffix")
         }
     }
 
@@ -100,6 +142,15 @@ object EpgSearchIndex {
             arrayOf<Any?>(TABLE)
         ).use { it.moveToFirst() }
 
+    /**
+     * Whether [table] holds any row at all, in O(1) — a plain `LIMIT 1` EXISTS,
+     * never a `COUNT(*)` on a guide with hundreds of thousands of programs.
+     */
+    private fun hasRows(db: SupportSQLiteDatabase, table: String): Boolean =
+        db.query("SELECT EXISTS(SELECT 1 FROM `$table` LIMIT 1)").use { cursor ->
+            cursor.moveToFirst() && cursor.getInt(0) == 1
+        }
+
     private fun countOf(db: SupportSQLiteDatabase, table: String): Long =
         db.query("SELECT COUNT(*) FROM `$table`").use { cursor ->
             if (cursor.moveToFirst()) cursor.getLong(0) else 0L
@@ -118,5 +169,11 @@ object EpgSearchIndex {
 object EpgSearchIndexCallback : RoomDatabase.Callback() {
     override fun onOpen(db: SupportSQLiteDatabase) {
         EpgSearchIndex.ensure(db)
+    }
+
+    override fun onDestructiveMigration(db: SupportSQLiteDatabase) {
+        // A migration that drops the guide must take the index with it: it is
+        // outside Room's schema, so nothing else would. See [EpgSearchIndex.drop].
+        EpgSearchIndex.drop(db)
     }
 }

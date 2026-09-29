@@ -115,6 +115,9 @@ class XmltvImporter(
         // import has nothing to protect).
         dao.clearGuideBySource(stagingUrl)
         val hadLiveGuide = dao.hasChannelsForSource(sourceUrl)
+        // Every staged row carries this id instead of a copy of the URL (see
+        // EpgSourceEntity). Resolved once per import, not once per row.
+        val stagingSourceId = dao.ensureSourceId(stagingUrl)
 
         val bufferedInput = if (input is BufferedInputStream) input else BufferedInputStream(input)
         bufferedInput.mark(2)
@@ -169,7 +172,7 @@ class XmltvImporter(
             if (eventType == XmlPullParser.START_TAG) {
                 when (parser.name) {
                     "channel" -> {
-                        readChannel(parser, stagingUrl)?.let { channel ->
+                        readChannel(parser, stagingSourceId)?.let { channel ->
                             channelBatch.add(channel)
                             parsedChannels++
                             // Decided once per channel, from the ids and alias
@@ -207,7 +210,7 @@ class XmltvImporter(
                         } else {
                             readProgram(
                                 parser = parser,
-                                sourceUrl = stagingUrl,
+                                sourceId = stagingSourceId,
                                 windowStartMs = windowStartMs,
                                 windowEndMs = windowEndMs
                             )?.let { program ->
@@ -368,7 +371,7 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         }
     }
 
-    private fun readChannel(parser: XmlPullParser, sourceUrl: String): EpgChannelEntity? {
+    private fun readChannel(parser: XmlPullParser, sourceId: Long): EpgChannelEntity? {
         parser.require(XmlPullParser.START_TAG, null, "channel")
 
         val id = parser.getAttributeValue(null, "id")?.trim().orEmpty()
@@ -400,7 +403,7 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         val aliasKeys = epgAliasKeys(id, displayNames)
         return EpgChannelEntity(
             id = id,
-            sourceUrl = sourceUrl,
+            sourceId = sourceId,
             primaryDisplayName = displayNames.firstOrNull().orEmpty(),
             allDisplayNames = aliasKeys.joinToString("|"),
             iconUrl = iconUrl?.ifBlank { null }
@@ -409,7 +412,7 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
 
     private fun readProgram(
         parser: XmlPullParser,
-        sourceUrl: String,
+        sourceId: Long,
         windowStartMs: Long,
         windowEndMs: Long
     ): EpgProgramEntity? {
@@ -449,7 +452,7 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         }
 
         return EpgProgramEntity(
-            sourceUrl = sourceUrl,
+            sourceId = sourceId,
             channelId = epgProgramChannelKey(channelId),
             title = title.ifBlank { "Untitled Program" },
             description = description,

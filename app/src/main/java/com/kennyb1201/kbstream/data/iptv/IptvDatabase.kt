@@ -8,14 +8,29 @@ import com.kennyb1201.kbstream.data.db.RoomBusyTimeout
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
+/*
+ * Schema history, for whoever is reading a diff:
+ *
+ *  v8 stores each guide's source URL ONCE, in `epg_sources`, and references it
+ *     from `epg_channels`/`epg_programs` by integer id. Those two tables used
+ *     to carry the URL as a column (and, for programs, as the leading column of
+ *     the composite index), which cost tens of megabytes per guide file on a
+ *     large playlist — see EpgSourceEntity. No migration is written for v7→v8
+ *     on purpose: this database is a cache of a provider's playlist and guide,
+ *     both re-imported from scratch, and `fallbackToDestructiveMigration`
+ *     already drops and recreates it. The one thing the drop must not leave
+ *     behind is the full-text index, which lives outside Room's schema —
+ *     EpgSearchIndexCallback.onDestructiveMigration removes it.
+ */
 @Database(
     entities = [
+        EpgSourceEntity::class,
         EpgChannelEntity::class,
         EpgProgramEntity::class,
         CachedPlaylistChannelEntity::class,
         PlaylistEpgMatchEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class IptvDatabase : RoomDatabase() {
