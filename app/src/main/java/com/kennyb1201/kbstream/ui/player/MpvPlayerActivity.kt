@@ -659,7 +659,12 @@ class MpvPlayerActivity : ComponentActivity() {
             // front because the mode it restores has to be captured before any
             // switch, and this is the first moment a switch is possible.
             if (frameRateMatcher == null && AppPreferences.getMatchFrameRate(this@MpvPlayerActivity)) {
-                frameRateMatcher = FrameRateMatcher(this@MpvPlayerActivity)
+                frameRateMatcher = FrameRateMatcher(
+                    this@MpvPlayerActivity,
+                    // mpv draws into its own SurfaceView, so the frame-rate
+                    // request rides on that view's surface.
+                    videoSurface = { surface?.holder?.surface }
+                )
             }
             frameRateMatcher?.onContentFrameRate(fps)
         }

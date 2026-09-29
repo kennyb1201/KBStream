@@ -64,6 +64,9 @@ import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
+import com.kennyb1201.kbstream.ui.player.FrameRateDiagnostics
+import com.kennyb1201.kbstream.ui.player.FrameRateMatch
+import com.kennyb1201.kbstream.ui.player.displayReport
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
@@ -1462,13 +1465,17 @@ fun SettingsScreen(
 
                 ToggleRow(
                     label = "Match Content Frame Rate",
-                    description = "Ask the TV to switch its refresh rate to match the title \u2014 24 Hz for film, 50 Hz for 25 fps \u2014 which is what removes the stutter from slow pans. The picture blanks for a moment while the TV re-syncs, and the panel is put back when playback ends. Only the displays that report a matching mode can do it; on the rest this changes nothing. Set per device, so it does not follow your profile to another TV.",
+                    description = "Ask the TV to switch its refresh rate to match the title \u2014 24 Hz for film, 50 Hz for 25 fps \u2014 which is what removes the stutter from slow pans. The app tells the TV the rate of what it is playing and the TV picks the mode; a switch that blanks the screen for a moment also needs the TV's own display setting to allow it. The panel is put back when playback ends. A TV that reports only the mode it is already in has nothing to switch to. Set per device, so it does not follow your profile to another TV.",
                     checked = matchFrameRate,
                     onToggle = {
                         matchFrameRate = it
                         AppPreferences.setMatchFrameRate(context, it)
                     }
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                FrameRateDiagnosticRow()
 
                 }
 
@@ -2890,6 +2897,83 @@ private fun ToggleRow(
                     .padding(horizontal = 14.dp, vertical = 8.dp)
             )
         }
+    }
+}
+
+/**
+ * What the panel says it can do, and what the last playback asked it for.
+ *
+ * Read-only, and it sits under the frame-rate toggle because the whole failure
+ * mode of matching is silence - a TV that refuses the request and a panel that
+ * had nothing better to offer both look like nothing happening - so the numbers
+ * that tell the two apart belong on the screen rather than in a logcat nobody
+ * on a couch can reach. The panel line is live until something has played, and
+ * then it is the panel as the last request saw it, which is the state worth
+ * comparing against the answer below it.
+ */
+@Composable
+private fun FrameRateDiagnosticRow() {
+    val context = LocalContext.current
+    val report by FrameRateDiagnostics.report.collectAsStateWithLifecycle()
+    val livePanel = remember(context) { displayReport(context) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(KBSurfaceRaised, KBShapeSmall)
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+    ) {
+        Text(
+            text = "FRAME RATE DIAGNOSTICS",
+            color = KBAccent,
+            style = MaterialTheme.typography.labelSmall
+        )
+        FrameRateDiagnosticLine(
+            label = "Panel",
+            value = report.panel ?: livePanel ?: "this screen has no display to ask"
+        )
+        FrameRateDiagnosticLine(
+            label = "Android path",
+            value = FrameRateMatch.describePath(Build.VERSION.SDK_INT)
+        )
+        FrameRateDiagnosticLine(
+            label = "Last request",
+            value = report.request ?: "nothing has played on this device yet"
+        )
+        report.outcome?.let { answer ->
+            FrameRateDiagnosticLine(label = "Panel's answer", value = answer)
+        }
+        Text(
+            text = "A TV only blanks the screen to change rate when its own display " +
+                "setting allows it - Google TV calls it \"Match content frame rate\", " +
+                "Fire TV \"Match Original Frame Rate\". Without that, only a rate the " +
+                "panel can reach without blanking is possible.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+    }
+}
+
+/** One label/value pair of [FrameRateDiagnosticRow]. */
+@Composable
+private fun FrameRateDiagnosticLine(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+    ) {
+        Text(
+            text = label,
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.width(120.dp)
+        )
+        Text(
+            text = value,
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f)
+        )
     }
 }
 

@@ -33,10 +33,12 @@ EPG).
   or from either in-player bar: the stream is handed over while KBStream keeps
   the session, so watch history, Continue Watching, scrobbling and both
   end-of-episode panels behave exactly as they do in-app. Both engines can
-  match the panel's refresh rate to the content — the app switches to the
-  display mode that is a whole multiple of the frame rate, so 24 fps film stops
-  juddering on a 60 Hz panel (Settings → Playback → Match Content Frame Rate,
-  off by default). Scrub previews are read from the player's own cache instead
+  match the panel's refresh rate to the content: the app tells the platform the
+  rate of what it is playing, which is how 24 fps film stops juddering on a
+  60 Hz panel, and falls back to asking for a specific display mode when the
+  panel does not take the request (Settings → Playback → Match Content Frame
+  Rate, off by default, with a read-out of the panel's own modes and of the last
+  request under it). Scrub previews are read from the player's own cache instead
   of opening a second connection to the stream.
 - **Profiles** — multiple per-device profiles with avatars, optional PIN
   locks, and full cross-device sync (history, watched state, addons,

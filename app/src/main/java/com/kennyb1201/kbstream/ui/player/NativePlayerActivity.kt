@@ -4912,7 +4912,16 @@ class NativePlayerActivity : ComponentActivity() {
             // restores on the way out has to be the one from before any
             // switch, so a rebuilt player must not hand it a second one.
             if (frameRateMatcher == null && AppPreferences.getMatchFrameRate(this@NativePlayerActivity)) {
-                frameRateMatcher = FrameRateMatcher(this@NativePlayerActivity)
+                // media3 asks the surface for the content's rate itself, but only
+                // ever for a switch that does not blank the screen - and a write
+                // from it later would overwrite the blank-screen opt-in
+                // FrameRateMatcher makes. One owner of the surface's rate, and it
+                // is the one that can reach 24 Hz for film.
+                player.setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+                frameRateMatcher = FrameRateMatcher(
+                    this@NativePlayerActivity,
+                    videoSurface = { videoOutputSurface() }
+                )
             }
             player.addListener(createPlayerListener())
             player.addAnalyticsListener(createAnalyticsListener())
@@ -6313,6 +6322,28 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
         return null
+    }
+
+    /**
+     * The surface the player is drawing into right now, or null when there is
+     * none to hand - the frame-rate request rides on the surface the picture
+     * goes to (see FrameRateMatcher).
+     *
+     * Two views matter. PlayerView's own SurfaceView is where the picture
+     * normally goes; the P5 colour-correction ladder hands the player its
+     * GLSurfaceView instead, and while that is up it is where the picture is.
+     * The TextureView fallback has no Surface of its own to hand over at all,
+     * so on that path the matcher asks for a display mode directly instead of a
+     * frame rate.
+     */
+    private fun videoOutputSurface(): android.view.Surface? {
+        if (::p5VideoGlesView.isInitialized && p5VideoGlesView.visibility == View.VISIBLE) {
+            val gl = runCatching { p5VideoGlesView.holder.surface }.getOrNull()
+            if (gl?.isValid == true) return gl
+        }
+        val holder = findVideoSurfaceView(playerView)?.holder ?: return null
+        val surface = runCatching { holder.surface }.getOrNull() ?: return null
+        return surface.takeIf { it.isValid }
     }
 
     private fun showBlackVideoNotice() {
