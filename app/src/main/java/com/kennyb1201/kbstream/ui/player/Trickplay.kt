@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import kotlin.math.abs
 
 /**
@@ -195,6 +196,55 @@ internal fun trickplayPermanentError(errorCode: Int): Boolean = when (errorCode)
 
     else -> false
 }
+
+/**
+ * The name of [playbackState], for the report.
+ *
+ * Null is a preview player that was never built, which is not the same answer as
+ * `idle`: one is a pipeline that was never asked to decode anything, the other a
+ * player that was built, opened something and stopped.
+ */
+internal fun trickplayPlayerState(playbackState: Int?): String = when (playbackState) {
+    null -> "none"
+    Player.STATE_IDLE -> "idle"
+    Player.STATE_BUFFERING -> "buffering"
+    Player.STATE_READY -> "ready"
+    Player.STATE_ENDED -> "ended"
+    else -> "unknown"
+}
+
+/**
+ * Why an extraction that ran out of time produced no frame.
+ *
+ * Every failure of the preview used to reach the report as one word — "timed
+ * out" — and that word covers three faults with nothing in common: a source that
+ * never gave the second player a byte, a capture surface the decoder never
+ * rendered into, and a seek that never settled on the position it was asked for.
+ * Each field below separates them, and each is a number the pipeline already
+ * had:
+ *
+ *  - `player`, `loading` and `position`: a player still buffering somewhere
+ *    short of `bucket` never got its data, while one sitting ready at `bucket`
+ *    did and produced nothing anyway. The two want opposite fixes.
+ *  - `images`: zero means the capture surface was never handed a frame at all,
+ *    which no amount of source health can fix; a count above zero means frames
+ *    did arrive and were refused by the gates in `onImageAvailable`.
+ *  - `error`: the player's own code, which fails an extraction on the spot
+ *    rather than at the timeout, so `none` here means the player never admitted
+ *    to anything and the wait itself is the only evidence there is.
+ */
+internal fun trickplayTimeoutReason(
+    timeoutMs: Long,
+    playerState: String,
+    loading: Boolean,
+    positionMs: Long?,
+    bucketMs: Long?,
+    imagesSeen: Int,
+    playerError: String?
+): String = "timed out after ${timeoutMs}ms" +
+    " (player=$playerState, loading=$loading, position=${positionMs ?: "none"}," +
+    " bucket=${bucketMs ?: "none"}, images=$imagesSeen," +
+    " error=${playerError ?: "none"})"
 
 /**
  * The container hint the preview player's media item carries.

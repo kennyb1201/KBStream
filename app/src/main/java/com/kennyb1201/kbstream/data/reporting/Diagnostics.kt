@@ -240,8 +240,14 @@ object Diagnostics {
                 append(" slowest=").append(PerfTrace.maxMs("trickplay.decode")).append("ms")
             }
             if (declined != null) append(" · declined: ").append(declined)
+            // The reasons used to be printed only once the pipeline had given
+            // up, which hid the most informative case of all: a session that
+            // failed its extractions but never reached the give-up count, so
+            // "frames=0 failed=2" landed in the report with no statement of why
+            // anywhere in it. Anything that failed says why now.
+            if (missed > 0) append(" · why: ").append(trickplayReasons())
             if (PerfTrace.count("trickplay.off") > 0) {
-                append(" · off for this session, last: ").append(trickplayReasons())
+                append(" · off for this session")
             } else if (late > 0) {
                 append(" · frames arrived after the card closed")
             }

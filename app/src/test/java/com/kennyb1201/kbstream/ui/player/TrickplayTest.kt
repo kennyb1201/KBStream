@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -19,7 +20,9 @@ import org.junit.Test
  * not at; a stale frame cached under the bucket that asked for the seek shows
  * them the wrong moment for the rest of the session and looks authoritative
  * while doing it; an LRU that evicts the frame just looked at re-opens the
- * stream on every press. None of those is visible in a build that compiles.
+ * stream on every press. None of those is visible in a build that compiles,
+ * and neither is the reason a failed extraction leaves behind: "I never see a
+ * thumbnail" is one sentence covering three faults that want opposite fixes.
  */
 class TrickplayTest {
 
@@ -292,5 +295,99 @@ class TrickplayTest {
         // was still entitled to deliver draws onto a card that has already
         // closed - the fault the report counts as `late=`.
         assertTrue(TRICKPLAY_WAIT_MS >= TRICKPLAY_TIMEOUT_MS + TRICKPLAY_SHOW_GRACE_MS)
+    }
+
+    // ── why an extraction produced nothing ───────────────────────────────────
+
+    @Test
+    fun `a timed-out extraction names the player it was waiting on`() {
+        val reason = trickplayTimeoutReason(
+            timeoutMs = TRICKPLAY_TIMEOUT_MS,
+            playerState = trickplayPlayerState(Player.STATE_BUFFERING),
+            loading = true,
+            positionMs = 12_000L,
+            bucketMs = 120_000L,
+            imagesSeen = 0,
+            playerError = null
+        )
+        // The case a bare "timed out" hides: a second player that is still
+        // buffering a minute short of the bucket it was asked for. Nothing about
+        // the screen can explain that; the source can.
+        assertTrue(reason.contains("player=buffering"))
+        assertTrue(reason.contains("loading=true"))
+        assertTrue(reason.contains("position=12000"))
+        assertTrue(reason.contains("bucket=120000"))
+        assertTrue(reason.contains("error=none"))
+    }
+
+    @Test
+    fun `a capture surface that never rendered is distinguishable from a refused frame`() {
+        val never = trickplayTimeoutReason(
+            timeoutMs = TRICKPLAY_TIMEOUT_MS,
+            playerState = trickplayPlayerState(Player.STATE_READY),
+            loading = false,
+            positionMs = 120_000L,
+            bucketMs = 120_000L,
+            imagesSeen = 0,
+            playerError = null
+        )
+        // Ready at the right position with nothing captured at all: the decoder
+        // is producing no frames, which is not a source fault and not a gate in
+        // onImageAvailable either.
+        assertTrue(never.contains("player=ready"))
+        assertTrue(never.contains("images=0"))
+
+        val refused = trickplayTimeoutReason(
+            timeoutMs = TRICKPLAY_TIMEOUT_MS,
+            playerState = trickplayPlayerState(Player.STATE_READY),
+            loading = false,
+            positionMs = 128_000L,
+            bucketMs = 120_000L,
+            imagesSeen = 7,
+            playerError = null
+        )
+        // Frames did arrive and were not filed: the surface works, the seek
+        // landed 8 s past the bucket, and the accept window refused it.
+        assertTrue(refused.contains("images=7"))
+    }
+
+    @Test
+    fun `an extraction with no player built says none, not idle`() {
+        val reason = trickplayTimeoutReason(
+            timeoutMs = TRICKPLAY_TIMEOUT_MS,
+            playerState = trickplayPlayerState(null),
+            loading = false,
+            positionMs = null,
+            bucketMs = null,
+            imagesSeen = 0,
+            playerError = null
+        )
+        assertTrue(reason.contains("player=none"))
+        assertTrue(reason.contains("position=none"))
+        assertTrue(reason.contains("bucket=none"))
+    }
+
+    @Test
+    fun `a player error is carried into the reason`() {
+        val reason = trickplayTimeoutReason(
+            timeoutMs = TRICKPLAY_TIMEOUT_MS,
+            playerState = trickplayPlayerState(Player.STATE_IDLE),
+            loading = false,
+            positionMs = 0L,
+            bucketMs = 0L,
+            imagesSeen = 0,
+            playerError = "ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"
+        )
+        assertTrue(reason.contains("error=ERROR_CODE_IO_NETWORK_CONNECTION_FAILED"))
+    }
+
+    @Test
+    fun `every player state the preview can be in has a name`() {
+        assertEquals("none", trickplayPlayerState(null))
+        assertEquals("idle", trickplayPlayerState(Player.STATE_IDLE))
+        assertEquals("buffering", trickplayPlayerState(Player.STATE_BUFFERING))
+        assertEquals("ready", trickplayPlayerState(Player.STATE_READY))
+        assertEquals("ended", trickplayPlayerState(Player.STATE_ENDED))
+        assertEquals("unknown", trickplayPlayerState(-1))
     }
 }
