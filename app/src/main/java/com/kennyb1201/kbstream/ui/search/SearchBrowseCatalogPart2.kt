@@ -340,7 +340,97 @@ val BROWSE_COLLECTION_NAMES = listOf(
     "Step Up Collection",
     "Bring It On Collection",
     "Grease Collection",
-    "Mamma Mia! Collection"
+    "Mamma Mia! Collection",
+    // -----------------------------------------------------------------
+    // Seventh wave (2026-09) — more English-language adult franchises.
+    //
+    // Every name was verified LIVE against /search/collection to resolve
+    // EXACTLY (the resolver prefers an exact-name hit, so an inexact
+    // name silently loses the chip) AND its member titles were read
+    // back from /collection/{id} to prove it is the franchise the name
+    // claims. Two candidates were dropped for failing that second check:
+    // "The Boys Collection" is TMDB's 1997 Israeli film series, not the
+    // superhero show, and "War of the Worlds Collection" is the Asylum
+    // mockbuster pair rather than either real adaptation.
+    //
+    // The wave leans English-language on purpose — the UK films
+    // (Bridget Jones, Trainspotting, Zulu, The Great Escape) sit beside
+    // the American romcoms and horror, matching the English-only default
+    // the discover rails already run under.
+    // -----------------------------------------------------------------
+    // ── Superhero solos the studio movies never got their own chip.
+    "Doctor Strange Collection",
+    "Captain Marvel Collection",
+    "Aquaman Collection",
+    "Wonder Woman Collection",
+    "Suicide Squad Collection",
+    "Shazam! Collection",
+    "The Punisher Collection",
+    "Watchmen Collection",
+
+    // ── Crime, action and comedy franchises.
+    "The Accountant Collection",
+    "The Italian Job Collection",
+    "Miss Marple Collection",
+    "Hot Shots! Collection",
+    "Harold & Kumar Collection",
+    "The Inbetweeners Collection",
+    "Road Trip Collection",
+    "Clerks Collection",
+    "Jay and Silent Bob Collection",
+    "The Boondock Saints Collection",
+    "National Lampoon's Vacation Collection",
+    "Borat Moviefilms Collection",
+
+    // ── Horror.
+    "Ju-on Collection",
+    "The Descent Collection",
+    "[REC] Collection",
+    "Quarantine Collection",
+    "Smile Collection",
+    "M3GAN Collection",
+    "The Craft Collection",
+    "Practical Magic Collection",
+    "Sleepaway Camp Collection",
+    "Prom Night Collection",
+    "Silent Night, Deadly Night Collection",
+    "Re-Animator Collection",
+    "Phantasm Collection",
+    "The Howling Collection",
+    "Fright Night Collection",
+    "The Invisible Man Collection",
+    "The Wolf Man Collection",
+    "Creature from the Black Lagoon Collection",
+    "Deep Blue Sea Collection",
+    "47 Meters Down Collection",
+    "Open Water Collection",
+    "Evil Dead Collection",
+
+    // ── Science fiction.
+    "Westworld Collection",
+    "Ghost in the Shell Collection",
+    "Clash of the Titans Collection",
+    "The Fly Collection",
+
+    // ── British, prestige and the road movie.
+    "Smokey and the Bandit Collection",
+    "Trainspotting Collection",
+    "The Great Escape Collection",
+    "Zulu Collection",
+
+    // ── Romance, dance and the teen comedies.
+    "Legally Blonde Collection",
+    "Bridget Jones Collection",
+    "Sex and the City Collection",
+    "Mean Girls Collection",
+    "The Devil Wears Prada Collection",
+    "The Princess Diaries Collection",
+    "The Sisterhood of the Traveling Pants Collection",
+    "Dirty Dancing Collection",
+    "Save the Last Dance Collection",
+    "Weekend at Bernie's Collection",
+    "Revenge of the Nerds Collection",
+    "Porky's Collection",
 )
 
 /**
@@ -795,7 +885,12 @@ val KIDS_COLLECTION_NAMES = listOf(
 
 /**
  * Kid-focused keywords: silly, warm, adventurous. No horror/war/crime
- * keywords at all. Strict name subset of BROWSE_KEYWORD_NAMES.
+ * keywords at all.
+ *
+ * NOT a subset of BROWSE_KEYWORD_NAMES, and has not been since the
+ * second wave: the resolver unions both lists and caches ids by name,
+ * so a kids-only tag ("panda", "tree house", "tooth fairy") still
+ * resolves, while an adult profile simply never renders it.
  */
 val KIDS_KEYWORD_NAMES = listOf(
     "dinosaur",
@@ -881,18 +976,18 @@ val KIDS_KEYWORD_NAMES = listOf(
     "duck",
     "farm",
     "garden",
-    "treehouse",
+    "tree house", // was "treehouse": TMDB spells it "tree house"
     "clubhouse",
     "hide and seek",
     "drawing",
     "storybook",
     "library",
     "helicopter",
-    "fire truck",
+    "firetruck", // was "fire truck": TMDB spells it "firetruck"
     "trains",
     "submarine",
     "hot air balloon",
-    "rockets",
+    "rocket", // was "rockets": TMDB has "rocket", not "rockets"
     "mars",
     "volcano",
     "rainbow",
@@ -921,10 +1016,141 @@ val KIDS_KEYWORD_NAMES = listOf(
     "spelling bee",
     "best friends",
     "siblings",
-    "new baby",
     "first day of school",
     "moving",
-    "new kid"
+    // 2026-09: "new baby" and "new kid" were dropped, not renamed —
+    // TMDB's keyword search has no exact match for either (its nearest
+    // names are "nepo baby" and "new kid in school"), and the resolver
+    // only accepts an exact hit, so both chips were dead on any install
+    // that had not cached them. The first idea comes back below as
+    // "baby", which resolves; the second is already covered by "first
+    // day of school" above.
+    "baby",
+    // -----------------------------------------------------------------
+    // Seventh wave (2026-09) — more kids tags. Every name below was
+    // verified LIVE against /search/keyword to resolve EXACTLY
+    // (case-insensitive) with real discover depth. Three older chips were
+    // also repointed at TMDB's canonical name in place, because the
+    // spellings the list carried ("treehouse", "fire truck",
+    // "rockets") had no exact match and never rendered — see the
+    // trailing comments on those lines. These need NOT be a subset of
+    // BROWSE_KEYWORD_NAMES: the resolver unions the two lists and the id
+    // cache is keyed by name, so a kids-only tag resolves in one pass.
+    // -----------------------------------------------------------------
+    // ── Animals — the biggest gap in the kids list after the pets.
+    "horse",
+    "sheep",
+    "cow",
+    "pig",
+    "chicken",
+    "goat",
+    "elephant",
+    "lion",
+    "tiger",
+    "monkey",
+    "panda",
+    "koala",
+    "kangaroo",
+    "giraffe",
+    "zebra",
+    "camel",
+    "polar bear",
+    "squirrel",
+    "hedgehog",
+    "raccoon",
+    "sloth",
+    "otter",
+    "owl",
+    "bee",
+    "butterfly",
+    "ant",
+    "frog",
+    "whale",
+    "octopus",
+    "crab",
+    "coral reef",
+    "rainforest",
+    "pet",
+    "stray dog",
+    "talking animal",
+    "talking dog",
+    "talking cat",
+
+    // ── Outdoors, play and school.
+    "camping",
+    "hiking",
+    "fishing",
+    "picnic",
+    "deserted island",
+    "playground",
+    "school bus",
+    "puzzle",
+    "comic book",
+    "board game",
+    "video game",
+    "kite",
+    "skateboard",
+    "scooter",
+    "ice cream",
+    "pizza",
+    "candy",
+    "birthday cake",
+    "popcorn",
+    "donut",
+    "honey",
+    "milk",
+    "classroom",
+    "teacher",
+    "homework",
+    "principal",
+    "campfire",
+    "babysitter",
+    "cartoon",
+
+    // ── Fantasy and adventure.
+    "fairy tale",
+    "potion",
+    "spell",
+    "reindeer",
+    "easter bunny",
+    "tooth fairy",
+    "imaginary friend",
+    "treasure map",
+    "pirate ship",
+    "canoe",
+    "sailboat",
+    "lighthouse",
+    "museum",
+    "aquarium",
+    "bakery",
+    "pumpkin",
+    "scarecrow",
+    "barn",
+    "gingerbread",
+    "sled",
+
+    // ── Days out and holidays.
+    "theme park",
+    "carnival",
+    "christmas tree",
+    "snowman",
+    "easter",
+
+    // ── Heroes.
+    "secret identity",
+    "superhero team",
+
+    // ── Space and the family it starts in.
+    "moon",
+    "sun",
+    "star",
+    "planet",
+    "galaxy",
+    "spaceship",
+    "telescope",
+    "cloud",
+    "time machine",
+    "big brother",
 )
 
 /** Decades are neutral; reuse the standard list. */

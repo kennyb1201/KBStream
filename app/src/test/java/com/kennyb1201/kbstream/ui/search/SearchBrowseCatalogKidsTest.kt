@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.search
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -18,6 +19,10 @@ import org.junit.Test
  *     parent would hand to a kid.
  *
  *  3. Every kids service/decade entry must carry a discoverable id.
+ *
+ *  4. Every keyword name is the EXACT name TMDB's /search/keyword answers
+ *     with — the resolver accepts an exact-name hit only, so a misspelling
+ *     is not a wrong rail, it is a chip that opens nothing.
  */
 class SearchBrowseCatalogKidsTest {
 
@@ -195,6 +200,122 @@ class SearchBrowseCatalogKidsTest {
     }
 
     // ── the kids/adult split of the studios list ─────────────────────────
+
+    // ── the 2026-09 seventh wave: more adult tags, more kids tags ───────
+
+    @Test
+    fun `adult keyword list carries the English and UK lanes`() {
+        // The seventh wave was asked for more ENGLISH adult tags, so the UK
+        // lanes are pinned by name. A later pass that trims the list back to
+        // American-only content has to delete this test on purpose.
+        val uk = listOf(
+            "british",
+            "england",
+            "scotland",
+            "ireland",
+            "wales",
+            "london, england",
+            "irish",
+            "scottish",
+            "victorian era"
+        )
+        val missingUk = uk.filterNot { it in BROWSE_KEYWORD_NAMES }
+        assertTrue(
+            "UK tags missing from the adult keyword list: $missingUk",
+            missingUk.isEmpty()
+        )
+
+        // ...plus the lanes the adult list was thinnest on: noir, procedurals,
+        // modern horror, the western and prestige drama.
+        val lanes = listOf(
+            "film noir",
+            "neo-noir",
+            "whodunit",
+            "police procedural",
+            "folk horror",
+            "creature feature",
+            "spaghetti western",
+            "space opera",
+            "period drama",
+            "true crime"
+        )
+        val missingLanes = lanes.filterNot { it in BROWSE_KEYWORD_NAMES }
+        assertTrue(
+            "adult lanes missing from the keyword list: $missingLanes",
+            missingLanes.isEmpty()
+        )
+    }
+
+    @Test
+    fun `kids chips that never resolved were repointed at TMDB's names`() {
+        // TMDB's /search/keyword has no exact match for "treehouse", "fire
+        // truck" or "rockets" (its canonical names are "tree house",
+        // "firetruck" and "rocket"), and the resolver accepts an exact hit
+        // only — so each shipped as a chip that opened nothing. "new baby"
+        // and "new kid" had no exact match at all and were dropped; the first
+        // idea comes back as "baby".
+        val dead = listOf("treehouse", "fire truck", "rockets", "new baby", "new kid")
+        for (name in dead) {
+            assertFalse(
+                "a chip that cannot resolve is back: $name",
+                name in KIDS_KEYWORD_NAMES
+            )
+        }
+        val live = listOf("tree house", "firetruck", "rocket", "baby")
+        for (name in live) {
+            assertTrue("replacement chip missing: $name", name in KIDS_KEYWORD_NAMES)
+        }
+    }
+
+    @Test
+    fun `keyword names are trimmed and lowercase in both lists`() {
+        // The chip label is the raw string while the resolver matches the
+        // exact TMDB name case-insensitively, so a stray capital or a trailing
+        // space is either a chip that reads wrong or one that never resolves.
+        val kids = KIDS_KEYWORD_NAMES.filter { it != it.trim() || it != it.lowercase() }
+        assertTrue("kids keywords must be trimmed and lowercase: $kids", kids.isEmpty())
+        val adult = BROWSE_KEYWORD_NAMES.filter { it != it.trim() || it != it.lowercase() }
+        assertTrue("adult keywords must be trimmed and lowercase: $adult", adult.isEmpty())
+    }
+
+    @Test
+    fun `seventh wave kids collections stay off the adult list`() {
+        // Children's TV movies, animal films and all-ages anime: kid-facing by
+        // construction, so an adult profile must not be offered them — the
+        // same split the sixth wave applied to Toy Story and friends. Both
+        // halves of the assertion matter: gone from the kids menu, or back on
+        // the adult strip, are each a regression.
+        val kidsOnly = listOf(
+            "The Super Mario Collection",
+            "Strawberry Shortcake (2003) Collection",
+            "The Benji Collection",
+            "Beverly Hills Chihuahua Collection",
+            "Charlotte's Web Collection",
+            "Babe Collection",
+            "Lassie Collection",
+            "Homeward Bound Collection",
+            "White Fang Collection",
+            "Astro Boy Collection",
+            "Robotech Collection",
+            "Cardcaptor Sakura Collection",
+            "Yo-kai Watch Collection",
+            "Tamagotchi Collection",
+            "Hamtaro Collection",
+            "Inazuma Eleven Collection",
+            "The Gruffalo Collection",
+            "Atlantis Collection",
+            "The Hunchback of Notre Dame Collection",
+            "Recess Collection",
+            "The Powerpuff Girls Collection",
+            "Zenon Collection",
+            "Twitches Collection"
+        )
+        val kids = KIDS_COLLECTION_NAMES + KIDS_COLLECTION_NAMES_EXTRA
+        val missing = kidsOnly.filterNot { it in kids }
+        assertTrue("kids seventh-wave collections missing: $missing", missing.isEmpty())
+        val leaked = kidsOnly.filter { it in BROWSE_COLLECTION_NAMES }
+        assertTrue("kids seventh-wave collections on the adult list: $leaked", leaked.isEmpty())
+    }
 
     @Test
     fun `children's houses stay on the kids menu and off the standard strip`() {

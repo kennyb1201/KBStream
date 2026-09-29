@@ -1286,7 +1286,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     private var catalogResolveStarted = false
 
     // Caps parallel TMDB name->id lookups in resolveCatalogEntries: the
-    // 216-name keyword list fanned out unbounded and TMDB throttled the
+    // keyword list (236 names when this was written, ~390 after the
+    // 2026-09 seventh wave) fanned out unbounded and TMDB throttled the
     // burst, silently dropping chips (failed lookups are filtered out).
     private val catalogResolveSemaphore = Semaphore(permits = 8)
 
@@ -1414,7 +1415,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
      * Results are persisted to disk (see [loadBrowseCatalogCache]) so the
      * FIRST app run pays the lookup cost and every later run renders the
      * chips instantly. Lookups are capped by [catalogResolveSemaphore] —
-     * the unbounded 216-name fan-out tripped TMDB throttling and silently
+     * the unbounded keyword fan-out tripped TMDB throttling and silently
      * dropped chips — and each name gets one retry after a short backoff.
      */
     private suspend fun resolveCatalogEntries() {

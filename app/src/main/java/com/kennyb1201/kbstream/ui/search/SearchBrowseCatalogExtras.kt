@@ -162,5 +162,57 @@ val KIDS_COLLECTION_NAMES_EXTRA: List<String> = listOf(
     "Tinker Bell Collection",
     "How the Grinch Stole Christmas Collection",
     "The Cheetah Girls Collection",
-    "Minecraft Movie Collection"
+    "Minecraft Movie Collection",
+    // 2026-09 seventh wave — more kids collections, every name verified
+    // live against /search/collection to resolve EXACTLY and its member
+    // titles read back to confirm it is the franchise the name claims
+    // (the resolver prefers an exact hit, so an inexact name is a dead
+    // chip, and a same-ish name can point at an unrelated page).
+    // Appended here, not to the main file, so the merge stays a plain
+    // append — see the header note in KIDS_COLLECTION_NAMES.
+    // ── Film and TV franchises.
+    "The Super Mario Collection",
+    "The Smurfs (Theatrical) Collection",
+    "Digimon Adventure Collection",
+    "Captain Underpants Collection",
+    "Megamind Collection",
+    "Sinbad Collection",
+    "Anastasia Collection",
+    "The Secret of NIMH Collection",
+    "Short Circuit Collection",
+    "Atlantis Collection",
+    "The Hunchback of Notre Dame Collection",
+    "The Gruffalo Collection",
+    "Inside Out Collection",
+    "The Mitchells vs. the Machines Collection",
+    "Leo Collection",
+    "The Sea Beast Collection",
+    "The Garfield Movie Collection",
+
+    // ── Animal films.
+    "The Benji Collection",
+    "Beverly Hills Chihuahua Collection",
+    "Cats & Dogs Collection",
+    "Homeward Bound Collection",
+    "White Fang Collection",
+    "Lassie Collection",
+    "Charlotte's Web Collection",
+    "Babe Collection",
+
+    // ── Kids TV movies and all-ages anime.
+    "Strawberry Shortcake (2003) Collection",
+    "Johnny Tsunami Collection",
+    "Zenon Collection",
+    "Twitches Collection",
+    "Wizards of Waverly Place Collection",
+    "Kim Possible Collection",
+    "Recess Collection",
+    "The Powerpuff Girls Collection",
+    "Astro Boy Collection",
+    "Robotech Collection",
+    "Cardcaptor Sakura Collection",
+    "Yo-kai Watch Collection",
+    "Tamagotchi Collection",
+    "Hamtaro Collection",
+    "Inazuma Eleven Collection",
 )
