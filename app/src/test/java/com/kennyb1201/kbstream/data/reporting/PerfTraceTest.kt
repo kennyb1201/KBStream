@@ -2,6 +2,8 @@ package com.kennyb1201.kbstream.data.reporting
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -37,6 +39,44 @@ class PerfTraceTest {
         PerfTrace.recordLaunch(label, 439_164L)
 
         assertEquals("the newer, bogus figure must not be what the report shows", 120L, PerfTrace.maxMs(label))
+    }
+
+    /**
+     * `http.ip` is shared by every bare address, so the label on its own says
+     * only that time went somewhere unnamed. The host recorded beside it is what
+     * makes the slowest endpoint fixable.
+     *
+     * These two cases record a sample large enough to rank in the summary's top
+     * six whatever else this JVM recorded, and deliberately do NOT call
+     * `reset()`: that would erase samples the launch cases in this class assert
+     * on, and JUnit gives no order between them.
+     */
+    @Test
+    fun `the host behind an unnamed label is named in the summary`() {
+        val label = "http.ipTestHost"
+        PerfTrace.recordHost(label, "132.4.9.11")
+        PerfTrace.record(label, 9_000_000L)
+
+        val line = PerfTrace.summary().lineSequence()
+            .firstOrNull { it.startsWith("perf· $label ") }
+
+        assertNotNull("the label must be ranked in the summary", line)
+        assertTrue("the host must be named: $line", line!!.endsWith("host=132.4.9.11"))
+    }
+
+    @Test
+    fun `a label that names its own destination carries no host`() {
+        // `http.tmdb` already says where the call went; appending a host to it
+        // would be noise on every line of the report.
+        val label = "http.tmdbTestHost"
+        PerfTrace.record(label, 9_000_001L)
+
+        assertNull(PerfTrace.hostFor(label))
+        val line = PerfTrace.summary().lineSequence()
+            .firstOrNull { it.startsWith("perf· $label ") }
+
+        assertNotNull("the label must be ranked in the summary", line)
+        assertFalse("no host should be appended: $line", line!!.contains("host="))
     }
 
     @Test

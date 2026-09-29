@@ -22,6 +22,9 @@ internal object PerfTrace {
     /** Samples kept before the oldest are dropped (≈a few screens of work). */
     private const val MAX_SAMPLES = 400
 
+    /** Hosts the summary can name. See [hostsByLabel]. */
+    private const val MAX_HOST_LABELS = 12
+
     /** Calls at or above this are worth naming in the summary. */
     private const val SLOW_MS = 1_200L
 
@@ -34,6 +37,17 @@ internal object PerfTrace {
 
     private val lock = Any()
     private val samples = ArrayDeque<Sample>()
+
+    /**
+     * Label to the most recent host seen under it, for labels whose name does
+     * not say where the call went.
+     *
+     * `http.ip` is the reason this exists: the label is shared by every bare
+     * address, so without the host beside it a report can say that 20 seconds
+     * went somewhere unnamed but not which endpoint to fix. Bounded, and only
+     * ever written for the labels the interceptor nominates.
+     */
+    private val hostsByLabel = LinkedHashMap<String, String>()
 
     @Volatile
     private var appStartElapsedMs = 0L
@@ -107,6 +121,26 @@ internal object PerfTrace {
     }
 
     /**
+     * Remembers the host behind [label], replacing any earlier one.
+     *
+     * Oldest entries fall out once the map is full: a session that talks to a
+     * dozen unnamed endpoints is already past the point where one more line
+     * helps the report.
+     */
+    fun recordHost(label: String, host: String) {
+        synchronized(lock) {
+            hostsByLabel[label] = host
+            while (hostsByLabel.size > MAX_HOST_LABELS) {
+                val oldest = hostsByLabel.keys.firstOrNull() ?: break
+                hostsByLabel.remove(oldest)
+            }
+        }
+    }
+
+    /** The host most recently recorded for [label], or null when none was. */
+    fun hostFor(label: String): String? = synchronized(lock) { hostsByLabel[label] }
+
+    /**
      * Drops every sample (used by the "clear diagnostics" action).
      *
      * Leaves the [launchLabels] latch alone on purpose: with the ring empty, a
@@ -114,7 +148,10 @@ internal object PerfTrace {
      * elapsed time as a launch figure all over again.
      */
     fun reset() {
-        synchronized(lock) { samples.clear() }
+        synchronized(lock) {
+            samples.clear()
+            hostsByLabel.clear()
+        }
     }
 
     /**
@@ -176,9 +213,13 @@ internal object PerfTrace {
         ranked.forEach { (label, rows) ->
             val times = rows.map { it.ms }.sorted()
             val total = times.sum()
+            // The host only ever exists for a label that does not name its own
+            // destination, so this adds nothing to the self-describing lines.
+            val host = hostFor(label)
             lines += "perf· $label n=${times.size} total=${total}ms " +
                 "avg=${total / times.size}ms p95=${percentile(times, 0.95)}ms " +
-                "max=${times.last()}ms"
+                "max=${times.last()}ms" +
+                (if (host == null) "" else " host=$host")
         }
 
         val slowest = snapshot
