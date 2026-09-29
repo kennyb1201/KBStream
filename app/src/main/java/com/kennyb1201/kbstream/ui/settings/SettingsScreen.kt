@@ -10,6 +10,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
@@ -57,6 +59,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
+import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
@@ -1815,16 +1818,13 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Auto" to "", "English" to "en", "Spanish" to "es", "French" to "fr", "German" to "de", "Japanese" to "ja", "Korean" to "ko", "Chinese" to "zh", "Portuguese" to "pt", "Italian" to "it", "Russian" to "ru").forEach { (label, code) ->
-                        KBCard(onClick = {
-                            preferredAudioLang = code
-                            AppPreferences.setPreferredAudioLanguage(context, code)
-                        }) {
-                            PillChip(label, preferredAudioLang == code)
-                        }
+                LanguageChipGrid(
+                    selected = preferredAudioLang,
+                    onSelect = { code ->
+                        preferredAudioLang = code
+                        AppPreferences.setPreferredAudioLanguage(context, code)
                     }
-                }
+                )
 
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -1834,16 +1834,13 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(bottom = 4.dp)
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Auto" to "", "English" to "en", "Spanish" to "es", "French" to "fr", "German" to "de", "Japanese" to "ja", "Korean" to "ko", "Chinese" to "zh", "Portuguese" to "pt", "Italian" to "it", "Russian" to "ru").forEach { (label, code) ->
-                        KBCard(onClick = {
-                            preferredSubtitleLang = code
-                            AppPreferences.setPreferredSubtitleLanguage(context, code)
-                        }) {
-                            PillChip(label, preferredSubtitleLang == code)
-                        }
+                LanguageChipGrid(
+                    selected = preferredSubtitleLang,
+                    onSelect = { code ->
+                        preferredSubtitleLang = code
+                        AppPreferences.setPreferredSubtitleLanguage(context, code)
                     }
-                }
+                )
                 }
 
                 if (selectedPane == SettingsPane.SUBTITLES) {
@@ -2614,6 +2611,42 @@ private fun AudioTuningRow(
         color = KBTextLo,
         style = MaterialTheme.typography.labelSmall
     )
+}
+
+/**
+ * One language list, as a wrapping grid of chips.
+ *
+ * The list itself is [PlayerTrackBridge.LANGUAGE_OPTIONS] - the player's track
+ * panel offers the same choices, and both used to spell them out separately,
+ * which is how a language could end up selectable in one place and not the
+ * other.
+ *
+ * The grid wraps because eleven chips are more than this pane is wide: the
+ * pane is the screen minus the settings rail and its padding, about 560dp on a
+ * 1080p set, while the chips in one line want roughly 840dp. A plain Row simply
+ * ran out of width part way along and handed each chip after that whatever was
+ * left - "Chinese" and the three behind it were squeezed into a column of
+ * single letters, and the last of them to nothing at all. A FlowRow wraps
+ * instead, so every language is on screen at its own width; there is no way to
+ * scroll a row sideways with a TV remote, so nothing may be laid out off the
+ * end of one.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun LanguageChipGrid(
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        PlayerTrackBridge.LANGUAGE_OPTIONS.forEach { (label, code) ->
+            KBCard(onClick = { onSelect(code) }) {
+                PillChip(label, selected == code)
+            }
+        }
+    }
 }
 
 @Composable
