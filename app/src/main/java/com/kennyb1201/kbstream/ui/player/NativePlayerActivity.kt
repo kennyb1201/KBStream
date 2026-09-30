@@ -995,6 +995,11 @@ class NativePlayerActivity : ComponentActivity() {
 
     // Hold-to-scrub acceleration
     private var scrubDirection = 0  // -1 = back, 1 = forward, 0 = idle
+    // True while a touch drag is on the seek bar itself. A TV remote never
+    // drags (it uses the key path), but a touchscreen or a pointer remote
+    // does, and the two share the same "do not let the clock fight the scrub"
+    // rule below.
+    private var isBarDragging = false
     private var scrubStepMs = 0L
     private val scrubHandler = Handler(Looper.getMainLooper())
     private val clockHandler = Handler(Looper.getMainLooper())
@@ -3495,9 +3500,11 @@ class NativePlayerActivity : ComponentActivity() {
                 }
             }
             override fun onStartTrackingTouch(sb: SeekBar) {
+                isBarDragging = true
                 removeAutoHide()
             }
             override fun onStopTrackingTouch(sb: SeekBar) {
+                isBarDragging = false
                 val durationMs = exoPlayer?.duration ?: 0L
                 val posMs = (sb.progress.toLong() * durationMs) / 10_000L
                 exoPlayer?.seekTo(posMs)
@@ -8559,11 +8566,24 @@ class NativePlayerActivity : ComponentActivity() {
                 val dur = player.duration
 
                 if (controlsVisible) {
-                    val progress = if (dur > 0 && dur != C.TIME_UNSET) {
-                        ((pos * 10_000L) / dur).toInt().coerceIn(0, 10_000)
-                    } else 0
-                    seekbar.progress = progress
-                    currentTime.text = formatMillis(pos)
+                    // Never move the bar out from under an in-flight scrub.
+                    // updateSeekBarPosition() already keeps the bar and the
+                    // clock on the position being scrubbed to; this 1-second
+                    // tick runs behind it and used to write the player's own
+                    // (slower, still-rebuffering) position instead. The bar
+                    // therefore jumped to where the viewer scrubbed and then
+                    // snapped back a tick later, and the release that commits
+                    // the seek (commitSeekFromBar) committed the snap - which
+                    // is what read as "scrubbing forward and back barely
+                    // works". Keep only the duration honest while scrubbing.
+                    val scrubbing = scrubDirection != 0 || isBarDragging
+                    if (!scrubbing) {
+                        val progress = if (dur > 0 && dur != C.TIME_UNSET) {
+                            ((pos * 10_000L) / dur).toInt().coerceIn(0, 10_000)
+                        } else 0
+                        seekbar.progress = progress
+                        currentTime.text = formatMillis(pos)
+                    }
                     if (dur > 0 && dur != C.TIME_UNSET) {
                         totalTime.text = formatMillis(dur)
                     }
@@ -9436,6 +9456,24 @@ class NativePlayerActivity : ComponentActivity() {
         resolveAddonIdentity(currentSourceLabel)
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
+        // The switched source brings its OWN request headers. These used to
+        // stay at whatever the activity launched with, so a host gated on a
+        // Referer / User-Agent answered the new request with the previous
+        // source's headers - a refusal, or a throttled variant - and the
+        // player ran the whole fallback ladder before giving up. Starting
+        // the same source fresh (from the streams picker) used the right
+        // headers and played, which is the "switching sources in the player
+        // is broken" report. Read them off this stream, exactly as the
+        // launch intent does (see requestHeaders on Stream).
+        streamHeaders = stream.requestHeaders
+        // The previous source's decoded identity does not describe this one.
+        // Left behind, it only mislabelled the next failure's copy ("This
+        // file's video (h264 3840x2160) can't be decoded") with the old
+        // stream's codec and size; a fresh source's own track callback
+        // re-establishes both.
+        streamCodec = null
+        streamWidth = 0
+        streamHeight = 0
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
         dvStripRetryDone = false; forceDvStripForSession = false

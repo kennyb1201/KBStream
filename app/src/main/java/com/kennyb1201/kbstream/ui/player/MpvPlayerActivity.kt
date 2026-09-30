@@ -1942,6 +1942,13 @@ class MpvPlayerActivity : ComponentActivity() {
         val resumeAt = (if (positionMs > 0L) positionMs else startPositionMs).coerceAtLeast(0L)
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
+        // The switched source brings its OWN request headers. These used to
+        // stay at whatever this activity launched with, so a host gated on a
+        // Referer / User-Agent answered the new request with the previous
+        // source's headers and the source failed - while the same source
+        // played fine started fresh from the streams picker. Read them off
+        // this stream, exactly as the launch path does.
+        streamHeaders = stream.requestHeaders
         currentSourceLabel = stream.sourceLabel()
         currentBadges = stream.badges
         startPositionMs = resumeAt
@@ -1967,7 +1974,7 @@ class MpvPlayerActivity : ComponentActivity() {
         surface?.load(
             MpvPlayerView.LoadRequest(
                 url = newUrl,
-                headers = streamHeaders,
+                headers = stream.requestHeaders,
                 audioUrl = currentAudioUrl,
                 startPositionMs = resumeAt
             )
