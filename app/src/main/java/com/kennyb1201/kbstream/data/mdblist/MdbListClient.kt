@@ -6,6 +6,7 @@ import com.kennyb1201.kbstream.data.addon.AppContextHolder
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
@@ -1331,9 +1332,15 @@ object MdbListClient {
                             season = if (isMovie) null
                             else node.optInt("season", -1).takeIf { it >= 0 }
                                 ?: session.optInt("season", -1).takeIf { it >= 0 },
+                            // A session the tracker could not place is written
+                            // with episode 0, which is not an episode. Read as
+                            // one it put "S02 · E00" on the rail and opened a
+                            // season of blank chips - see EpisodeNumbering.
                             episode = if (isMovie) null
-                            else node.optInt("number", -1).takeIf { it >= 0 }
-                                ?: session.optInt("episode", -1).takeIf { it >= 0 }
+                            else namedEpisodeNumber(
+                                node.optInt("number", -1).takeIf { it >= 0 }
+                                    ?: session.optInt("episode", -1).takeIf { it >= 0 }
+                            )
                         )
                     }
                     out

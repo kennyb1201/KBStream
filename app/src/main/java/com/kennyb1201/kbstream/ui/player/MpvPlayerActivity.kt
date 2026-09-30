@@ -34,6 +34,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerEngine
@@ -746,7 +747,10 @@ class MpvPlayerActivity : ComponentActivity() {
         parentId = intent.getStringExtra("parent_id").orEmpty()
         parentType = intent.getStringExtra("parent_type").orEmpty()
         season = intent.getIntExtra("season", -1).takeIf { it >= 0 }
-        episode = intent.getIntExtra("episode", -1).takeIf { it >= 0 }
+        // A launch carrying 0 as its episode is carrying "no episode": see
+        // EpisodeNumbering. Read as one, the up-next line said "Season 2
+        // Episode 00".
+        episode = namedEpisodeNumber(intent.getIntExtra("episode", -1))
         episodeStreamId = intent.getStringExtra("episode_stream_id")
         itemName = intent.getStringExtra("item_name")
             ?: intent.getStringExtra("display_name").orEmpty()

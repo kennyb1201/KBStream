@@ -312,6 +312,26 @@ internal fun upNextEpisodeLabel(
     }
 }
 
+/**
+ * The Home hero's Continue Watching line: the card's own season/episode label
+ * behind its action prefix ("Resume  •  S02 · E08").
+ *
+ * The hero sits directly above the rail, and it used to format the season and
+ * episode itself. That meant the card's own rule (see [upNextEpisodeLabel])
+ * only ever reached the rail: for the very card whose corner had been fixed,
+ * the hero still read "Resume  •  S02 · E00", which is what made the fix look
+ * like it had not taken. Both surfaces now spell the pair the same way, and a
+ * prefix with nothing to attach to stays a bare prefix.
+ */
+internal fun upNextHeroEpisodeLabel(
+    prefix: String,
+    season: Int?,
+    episode: Int?
+): String =
+    upNextEpisodeLabel(season, episode)
+        ?.let { label -> "$prefix  •  $label" }
+        ?: prefix
+
 /** Title key: the fallback identity of a show when its ids disagree. */
 internal fun upNextTitleKey(item: UpNextItem): String =
     "title:${upNextMediaType(item.parentType)}:${item.title.trim().lowercase()}"

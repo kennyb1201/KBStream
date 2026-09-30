@@ -55,4 +55,30 @@ class UpNextEpisodeLabelTest {
         assertEquals("S00 · E03", upNextEpisodeLabel(0, 3))
         assertEquals("S00", upNextEpisodeLabel(0, 0))
     }
+
+    // --- The hero's line --------------------------------------------------
+
+    @Test
+    fun `the hero spells the pair the same way the card does`() {
+        assertEquals("Resume  •  S02 · E08", upNextHeroEpisodeLabel("Resume", 2, 8))
+        assertEquals("Next Up  •  S01 · E01", upNextHeroEpisodeLabel("Next Up", 1, 1))
+    }
+
+    @Test
+    fun `a zero episode never reaches the hero line either`() {
+        // The card's corner was fixed first, and the hero kept reading
+        // "Resume  •  S02 · E00" for the same item - the report that the fix
+        // had not taken.
+        assertEquals("Resume  •  S02", upNextHeroEpisodeLabel("Resume", 2, 0))
+        assertEquals("Resume", upNextHeroEpisodeLabel("Resume", null, 0))
+    }
+
+    @Test
+    fun `a prefix with nothing to attach to stays a bare prefix`() {
+        assertEquals("Resume", upNextHeroEpisodeLabel("Resume", null, null))
+        assertEquals(
+            "Airs Tomorrow  •  S00 · E03",
+            upNextHeroEpisodeLabel("Airs Tomorrow", 0, 3)
+        )
+    }
 }

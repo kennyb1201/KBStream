@@ -2847,8 +2847,12 @@ Log.d(
                 parentId = entry.parentId.ifBlank { entry.id },
                 parentType = entry.type,
                 season = entry.season,
-                episode = entry.episode,
-                episodeStreamId = entry.episodeStreamId,
+                episode = namedEpisodeNumber(entry.episode),
+                // A stream id keys an episode. When the row's episode is the
+                // source's 0, there is no episode for it to key, so it is
+                // dropped with the number rather than opening a phantom one.
+                episodeStreamId = entry.episodeStreamId
+                    .takeIf { namedEpisodeNumber(entry.episode) != null },
                 startPositionMs = entry.positionMs,
                 recencyTimestamp = entry.updatedAt,
                 historyRowId = entry.id
@@ -3223,8 +3227,11 @@ Log.d(
             parentType = entry.type,
 
             season = entry.season,
-            episode = entry.episode,
-            episodeStreamId = entry.episodeStreamId,
+            episode = namedEpisodeNumber(entry.episode),
+            // Dropped with the number: a stream id keys an episode, and the
+            // source's 0 names none, so keeping it only opened a phantom.
+            episodeStreamId = entry.episodeStreamId
+                .takeIf { namedEpisodeNumber(entry.episode) != null },
 
             startPositionMs = entry.positionMs,
             recencyTimestamp = entry.updatedAt,
@@ -3644,7 +3651,10 @@ Log.d(
 
         if (!session.isMovie) {
             resolvedSeason = session.season ?: 1
-            resolvedEpisode = session.episode ?: 1
+            // A session the tracker could not place carries no episode, and
+            // inventing E01 for it read as confidently as a real number. Leave
+            // it unnamed so the label falls back to the season alone.
+            resolvedEpisode = namedEpisodeNumber(session.episode)
         }
 
         val progressFraction =

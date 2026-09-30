@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.runtime.Composable
@@ -1139,27 +1140,13 @@ private fun HomeHero(
                         }
                 }
 
-            when {
-                item.season != null &&
-                    item.episode != null ->
-                    "$prefix  •  S%02d · E%02d".format(
-                        item.season,
-                        item.episode
-                    )
-
-                item.season != null ->
-                    "$prefix  •  S%02d".format(
-                        item.season
-                    )
-
-                item.episode != null ->
-                    "$prefix  •  E%02d".format(
-                        item.episode
-                    )
-
-                else ->
-                    prefix
-            }
+            // The pair is spelled by the same rule the card uses, so the
+            // hero cannot print the E00 the card beside it already refuses.
+            upNextHeroEpisodeLabel(
+                prefix,
+                item.season,
+                item.episode
+            )
         }
 
     val continueProgress =
@@ -2616,6 +2603,14 @@ fun HomeScreen(
             return
         }
 
+        // A source that wrote 0 where it meant "no episode" must not reach the
+        // streams picker or the detail page: an episode the sources never named
+        // is exactly what opened a season over blank chips. The item could still
+        // carry one from a persisted row, so the guard lives at the use as well
+        // as at the builder.
+        val namedEpisode =
+            namedEpisodeNumber(item.episode)
+
         val detail = MetaPreview(
             id = parentId,
             type = parentType,
@@ -2634,20 +2629,20 @@ fun HomeScreen(
         val targetTitle = run {
             val hasMarker =
                 item.season != null &&
-                    item.episode != null &&
+                    namedEpisode != null &&
                     Regex(
-                        "S\\s*0*${item.season}\\s*E\\s*0*${item.episode}\\b",
+                        "S\\s*0*${item.season}\\s*E\\s*0*$namedEpisode\\b",
                         RegexOption.IGNORE_CASE
                     ).containsMatchIn(item.title)
             if (
                 parentType == "series" &&
                 item.season != null &&
-                item.episode != null &&
+                namedEpisode != null &&
                 !hasMarker
             ) {
                 buildString {
                     append(item.title)
-                    append(" S${item.season} E${item.episode}")
+                    append(" S${item.season} E$namedEpisode")
                     item.episodeTitle
                         ?.takeIf { it.isNotBlank() }
                         ?.let { append(" • $it") }
@@ -2665,7 +2660,7 @@ fun HomeScreen(
             title = targetTitle,
             displayName = item.title,
             season = item.season,
-            episode = item.episode,
+            episode = namedEpisode,
             resumePositionMs =
                 if (startAtBeginning) {
                     0L
@@ -3386,7 +3381,8 @@ fun HomeScreen(
                 subtitle = buildString {
                     val seasonEpisode = listOfNotNull(
                         menuItem.season?.let { "S%02d".format(it) },
-                        menuItem.episode?.let { "E%02d".format(it) }
+                        namedEpisodeNumber(menuItem.episode)
+                            ?.let { "E%02d".format(it) }
                     ).joinToString(" · ")
                     if (seasonEpisode.isNotBlank()) {
                         append(seasonEpisode)

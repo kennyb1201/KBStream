@@ -70,6 +70,7 @@ import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
@@ -2695,7 +2696,10 @@ class NativePlayerActivity : ComponentActivity() {
         parentType = intent.getStringExtra("parent_type").orEmpty()
         isLiveChannel = parentType == "channel"
         season = intent.getIntExtra("season", -1).takeIf { it >= 0 }
-        episode = intent.getIntExtra("episode", -1).takeIf { it >= 0 }
+        // A launch carrying 0 as its episode is carrying "no episode": see
+        // EpisodeNumbering. Read as one, the up-next line said "Season 2
+        // Episode 00".
+        episode = namedEpisodeNumber(intent.getIntExtra("episode", -1))
         episodeStreamId = intent.getStringExtra("episode_stream_id")
         itemName = intent.getStringExtra("item_name")
             ?.takeIf { it.isNotBlank() }
