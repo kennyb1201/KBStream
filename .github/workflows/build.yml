@@ -125,7 +125,7 @@ jobs:
             gradle-deps-${{ runner.os }}-
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
           # The action's default package set includes the legacy `tools`
           # package, which Google removed from the SDK repository (runs fail
