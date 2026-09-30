@@ -48,6 +48,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
@@ -3348,6 +3349,11 @@ class MpvPlayerActivity : ComponentActivity() {
                     )
                 }
             }.onFailure { Log.w(TAG, "MDBList completion sync failed", it) }
+            // The completion is on the tracker now, so the Continue Watching
+            // feeds are stale. Home's ON_RESUME refresh races this write and
+            // can read the pre-completion feed; ask for one more merge so a
+            // finished title leaves the rail without waiting for a resume.
+            ContinueWatchingRefreshBus.requestRefresh()
         }
     }
 

@@ -89,6 +89,7 @@ import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
+import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import coil3.load
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -9092,6 +9093,12 @@ class NativePlayerActivity : ComponentActivity() {
                 simklScrobbleSent = false
                 Log.e(TAG, "Simkl completion sync failed; will retry")
             }
+            // The completion is now on the tracker, so the Continue Watching
+            // feeds this episode's title came from are stale. Home's ON_RESUME
+            // refresh races this write and can read the pre-completion feed,
+            // leaving a finished title on the rail until the next resume; ask
+            // for one more merge now that the push has landed.
+            ContinueWatchingRefreshBus.requestRefresh()
         }
     }
 

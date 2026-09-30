@@ -29,6 +29,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
@@ -6875,6 +6876,17 @@ private suspend fun calculateEpisodesRemaining(
         loadRails()
 
         observeUpNext()
+
+        // A finished title leaves the rail only when the tracker feeds are
+        // read again after the completion has been pushed (see
+        // ContinueWatchingRefreshBus). Home's ON_RESUME refresh can beat that
+        // push, so the player asks for one more merge once the push has
+        // actually landed - otherwise the card lingers until the next resume.
+        viewModelScope.launch {
+            ContinueWatchingRefreshBus.requests.collect {
+                refreshUpNext()
+            }
+        }
 
         observeProfileSwitches()
 
