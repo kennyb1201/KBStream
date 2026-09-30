@@ -351,6 +351,44 @@ internal fun upNextCardEpisodePair(
 }
 
 /**
+ * Local-history parent ids that describe a show: the id a Continue Watching
+ * row is keyed by plus the twins the SAME show is stored under.
+ *
+ * The same title arrives under more than one id flavor - TMDB search results
+ * and the kids rails carry "tmdb:<n>", add-on catalogs and Continue Watching
+ * carry "tt..." - and playback history is written under whichever flavor
+ * started it. Reading only the row's own flavor is what made Continue Watching
+ * blind to watch state the detail screen could see: the show resolved no
+ * watched episode, so its card fell back to "season 1 episode 1" while its
+ * episode markers were ticked on Detail. Every local history read that feeds
+ * the series resolution goes through this list (the detail screen's twin of
+ * this rule lives in DetailViewModel.localHistoryParentIds).
+ */
+internal fun localHistoryParentIdsForShow(
+    parentId: String,
+    tmdbShowId: Int?,
+    imdbId: String? = null
+): List<String> {
+    if (parentId.isBlank()) return emptyList()
+
+    val ids = linkedSetOf(parentId)
+
+    // A synthetic / unresolved id (-1) must never become a fake "tmdb:-1" key.
+    val tmdbId =
+        tmdbShowId?.takeIf { it > 0 }
+    if (tmdbId != null) {
+        ids += "tmdb:$tmdbId"
+    }
+
+    imdbId
+        ?.trim()
+        ?.takeIf { it.startsWith("tt") }
+        ?.let { ids += it }
+
+    return ids.toList()
+}
+
+/**
  * The Home hero's Continue Watching line: the card's own season/episode label
  * behind its action prefix ("Resume  •  S02 · E08").
  *

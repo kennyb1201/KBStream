@@ -3047,22 +3047,10 @@ Log.d(
         }
 
         // Cache completed episode keys per show so we only query the
-        // DAO once per parentId instead of once per history row.
-        val localCompletedForParent: Set<Pair<Int, Int>> =
-            if (resolvesAsSeries) {
-                try {
-                    val resolvedParentId = entry.parentId.trim().ifBlank { entry.id.trim() }
-                    historyDao.getCompletedForParent(resolvedParentId)
-                        .mapNotNull { e ->
-                            e.season?.let { s -> e.episode?.let { ep -> s to ep } }
-                        }
-                        .toSet()
-                } catch (_: Exception) {
-                    emptySet()
-                }
-            } else {
-                emptySet()
-            }
+        // DAO once per parentId instead of once per history row. Read below,
+        // once the show's TMDB id is known: the read is flavor-tolerant (see
+        // localHistoryParentIdsForShow), so it needs the id twins.
+        var localCompletedForParent: Set<Pair<Int, Int>> = emptySet()
 
         // Whole-show watched/total computed from TMDB aired episodes. Stay
         // null when we can't resolve TMDB so we fall back to the stored
@@ -3130,6 +3118,23 @@ Log.d(
                         else -> {
                             null
                         }
+                    }
+
+                localCompletedForParent =
+                    try {
+                        historyDao
+                            .getCompletedForParents(
+                                localHistoryParentIds(
+                                    parentId,
+                                    tmdbDetail?.id ?: 0
+                                )
+                            )
+                            .mapNotNull { e ->
+                                e.season?.let { s -> e.episode?.let { ep -> s to ep } }
+                            }
+                            .toSet()
+                    } catch (_: Exception) {
+                        emptySet()
                     }
 
                 // Only replace stored art with art that actually resolved: a
@@ -4347,6 +4352,40 @@ episodesTotal =
         )
     }
 
+    /**
+     * Local-history parent ids that describe THIS show: the id the card is keyed
+     * by plus the twins the same show is stored under (see
+     * [localHistoryParentIdsForShow]). The IMDB twin is resolved from the TMDB
+     * id the caller already has; that lookup is memory + disk cached after the
+     * first call.
+     *
+     * Continue Watching used to read only its own flavor, so a show whose
+     * episodes were completed under the other id looked unwatched here - the
+     * card fell back to "season 1 episode 1" while the detail screen, which has
+     * this same twin list, showed the markers correctly.
+     */
+    private suspend fun localHistoryParentIds(
+        parentId: String,
+        tmdbId: Int
+    ): List<String> {
+        if (parentId.isBlank()) return emptyList()
+
+        val imdbId =
+            if (tmdbId > 0) {
+                runCatchingCancellable {
+                    tmdbRepository.resolveImdbId(tmdbId, "series")
+                }.getOrNull()
+            } else {
+                null
+            }
+
+        return localHistoryParentIdsForShow(
+            parentId = parentId,
+            tmdbShowId = tmdbId,
+            imdbId = imdbId
+        )
+    }
+
     private suspend fun preloadWatchedEpisodeStateForShow(
         parentId: String,
         tmdbShowId: Int
@@ -4406,8 +4445,11 @@ episodesTotal =
                 try {
 
                     historyDao
-                        .getCompletedForParent(
-                            parentId
+                        .getCompletedForParents(
+                            localHistoryParentIds(
+                                parentId,
+                                tmdbShowId
+                            )
                         )
 
                 } catch (_: Exception) {
@@ -4832,7 +4874,15 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
      */
     val resume =
         try {
-            historyDao.getResumeForParent(parentId)
+            // Flavor-tolerant read: the in-progress row can live under this
+            // show's other id flavor, and a resume this resolution cannot see
+            // is a resume the card cannot print.
+            historyDao.getResumeForParents(
+                localHistoryParentIds(
+                    parentId,
+                    tmdbId
+                )
+            )
         } catch (_: Exception) {
             null
         }
