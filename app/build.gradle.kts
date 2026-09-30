@@ -303,15 +303,15 @@ android {
 
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.activity:activity-compose:1.9.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.4")
 
     implementation("androidx.compose.runtime:runtime")
 
-    implementation("androidx.tv:tv-material:1.0.0")
-    implementation("androidx.tv:tv-foundation:1.0.0")
+    implementation("androidx.tv:tv-material:1.1.0")
+    implementation("androidx.tv:tv-foundation:1.1.0")
     // 1.7.x BOM: BringIntoViewSpec (streaming-app-style focus landing on the
     // Home rails) was finalized in Compose 1.7; 1.6 shipped only the old
     // BringIntoViewResponder API.
@@ -336,14 +336,14 @@ dependencies {
     // the adapter by name). Keep this version in lockstep with moshi-kotlin
     // below — the generated adapters and the runtime are the same artifact's
     // two halves.
-    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.1")
+    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.2")
     // The reflective half, kept as the FALLBACK for a type with no annotation.
     // Every Moshi.Builder below adds it with addLast() rather than add():
     // Moshi consults factories in order, so adding it first would let
     // reflection claim every model before the generated adapter is ever
     // looked up, and this dependency would be dead weight.
-    implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.squareup.moshi:moshi-kotlin:1.15.2")
+    implementation("com.google.zxing:core:3.5.4")
 
     // Baseline profiles, runtime half. The profile itself (a list of the
     // classes/methods startup touches) is captured by :baselineprofile on a
@@ -373,22 +373,22 @@ dependencies {
     // cycle, i.e. permanent background network/DB churn during playback.
     // OkHttp is already a dependency here (REST datasource, Coil).
     implementation("io.ktor:ktor-client-okhttp:2.3.12")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
-    implementation("androidx.media3:media3-exoplayer:1.9.0")
-    implementation("androidx.media3:media3-exoplayer-hls:1.9.0")
-    implementation("androidx.media3:media3-exoplayer-dash:1.9.0")
-    implementation("androidx.media3:media3-exoplayer-rtsp:1.9.0")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-exoplayer-hls:1.11.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.11.1")
+    implementation("androidx.media3:media3-exoplayer-rtsp:1.11.1")
     // Microsoft Smooth Streaming (MSS), the Silverlight-era adaptive format:
     // ".../stream.ism/Manifest", still served by IIS Media Services and some
     // CDNs. Small module, and Media3's DefaultMediaSourceFactory picks it up by
     // class name (SsMediaSource$Factory) once it is on the classpath - see
     // resolveMimeType in NativePlayerActivity, which is what puts the mime on
     // the MediaItem for a URL that has no extension to key off.
-    implementation("androidx.media3:media3-exoplayer-smoothstreaming:1.9.0")
-    implementation("androidx.media3:media3-ui:1.9.0")
-    implementation("androidx.media3:media3-session:1.9.0")
-    implementation("androidx.media3:media3-datasource-okhttp:1.9.0")
+    implementation("androidx.media3:media3-exoplayer-smoothstreaming:1.11.1")
+    implementation("androidx.media3:media3-ui:1.11.1")
+    implementation("androidx.media3:media3-session:1.11.1")
+    implementation("androidx.media3:media3-datasource-okhttp:1.11.1")
     // FFmpeg decoder extension.
     //
     // Default: the published Jellyfin build of media3's own decoder_ffmpeg
@@ -442,7 +442,7 @@ dependencies {
     // PlayerEngine refuses to select MPV below API 26 rather than loading the
     // native libraries on a device they were not built for.
     implementation("dev.jdtech.mpv:libmpv:0.5.1")
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.recyclerview:recyclerview:1.4.0")
     // Pinned to the COMMIT behind tag v0.26.4 (43f8e6ebeef4…, full hash
     // 43f8e6ebeef469db7c5328714bc5f33c9f06f092), not the tag itself: tags are
     // mutable, so "v0.26.4" can silently resolve to different code than the
@@ -451,24 +451,24 @@ dependencies {
     implementation("com.github.TeamNewPipe:NewPipeExtractor:43f8e6ebeef4")
 
 
-    implementation("androidx.room:room-runtime:2.7.1")
-    ksp("androidx.room:room-compiler:2.7.1")
-    implementation("androidx.room:room-ktx:2.7.1")
+    implementation("androidx.room:room-runtime:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
+    implementation("androidx.room:room-ktx:2.8.5")
 
-    implementation("androidx.work:work-runtime-ktx:2.10.1")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
 
-    implementation("io.coil-kt.coil3:coil-compose:3.0.0")
-    implementation("io.coil-kt.coil3:coil:3.0.0")
-    implementation("io.coil-kt.coil3:coil-network-okhttp:3.0.0")
+    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
+    implementation("io.coil-kt.coil3:coil:3.6.3")
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
     // SVG badge art: several popular KB-compatible badge packs serve chips
     // as .svg, which base Coil cannot decode — without this those badges
     // render blank.
-    implementation("io.coil-kt.coil3:coil-svg:3.0.0")
+    implementation("io.coil-kt.coil3:coil-svg:3.6.3")
     // Animated focus GIFs on KB collection folder tiles (manifest
     // focusGifUrl / focusGifEnabled); base Coil shows only the first frame.
-    implementation("io.coil-kt.coil3:coil-gif:3.0.0")
+    implementation("io.coil-kt.coil3:coil-gif:3.6.3")
 
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 
     // JVM unit tests (KidsMode rating matrix, catalog invariants).
     testImplementation("junit:junit:4.13.2")
@@ -483,16 +483,16 @@ dependencies {
     // against the exported schema - the one class of test the JVM-only suite
     // could not reach, and the gap that let the watch-history schema sit one
     // version bump away from being dropped unnoticed.
-    testImplementation("androidx.room:room-testing:2.7.1")
+    testImplementation("androidx.room:room-testing:2.8.5")
     // ...and Robolectric is what supplies the Android runtime room-testing and
     // MigrationTestHelper's instrumentation need, so it stays a UNIT test: no
     // device, no emulator, no androidTest variant, run by the same
     // `./gradlew testDebugUnitTest` gate as everything else.
     // 4.14 is the floor here: it is the first release with API 35 support, and
     // this module compiles against 35 (Robolectric picks the target SDK).
-    testImplementation("org.robolectric:robolectric:4.14.1")
-    testImplementation("androidx.test.ext:junit:1.2.1")
-    testImplementation("androidx.test:core-ktx:1.6.1")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("androidx.test:core-ktx:1.7.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
