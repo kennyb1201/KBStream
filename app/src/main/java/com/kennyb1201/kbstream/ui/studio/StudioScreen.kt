@@ -1,6 +1,5 @@
 package com.kennyb1201.kbstream.ui.studio
 
-import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Box
@@ -30,24 +29,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ColorFilter
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.allowHardware
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbCompanyDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.ui.components.BrandMark
-import com.kennyb1201.kbstream.ui.components.brandMarkTreatment
+import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.GenreChipRow
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
@@ -481,7 +471,8 @@ private fun StudioHeader(
 
 /**
  * Brand logo rendered for a dark surface, in one of three ways decided by
- * sampling the decoded artwork (see [brandMarkTreatment]):
+ * sampling the decoded artwork (see [BrandMarkImage], which owns that and is
+ * what every other drawing site of a brand mark uses too):
  *
  *  - [BrandMark.WHITEN]   the dark, colorless glyph-on-transparency that the
  *                         TMDB company/network endpoints default to, and a
@@ -504,7 +495,9 @@ private fun StudioHeader(
  * the header fall back to its name text. That walk is what gives the brands
  * whose single top mark is an unreadable plate their logo back.
  *
- * Public so other screens can share the same logic.
+ * The drawing itself - and the rule for which of the three ways a mark takes -
+ * lives in [BrandMarkImage], so a single-URL caller draws a brand mark the same
+ * way without owning a candidate list.
  */
 @Composable
 fun BrandLogo(
@@ -512,70 +505,23 @@ fun BrandLogo(
     name: String,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     var index by remember(urls) { mutableStateOf(0) }
     val url = urls.getOrNull(index)
-    var treatment by remember(url) { mutableStateOf(BrandMark.AS_IS) }
     // Set when every candidate has been rejected. The header then keeps its
     // (large) name text and reclaims this component's width.
     var unreadable by remember(urls) { mutableStateOf(false) }
 
     if (url == null || unreadable) return
 
-    // Move to the next candidate, or give up once the list is exhausted.
-    fun advance() {
-        if (index + 1 < urls.size) index += 1 else unreadable = true
-    }
-
-    val request = remember(url) {
-        ImageRequest.Builder(context)
-            .data(url)
-            // Force a software bitmap so pixels can be sampled for luminance.
-            .allowHardware(false)
-            .build()
-    }
-
-    AsyncImage(
-        model = request,
+    BrandMarkImage(
+        url = url,
         contentDescription = name,
-        contentScale = ContentScale.Fit,
-        colorFilter = if (treatment == BrandMark.WHITEN) {
-            ColorFilter.tint(Color.White, BlendMode.SrcIn)
-        } else {
-            null
-        },
-        onSuccess = { state ->
-            val sampled = sampleBrandMark(state.result.image)
-            if (sampled == BrandMark.UNUSABLE) advance() else treatment = sampled
-        },
-        // A logo that never arrives must not hold its slot open either.
-        onError = { advance() },
-        modifier = modifier
-    )
-}
-
-/**
- * Samples a decoded logo down to one 48x48 tile and hands the pixels to
- * [brandMarkTreatment], which owns the decision (and is unit-tested there).
- *
- * Deliberately coarse because this runs once per logo, and it must stay off
- * the hardware path so the pixels can be read at all.
- */
-private fun sampleBrandMark(image: coil3.Image): BrandMark {
-    return try {
-        val src = (image as? coil3.BitmapImage)?.bitmap ?: return BrandMark.AS_IS
-        val small = if (src.width <= 48 && src.height <= 48) {
-            src
-        } else {
-            Bitmap.createScaledBitmap(src, 48, 48, true)
+        modifier = modifier,
+        // Move to the next candidate, or give up once the list is exhausted.
+        onUnusable = {
+            if (index + 1 < urls.size) index += 1 else unreadable = true
         }
-        val pixels = IntArray(small.width * small.height)
-        small.getPixels(pixels, 0, small.width, 0, 0, small.width, small.height)
-        brandMarkTreatment(pixels, small.width, small.height)
-    } catch (_: Exception) {
-        // Undecodable/protected bitmap — leave the logo untouched.
-        BrandMark.AS_IS
-    }
+    )
 }
 
 @Composable

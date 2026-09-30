@@ -46,6 +46,7 @@ import com.kennyb1201.kbstream.data.kb.browseRailArrangementOf
 import com.kennyb1201.kbstream.data.kb.browseRowPlacement
 import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
+import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
@@ -602,6 +603,14 @@ fun KBHomeBrowseRail(
  * the plain surface with the chip's name on it, so the row is legible
  * immediately and upgrades in place rather than holding the rail back for a
  * network walk.
+ *
+ * A brand mark is drawn through [BrandMarkImage] rather than as a plain image,
+ * and that is not cosmetic: a service's or studio's mark is as often as not
+ * the dark glyph-on-transparency TMDB's company and network endpoints default
+ * to, which on this near-black card is a logo that is *there* and invisible.
+ * The shared composable whitens exactly those, and reports the marks that
+ * cannot be drawn at all - a featureless plate, art that never arrives - so
+ * the wordmark stands in instead of an empty card.
  */
 @Composable
 private fun BrowseShortcutTile(
@@ -617,6 +626,10 @@ private fun BrowseShortcutTile(
     }
 
     val clearlogoUrl = art?.clearlogoUrl?.takeIf { it.isNotBlank() }
+    // Set when the resolved mark turns out to be undrawable on this surface:
+    // the chip's own name is then the tile, rather than a blank card that
+    // looks like the artwork is still loading.
+    var markUnusable by remember(clearlogoUrl) { mutableStateOf(false) }
 
     KBCard(
         onClick = onClick,
@@ -629,17 +642,7 @@ private fun BrowseShortcutTile(
                 .background(KBSurface),
             contentAlignment = Alignment.Center
         ) {
-            if (clearlogoUrl != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(clearlogoUrl).build(),
-                    contentDescription = shortcut.name,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxWidth(0.72f)
-                        .height(CollectionTileHeight * 0.5f)
-                )
-            } else {
+            if (clearlogoUrl == null || markUnusable) {
                 // No clearlogo (no art at all, a category TMDB has no logo
                 // for, or the first frame): the chip's own name is the mark.
                 Column(
@@ -655,6 +658,15 @@ private fun BrowseShortcutTile(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+            } else {
+                BrandMarkImage(
+                    url = clearlogoUrl,
+                    contentDescription = shortcut.name,
+                    onUnusable = { markUnusable = true },
+                    modifier = Modifier
+                        .fillMaxWidth(0.72f)
+                        .height(CollectionTileHeight * 0.5f)
+                )
             }
         }
     }
