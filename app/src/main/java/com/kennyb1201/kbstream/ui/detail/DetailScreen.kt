@@ -91,6 +91,8 @@ import coil3.request.allowHardware
 import coil3.size.Size
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
@@ -283,6 +285,23 @@ private data class EpisodeMenuTarget(
     val runtimeMinutes: Int? = null
 )
 
+/**
+ * A NETWORK or PRODUCTION chip whose long-press menu is open.
+ *
+ * The chip's own fields are all the Browse row needs: [categoryKey] is the
+ * browse category the chip belongs to ("services" for a network, "studios"
+ * for a production company), which is what decides the screen a Home tile
+ * opens, and [id]/[name] are the entity the chip already links to. [onHome]
+ * is read when the menu OPENS, so the action says Add or Remove for the state
+ * the mirror is actually in.
+ */
+private data class StudioChipMenuTarget(
+    val categoryKey: String,
+    val id: Int,
+    val name: String,
+    val onHome: Boolean
+)
+
 private data class DetailFactItem(
     val label: String,
     val value: String
@@ -431,6 +450,15 @@ fun DetailScreen(
 ) {
     val scope = rememberCoroutineScope()
     var selectedSeason by remember { mutableStateOf<Int?>(null) }
+
+    // A NETWORK / PRODUCTION chip opens its screen on a press, so its
+    // long-press menu is where the Search browse chips' "keep this on Home"
+    // action lives. The prefs are read when the menu opens and written from
+    // the action; Home re-reads them when it next composes (KBHomeViewModel).
+    val chipMenuContext = androidx.compose.ui.platform.LocalContext.current
+    var studioChipMenu by remember {
+        mutableStateOf<StudioChipMenuTarget?>(null)
+    }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
 
     // Long-press context menu for More Like This / collection rail posters.
@@ -3217,6 +3245,22 @@ fun DetailScreen(
                                                     true
                                                 )
                                             },
+                                            onLongClick = {
+                                                studioChipMenu =
+                                                    StudioChipMenuTarget(
+                                                        categoryKey = "services",
+                                                        id = n.id,
+                                                        name = n.name,
+                                                        onHome =
+                                                            BrowseHomeShortcuts.contains(
+                                                                BrowseHomeShortcuts.list(
+                                                                    chipMenuContext
+                                                                ),
+                                                                "services",
+                                                                n.name
+                                                            )
+                                                    )
+                                            },
                                             modifier = Modifier
                                                 .focusRequester(
                                                     chipFocusRequester
@@ -3282,6 +3326,22 @@ fun DetailScreen(
                                                     c.name,
                                                     false
                                                 )
+                                            },
+                                            onLongClick = {
+                                                studioChipMenu =
+                                                    StudioChipMenuTarget(
+                                                        categoryKey = "studios",
+                                                        id = c.id,
+                                                        name = c.name,
+                                                        onHome =
+                                                            BrowseHomeShortcuts.contains(
+                                                                BrowseHomeShortcuts.list(
+                                                                    chipMenuContext
+                                                                ),
+                                                                "studios",
+                                                                c.name
+                                                            )
+                                                    )
                                             },
                                             modifier = Modifier
                                                 .focusRequester(
@@ -3656,6 +3716,58 @@ fun DetailScreen(
                         review = review,
                         onDismiss = {
                             selectedReview = null
+                        }
+                    )
+                }
+
+                // Long-press on a NETWORK or PRODUCTION chip: mirror it onto
+                // Home exactly like a Search browse chip, so a network the
+                // viewer keeps coming back to gets its own tile in the shared
+                // Browse row. A press already opens the chip's screen, so this
+                // menu holds only what a press cannot say.
+                studioChipMenu?.let { target ->
+                    PosterContextMenu(
+                        title = target.name,
+                        subtitle = if (target.categoryKey == "studios") {
+                            "Production company"
+                        } else {
+                            "Network"
+                        },
+                        actions = listOf(
+                            PosterContextAction(
+                                label = if (target.onHome) {
+                                    "Remove from Home"
+                                } else {
+                                    "Add to Home"
+                                },
+                                description = if (target.onHome) {
+                                    "Take this chip off the Browse row on Home"
+                                } else {
+                                    "Keep this chip on Home, in the Browse row"
+                                },
+                                isDestructive = target.onHome
+                            ) {
+                                if (target.onHome) {
+                                    BrowseHomeShortcuts.remove(
+                                        chipMenuContext,
+                                        target.categoryKey,
+                                        target.name
+                                    )
+                                } else {
+                                    BrowseHomeShortcuts.add(
+                                        chipMenuContext,
+                                        BrowseHomeShortcut(
+                                            categoryKey = target.categoryKey,
+                                            id = target.id,
+                                            name = target.name
+                                        )
+                                    )
+                                }
+                                studioChipMenu = null
+                            }
+                        ),
+                        onDismiss = {
+                            studioChipMenu = null
                         }
                     )
                 }

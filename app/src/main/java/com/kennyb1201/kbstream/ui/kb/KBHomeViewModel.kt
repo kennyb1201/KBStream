@@ -6,14 +6,23 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
+import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+
+/** How many browse-shortcut art lookups run at once on a cold row. */
+private const val BROWSE_ART_CONCURRENCY = 3
 
 /**
  * Home-side state: imported KB COLLECTIONS (each renders as a titled row
@@ -28,6 +37,13 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
         val arrangement: KBHomeOrder = KBHomeOrder(),
         /** Browse chips mirrored to Home, rendered as one shared row. */
         val browseShortcuts: List<BrowseHomeShortcut> = emptyList(),
+        /**
+         * Resolved tile/hero artwork per browse shortcut, keyed by
+         * [BrowseHomeShortcut.chipKey]. Filled in after the row has already
+         * drawn, so a tile that has no art yet (or none at all) keeps its
+         * wordmark instead of holding the rail back.
+         */
+        val browseShortcutArt: Map<String, BrowseShortcutArt> = emptyMap(),
         val isLoading: Boolean = true
     )
 
@@ -35,6 +51,14 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val repository = KBRepository.getInstance(application)
+
+    /**
+     * Session memo of resolved artwork, so a Home resume republishes the tiles
+     * it already knows instead of re-walking TMDB for every shortcut.
+     */
+    private val browseArtCache = mutableMapOf<String, BrowseShortcutArt>()
+
+    private var browseArtJob: Job? = null
 
     init {
         load()
@@ -73,6 +97,77 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
                 browseShortcuts = browseShortcuts,
                 isLoading = false
             )
+            // After the row is on screen, not before it: the tiles must not
+            // wait on TMDB to appear.
+            resolveBrowseShortcutArt(browseShortcuts)
+        }
+    }
+
+    /**
+     * Resolves the artwork for the Browse row's tiles in the background, one
+     * shortcut at a time as each answer lands.
+     *
+     * The work is a single discover page (plus a brand logo, for a service or
+     * studio) per shortcut - see [TmdbRepository.getBrowseShortcutArt] - and it
+     * is deliberately NOT awaited by [load]: Home's first frame draws the
+     * wordmark tiles and each one upgrades to its backdrop/clearlogo when its
+     * art arrives.
+     */
+    private fun resolveBrowseShortcutArt(
+        shortcuts: List<BrowseHomeShortcut>
+    ) {
+        browseArtJob?.cancel()
+
+        // Publish whatever the session already resolved before starting new
+        // work, so a resume does not flash the wordmark fallback over a tile
+        // whose art is sitting in the cache.
+        if (browseArtCache.isNotEmpty()) {
+            _state.value = _state.value.copy(
+                browseShortcutArt = browseArtCache.toMap()
+            )
+        }
+
+        val missing = shortcuts.filter { it.chipKey() !in browseArtCache }
+        if (missing.isEmpty()) return
+
+        val requestedProfileId =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+
+        browseArtJob = viewModelScope.launch {
+            val tmdb = TmdbRepository.getInstance(getApplication())
+            val semaphore = Semaphore(BROWSE_ART_CONCURRENCY)
+
+            missing.forEach { shortcut ->
+                launch {
+                    semaphore.withPermit {
+                        val art = runCatchingCancellable {
+                            tmdb.getBrowseShortcutArt(
+                                categoryKey = shortcut.categoryKey,
+                                entryId = shortcut.id,
+                                providerId = shortcut.providerId,
+                                networkOrCompanyId = shortcut.networkOrCompanyId,
+                                networkIsCompany = shortcut.networkIsCompany
+                            )
+                        }.getOrNull() ?: return@withPermit
+
+                        // A profile switch clears the row and resets the
+                        // state; a late answer must not paint the outgoing
+                        // profile's tile into the incoming one.
+                        if (
+                            requestedProfileId !=
+                            com.kennyb1201.kbstream.data.sync.ProfileManager
+                                .activeProfile.value?.id
+                        ) {
+                            return@withPermit
+                        }
+
+                        browseArtCache[shortcut.chipKey()] = art
+                        _state.value = _state.value.copy(
+                            browseShortcutArt = browseArtCache.toMap()
+                        )
+                    }
+                }
+            }
         }
     }
 

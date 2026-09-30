@@ -33,8 +33,11 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
+import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.sync.ProfileManager
+import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -1760,6 +1763,8 @@ private fun UpcomingEpisodeCard(
 private fun HomeHeroHost(
     focusedItem: State<MetaPreview?>,
     focusedFolder: State<KBFolder?>,
+    focusedBrowseShortcut: State<BrowseHomeShortcut?>,
+    browseShortcutArt: Map<String, BrowseShortcutArt>,
     continueWatchingItem: State<UpNextItem?>,
     heroMeta: State<Meta?>,
     heroTmdbDetail: State<TmdbDetail?>,
@@ -1831,7 +1836,30 @@ private fun HomeHeroHost(
         )
     }
 
-    (folderPreview ?: focusedItem.value)?.let {
+    // A focused Browse tile owns the hero the same way a folder does, but its
+    // artwork is the tile lookup's answer (see KBHomeViewModel) rather than a
+    // manifest: it can still be null while that lookup is in flight, and the
+    // hero then falls back to the shortcut's own name.
+    val heroBrowse = focusedBrowseShortcut.value
+    val browseArt =
+        heroBrowse?.let { shortcut -> browseShortcutArt[shortcut.chipKey()] }
+    val browseBackdrop =
+        browseArt?.backdropUrl?.takeIf { it.isNotBlank() }
+    val browseLogo =
+        browseArt?.clearlogoUrl?.takeIf { it.isNotBlank() }
+    val browsePreview = heroBrowse?.let { shortcut ->
+        MetaPreview(
+            id = "browse:${shortcut.chipKey()}",
+            type = "movie",
+            name = shortcut.name
+        )
+    }
+
+    // A rail tile that is not a catalog item owns the hero whenever it is
+    // focused; the catalog item's meta/artwork/trailer is then left out.
+    val heroOverridden = heroFolder != null || heroBrowse != null
+
+    (browsePreview ?: folderPreview ?: focusedItem.value)?.let {
         // KB-style proportional hero: give the rails a fixed fraction of the
         // real screen height, and the hero whatever remains. Scales to any TV
         // density, unlike the old fixed 300.dp which pushed the first rail's
@@ -1846,13 +1874,22 @@ private fun HomeHeroHost(
         HomeHero(
             preview = it,
             heroHeight = heroComputedHeight,
-            meta = if (heroFolder != null) null else heroMeta.value,
-            tmdbDetail = if (heroFolder != null) null else heroTmdbDetail.value,
-            heroBackdropUrl = if (heroFolder != null) folderBackdrop else heroBackdropUrl.value,
-            heroLogoUrl = if (heroFolder != null) folderLogo else heroLogoUrl.value,
-            trailerKey = if (heroFolder != null) null else heroTrailerKey.value,
+            meta = if (heroOverridden) null else heroMeta.value,
+            tmdbDetail = if (heroOverridden) null else heroTmdbDetail.value,
+            heroBackdropUrl = when {
+                heroFolder != null -> folderBackdrop
+                heroBrowse != null -> browseBackdrop
+                else -> heroBackdropUrl.value
+            },
+            heroLogoUrl = when {
+                heroFolder != null -> folderLogo
+                heroBrowse != null -> browseLogo
+                else -> heroLogoUrl.value
+            },
+            trailerKey = if (heroOverridden) null else heroTrailerKey.value,
             autoPlayTrailer =
-                heroTrailerReady &&
+                !heroOverridden &&
+                    heroTrailerReady &&
                     continueWatchingItem.value == null &&
                     // Settings > Playback: hero trailer autoplay toggle
                     AppPreferences.getHeroTrailerAutoplay(context),
@@ -1862,13 +1899,13 @@ private fun HomeHeroHost(
             // Collection manifests supply their own wordmark logo — render it
             // larger than the shared TMDB hero logo.
             heroLogoWidth =
-                if (heroFolder != null) {
+                if (heroOverridden) {
                     CollectionHeroLogoWidth
                 } else {
                     HeroLogoWidth
                 },
             heroLogoHeight =
-                if (heroFolder != null) {
+                if (heroOverridden) {
                     CollectionHeroLogoHeight
                 } else {
                     HeroLogoHeight
@@ -2390,6 +2427,15 @@ fun HomeScreen(
     }
     var focusedContinueWatchingItem by focusedContinueWatchingItemState
 
+    // Browse tile currently under focus (null = the hero belongs to a catalog
+    // item, a KB folder or Continue Watching). Its resolved artwork drives the
+    // hero, so a Browse row gets the same "focus swaps the hero" treatment the
+    // collection folders do.
+    val focusedBrowseShortcutState = remember {
+        mutableStateOf<BrowseHomeShortcut?>(null)
+    }
+    var focusedBrowseShortcut by focusedBrowseShortcutState
+
     // Scroll position of the rails LazyColumn; read/written by selectHero so
     // the Continue Watching row can be cleared out of the viewport on rail
     // focus (see below).
@@ -2527,6 +2573,7 @@ fun HomeScreen(
         focusedItem = item
         focusedFolder = null
         focusedContinueWatchingItem = null
+        focusedBrowseShortcut = null
     }
 
     /**
@@ -2543,6 +2590,7 @@ fun HomeScreen(
         focusedItem = item
         focusedFolder = null
         focusedContinueWatchingItem = upNextItem
+        focusedBrowseShortcut = null
     }
 
     // Re-apply rail display settings changed in Settings while we were away
@@ -2718,6 +2766,8 @@ fun HomeScreen(
             HomeHeroHost(
                 focusedItem = focusedItemState,
                 focusedFolder = focusedFolderState,
+                focusedBrowseShortcut = focusedBrowseShortcutState,
+                browseShortcutArt = kbState.browseShortcutArt,
                 continueWatchingItem = focusedContinueWatchingItemState,
                 heroMeta = heroMetaState,
                 heroTmdbDetail = heroTmdbDetailState,
@@ -3083,11 +3133,13 @@ fun HomeScreen(
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRow ->
                                         com.kennyb1201.kbstream.ui.kb.KBHomeBrowseRail(
                                             shortcuts = e.shortcuts,
+                                            artByKey = kbState.browseShortcutArt,
                                             onOpenShortcut = onOpenBrowseShortcut,
-                                            onShortcutFocused = {
+                                            onShortcutFocused = { shortcut ->
                                                 userAdjustedFocus = true
                                                 focusedFolder = null
                                                 focusedContinueWatchingItem = null
+                                                focusedBrowseShortcut = shortcut
                                             }
                                         )
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
@@ -3098,6 +3150,7 @@ fun HomeScreen(
                                                 userAdjustedFocus = true
                                                 focusedFolder = folder
                                                 focusedContinueWatchingItem = null
+                                                focusedBrowseShortcut = null
                                             }
                                         )
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail -> {

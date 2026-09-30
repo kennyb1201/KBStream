@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -42,6 +43,7 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.browseRowPlacement
 import com.kennyb1201.kbstream.data.kb.browseShortcutCategoryLabel
 import com.kennyb1201.kbstream.data.kb.chipKey
+import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
@@ -480,12 +482,19 @@ private fun CollectionFolderTile(
  *
  * Each tile opens the screen its chip opens in Browse, not a copy of it: the
  * chip's own category decides (genre, keyword, service/network, studio,
- * collection, decade), so the row costs no network work and can never drift
- * from what the browse browser shows.
+ * collection, decade), so the row can never drift from what the browse browser
+ * shows. Its artwork is resolved separately, after the row has drawn: a browse
+ * chip carries no manifest cover and no curated art, so each tile's backdrop
+ * and clearlogo come from one TMDB discover lookup (see KBHomeViewModel and
+ * TmdbRepository.getBrowseShortcutArt), and a shortcut TMDB has nothing for
+ * simply keeps the wordmark it has always drawn.
  */
 @Composable
 fun KBHomeBrowseRail(
     shortcuts: List<BrowseHomeShortcut>,
+    // Resolved tile/hero artwork per chip key. Empty on the first frame, then
+    // filled in per shortcut as each lookup lands.
+    artByKey: Map<String, BrowseShortcutArt> = emptyMap(),
     onOpenShortcut: (BrowseHomeShortcut) -> Unit,
     onShortcutFocused: ((BrowseHomeShortcut) -> Unit)? = null
 ) {
@@ -518,6 +527,7 @@ fun KBHomeBrowseRail(
             ) { shortcut ->
                 BrowseShortcutTile(
                     shortcut = shortcut,
+                    art = artByKey[shortcut.chipKey()],
                     onClick = { onOpenShortcut(shortcut) },
                     onFocus = onShortcutFocused?.let { callback ->
                         { callback(shortcut) }
@@ -529,18 +539,20 @@ fun KBHomeBrowseRail(
 }
 
 /**
- * One Browse tile: a landscape card carrying the chip's name as a wordmark
- * over the app's own surface, with its category under it.
+ * One Browse tile: a landscape card that draws the shortcut's resolved
+ * backdrop as its cover, with the shortcut's clearlogo over it (and its
+ * category underneath).
  *
- * No cover artwork is fetched for these. A browse chip's "logo" would be TMDB
- * artwork that only exists after the resolver has run (the same reason
- * keyword and collection chips are keyed by NAME), and paying that on Home
- * for a shortcut shelf would put a network walk in front of the first frame.
- * The wordmark is what the tile says instead - legible, immediate and honest.
+ * The wordmark is the fallback, not the design. A shortcut TMDB has no art
+ * for - and every tile on the first frame, before the lookups land - keeps
+ * the plain surface with the chip's name on it, so the row is legible
+ * immediately and upgrades in place rather than holding the rail back for a
+ * network walk.
  */
 @Composable
 private fun BrowseShortcutTile(
     shortcut: BrowseHomeShortcut,
+    art: BrowseShortcutArt?,
     onClick: () -> Unit,
     onFocus: (() -> Unit)? = null
 ) {
@@ -549,6 +561,9 @@ private fun BrowseShortcutTile(
         isFocused = it.isFocused
         if (it.isFocused) onFocus?.invoke()
     }
+
+    val backdropUrl = art?.backdropUrl?.takeIf { it.isNotBlank() }
+    val clearlogoUrl = art?.clearlogoUrl?.takeIf { it.isNotBlank() }
 
     KBCard(
         onClick = onClick,
@@ -561,26 +576,94 @@ private fun BrowseShortcutTile(
                 .background(KBSurface),
             contentAlignment = Alignment.Center
         ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(horizontal = 10.dp)
-            ) {
-                Text(
-                    text = shortcut.name.uppercase(),
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+            if (backdropUrl != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(backdropUrl).build(),
+                    contentDescription = shortcut.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .matchParentSize()
                 )
+            }
+
+            if (clearlogoUrl != null) {
+                // A resolved clearlogo is a transparent wordmark, so it sits
+                // on the artwork with a light scrim behind it - the same
+                // treatment the collection tiles give a cover.
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .background(
+                            androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    KBVoid.copy(alpha = 0.12f),
+                                    KBVoid.copy(alpha = 0.58f)
+                                )
+                            )
+                        )
+                )
+
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(clearlogoUrl).build(),
+                    contentDescription = shortcut.name,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth(0.68f)
+                        .height(CollectionTileHeight * 0.46f)
+                )
+
                 Text(
                     text = browseShortcutCategoryLabel(shortcut.categoryKey),
-                    color = KBTextHi.copy(alpha = 0.62f),
+                    color = KBTextHi.copy(alpha = 0.72f),
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 3.dp)
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(8.dp)
                 )
+            } else {
+                // No clearlogo (no art at all, a keyword TMDB has no logo for,
+                // or the first frame): the chip's own name is the mark, over
+                // the backdrop when there is one.
+                if (backdropUrl != null) {
+                    Box(
+                        modifier = Modifier
+                            .matchParentSize()
+                            .background(
+                                androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(
+                                        KBVoid.copy(alpha = 0.20f),
+                                        KBVoid.copy(alpha = 0.78f)
+                                    )
+                                )
+                            )
+                    )
+                }
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(horizontal = 10.dp)
+                ) {
+                    Text(
+                        text = shortcut.name.uppercase(),
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = browseShortcutCategoryLabel(shortcut.categoryKey),
+                        color = KBTextHi.copy(alpha = 0.62f),
+                        style = MaterialTheme.typography.labelSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                }
             }
         }
     }

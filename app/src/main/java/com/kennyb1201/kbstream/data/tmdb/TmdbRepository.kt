@@ -36,6 +36,20 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
+/**
+ * Artwork for a Home Browse tile: a backdrop to draw as its cover and a
+ * clearlogo to sit over it.
+ *
+ * Null fields are the honest answer for a shortcut TMDB has no art for (a
+ * keyword with no backdrop-carrying titles, a service whose brand mark is not
+ * in the registry); the tile then falls back to its own wordmark rather than
+ * drawing a blank card.
+ */
+data class BrowseShortcutArt(
+    val backdropUrl: String? = null,
+    val clearlogoUrl: String? = null
+)
+
 data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
 data class StudioSection(val title: String, val items: List<StudioItem>)
 
@@ -2420,6 +2434,170 @@ class TmdbRepository private constructor(context: Context) :
 
         if (candidates.isNotEmpty()) return candidates
         return providerId?.let { listOfNotNull(watchProviderLogoUrl(it)) }.orEmpty()
+    }
+
+    /**
+     * The top title of one browse dimension, for a tile's backdrop: a single
+     * discover page, filtered by the dimension the shortcut names.
+     *
+     * One page on purpose. A tile is a shortcut, not a screen: the genre /
+     * network / decade page behind it resolves its own rails when it opens,
+     * and paying a screen's worth of discover calls here would put that work
+     * in front of the first frame of Home. The popularity sort plus the same
+     * vote floor the browse rails use keeps an audience-less stub off the
+     * tile, and only a result that actually carries a backdrop is worth
+     * returning - the tile draws it full-bleed.
+     */
+    private suspend fun browseSpotlightItem(
+        categoryKey: String,
+        entryId: Int,
+        providerId: Int?,
+        networkOrCompanyId: Int?,
+        networkIsCompany: Boolean
+    ): TmdbDiscoverItem? {
+        if (apiKey.isBlank()) return null
+
+        // Exactly ONE dimension filter is set: TMDB ANDs a discover's filters,
+        // and a service that carries both a watch-provider id and a brand id
+        // would then ask for titles on the service AND made by the brand,
+        // which is a different (and much smaller) shelf than either. The
+        // provider id wins where there is one, matching the screen's rails.
+        val withCompanies =
+            when {
+                categoryKey == "studios" -> entryId.toString()
+
+                categoryKey == "services" &&
+                    providerId == null &&
+                    networkIsCompany ->
+                    (networkOrCompanyId ?: entryId).toString()
+
+                else -> null
+            }
+
+        val withNetworks =
+            if (
+                categoryKey == "services" &&
+                providerId == null &&
+                !networkIsCompany
+            ) {
+                (networkOrCompanyId ?: entryId).toString()
+            } else {
+                null
+            }
+
+        return runCatchingCancellable {
+            api.discoverMovieGeneric(
+                apiKey = apiKey,
+                page = 1,
+                sortBy = "popularity.desc",
+                voteCountGte = 50,
+                withGenres =
+                    entryId.toString().takeIf { categoryKey == "genres" },
+                withKeywords =
+                    entryId.toString().takeIf { categoryKey == "keywords" },
+                withCompanies = withCompanies,
+                withNetworks = withNetworks,
+                withWatchProviders =
+                    providerId?.toString().takeIf { categoryKey == "services" },
+                watchRegion = "US".takeIf { categoryKey == "services" },
+                primaryReleaseDateGte =
+                    "$entryId-01-01".takeIf { categoryKey == "decades" },
+                primaryReleaseDateLte =
+                    "${entryId + 9}-12-31".takeIf { categoryKey == "decades" }
+            ).results
+                .firstOrNull { !it.backdropPath.isNullOrBlank() }
+        }.getOrNull()
+    }
+
+    /**
+     * The artwork a Home Browse shortcut's tile - and the hero above it -
+     * should draw, resolved in the shortcut's OWN dimension.
+     *
+     * A browse chip carries no manifest and no curated art: the browse
+     * browser's chips are text, and the destination screen resolves its own
+     * header. So the tile is given what that screen shows first - one
+     * spotlight title from the dimension itself (a genre's most popular, a
+     * studio's, a decade's, a service's, a keyword's) - as its backdrop, with
+     * the clearlogo drawn over it. A service or studio is the exception in the
+     * other direction: its BRAND mark is the clearlogo, the same rule the
+     * studio screen's header follows (see [getEntityLogoUrls]). A collection
+     * needs neither, because it has artwork of its own (see [getCollection]).
+     *
+     * Failure-tolerant throughout: a shortcut TMDB has no art for comes back
+     * with null fields (or as null), and the tile keeps the wordmark it draws
+     * today rather than showing a blank card.
+     */
+    suspend fun getBrowseShortcutArt(
+        categoryKey: String,
+        entryId: Int,
+        providerId: Int? = null,
+        networkOrCompanyId: Int? = null,
+        networkIsCompany: Boolean = false
+    ): BrowseShortcutArt? {
+        if (apiKey.isBlank()) return null
+
+        var backdropUrl: String? = null
+        var clearlogoUrl: String? = null
+
+        if (categoryKey == "collections") {
+            val collection = getCollection(entryId)
+            backdropUrl =
+                collection?.backdropPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { BACKDROP_BASE + it }
+                    ?: collection?.posterPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { POSTER_BASE + it }
+        } else {
+            val spotlight = browseSpotlightItem(
+                categoryKey = categoryKey,
+                entryId = entryId,
+                providerId = providerId,
+                networkOrCompanyId = networkOrCompanyId,
+                networkIsCompany = networkIsCompany
+            )
+
+            if (spotlight != null) {
+                backdropUrl =
+                    spotlight.backdropPath
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { BACKDROP_BASE + it }
+
+                // The spotlight's own wordmark: the only logo a genre,
+                // keyword or decade has to offer, since none of them owns a
+                // brand mark of its own.
+                clearlogoUrl =
+                    runCatchingCancellable {
+                        val mediaType =
+                            if (spotlight.title.isNullOrBlank()) "series" else "movie"
+                        fetchEnrichedMetaCached("tmdb:${spotlight.id}", mediaType)
+                            ?.bestLogoPath()
+                            ?.let { LOGO_BASE + it }
+                    }.getOrNull()
+            }
+        }
+
+        // A service or studio draws its brand mark, not the spotlight
+        // title's; the spotlight logo above is only the fallback for a brand
+        // whose entity artwork TMDB does not hold.
+        if (categoryKey == "services" || categoryKey == "studios") {
+            clearlogoUrl =
+                runCatchingCancellable {
+                    getEntityLogoUrls(
+                        entityId = networkOrCompanyId ?: entryId,
+                        isNetwork = categoryKey == "services" && !networkIsCompany,
+                        providerId = providerId
+                    ).firstOrNull()
+                }.getOrNull()
+                    ?: clearlogoUrl
+        }
+
+        if (backdropUrl == null && clearlogoUrl == null) return null
+
+        return BrowseShortcutArt(
+            backdropUrl = backdropUrl,
+            clearlogoUrl = clearlogoUrl
+        )
     }
 
     /**

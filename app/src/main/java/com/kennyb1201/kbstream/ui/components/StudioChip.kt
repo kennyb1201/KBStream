@@ -34,12 +34,18 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 /**
  * Compact studio/network chip for the detail screen.
  * White background with dark logos — the original look.
+ *
+ * [onLongClick] is the chip's context menu (the detail screen offers "add
+ * this network / company to Home"); the press behaviour itself is unchanged,
+ * because [rememberLongPressModifier] only swallows a long hold and lets a
+ * short one fall through to [onClick].
  */
 @Composable
 fun StudioChip(
     name: String,
     logoPath: String?,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val cardShape = KBShapeChip
@@ -86,6 +92,7 @@ fun StudioChip(
         modifier = modifier
             .width(120.dp)
             .height(54.dp)
+            .then(rememberLongPressModifier(onLongClick))
             .padding(end = 8.dp)
     ) {
         Box(
