@@ -1084,8 +1084,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _hiddenBrowseChips.asStateFlow()
 
     /**
-     * Browse chips this profile mirrored to Home (the shared Browse row), in
-     * the order they were added.
+     * Browse chips this profile mirrored to Home, in the order they were
+     * added. Home groups them into one rail per kind (see BrowseShortcutRail).
      *
      * Held here as well as in prefs so the chip's own long-press menu can say
      * "Add to Home" or "Remove from Home" without a disk read per redraw.

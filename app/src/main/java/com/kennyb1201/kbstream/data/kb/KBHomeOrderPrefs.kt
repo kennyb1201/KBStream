@@ -18,10 +18,11 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
  *    in pin order.
  *  - [hidden]: rail keys removed from Home.
  *
- * The Browse row (the browse-menu chips mirrored to Home) is a rail in both
- * senses: it takes an entry in [order], it can be pinned, and it can be
- * hidden. It is the only key outside the two import families that gets a pin
- * control, which is why "may this key be pinned?" is asked through
+ * A Browse rail (a group of browse-menu chips mirrored to Home: genres and
+ * tags, services and networks, studios, decades, collections) is a rail in
+ * both senses: it takes an entry in [order], it can be pinned, and it can be
+ * hidden. They are the only keys outside the two import families that get a
+ * pin control, which is why "may this key be pinned?" is asked through
  * [KBHomeOrderPrefs.isPinnableKey] rather than through the collection test.
  */
 @JsonClass(generateAdapter = true)
@@ -44,7 +45,7 @@ internal const val KB_COLLECTION_KEY_PREFIX = "kb:"
 /**
  * Top/bottom moves on the merged arrangement.
  *
- * TOP pins a PINNABLE rail (a collection or the Browse row) to the head of the
+ * TOP pins a PINNABLE rail (a collection or a Browse rail) to the head of the
  * pinned block (the absolute first rail), but only moves a CATALOG to the head
  * of the order block — a catalog parked in the pinned list could never be
  * unpinned, because the manager has no pin control on a catalog row, so it
@@ -87,7 +88,7 @@ internal fun moveRailToEnd(
 }
 
 /**
- * Pin or unpin one PINNABLE rail (a collection or the Browse row). Keys with
+ * Pin or unpin one PINNABLE rail (a collection or a Browse rail). Keys with
  * no pin control are returned unchanged (a catalog has no pin control, and one
  * sitting in `pinned` could never be taken back out — see [moveRailToEnd]).
  *
@@ -101,7 +102,7 @@ internal fun moveRailToEnd(
  * removed the key from [KBHomeOrder.pinned] did not un-pin the rail, it deleted
  * it from Home and dropped its manager row into the HIDDEN section.
  *
- * "Never arranged" has no such consequence for the Browse row - it defaults to
+ * "Never arranged" has no such consequence for a Browse rail - it defaults to
  * visible (see KBHomeSlots) - but it is pinned and unpinned through this same
  * path so the manager has one control for both.
  */
@@ -125,7 +126,7 @@ internal fun toggleCollectionPin(value: KBHomeOrder, key: String): KBHomeOrder {
  * Read-time repair for arrangements written before pinned was
  * collections-only: catalog keys sitting in [KBHomeOrder.pinned] are moved to
  * the head of the order block, in the sequence they were pinned in. Pinned
- * collections and the Browse row are left where they are - see
+ * collections and the Browse rails are left where they are - see
  * [KBHomeOrderPrefs.isPinnableKey].
  *
  * This is what makes an already-stuck catalog movable again without the user
@@ -205,7 +206,7 @@ object KBHomeOrderPrefs {
         key.startsWith(KB_COLLECTION_KEY_PREFIX)
 
     /**
-     * True for a rail the manager can PIN: a collection, or the Browse row.
+     * True for a rail the manager can PIN: a collection, or a Browse rail.
      *
      * Catalog rails are deliberately not pinnable - the manager offers no pin
      * control on a catalog row, so one that reached the pinned list could

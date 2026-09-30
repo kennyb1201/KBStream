@@ -22,7 +22,7 @@ class BrowseHomeShortcutsTest {
         name: String = "Comedy"
     ) = BrowseHomeShortcut(categoryKey = categoryKey, id = id, name = name)
 
-    private val row = BrowseHomeShortcuts.ROW_KEY
+    private val row = BrowseHomeShortcuts.LEGACY_ROW_KEY
     private val colA = "kb:My Collection"
     private val catA = "addon:https://a.example:movie:top"
 
@@ -45,12 +45,16 @@ class BrowseHomeShortcutsTest {
     }
 
     @Test
-    fun `the row's key is in its own space, apart from collections and catalogs`() {
-        assertTrue(BrowseHomeShortcuts.isRowKey(row))
+    fun `a browse key is in its own space, apart from collections and catalogs`() {
+        assertTrue(BrowseHomeShortcuts.isLegacyRowKey(row))
         assertTrue(BrowseHomeShortcuts.isShortcutKey(row))
+        assertTrue(BrowseHomeShortcuts.isShortcutKey(BrowseShortcutRail.GENRES_TAGS.key))
+        assertTrue(BrowseHomeShortcuts.isShortcutKey(BrowseShortcutRail.COLLECTIONS.key))
         assertFalse(BrowseHomeShortcuts.isShortcutKey(colA))
         assertFalse(BrowseHomeShortcuts.isShortcutKey(catA))
-        assertFalse(BrowseHomeShortcuts.isRowKey(colA))
+        assertFalse(BrowseHomeShortcuts.isLegacyRowKey(colA))
+        // A collection's key is a different key space from a collection CHIP.
+        assertFalse(BrowseHomeShortcuts.isLegacyRowKey(BrowseShortcutRail.COLLECTIONS.key))
     }
 
     @Test
@@ -194,6 +198,131 @@ class BrowseHomeShortcutsTest {
         // The row and the collection stay pinned; only the catalog is lifted.
         assertEquals(listOf(row, colA), healed.pinned)
         assertEquals(listOf(catA), healed.order)
+    }
+
+    // ── the rails ───────────────────────────────────────────────────
+
+    @Test
+    fun `each rail key is its own, and every rail is pinnable`() {
+        val keys = BrowseShortcutRail.entries.map { it.key }
+        assertEquals(keys.size, keys.toSet().size)
+        keys.forEach { key ->
+            assertTrue(
+                "$key must be pinnable, it is a rail with a pin control",
+                KBHomeOrderPrefs.isPinnableKey(key)
+            )
+            assertTrue("$key must not collide with the legacy row", key != row)
+        }
+    }
+
+    @Test
+    fun `a chip's category decides its rail`() {
+        // Genres and tags share a rail: both browse by subject.
+        assertEquals(BrowseShortcutRail.GENRES_TAGS, browseShortcutRail("genres"))
+        assertEquals(BrowseShortcutRail.GENRES_TAGS, browseShortcutRail("KEYWORDS"))
+        // A network chip added from a show's Detail page and a service chip
+        // added from Browse end up on the same rail.
+        assertEquals(BrowseShortcutRail.SERVICES, browseShortcutRail("services"))
+        assertEquals(BrowseShortcutRail.STUDIOS, browseShortcutRail("studios"))
+        assertEquals(BrowseShortcutRail.DECADES, browseShortcutRail("decades"))
+        assertEquals(BrowseShortcutRail.COLLECTIONS, browseShortcutRail("collections"))
+        assertEquals(null, browseShortcutRail("vibes"))
+        assertEquals(null, browseShortcutRail(null))
+    }
+
+    @Test
+    fun `chips render as one rail per kind, in a fixed order`() {
+        val rails = browseHomeRails(
+            listOf(
+                shortcut("studios", 1, "A24"),
+                shortcut("genres", 35, "Comedy"),
+                shortcut("keywords", 9715, "Superhero"),
+                shortcut("services", 8, "Netflix"),
+                shortcut("decades", 1990, "1990s")
+            )
+        )
+
+        // Fixed order, not "however they were added": adding a studio must
+        // never move the genres rail.
+        assertEquals(
+            listOf(
+                BrowseShortcutRail.GENRES_TAGS.key,
+                BrowseShortcutRail.SERVICES.key,
+                BrowseShortcutRail.STUDIOS.key,
+                BrowseShortcutRail.DECADES.key
+            ),
+            rails.map { it.key }
+        )
+
+        // The shared rail holds the genre AND the tag, in the order added.
+        val genresAndTags = rails.first()
+        assertEquals("Genres & Tags", genresAndTags.title)
+        assertEquals(listOf("Comedy", "Superhero"), genresAndTags.shortcuts.map { it.name })
+    }
+
+    @Test
+    fun `a rail with nothing in it is not a rail`() {
+        val rails = browseHomeRails(listOf(shortcut("services", 8, "Netflix")))
+
+        assertEquals(1, rails.size)
+        assertEquals(BrowseShortcutRail.SERVICES.key, rails.single().key)
+        assertEquals("Services & Networks", rails.single().title)
+        assertEquals(emptyList<BrowseHomeRail>(), browseHomeRails(emptyList()))
+    }
+
+    @Test
+    fun `a category this build does not know keeps its tiles on the legacy row`() {
+        // A blob written by a newer build: dropping these would silently
+        // delete tiles the viewer added.
+        val rails = browseHomeRails(
+            listOf(shortcut("genres", 35, "Comedy"), shortcut("vibes", 1, "Chill"))
+        )
+
+        assertEquals(2, rails.size)
+        assertEquals(row, rails.last().key)
+        assertEquals(listOf("Chill"), rails.last().shortcuts.map { it.name })
+    }
+
+    @Test
+    fun `a rail takes over from the legacy row only once its own key is arranged`() {
+        val own = BrowseShortcutRail.SERVICES.key
+
+        // Untouched rails inherit the old shared row's flags, so an install
+        // that pinned or placed that row keeps it there (and a hidden row
+        // stays hidden).
+        val inherited = browseRailArrangementOf(
+            key = own,
+            legacyKey = row,
+            pinnedKeys = setOf(row),
+            order = emptyList(),
+            hiddenSet = emptySet()
+        )
+        assertTrue(inherited.pinned)
+        assertFalse(inherited.hidden)
+        assertFalse(inherited.arranged)
+
+        // Once the rail's own key appears, it wins - the legacy row's pin
+        // must not drag it along.
+        val own2 = browseRailArrangementOf(
+            key = own,
+            legacyKey = row,
+            pinnedKeys = setOf(row),
+            order = listOf(own),
+            hiddenSet = emptySet()
+        )
+        assertFalse(own2.pinned)
+        assertTrue(own2.arranged)
+
+        // And a rail the viewer hid is hidden even though it has no order
+        // entry of its own.
+        val hiddenRail = browseRailArrangementOf(
+            key = own,
+            legacyKey = row,
+            pinnedKeys = emptySet(),
+            order = emptyList(),
+            hiddenSet = setOf(own)
+        )
+        assertTrue(hiddenRail.hidden)
     }
 
     // ── the tile's caption ──────────────────────────────────────────

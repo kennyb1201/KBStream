@@ -578,6 +578,13 @@ fun SearchScreen(
                 categoryKey,
                 entry.name
             )
+            // The rail the chip will land in, named in the menu so the
+            // action says WHERE: chips are grouped by kind (genres and tags
+            // together, services and networks together, ...).
+            val railTitle =
+                com.kennyb1201.kbstream.data.kb.browseShortcutRail(categoryKey)
+                    ?.title
+                    ?: "Browse"
             PosterContextMenu(
                 title = entry.name,
                 subtitle = "Browse chip",
@@ -589,9 +596,9 @@ fun SearchScreen(
                             "Add to Home"
                         },
                         description = if (onHome) {
-                            "Take this chip off the Browse row on Home"
+                            "Take this chip off the $railTitle rail on Home"
                         } else {
-                            "Keep this chip on Home, in the Browse row"
+                            "Keep this chip on Home, in the $railTitle rail"
                         },
                         isDestructive = onHome
                     ) {

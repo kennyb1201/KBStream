@@ -16,7 +16,9 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
 import com.kennyb1201.kbstream.data.kb.moveRailToEnd
+import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
+import com.kennyb1201.kbstream.data.kb.browseHomeRails
 import com.kennyb1201.kbstream.data.kb.toggleCollectionPin
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
@@ -79,11 +81,13 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         val profileUrls: List<String> = emptyList(),
         val collections: List<ManagedCollection> = emptyList(),
         /**
-         * How many browse chips are mirrored to Home. The manager lists the
-         * shared Browse row only while it has something in it, and needs the
-         * count for the row's own subtitle.
+         * The browse rails that have chips in them, in the order Home draws
+         * them (genres & tags, services & networks, studios, decades,
+         * collections). The manager lists one row per rail - each is pinned,
+         * moved and hidden on its own - and takes the rail's name and its
+         * chip count from here.
          */
-        val browseShortcutCount: Int = 0,
+        val browseRails: List<BrowseHomeRail> = emptyList(),
         val statusMessage: String? = null
     )
 
@@ -237,7 +241,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         isHidden = key in prefs.hiddenSet || key !in arranged
                     )
                 },
-                browseShortcutCount = BrowseHomeShortcuts.list(context).size,
+                browseRails = browseHomeRails(BrowseHomeShortcuts.list(context)),
                 statusMessage = _collections.value.statusMessage
             )
         }
@@ -478,17 +482,12 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun mergedRailKeys(prefs: KBHomeOrder): List<String> {
         val collectionKeys = _collections.value.collections.map { it.key }
-        // The Browse row is a managed rail too - it can be pinned and moved -
-        // so the manager has to know about it whenever it renders on Home,
-        // or it could never be arranged at all. It leads the default block:
-        // Home puts it directly under the Top Today rows, which are the head
-        // of the addon block here.
-        val browseKeys =
-            if (_collections.value.browseShortcutCount > 0) {
-                listOf(BrowseHomeShortcuts.ROW_KEY)
-            } else {
-                emptyList()
-            }
+        // The browse rails are managed rails too - each can be pinned and
+        // moved on its own - so the manager has to know about every one that
+        // renders on Home, or it could never be arranged at all. They lead the
+        // default block: Home puts them directly under the Top Today rows,
+        // which are the head of the addon block here.
+        val browseKeys = _collections.value.browseRails.map { rail -> rail.key }
         val urls = manifestUrlByAddonId
         val addonKeys = _catalogConfigurations.value
             .filter { it.catalog.showOnHome }

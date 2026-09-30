@@ -3722,10 +3722,18 @@ fun DetailScreen(
 
                 // Long-press on a NETWORK or PRODUCTION chip: mirror it onto
                 // Home exactly like a Search browse chip, so a network the
-                // viewer keeps coming back to gets its own tile in the shared
-                // Browse row. A press already opens the chip's screen, so this
-                // menu holds only what a press cannot say.
+                // viewer keeps coming back to gets its own tile on Home. The
+                // chip's own category decides the rail - a network lands on
+                // the Services & Networks rail, a production company on the
+                // Studios rail - so the tile joins the right row without the
+                // menu having to choose one. A press already opens the chip's
+                // screen, so this menu holds only what a press cannot say.
                 studioChipMenu?.let { target ->
+                    val railTitle =
+                        com.kennyb1201.kbstream.data.kb
+                            .browseShortcutRail(target.categoryKey)
+                            ?.title
+                            ?: "Browse"
                     PosterContextMenu(
                         title = target.name,
                         subtitle = if (target.categoryKey == "studios") {
@@ -3741,9 +3749,9 @@ fun DetailScreen(
                                     "Add to Home"
                                 },
                                 description = if (target.onHome) {
-                                    "Take this chip off the Browse row on Home"
+                                    "Take this chip off the $railTitle rail on Home"
                                 } else {
-                                    "Keep this chip on Home, in the Browse row"
+                                    "Keep this chip on Home, in the $railTitle rail"
                                 },
                                 isDestructive = target.onHome
                             ) {

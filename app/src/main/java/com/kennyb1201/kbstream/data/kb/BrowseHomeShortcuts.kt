@@ -50,11 +50,18 @@ internal data class BrowseHomeShortcutsBlob(
  * like the hidden-chip record, so a chip added on one profile never shows up
  * on another profile's Home.
  *
- * The whole set renders as ONE row ("Browse"), not one row per chip: a viewer
- * adding six genres wants six tiles in a place they can find, not six rails
- * wedged between Continue Watching and the catalog. The row is a single
- * arrangement key (see [ROW_KEY]), so it is pinned and moved as a unit, and
- * the tiles inside it keep the order they were added in.
+ * The chips render as rails by KIND, not one row per chip and not one shared
+ * row for everything: genres and tags together, services and networks
+ * together, then studios, decades and collections each on their own (see
+ * [BrowseShortcutRail]). A viewer adding six genres wants one rail of six
+ * tiles, not six rails wedged between Continue Watching and the catalogue - and
+ * a genre next to a network is two different doors wearing the same tile.
+ *
+ * Each rail is its own arrangement key, so it is pinned, moved and hidden on
+ * its own, and the tiles inside it keep the order they were added in. Before
+ * that split there was a single shared row keyed [LEGACY_ROW_KEY]; an
+ * arrangement that still names it is honoured for every rail that has no
+ * arrangement of its own (see [browseRailArrangementOf]).
  */
 object BrowseHomeShortcuts {
 
@@ -68,16 +75,21 @@ object BrowseHomeShortcuts {
     private const val PREFIX = "browse:"
 
     /**
-     * Arrangement key for the one shared row.
+     * Arrangement key of the single row the chips used to share.
      *
-     * Prefixed so the home order prefs can tell this rail apart from an addon
-     * catalog key ("addon:...") and a collection key ("kb:...") - and, in
-     * particular, so it can be PINNED. Pinned is otherwise collections-only,
-     * because a catalog found there could never be taken back out again (the
-     * manager has no pin control on a catalog row); this row has one, since
-     * the manager shows it as a row of its own.
+     * Kept as the fallback for an arrangement written before the rails were
+     * split by kind (see [browseRailArrangementOf]) - and as the rail key of
+     * chips whose category this build does not know, so a blob written by a
+     * newer build still has somewhere to render.
+     *
+     * Prefixed so the home order prefs can tell a browse rail apart from an
+     * addon catalog key ("addon:...") and a collection key ("kb:...") - and,
+     * in particular, so it can be PINNED. Pinned is otherwise
+     * collections-only, because a catalog found there could never be taken
+     * back out again (the manager has no pin control on a catalog row); a
+     * browse rail has one, since the manager shows it as a row of its own.
      */
-    const val ROW_KEY = PREFIX + SEPARATOR + "row"
+    const val LEGACY_ROW_KEY = PREFIX + SEPARATOR + "row"
 
     private val adapter = Moshi.Builder()
         .addLast(KotlinJsonAdapterFactory())
@@ -88,12 +100,12 @@ object BrowseHomeShortcuts {
     fun chipKey(categoryKey: String, name: String): String =
         "$categoryKey$SEPARATOR${name.trim()}"
 
-    /** True when [key] belongs to the Browse row's arrangement key space. */
+    /** True when [key] belongs to a Browse rail's arrangement key space. */
     fun isShortcutKey(key: String?): Boolean =
         key?.startsWith(PREFIX) == true
 
-    /** True for the shared row's arrangement key specifically. */
-    fun isRowKey(key: String?): Boolean = key == ROW_KEY
+    /** True for the legacy shared row's arrangement key specifically. */
+    fun isLegacyRowKey(key: String?): Boolean = key == LEGACY_ROW_KEY
 
     fun list(context: Context): List<BrowseHomeShortcut> {
         val raw = prefs(context).getString(KEY_BLOB, null) ?: return emptyList()
@@ -152,14 +164,151 @@ object BrowseHomeShortcuts {
     )
 }
 
-/** Identity of this chip as an entry in the row. */
+/** Identity of this chip as an entry in its rail. */
 internal fun BrowseHomeShortcut.chipKey(): String =
     BrowseHomeShortcuts.chipKey(categoryKey, name)
 
 /**
- * Whether the shared Browse row should be offered at all: a row with nothing
- * in it is not a row, and a row the user hid in the home manager stays hidden.
- * Pure so the rule is reachable by a test.
+ * The kind of browse chip a rail holds, and therefore where a chip added from
+ * Browse - or from a Detail screen's own chips - lands on Home.
+ *
+ * The grouping is by KIND, which is not the same thing as by browse tab:
+ * "genres" and "keywords" are two tabs of the same kind of door (browse by
+ * subject), and "services" covers both watch providers and networks, which is
+ * why a network chip added from a show's Detail page and a service chip added
+ * from Browse end up beside each other. Studios (production companies) and
+ * collections are each their own kind, and decades are a fourth.
+ */
+enum class BrowseShortcutRail(
+    /** Stable slug, part of the rail's arrangement key. */
+    val slug: String,
+    /** What the rail is called on Home and in the home manager. */
+    val title: String
+) {
+    GENRES_TAGS("genres", "Genres & Tags"),
+    SERVICES("services", "Services & Networks"),
+    STUDIOS("studios", "Studios"),
+    DECADES("decades", "Decades"),
+    COLLECTIONS("collections", "Collections");
+
+    /**
+     * Arrangement key for this rail ("browse:\u0001rail:genres", ...).
+     *
+     * Spelled out per rail rather than derived from [slug] through a private
+     * name in the object, so the key space is readable from one place - the
+     * home manager, the order prefs and Home all have to agree on it, and a
+     * silent disagreement is a rail that can never be moved.
+     */
+    val key: String
+        get() = "browse:\u0001rail:$slug"
+}
+
+/**
+ * One rail of mirrored browse chips on Home: its kind, and the chips in it in
+ * the order they were added.
+ *
+ * [key] and [title] are plain strings rather than the enum's own, because one
+ * rail is not a kind at all: chips whose category this build does not know
+ * ride the legacy shared row, so a blob written by a newer build still renders
+ * (and can still be hidden) instead of vanishing.
+ */
+data class BrowseHomeRail(
+    val key: String,
+    val title: String,
+    val shortcuts: List<BrowseHomeShortcut>
+)
+
+/** The rail one browse category's chips belong to, or null when unknown. */
+internal fun browseShortcutRail(categoryKey: String?): BrowseShortcutRail? =
+    when (categoryKey?.trim()?.lowercase()) {
+        "genres", "keywords" -> BrowseShortcutRail.GENRES_TAGS
+        "services" -> BrowseShortcutRail.SERVICES
+        "studios" -> BrowseShortcutRail.STUDIOS
+        "decades" -> BrowseShortcutRail.DECADES
+        "collections" -> BrowseShortcutRail.COLLECTIONS
+        else -> null
+    }
+
+/**
+ * The rails Home draws, in their fixed order, carrying only the rails that
+ * have chips in them.
+ *
+ * A rail with nothing in it is not a rail - the same rule a single shared row
+ * followed (see [browseRowVisible]) - and the order is fixed rather than
+ * "however the chips were added", so adding a studio never moves the genres
+ * rail.
+ */
+internal fun browseHomeRails(
+    shortcuts: List<BrowseHomeShortcut>
+): List<BrowseHomeRail> {
+    val grouped = BrowseShortcutRail.entries.mapNotNull { rail ->
+        val chips = shortcuts.filter { browseShortcutRail(it.categoryKey) == rail }
+        if (chips.isEmpty()) {
+            null
+        } else {
+            BrowseHomeRail(key = rail.key, title = rail.title, shortcuts = chips)
+        }
+    }
+
+    val unknown = shortcuts.filter { browseShortcutRail(it.categoryKey) == null }
+
+    return if (unknown.isEmpty()) {
+        grouped
+    } else {
+        // A category this build has no rail for (a blob written by a newer
+        // one): keep the chips together on the legacy row rather than
+        // dropping tiles the user added.
+        grouped + BrowseHomeRail(
+            key = BrowseHomeShortcuts.LEGACY_ROW_KEY,
+            title = "Browse",
+            shortcuts = unknown
+        )
+    }
+}
+
+/**
+ * The arrangement flags that apply to one browse rail.
+ *
+ * A rail's OWN key wins as soon as the arrangement names it. Until then the
+ * legacy shared row's flags apply, so an arrangement saved before the rails
+ * were split keeps its pin or its place (and a hidden row stays hidden) for
+ * every rail that has not been arranged since.
+ */
+internal data class BrowseRailArrangement(
+    val hidden: Boolean,
+    val pinned: Boolean,
+    val arranged: Boolean
+)
+
+internal fun browseRailArrangementOf(
+    key: String,
+    legacyKey: String,
+    pinnedKeys: Set<String>,
+    order: List<String>,
+    hiddenSet: Set<String>
+): BrowseRailArrangement {
+    val arrangedHere =
+        key in pinnedKeys || key in hiddenSet || order.contains(key)
+
+    return if (arrangedHere) {
+        BrowseRailArrangement(
+            hidden = key in hiddenSet,
+            pinned = key in pinnedKeys,
+            arranged = order.contains(key)
+        )
+    } else {
+        BrowseRailArrangement(
+            hidden = legacyKey in hiddenSet,
+            pinned = legacyKey in pinnedKeys,
+            arranged = order.contains(legacyKey)
+        )
+    }
+}
+
+/**
+ * Whether a Browse rail should be offered at all: a row with nothing in it is
+ * not a row, and a row the user hid in the home manager stays hidden. Pure so
+ * the rule is reachable by a test.
  */
 internal fun browseRowVisible(
     shortcuts: List<BrowseHomeShortcut>,
@@ -178,7 +327,7 @@ internal fun browseRowVisible(
  * rather than an empty tile.
  */
 /**
- * Where the shared Browse row belongs on Home for one arrangement state.
+ * Where a Browse rail belongs on Home for one arrangement state.
  *
  * The order of the cases is the whole rule: hidden or empty wins over every
  * position, then an explicit pin, then an explicit place in the stored order,
@@ -197,7 +346,7 @@ internal enum class BrowseRowPlacement {
     /** Placed by the stored order: wherever the manager put it. */
     IN_ORDER,
 
-    /** Never arranged: directly under the Top Today rows. */
+    /** Never arranged (by its own key or the legacy one): under Top Today. */
     BELOW_TOP_TODAY
 }
 

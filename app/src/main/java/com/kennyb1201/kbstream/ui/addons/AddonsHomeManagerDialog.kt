@@ -66,7 +66,6 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
-import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
@@ -174,16 +173,13 @@ internal fun CatalogManagerDialog(
                 it.catalog.id
             )
         }
-        // The Browse row joins the list while it has chips in it: it is a
-        // rail the viewer can pin, move and hide like a collection, and a
+        // The browse rails join the list while they have chips in them: each
+        // is a rail the viewer can pin, move and hide like a collection, and a
         // rail that cannot be seen in the manager cannot be arranged.
-        val browseRowKey = if (collectionsState.browseShortcutCount > 0) {
-            BrowseHomeShortcuts.ROW_KEY
-        } else {
-            null
-        }
+        val browseRailByKey =
+            collectionsState.browseRails.associateBy { rail -> rail.key }
         val known = addonByKey.keys + collectionsState.collections.map { it.key } +
-            listOfNotNull(browseRowKey)
+            browseRailByKey.keys
         // Best-effort merged order read (same prefs the ViewModel writes);
         // keys not found keep their default slot at the end.
         val prefs = KBHomeOrderPrefs.readOrder()
@@ -194,21 +190,28 @@ internal fun CatalogManagerDialog(
         }
 
         orderedKeys.mapNotNull { key ->
-            if (key == browseRowKey) {
+            val browseRail = browseRailByKey[key]
+            if (browseRail != null) {
                 // isCollection is the flag that carries the PIN control, and
                 // this row has one. Its hidden state is the stored flag
-                // alone: unlike a collection, a never-arranged Browse row
+                // alone: unlike a collection, a never-arranged browse rail
                 // renders (under the Top Today rows), so it must not be
                 // listed as hidden for want of an arrangement entry.
+                //
+                // The legacy shared row's flags are deliberately not folded
+                // in: this is the list a pin or a move is written from, and
+                // writing the rail's OWN key is what takes it over from the
+                // row the chips used to share.
                 CatalogManagerDialogRow(
                     key = key,
                     isCollection = true,
                     config = null,
                     collectionKey = key,
-                    title = "Browse",
-                    subtitle = "Browse chips saved to Home",
+                    title = browseRail.title,
+                    subtitle = "Browse · ${browseRail.shortcuts.size} saved",
                     isPinned = key in prefs.pinned,
-                    isHidden = key in prefs.hiddenSet
+                    isHidden = key in prefs.hiddenSet,
+                    isBrowseRail = true
                 )
             } else if (key.startsWith("kb:")) {
                 val collection = collectionByKey[key] ?: return@mapNotNull null
@@ -693,7 +696,7 @@ private fun UnifiedManagerRow(
             )
             RailKindChip(
                 isCollection = row.isCollection,
-                isBrowseRow = row.key == BrowseHomeShortcuts.ROW_KEY
+                isBrowseRow = row.isBrowseRail
             )
             if (row.isPinned) {
                 Icon(
@@ -846,10 +849,16 @@ private data class CatalogManagerDialogRow(
     val title: String,
     val subtitle: String,
     val isPinned: Boolean,
-    val isHidden: Boolean
+    val isHidden: Boolean,
+    /**
+     * A browse rail (genres & tags, services & networks, ...) rather than a
+     * collection: the kind tag says BROWSE, and [isCollection] carries the pin
+     * control both kinds use.
+     */
+    val isBrowseRail: Boolean = false
 )
 
-/** Tiny kind tag: collections, catalogs and the Browse row share one list. */
+/** Tiny kind tag: collections, catalogs and the browse rails share one list. */
 @Composable
 private fun RailKindChip(
     isCollection: Boolean,

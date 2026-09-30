@@ -34,12 +34,15 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.kb.BrowseRowPlacement
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+import com.kennyb1201.kbstream.data.kb.browseHomeRails
+import com.kennyb1201.kbstream.data.kb.browseRailArrangementOf
 import com.kennyb1201.kbstream.data.kb.browseRowPlacement
 import com.kennyb1201.kbstream.data.kb.browseShortcutCategoryLabel
 import com.kennyb1201.kbstream.data.kb.chipKey
@@ -93,25 +96,61 @@ object KBHomeSlots {
         val hidden = effectiveHidden
         val pinnedKeys = arrangement.pinned.toSet()
 
-        // The browse-menu chips mirrored to Home, as ONE shared row. It is
-        // neither a collection nor an addon catalog, and it is the one rail
-        // whose default is VISIBLE: a never-arranged collection waits in the
-        // home manager until Show is pressed, but a row the viewer just filled
-        // from a chip's long-press has to be somewhere they can see, or the
-        // action reads as having done nothing.
-        val browseKey = BrowseHomeShortcuts.ROW_KEY
-        val browsePlacement = browseRowPlacement(
-            shortcuts = state.browseShortcuts,
-            hidden = browseKey in hidden,
-            pinned = browseKey in pinnedKeys,
-            arranged = arrangement.order.contains(browseKey)
-        )
-        val browseEntry =
-            if (browsePlacement == BrowseRowPlacement.NONE) {
-                null
-            } else {
-                HomeEntry.BrowseRow(state.browseShortcuts)
+        // The browse-menu chips mirrored to Home, as one rail per KIND:
+        // genres and tags together, services and networks together, then
+        // studios, decades and collections each on their own. They are neither
+        // collections nor addon catalogs, and they are the rails whose default
+        // is VISIBLE: a never-arranged collection waits in the home manager
+        // until Show is pressed, but a rail the viewer just filled from a
+        // chip's long-press has to be somewhere they can see, or the action
+        // reads as having done nothing.
+        //
+        // Each rail carries its own arrangement key, so it is pinned and moved
+        // on its own. An arrangement that still names the single shared row
+        // this replaced applies to every rail that has no arrangement of its
+        // own - see browseRailArrangementOf.
+        val legacyBrowseKey = BrowseHomeShortcuts.LEGACY_ROW_KEY
+        val placedBrowse = browseHomeRails(state.browseShortcuts)
+            .mapNotNull { rail ->
+                val flags = browseRailArrangementOf(
+                    key = rail.key,
+                    legacyKey = legacyBrowseKey,
+                    pinnedKeys = pinnedKeys,
+                    order = arrangement.order,
+                    hiddenSet = hidden
+                )
+                val placement = browseRowPlacement(
+                    shortcuts = rail.shortcuts,
+                    hidden = flags.hidden,
+                    pinned = flags.pinned,
+                    arranged = flags.arranged
+                )
+                if (placement == BrowseRowPlacement.NONE) {
+                    null
+                } else {
+                    HomeEntry.BrowseRail(rail) to placement
+                }
             }
+        val browseEntries = placedBrowse.map { (entry, _) -> entry }
+        val browseKeys = browseEntries.mapTo(mutableSetOf()) { entry ->
+            entry.key
+        }
+
+        /**
+         * The browse rails one arrangement key stands for. A rail's own key
+         * names exactly one; the legacy shared row's key names the rails that
+         * carry no arrangement of their own, in rail order - which is how an
+         * install that pinned or moved the old row keeps its rails where it
+         * put them.
+         */
+        fun browseEntriesFor(key: String): List<HomeEntry> {
+            val direct = browseEntries.filter { entry -> entry.key == key }
+            if (direct.isNotEmpty()) return direct
+            if (key != legacyBrowseKey) return emptyList()
+            return browseEntries.filter { entry ->
+                entry.key !in pinnedKeys && !arrangement.order.contains(entry.key)
+            }
+        }
 
         val collectionByKey = LinkedHashMap<String, KBCollectionProfile>()
         for (collection in collections) {
@@ -161,7 +200,8 @@ object KBHomeSlots {
                 // Top Today renders first unconditionally — never also in
                 // the pinned block (would duplicate the rail).
                 pinKey in topTodayKeys -> emptyList()
-                pinKey == browseKey -> listOfNotNull(browseEntry)
+                pinKey == legacyBrowseKey || pinKey in browseKeys ->
+                    browseEntriesFor(pinKey)
                 pinKey.startsWith("kb:") ->
                     listOfNotNull(collectionByKey[pinKey]).map { HomeEntry.Collection(it) }
                 else ->
@@ -184,8 +224,8 @@ object KBHomeSlots {
             if (key in topTodayKeys) continue
             if (key in hardcodedKeys) continue
             if (key in pinnedAddonKeys) continue
-            if (key == browseKey) {
-                browseEntry?.let { middle += it }
+            if (key == legacyBrowseKey || key in browseKeys) {
+                middle += browseEntriesFor(key)
                 continue
             }
             val collection = collectionByKey[key]
@@ -227,16 +267,13 @@ object KBHomeSlots {
             }
         }
 
-        // The Browse row's default spot: directly under the Top Today rows,
+        // The browse rails' default spot: directly under the Top Today rows,
         // which is where the rest of Home's doors to the catalog begin. Only
-        // when the user has never touched its position - once it is pinned or
+        // a rail the user has never touched lands here - once it is pinned or
         // placed in the stored order, the walk above owns where it sits.
-        val defaultBrowse =
-            if (browsePlacement == BrowseRowPlacement.BELOW_TOP_TODAY) {
-                listOfNotNull(browseEntry)
-            } else {
-                emptyList()
-            }
+        val defaultBrowse = placedBrowse
+            .filter { (_, placement) -> placement == BrowseRowPlacement.BELOW_TOP_TODAY }
+            .map { (entry, _) -> entry }
 
         return topTodayRails + defaultBrowse + hardcodedRails + pinned + middle + tail
     }
@@ -274,14 +311,19 @@ sealed class HomeEntry {
     data class Collection(val collection: KBCollectionProfile) : HomeEntry()
 
     /**
-     * The browse chips the viewer mirrored to Home, as one row of tiles.
+     * One rail of browse chips the viewer mirrored to Home.
      *
      * It carries the chips rather than a rendered result because the tiles
-     * open the app's own discover screens (genre, service/network, collection,
-     * decade) - the row is a shortcut shelf, not a catalog copy, so there is
-     * nothing to fetch and nothing to keep in sync.
+     * open the app's own discover screens (genre, service/network, studio,
+     * collection, decade) - the rail is a shortcut shelf, not a catalog copy,
+     * so there is nothing to fetch and nothing to keep in sync. The kind of
+     * chip decides which rail it lands in, and each rail is arranged (pinned,
+     * moved, hidden) on its own key.
      */
-    data class BrowseRow(val shortcuts: List<BrowseHomeShortcut>) : HomeEntry()
+    data class BrowseRail(val rail: BrowseHomeRail) : HomeEntry() {
+        /** Arrangement key of this rail. */
+        val key: String get() = rail.key
+    }
 }
 
 private val CollectionTileWidth = 210.dp
@@ -472,8 +514,9 @@ private fun CollectionFolderTile(
 }
 
 /**
- * The Browse row: one landscape tile per browse chip the viewer mirrored to
- * Home, in the order they were added.
+ * A Browse rail: one landscape tile per browse chip the viewer mirrored to
+ * Home, in the order they were added, for one kind of chip (genres and tags,
+ * services and networks, studios, decades, collections).
  *
  * It is shaped like a collection rail on purpose - same tile size, same
  * gutters, same focus treatment - because it is the same kind of thing on
@@ -496,7 +539,11 @@ fun KBHomeBrowseRail(
     // filled in per shortcut as each lookup lands.
     artByKey: Map<String, BrowseShortcutArt> = emptyMap(),
     onOpenShortcut: (BrowseHomeShortcut) -> Unit,
-    onShortcutFocused: ((BrowseHomeShortcut) -> Unit)? = null
+    onShortcutFocused: ((BrowseHomeShortcut) -> Unit)? = null,
+    // The rail's own name ("Genres & Tags", "Studios", ...). Defaulted to the
+    // old shared row's word so a caller that predates the split still draws
+    // something sensible.
+    title: String = "Browse"
 ) {
     Column(
         modifier = Modifier.padding(
@@ -506,7 +553,7 @@ fun KBHomeBrowseRail(
         )
     ) {
         Text(
-            text = "Browse",
+            text = title,
             color = KBTextHi.copy(alpha = 0.94f),
             style = MaterialTheme.typography.titleMedium,
             modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)

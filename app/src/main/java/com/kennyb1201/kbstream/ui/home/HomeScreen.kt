@@ -3121,19 +3121,22 @@ fun HomeScreen(
                                                 entry.rail.catalogName + ":" + entry.rail.type
                                         is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
                                             "kb|" + (entry.collection.id ?: entry.collection.title)
-                                        // One shared row, so a fixed key: the chips inside
-                                        // it are reordered in place rather than
-                                        // re-keying the LazyColumn item.
-                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRow ->
-                                            "browse-row"
+                                        // One key per rail: the chips inside a
+                                        // rail are reordered in place rather
+                                        // than re-keying the LazyColumn item,
+                                        // and a rail is its own arrangement
+                                        // key, so it can move on its own.
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRail ->
+                                            "browse|" + entry.key
                                     }
                                 }
                             ) { _, entry ->
                                 when (val e = entry) {
-                                    is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRow ->
+                                    is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRail ->
                                         com.kennyb1201.kbstream.ui.kb.KBHomeBrowseRail(
-                                            shortcuts = e.shortcuts,
+                                            shortcuts = e.rail.shortcuts,
                                             artByKey = kbState.browseShortcutArt,
+                                            title = e.rail.title,
                                             onOpenShortcut = onOpenBrowseShortcut,
                                             onShortcutFocused = { shortcut ->
                                                 userAdjustedFocus = true
