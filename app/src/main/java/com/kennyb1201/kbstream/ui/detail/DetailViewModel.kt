@@ -13,6 +13,7 @@ import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrections
 import com.kennyb1201.kbstream.data.airdates.TvmazeAirDateRepository
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
@@ -1034,8 +1035,14 @@ for ((metaAddon, response, error) in probeResults) {
     // for titles TMDB does not know; loadEpisodesForSeason checks the
     // synthetic flag and serves addon videos instead of calling TMDB.
     if (tmdbDetailResult.getOrNull() == null && normalizedType == "series") {
+        // A video numbered 0 is not an episode - see EpisodeNumbering.
+        // Left in, a whole season list built this way read "EPISODE 0" with
+        // no title and no still, which is what prompted the report.
         val addonVideos = _meta.value?.videos.orEmpty()
-            .filter { it.season != null && it.episode != null }
+            .filter {
+                it.season != null &&
+                    namedEpisodeNumber(it.episode) != null
+            }
         if (addonVideos.isNotEmpty()) {
             val seasons = addonVideos
                 .mapNotNull { it.season }
@@ -1370,11 +1377,18 @@ for ((metaAddon, response, error) in probeResults) {
                 _episodesLoading.value = true
                 try {
                     val videos = _meta.value?.videos.orEmpty()
-                        .filter { it.season == season && it.episode != null }
+                        .filter {
+                            it.season == season &&
+                                namedEpisodeNumber(it.episode) != null
+                        }
                         .sortedBy { it.episode ?: 0 }
                     val parentId = imdbId
                     val syntheticEpisodes = videos.mapNotNull { v ->
-                        val episodeNumber = v.episode ?: return@mapNotNull null
+                        val episodeNumber =
+                            namedEpisodeNumber(
+                                v.episode
+                            )
+                                ?: return@mapNotNull null
                         ResolvedEpisode(
                             streamId = "$parentId:${season}:$episodeNumber",
                             episodeNumber = episodeNumber,

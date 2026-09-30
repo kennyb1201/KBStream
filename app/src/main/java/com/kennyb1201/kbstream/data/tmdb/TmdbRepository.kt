@@ -5,6 +5,7 @@ import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance
@@ -1253,7 +1254,13 @@ class TmdbRepository private constructor(context: Context) :
 
         val seasonDetail = api.getSeasonDetail(tvId, season, apiKey)
 
-        val episodes = seasonDetail.episodes.map { ep ->
+        // TMDB files a "- Specials" row numbered 0 inside a regular
+        // season from time to time. It is not an episode the season browser
+        // can show: it has no name and no still, so it rendered as a blank
+        // card reading EPISODE 0 (see EpisodeNumbering).
+        val episodes = seasonDetail.episodes
+            .filter { ep -> namedEpisodeNumber(ep.episodeNumber) != null }
+            .map { ep ->
             ResolvedEpisode(
                 streamId = "$imdbId:$season:${ep.episodeNumber}",
                 episodeNumber = ep.episodeNumber,

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
@@ -2492,9 +2493,17 @@ class SimklRepository(
                                     item.episode
                                         ?.season,
 
+                                // A session the tracker could not place
+                                // arrives as episode 0, which is not an
+                                // episode - see EpisodeNumbering. Read as
+                                // one, the card said "S02 · E00" and the
+                                // player "Season 2 Episode 00" over blank
+                                // artwork.
                                 episode =
-                                    item.episode
-                                        ?.episode
+                                    namedEpisodeNumber(
+                                        item.episode
+                                            ?.episode
+                                    )
                             )
                         }
 
@@ -2593,7 +2602,9 @@ class SimklRepository(
                             parsedNext?.first
 
                         val nextEpisode =
-                            parsedNext?.second
+                            namedEpisodeNumber(
+                                parsedNext?.second
+                            )
 
                         SimklContinueWatchingItem(
                             id =
@@ -2959,7 +2970,9 @@ class SimklRepository(
                     episode.season,
 
                 episode =
-                    episode.episode
+                    namedEpisodeNumber(
+                        episode.episode
+                    )
             )
 
         return buildString {
@@ -3046,13 +3059,18 @@ class SimklRepository(
                 .toIntOrNull()
                 ?: return null
 
+        // "S2E0" is how the tracker writes "the next one has no number
+        // yet"; it is not a target. Dropping it here leaves the season and
+        // lets the resolver work the next episode out from TMDB instead.
         val episode =
-            match.groupValues
-                .getOrNull(2)
-                ?.takeIf {
-                    it.isNotBlank()
-                }
-                ?.toIntOrNull()
+            namedEpisodeNumber(
+                match.groupValues
+                    .getOrNull(2)
+                    ?.takeIf {
+                        it.isNotBlank()
+                    }
+                    ?.toIntOrNull()
+            )
 
         return season to
             episode

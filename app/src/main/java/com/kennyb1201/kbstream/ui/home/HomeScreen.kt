@@ -1929,21 +1929,13 @@ private fun CompactUpNextCard(
         mutableStateOf(false)
     }
 
-    val episodeLabel = when {
-        item.season != null && item.episode != null ->
-            "S%02d · E%02d".format(
-                item.season,
-                item.episode
-            )
-
-        item.season != null ->
-            "S%02d".format(item.season)
-
-        item.episode != null ->
-            "E%02d".format(item.episode)
-
-        else -> null
-    }
+    // The rule lives in HomeUpNext.kt so a test can reach it; it refuses an
+    // episode number the sources never named, which is what a card reading
+    // "S02 · E00" over blank artwork was: a tracker's or an add-on's 0.
+    val episodeLabel = upNextEpisodeLabel(
+        item.season,
+        item.episode
+    )
 
     val displayBadge =
         when {

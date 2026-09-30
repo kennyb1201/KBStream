@@ -76,10 +76,8 @@ import kotlinx.coroutines.sync.withPermit
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.format.DateTimeParseException
-import java.time.OffsetDateTime
-import java.time.temporal.ChronoUnit
 import org.json.JSONObject
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 @OptIn(FlowPreview::class)
@@ -2783,38 +2781,7 @@ Log.d(
         return resolved
     }
 
-    private fun parseTmdbAirDate(raw: String?): Long? {
-        val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        return try {
-            LocalDate.parse(value)
-                .atStartOfDay(ZoneId.systemDefault())
-                .toInstant()
-                .toEpochMilli()
-        } catch (_: DateTimeParseException) {
-            null
-        } catch (_: Exception) {
-            null
-        }
-    }
 
-    private fun formatAirDateLabel(raw: String?): String {
-        val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return "Date TBA"
-        return try {
-            val date = LocalDate.parse(value)
-            val today = LocalDate.now(ZoneId.systemDefault())
-            val days = ChronoUnit.DAYS.between(today, date)
-            when {
-                days == 0L -> "Today"
-                days == 1L -> "Tomorrow"
-                days in 2..6 -> "In $days days"
-                else -> date.format(
-                    DateTimeFormatter.ofPattern("EEE, MMM d")
-                )
-            }
-        } catch (_: Exception) {
-            "Date TBA"
-        }
-    }
 
     /**
      * Instant Continue Watching seed: publish a lightweight snapshot built
@@ -4848,8 +4815,15 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     val startingSeason =
         simklSeason ?: furthestWatchedSeason ?: 1
 
+    // A tracker episode number of 0 is "no episode": see
+    // EpisodeNumbering. Kept as one, it was returned verbatim below - the
+    // card read "S02 · E00", the player "Season 2 Episode 00", for a
+    // show whose next episode TMDB knows perfectly well. Dropping it here
+    // lets the furthest-watched walk pick the right one.
     val startingEpisode =
-        simklEpisode
+        namedEpisodeNumber(
+            simklEpisode
+        )
             ?: if (
                 startingSeason == furthestWatchedSeason &&
                 furthestWatchedEpisode > 0
@@ -5323,297 +5297,16 @@ private suspend fun calculateEpisodesRemaining(
         }
     }
 
-    private fun formatSeasonEpisode(
-        season: Int?,
-        episode: Int?
-    ): String {
 
-        return when {
 
-            season != null &&
-                episode != null ->
-                "S${season}E${episode}"
 
-            season != null ->
-                "S$season"
 
-            episode != null ->
-                "E$episode"
 
-            else ->
-                ""
-        }
-    }
 
-    private fun parseTimestampMillis(
-        value: String?
-    ): Long {
 
-        return try {
 
-            OffsetDateTime
-                .parse(value)
-                .toInstant()
-                .toEpochMilli()
 
-        } catch (_: Exception) {
-            0L
-        }
-    }
 
-    private fun isWithinDays(
-        dateStr: String,
-        days: Int
-    ): Boolean {
-
-        return try {
-
-            val date =
-                LocalDate.parse(
-                    dateStr
-                )
-
-            val today =
-                LocalDate.now()
-
-            val diff =
-                ChronoUnit.DAYS.between(
-                    date,
-                    today
-                )
-
-            diff in 0..days.toLong()
-
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    private fun isAiredOrUnknown(
-        airDate: String?
-    ): Boolean {
-
-        if (
-            airDate.isNullOrBlank()
-        ) {
-            return true
-        }
-
-        return try {
-
-            !LocalDate
-                .parse(airDate)
-                .isAfter(
-                    LocalDate.now()
-                )
-
-        } catch (_: Exception) {
-            true
-        }
-    }
-
-    private fun progressFromHistory(
-        positionMs: Long,
-        durationMs: Long
-    ): Float? {
-
-        if (
-            positionMs <= 0L ||
-            durationMs <= 0L
-        ) {
-            return null
-        }
-
-        return (
-            positionMs.toFloat() /
-                durationMs.toFloat()
-            ).coerceIn(
-                0.005f,
-                0.99f
-            )
-    }
-
-    private fun parseEpisodeKey(
-        key: String
-    ): Triple<String, Int, Int>? {
-
-        val match =
-            Regex(
-                """^(.+?)(?::[sS]?(\d+))(?::[eE]?(\d+))$"""
-            ).find(
-                key.trim()
-            )
-                ?: return null
-
-        val showId =
-            match.groupValues[1]
-                .trim()
-
-        val season =
-            match.groupValues[2]
-                .toIntOrNull()
-                ?: return null
-
-        val episode =
-            match.groupValues[3]
-                .toIntOrNull()
-                ?: return null
-
-        if (
-            showId.isBlank() ||
-            season < 0 ||
-            episode < 0
-        ) {
-            return null
-        }
-
-        return Triple(
-            showId,
-            season,
-            episode
-        )
-    }
-
-    private fun dedupeAndSortUpNext(
-        items: List<UpNextItem>
-    ): List<UpNextItem> {
-
-        return clusterByIdentityKeys(
-            collapseDuplicateUpNextCards(
-                items
-            )
-        ) { item ->
-            upNextGroupingKeys(item)
-        }
-            .mapNotNull { candidates ->
-
-                candidates.maxWithOrNull(
-
-                    compareBy<UpNextItem> {
-                        winnerScore(it)
-                    }
-                        .thenByDescending {
-                            it.recencyTimestamp
-                        }
-
-                        .thenBy {
-                            targetPrecisionScore(it)
-                        }
-
-                        .thenBy {
-                            it.title.lowercase()
-                        }
-                )
-            }
-            // Watching first, most recently watched first, and the news
-            // behind it - see UpNextRailOrder.kt for why that order is the
-            // rail's whole point, and UpNextRailOrderTest for the rule.
-            .sortedWith(upNextRailComparator)
-    }
-
-    private fun showDedupeKey(
-        item: UpNextItem
-    ): String =
-        upNextShowKey(item)
-
-    private fun winnerScore(
-    item: UpNextItem
-): Int {
-
-    var score =
-        0
-
-    if (
-        item.badge ==
-            UpNextBadge.CONTINUE_WATCHING
-    ) {
-        score += 5_000
-    }
-
-    // Prefer entries that actually have calculated
-    // remaining playback time.
-    if (
-        item.remainingMinutes != null &&
-        item.remainingMinutes > 0
-    ) {
-        score += 1_000
-    }
-
-    if (
-        item.startPositionMs > 0L ||
-        (item.progressPercent ?: 0f) > 0f
-    ) {
-        score += 2_500
-    }
-
-    if (
-        !item.episodeStreamId
-            .isNullOrBlank()
-    ) {
-        score += 500
-    }
-
-    if (
-        item.season != null &&
-        item.episode != null
-    ) {
-        score += 250
-    }
-
-    return score
-}
-
-    private fun targetPrecisionScore(
-        item: UpNextItem
-    ): Int {
-
-        var score =
-            0
-
-        if (
-            !item.episodeStreamId
-                .isNullOrBlank()
-        ) {
-            score += 3
-        }
-
-        if (
-            valueOrDefault(
-                item.season,
-                0
-            ) != 0
-        ) {
-            score += 2
-        }
-
-        if (
-            item.episode != null
-        ) {
-            score += 2
-        }
-
-        if (
-            !item.streamUrl
-                .isNullOrBlank()
-        ) {
-            score += 1
-        }
-
-        if (
-            !item.poster
-                .isNullOrBlank()
-        ) {
-            score += 1
-        }
-
-        return score
-    }
-
-    private fun valueOrDefault(
-        value: Int?,
-        default: Int
-    ): Int =
-        value ?: default
 
     fun loadRails(
         forceRefresh: Boolean = false
@@ -5636,53 +5329,7 @@ private suspend fun calculateEpisodesRemaining(
         val catalogRawName: String
     )
 
-    /**
-     * Drops titles whose release date (from the catalog's releaseInfo field,
-     * e.g. "2026-12-25T00:00:00.000Z") is in the future. Titles with no or
-     * unparseable release info are always kept — the filter only removes
-     * items we can positively tell are not out yet.
-     */
-    private fun filterUpcoming(
-        metas: List<MetaPreview>
-    ): List<MetaPreview> {
 
-        val today = LocalDate.now()
-
-        return metas.filter { meta ->
-
-            val raw = meta.releaseInfo
-                ?.trim()
-                .orEmpty()
-
-            if (raw.isEmpty()) {
-                return@filter true
-            }
-
-            parseReleaseDate(raw)?.let { date ->
-
-                !date.isAfter(today)
-
-            } ?: run {
-
-                // Bare year (the common catalog shape, e.g. "2026"):
-                // hide only when the year is entirely in the future —
-                // the current year is ambiguous, so keep it. Anything
-                // unparseable is kept too.
-                val year = raw.toIntOrNull()
-
-                year == null || year <= today.year
-            }
-        }
-    }
-
-    private fun parseReleaseDate(raw: String): LocalDate? {
-
-        return runCatching {
-            OffsetDateTime.parse(raw).toLocalDate()
-        }.recoverCatching {
-            LocalDate.parse(raw)
-        }.getOrNull()
-    }
 
     /**
      * Landscape artwork (backdrop + clearlogo) for a rail's items, through the
@@ -6587,24 +6234,6 @@ private suspend fun calculateEpisodesRemaining(
         return addonName + "::" + catalogId + "::" + type
     }
 
-    private fun formatCatalogName(
-        name: String
-    ): String {
-
-        return name
-            .replace(
-                "_",
-                " "
-            )
-            .split(" ")
-            .joinToString(" ") { word ->
-
-                word.lowercase()
-                    .replaceFirstChar {
-                        it.uppercase()
-                    }
-            }
-    }
 
     /**
      * Kids-profile replacement for the pinned "Top ... Today" rails: two
@@ -6952,25 +6581,6 @@ private suspend fun calculateEpisodesRemaining(
         }
     }
 
-    private fun normalizeMediaType(
-        type: String?
-    ): String? =
-
-        when (
-            type?.lowercase()
-        ) {
-
-            "movie" ->
-                "movie"
-
-            "series",
-            "show",
-            "tv" ->
-                "series"
-
-            else ->
-                null
-        }
 
     override fun onCleared() {
 

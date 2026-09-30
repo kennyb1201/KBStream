@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import kotlinx.coroutines.flow.map
 
@@ -272,6 +273,43 @@ internal fun upNextDisplayTitleOrNull(
     if (trimmed.isEmpty()) return null
     if (looksLikeRawMediaId(trimmed, hasArtwork)) return null
     return trimmed
+}
+
+/**
+ * The small season/episode label a Continue Watching card carries - "S02 · E08".
+ *
+ * Extracted from the card so the one thing that must never happen here can be
+ * pinned by a test: printing an episode number the sources never really named.
+ * A tracker and an add-on both spell "no episode" as 0 (see
+ * [com.kennyb1201.kbstream.data.namedEpisodeNumber]), and formatting that
+ * straight through is what put a rail of cards reading "S02 · E00" over blank
+ * artwork in front of a viewer. The season half is still worth saying on its
+ * own; when neither half is a real number the label goes away rather than
+ * becoming an empty "S02 · E00" shape.
+ */
+internal fun upNextEpisodeLabel(
+    season: Int?,
+    episode: Int?
+): String? {
+    val named =
+        namedEpisodeNumber(episode)
+
+    return when {
+        season != null && named != null ->
+            "S%02d · E%02d".format(
+                season,
+                named
+            )
+
+        season != null ->
+            "S%02d".format(season)
+
+        named != null ->
+            "E%02d".format(named)
+
+        else ->
+            null
+    }
 }
 
 /** Title key: the fallback identity of a show when its ids disagree. */
