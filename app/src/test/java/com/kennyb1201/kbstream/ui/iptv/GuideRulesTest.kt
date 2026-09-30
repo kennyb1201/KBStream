@@ -321,4 +321,57 @@ class GuideRulesTest {
             importing("", false)
         )
     }
+
+    // ── the request queue: why a row stops saying "Loading guide..." ──────
+    //
+    // A row renders as loading while its channel id is absent from the
+    // resolved set. The lineup flow cancels an in-flight query the moment the
+    // next scroll batch arrives (flatMapLatest), and a cancelled query never
+    // emits - so the queue has to keep the superseded batch's ids, or those
+    // rows never resolve even though their channels are marked as queued.
+
+    @Test
+    fun `a new batch is added to what is still waiting, not swapped in`() {
+        val pending = GuideRequestQueue.enqueue(emptySet(), setOf("a", "b"))
+        assertEquals(
+            setOf("a", "b", "c", "d"),
+            GuideRequestQueue.enqueue(pending, setOf("c", "d"))
+        )
+    }
+
+    @Test
+    fun `a superseded batch is re-issued rather than stranded`() {
+        // Batch A is queued; before it is answered batch B lands and cancels
+        // A's query. The next request must still carry A's channel.
+        val pendingA = GuideRequestQueue.enqueue(emptySet(), setOf("a"))
+        val pendingAB = GuideRequestQueue.enqueue(pendingA, setOf("b"))
+        // The emission that lands answers b but not a.
+        val afterB = GuideRequestQueue.clearAnswered(pendingAB, resolved = setOf("b"))
+        assertEquals(setOf("a"), afterB)
+    }
+
+    @Test
+    fun `only answered ids leave the queue`() {
+        assertEquals(
+            setOf("b", "d"),
+            GuideRequestQueue.clearAnswered(
+                pending = setOf("a", "b", "c", "d"),
+                resolved = setOf("a", "c")
+            )
+        )
+    }
+
+    @Test
+    fun `an empty answer leaves the queue untouched`() {
+        val pending = setOf("a", "b")
+        assertEquals(pending, GuideRequestQueue.clearAnswered(pending, emptySet()))
+    }
+
+    @Test
+    fun `a fully answered queue drains to empty`() {
+        assertEquals(
+            emptySet<String>(),
+            GuideRequestQueue.clearAnswered(setOf("a", "b"), resolved = setOf("a", "b"))
+        )
+    }
 }

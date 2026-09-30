@@ -409,7 +409,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             lineupSource.collect { lineup ->
                 if (lineup.isNotEmpty()) {
                     mergeGuideItems(lineup)
-                    _pendingGuideChannelIds.value = emptySet()
+                    // Drop only the ids this merge answered. A superseded
+                    // request never emits, so its ids are still outstanding
+                    // and must survive to be re-issued; clearing the whole set
+                    // here is what left those channels pending forever.
+                    _pendingGuideChannelIds.value = GuideRequestQueue.clearAnswered(
+                        _pendingGuideChannelIds.value,
+                        _guideItemsByChannelId.value.keys
+                    )
                 }
             }
         }
@@ -605,7 +612,16 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             .toSet()
         if (newIds.isEmpty()) return
         _guideChannelIds.value = queuedIds + newIds
-        _pendingGuideChannelIds.value = newIds
+        // ADD to the outstanding set, don't replace it. The lineup flow
+        // cancels an in-flight query the moment a newer batch arrives, and a
+        // cancelled query never emits, so the batch it was working on would
+        // otherwise vanish from here while staying in _guideChannelIds - no
+        // longer pending (never re-issued) and never resolved, which is the
+        // row stuck on "Loading guide...".
+        _pendingGuideChannelIds.value = GuideRequestQueue.enqueue(
+            _pendingGuideChannelIds.value,
+            newIds
+        )
         Log.d(TAG, "GUIDE CHANNELS QUEUED total=${_guideChannelIds.value.size} added=${newIds.size}")
     }
 

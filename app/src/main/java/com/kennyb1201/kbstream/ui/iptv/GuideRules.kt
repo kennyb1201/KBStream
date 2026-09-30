@@ -140,6 +140,39 @@ internal fun formatCatchupWindow(
  * count splits on both newline and semicolon because that field is the user's
  * own paste of several URLs and they arrive in either shape.
  */
+/**
+ * The guide's request bookkeeping: which channel ids are waiting on an answer.
+ *
+ * Split out of [IptvViewModel] because the rule here is the difference between
+ * a row that finishes loading and one that reads "Loading guide..." for the
+ * rest of the session, and the guide's flow cannot be rendered in a unit test
+ * (there is no Compose test infrastructure), so this is the seam the behaviour
+ * is pinned at.
+ *
+ * The flow cancels an in-flight lineup query the moment a newer batch arrives
+ * (`flatMapLatest`), and a superseded query never emits - so its channels are
+ * never merged. The queue therefore has to hold un-answered ids ACROSS that
+ * cancellation instead of keeping only the newest batch.
+ */
+internal object GuideRequestQueue {
+
+    /**
+     * Add a freshly visible batch to what is already outstanding. Addition,
+     * not replacement: a batch whose query a later batch cancels is still
+     * waiting and must ride the next request rather than being dropped.
+     */
+    fun enqueue(pending: Set<String>, requested: Set<String>): Set<String> =
+        pending + requested
+
+    /**
+     * Drop only the ids the latest emission actually answered, leaving
+     * anything still outstanding in the queue so the next request carries it.
+     * Sweeping the queue empty here is what stranded every superseded batch.
+     */
+    fun clearAnswered(pending: Set<String>, resolved: Set<String>): Set<String> =
+        pending - resolved
+}
+
 internal fun buildSetupDiagnosticsText(
     playlistUrl: String,
     epgUrl: String,
