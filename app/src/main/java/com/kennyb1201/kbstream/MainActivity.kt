@@ -1218,6 +1218,14 @@ fun AppRoot() {
                     )
                 },
 
+                // A Browse tile on Home opens exactly what its chip opens in
+                // Search, so the mirrored chip and the chip cannot drift.
+                onOpenBrowseShortcut = { shortcut ->
+                    browseShortcutScreen(shortcut)?.let { destination ->
+                        screen = destination
+                    }
+                },
+
                 onOpenCatalogGrid = { rail ->
                     screen = Screen.CatalogGrid(
                         title = rail.catalogName,
@@ -2511,6 +2519,52 @@ private fun UpdateAvailablePopup(isPlaying: Boolean) {
             }
         }
     }
+}
+
+/**
+ * The destination a Home Browse tile opens.
+ *
+ * Deliberately one function for both callers: the Search screen's browse
+ * browser routes its own chips through the equivalent `when` (see
+ * SearchViewModel.onBrowseEntryClicked), and a mirrored chip has to land on
+ * the same screen or the whole point of the shelf - reaching the browser's
+ * doors without walking the browser - is lost to a copy that drifts.
+ *
+ * Return is Home, since that is where the tile was pressed. A category with no
+ * screen of its own yields null and the press does nothing, rather than
+ * navigating somewhere arbitrary.
+ */
+private fun browseShortcutScreen(
+    shortcut: com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
+): Screen? = when (shortcut.categoryKey) {
+    "genres" -> Screen.Tag(shortcut.id, shortcut.name, false, "movie", Screen.Home)
+    "keywords" -> Screen.Tag(shortcut.id, shortcut.name, true, "movie", Screen.Home)
+    // Services carry their watch-provider id so their screen runs movies +
+    // series rails; a plain network entry has none, so it runs the network
+    // page. isNetwork follows the id space, as it does in Browse.
+    "services" -> Screen.Studio(
+        shortcut.id,
+        shortcut.name,
+        !shortcut.networkIsCompany,
+        shortcut.providerId,
+        shortcut.networkOrCompanyId,
+        shortcut.networkIsCompany,
+        shortcut.originalsCompanyId,
+        Screen.Home
+    )
+    "studios" -> Screen.Studio(
+        shortcut.id,
+        shortcut.name,
+        false,
+        null,
+        null,
+        false,
+        null,
+        Screen.Home
+    )
+    "collections" -> Screen.Collection(shortcut.id, shortcut.name, Screen.Home)
+    "decades" -> Screen.Decade(shortcut.id, shortcut.name, Screen.Home)
+    else -> null
 }
 
 /** Which face the update dialog is showing. */

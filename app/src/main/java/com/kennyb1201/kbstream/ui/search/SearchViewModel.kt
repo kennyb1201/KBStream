@@ -10,6 +10,8 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
@@ -1082,6 +1084,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _hiddenBrowseChips.asStateFlow()
 
     /**
+     * Browse chips this profile mirrored to Home (the shared Browse row), in
+     * the order they were added.
+     *
+     * Held here as well as in prefs so the chip's own long-press menu can say
+     * "Add to Home" or "Remove from Home" without a disk read per redraw.
+     */
+    private val _browseHomeShortcuts =
+        MutableStateFlow<List<BrowseHomeShortcut>>(emptyList())
+
+    val browseHomeShortcuts: StateFlow<List<BrowseHomeShortcut>> =
+        _browseHomeShortcuts.asStateFlow()
+
+    /**
      * The unfiltered sidebar as last built, so hiding or unhiding a chip
      * republishes instantly instead of re-resolving keywords and collections.
      */
@@ -1089,6 +1104,44 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private fun loadHiddenBrowseChips() {
         _hiddenBrowseChips.value = BrowseChipVisibility.hiddenKeys(app)
+    }
+
+    private fun loadBrowseHomeShortcuts() {
+        _browseHomeShortcuts.value = BrowseHomeShortcuts.list(app)
+    }
+
+    /**
+     * Long-press "Add to Home" on a browse chip.
+     *
+     * The chip's own fields are copied across verbatim: a Home tile is the
+     * same door the chip is, so everything the chip's screen needs - the
+     * service's provider / network / company ids included - travels with it.
+     * Adding the same chip twice is a no-op (see [BrowseHomeShortcuts.add]),
+     * so the action cannot reshuffle the row it is already in.
+     */
+    fun addBrowseChipToHome(categoryKey: String, entry: BrowseEntry) {
+        if (entry.name.isBlank()) return
+        _browseHomeShortcuts.value = BrowseHomeShortcuts.add(
+            app,
+            BrowseHomeShortcut(
+                categoryKey = categoryKey,
+                id = entry.id,
+                name = entry.name,
+                providerId = entry.providerId,
+                networkOrCompanyId = entry.networkOrCompanyId,
+                networkIsCompany = entry.networkIsCompany,
+                originalsCompanyId = entry.originalsCompanyId
+            )
+        )
+    }
+
+    /** Long-press "Remove from Home" on a chip that is already mirrored. */
+    fun removeBrowseChipFromHome(categoryKey: String, entry: BrowseEntry) {
+        _browseHomeShortcuts.value = BrowseHomeShortcuts.remove(
+            app,
+            categoryKey,
+            entry.name
+        )
     }
 
     /**
@@ -1305,6 +1358,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // Hidden chips load first: the sidebar publish below and the cache
         // merge that follows both filter against the hidden set.
         loadHiddenBrowseChips()
+        // Which chips are on Home, so the chip menu offers the right action.
+        loadBrowseHomeShortcuts()
         publishBrowseCategories(baseBrowseCategories())
         // Restore the last-resolved keyword/collection ids from disk so the
         // browse submenu renders instantly; a background refresh then only

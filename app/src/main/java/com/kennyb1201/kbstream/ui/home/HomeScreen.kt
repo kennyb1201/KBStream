@@ -2213,6 +2213,7 @@ fun HomeScreen(
     onOpenSettings: () -> Unit = {},
     onSwitchProfile: () -> Unit = {},
     onOpenKBFolder: (String) -> Unit = {},
+    onOpenBrowseShortcut: (com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut) -> Unit = {},
     onOpenCatalogGrid: (Rail) -> Unit = {},
     viewModel: HomeViewModel =
         androidx.lifecycle.viewmodel.compose.viewModel()
@@ -3070,10 +3071,25 @@ fun HomeScreen(
                                                 entry.rail.catalogName + ":" + entry.rail.type
                                         is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
                                             "kb|" + (entry.collection.id ?: entry.collection.title)
+                                        // One shared row, so a fixed key: the chips inside
+                                        // it are reordered in place rather than
+                                        // re-keying the LazyColumn item.
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRow ->
+                                            "browse-row"
                                     }
                                 }
                             ) { _, entry ->
                                 when (val e = entry) {
+                                    is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRow ->
+                                        com.kennyb1201.kbstream.ui.kb.KBHomeBrowseRail(
+                                            shortcuts = e.shortcuts,
+                                            onOpenShortcut = onOpenBrowseShortcut,
+                                            onShortcutFocused = {
+                                                userAdjustedFocus = true
+                                                focusedFolder = null
+                                                focusedContinueWatchingItem = null
+                                            }
+                                        )
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
                                         KBHomeCollectionRail(
                                             collection = e.collection,

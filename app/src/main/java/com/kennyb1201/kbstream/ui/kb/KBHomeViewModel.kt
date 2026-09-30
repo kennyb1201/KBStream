@@ -3,6 +3,8 @@ package com.kennyb1201.kbstream.ui.kb
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
@@ -24,6 +26,8 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
     data class UiState(
         val collections: List<KBCollectionProfile> = emptyList(),
         val arrangement: KBHomeOrder = KBHomeOrder(),
+        /** Browse chips mirrored to Home, rendered as one shared row. */
+        val browseShortcuts: List<BrowseHomeShortcut> = emptyList(),
         val isLoading: Boolean = true
     )
 
@@ -50,6 +54,10 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
             com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
         viewModelScope.launch {
             val arrangement = KBHomeOrderPrefs.get(getApplication())
+            // The Browse row is part of the same arrangement Home renders, so
+            // it is read in the same pass: adding a chip on Search and coming
+            // back to Home has to show the tile without a second refresh path.
+            val browseShortcuts = BrowseHomeShortcuts.list(getApplication())
             val collections = runCatchingCancellable { repository.loadProfiles() }
                 .getOrDefault(emptyList())
                 .sortedByDescending { it.pinToTop }
@@ -62,6 +70,7 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
             _state.value = _state.value.copy(
                 arrangement = arrangement,
                 collections = collections,
+                browseShortcuts = browseShortcuts,
                 isLoading = false
             )
         }

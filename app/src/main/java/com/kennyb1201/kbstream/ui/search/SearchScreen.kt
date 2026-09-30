@@ -110,6 +110,7 @@ fun SearchScreen(
     val browseCategories by viewModel.browseCategories.collectAsStateWithLifecycle()
     val browseSubmenuLoading by viewModel.browseSubmenuLoading.collectAsStateWithLifecycle()
     val hiddenBrowseChips by viewModel.hiddenBrowseChips.collectAsStateWithLifecycle()
+    val browseHomeShortcuts by viewModel.browseHomeShortcuts.collectAsStateWithLifecycle()
 
     // Add-on search rail title toggles (addon name / catalog type). These
     // apply ONLY to the addon search rails below — the built-in TMDB
@@ -567,13 +568,40 @@ fun SearchScreen(
             )
         }
 
-        // Long-press on a browse chip. Hide is the only action: a normal
-        // press already opens the chip's discover screen.
+        // Long-press on a browse chip. A normal press already opens the
+        // chip's discover screen, so the menu holds the two things a press
+        // cannot say: mirror the chip onto Home, or take it out of the
+        // browse list.
         hiddenChipMenu?.let { (categoryKey, entry) ->
+            val onHome = com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.contains(
+                browseHomeShortcuts,
+                categoryKey,
+                entry.name
+            )
             PosterContextMenu(
                 title = entry.name,
                 subtitle = "Browse chip",
                 actions = listOf(
+                    PosterContextAction(
+                        label = if (onHome) {
+                            "Remove from Home"
+                        } else {
+                            "Add to Home"
+                        },
+                        description = if (onHome) {
+                            "Take this chip off the Browse row on Home"
+                        } else {
+                            "Keep this chip on Home, in the Browse row"
+                        },
+                        isDestructive = onHome
+                    ) {
+                        if (onHome) {
+                            viewModel.removeBrowseChipFromHome(categoryKey, entry)
+                        } else {
+                            viewModel.addBrowseChipToHome(categoryKey, entry)
+                        }
+                        hiddenChipMenu = null
+                    },
                     PosterContextAction(
                         label = "Hide",
                         description = "Remove this chip from the browse list",

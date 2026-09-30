@@ -16,6 +16,7 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
 import com.kennyb1201.kbstream.data.kb.moveRailToEnd
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.kb.toggleCollectionPin
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +78,12 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     data class CollectionUiState(
         val profileUrls: List<String> = emptyList(),
         val collections: List<ManagedCollection> = emptyList(),
+        /**
+         * How many browse chips are mirrored to Home. The manager lists the
+         * shared Browse row only while it has something in it, and needs the
+         * count for the row's own subtitle.
+         */
+        val browseShortcutCount: Int = 0,
         val statusMessage: String? = null
     )
 
@@ -230,6 +237,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                         isHidden = key in prefs.hiddenSet || key !in arranged
                     )
                 },
+                browseShortcutCount = BrowseHomeShortcuts.list(context).size,
                 statusMessage = _collections.value.statusMessage
             )
         }
@@ -354,8 +362,14 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         // WITHOUT a hidden entry ("never arranged"), so keying off
         // hiddenSet alone made the first SHOW click take the hide path and
         // the toggle visibly do nothing.
+        // Collections carry their own default-hidden rule in the state
+        // snapshot. The Browse row is not a collection and has no such rule -
+        // it defaults to VISIBLE - so it falls back to the stored flag rather
+        // than to "hidden", which would have made the first HIDE press take
+        // the show path and visibly do nothing.
         val currentlyHidden = _collections.value.collections
-            .firstOrNull { it.key == key }?.isHidden ?: true
+            .firstOrNull { it.key == key }?.isHidden
+            ?: KBHomeOrderPrefs.get(getApplication<Application>()).hiddenSet.contains(key)
         persistHomeOrder { prefs ->
             if (currentlyHidden) {
                 // SHOW: clear the hidden flag AND arrange the rail. A
@@ -464,6 +478,17 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun mergedRailKeys(prefs: KBHomeOrder): List<String> {
         val collectionKeys = _collections.value.collections.map { it.key }
+        // The Browse row is a managed rail too - it can be pinned and moved -
+        // so the manager has to know about it whenever it renders on Home,
+        // or it could never be arranged at all. It leads the default block:
+        // Home puts it directly under the Top Today rows, which are the head
+        // of the addon block here.
+        val browseKeys =
+            if (_collections.value.browseShortcutCount > 0) {
+                listOf(BrowseHomeShortcuts.ROW_KEY)
+            } else {
+                emptyList()
+            }
         val urls = manifestUrlByAddonId
         val addonKeys = _catalogConfigurations.value
             .filter { it.catalog.showOnHome }
@@ -474,7 +499,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     it.catalog.id
                 )
             }
-        val defaults = collectionKeys + addonKeys
+        val defaults = browseKeys + collectionKeys + addonKeys
         val known = defaults.toSet()
 
         val positioned = mutableListOf<String>()

@@ -33,9 +33,15 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
+import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
+import com.kennyb1201.kbstream.data.kb.BrowseRowPlacement
 import com.kennyb1201.kbstream.data.kb.KBCollectionProfile
 import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+import com.kennyb1201.kbstream.data.kb.browseRowPlacement
+import com.kennyb1201.kbstream.data.kb.browseShortcutCategoryLabel
+import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
@@ -85,6 +91,26 @@ object KBHomeSlots {
         val hidden = effectiveHidden
         val pinnedKeys = arrangement.pinned.toSet()
 
+        // The browse-menu chips mirrored to Home, as ONE shared row. It is
+        // neither a collection nor an addon catalog, and it is the one rail
+        // whose default is VISIBLE: a never-arranged collection waits in the
+        // home manager until Show is pressed, but a row the viewer just filled
+        // from a chip's long-press has to be somewhere they can see, or the
+        // action reads as having done nothing.
+        val browseKey = BrowseHomeShortcuts.ROW_KEY
+        val browsePlacement = browseRowPlacement(
+            shortcuts = state.browseShortcuts,
+            hidden = browseKey in hidden,
+            pinned = browseKey in pinnedKeys,
+            arranged = arrangement.order.contains(browseKey)
+        )
+        val browseEntry =
+            if (browsePlacement == BrowseRowPlacement.NONE) {
+                null
+            } else {
+                HomeEntry.BrowseRow(state.browseShortcuts)
+            }
+
         val collectionByKey = LinkedHashMap<String, KBCollectionProfile>()
         for (collection in collections) {
             collectionByKey.putIfAbsent(
@@ -133,6 +159,7 @@ object KBHomeSlots {
                 // Top Today renders first unconditionally — never also in
                 // the pinned block (would duplicate the rail).
                 pinKey in topTodayKeys -> emptyList()
+                pinKey == browseKey -> listOfNotNull(browseEntry)
                 pinKey.startsWith("kb:") ->
                     listOfNotNull(collectionByKey[pinKey]).map { HomeEntry.Collection(it) }
                 else ->
@@ -155,6 +182,10 @@ object KBHomeSlots {
             if (key in topTodayKeys) continue
             if (key in hardcodedKeys) continue
             if (key in pinnedAddonKeys) continue
+            if (key == browseKey) {
+                browseEntry?.let { middle += it }
+                continue
+            }
             val collection = collectionByKey[key]
             if (collection != null) {
                 if (key !in hidden) {
@@ -194,7 +225,18 @@ object KBHomeSlots {
             }
         }
 
-        return topTodayRails + hardcodedRails + pinned + middle + tail
+        // The Browse row's default spot: directly under the Top Today rows,
+        // which is where the rest of Home's doors to the catalog begin. Only
+        // when the user has never touched its position - once it is pinned or
+        // placed in the stored order, the walk above owns where it sits.
+        val defaultBrowse =
+            if (browsePlacement == BrowseRowPlacement.BELOW_TOP_TODAY) {
+                listOfNotNull(browseEntry)
+            } else {
+                emptyList()
+            }
+
+        return topTodayRails + defaultBrowse + hardcodedRails + pinned + middle + tail
     }
 
     /**
@@ -219,12 +261,25 @@ object KBHomeSlots {
         )
 }
 
-/** One Home entry: either an addon catalog rail or an imported collection. */
+/**
+ * One Home entry: an addon catalog rail, an imported collection, or the
+ * shared Browse row.
+ */
 sealed class HomeEntry {
     // sourceIndex preserves the original rails position so two rails that
     // ever share addon/catalog/type still get unique LazyColumn keys.
     data class AddonRail(val rail: Rail, val sourceIndex: Int) : HomeEntry()
     data class Collection(val collection: KBCollectionProfile) : HomeEntry()
+
+    /**
+     * The browse chips the viewer mirrored to Home, as one row of tiles.
+     *
+     * It carries the chips rather than a rendered result because the tiles
+     * open the app's own discover screens (genre, service/network, collection,
+     * decade) - the row is a shortcut shelf, not a catalog copy, so there is
+     * nothing to fetch and nothing to keep in sync.
+     */
+    data class BrowseRow(val shortcuts: List<BrowseHomeShortcut>) : HomeEntry()
 }
 
 private val CollectionTileWidth = 210.dp
@@ -408,6 +463,123 @@ private fun CollectionFolderTile(
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(8.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The Browse row: one landscape tile per browse chip the viewer mirrored to
+ * Home, in the order they were added.
+ *
+ * It is shaped like a collection rail on purpose - same tile size, same
+ * gutters, same focus treatment - because it is the same kind of thing on
+ * Home (a row that opens somewhere else), and it is the row the home manager
+ * lets the viewer move or pin next to the collections.
+ *
+ * Each tile opens the screen its chip opens in Browse, not a copy of it: the
+ * chip's own category decides (genre, keyword, service/network, studio,
+ * collection, decade), so the row costs no network work and can never drift
+ * from what the browse browser shows.
+ */
+@Composable
+fun KBHomeBrowseRail(
+    shortcuts: List<BrowseHomeShortcut>,
+    onOpenShortcut: (BrowseHomeShortcut) -> Unit,
+    onShortcutFocused: ((BrowseHomeShortcut) -> Unit)? = null
+) {
+    Column(
+        modifier = Modifier.padding(
+            start = TvSafeAreaHorizontal,
+            top = 0.dp,
+            bottom = 8.dp
+        )
+    ) {
+        Text(
+            text = "Browse",
+            color = KBTextHi.copy(alpha = 0.94f),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+        )
+
+        LazyRow(
+            contentPadding = PaddingValues(
+                start = RailHorizontalStartPadding,
+                end = TvSafeAreaHorizontal,
+                top = 4.dp,
+                bottom = 12.dp
+            ),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(
+                items = shortcuts,
+                key = { it.chipKey() }
+            ) { shortcut ->
+                BrowseShortcutTile(
+                    shortcut = shortcut,
+                    onClick = { onOpenShortcut(shortcut) },
+                    onFocus = onShortcutFocused?.let { callback ->
+                        { callback(shortcut) }
+                    }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One Browse tile: a landscape card carrying the chip's name as a wordmark
+ * over the app's own surface, with its category under it.
+ *
+ * No cover artwork is fetched for these. A browse chip's "logo" would be TMDB
+ * artwork that only exists after the resolver has run (the same reason
+ * keyword and collection chips are keyed by NAME), and paying that on Home
+ * for a shortcut shelf would put a network walk in front of the first frame.
+ * The wordmark is what the tile says instead - legible, immediate and honest.
+ */
+@Composable
+private fun BrowseShortcutTile(
+    shortcut: BrowseHomeShortcut,
+    onClick: () -> Unit,
+    onFocus: (() -> Unit)? = null
+) {
+    var isFocused by remember { mutableStateOf(false) }
+    val focusModifier = Modifier.onFocusChanged {
+        isFocused = it.isFocused
+        if (it.isFocused) onFocus?.invoke()
+    }
+
+    KBCard(
+        onClick = onClick,
+        modifier = focusModifier
+    ) {
+        Box(
+            modifier = Modifier
+                .width(CollectionTileWidth)
+                .height(CollectionTileHeight)
+                .background(KBSurface),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(horizontal = 10.dp)
+            ) {
+                Text(
+                    text = shortcut.name.uppercase(),
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = browseShortcutCategoryLabel(shortcut.categoryKey),
+                    color = KBTextHi.copy(alpha = 0.62f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 3.dp)
                 )
             }
         }
