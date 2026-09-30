@@ -374,6 +374,67 @@ internal fun upNextHeroEpisodeLabel(
 internal fun upNextTitleKey(item: UpNextItem): String =
     "title:${upNextMediaType(item.parentType)}:${item.title.trim().lowercase()}"
 
+/**
+ * True when this card came from a TRACKER account (Simkl, MDBList) rather
+ * than from this profile's own watch history.
+ */
+internal fun isTrackerSourcedCard(item: UpNextItem): Boolean =
+    item.id.startsWith("simkl:", ignoreCase = true) ||
+        item.id.startsWith("mdblist:", ignoreCase = true)
+
+/**
+ * Whether a tracker card must stay off the active profile's rails because the
+ * title belongs to a sibling profile.
+ *
+ * Local history is profile-scoped, so a local card is never in question here:
+ * it exists only for a title the ACTIVE profile watched. The tracker feeds are
+ * account-wide (Simkl and MDBList hold one library per account, not per
+ * profile), which is how a kids show watched on profile 3 resurfaced on
+ * profile 1 - a profile with no history for it at all. The owner a local card
+ * recorded decides it.
+ *
+ * A title with no recorded owner is kept everywhere on purpose: a show watched
+ * on another device, or before this TV had profiles, cannot be attributed, and
+ * hiding it would break the cross-device Continue Watching the tracker feeds
+ * exist for.
+ */
+internal fun trackerCardOwnedByAnotherProfile(
+    item: UpNextItem,
+    ownerByTitleKey: Map<String, String>,
+    activeProfileId: String?
+): Boolean {
+    if (!isTrackerSourcedCard(item)) return false
+
+    val active = activeProfileId?.takeIf { it.isNotBlank() } ?: return false
+    val owner = ownerByTitleKey[upNextTitleKey(item)] ?: return false
+
+    return owner != active
+}
+
+/**
+ * A tracker card's subtitle: the action word and the episode pair, or the
+ * tracker's own text when there is no pair to print.
+ *
+ * The pair used to be concatenated unconditionally, so a card whose resolution
+ * came back with nothing at all read "Up Next - " - a dangling separator - or
+ * worse, "Up Next - S1 E1" from the invented default pair. The tracker's own
+ * line ("S2 · E5", "Paused 34%") is real information; it stands when the pair
+ * is not.
+ */
+internal fun upNextTrackerSubtitle(
+    prefix: String,
+    season: Int?,
+    episode: Int?,
+    fallback: String?
+): String? {
+    val pair = formatSeasonEpisode(season, episode)
+    return if (pair.isBlank()) {
+        fallback?.takeIf { it.isNotBlank() }
+    } else {
+        "$prefix - $pair"
+    }
+}
+
 /** One card per show: keyed by parent id when the card has one, title otherwise. */
 internal fun upNextShowKey(item: UpNextItem): String {
     val normalizedParentId =
@@ -732,8 +793,15 @@ data class UpcomingEpisode(
 )
 
 internal data class ResolvedHomeSeriesTarget(
-    val season: Int,
-    val episode: Int,
+    // Nullable on purpose. The resolution's last resort - a show whose season
+    // walk resolved no episode at all - knows no pair, and an unknown episode
+    // must stay unknown: reported as Continue Watching cards reading "season 1
+    // episode 1" for shows the viewer had actually been watching, which is
+    // exactly the pair the S1E1 default invented for a show with no episode
+    // list. Callers print what they have (see [upNextEpisodeLabel] /
+    // [upNextCardEpisodePair]); null prints nothing rather than a guess.
+    val season: Int? = null,
+    val episode: Int? = null,
     val streamId: String? = null,
     val startPositionMs: Long = 0L,
     val isResume: Boolean = false,

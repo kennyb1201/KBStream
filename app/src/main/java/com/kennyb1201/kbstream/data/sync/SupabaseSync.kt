@@ -656,6 +656,48 @@ object SupabaseSync {
     private fun storedKeyMatchesActiveProfile(storedKey: String): Boolean =
         storedKeyMatchesProfile(storedKey, currentProfileId())
 
+    /**
+     * Attributes the account's watched titles to the profiles that watched
+     * them, from the cloud rows themselves.
+     *
+     * This is the only place that sees EVERY profile's history at once: a
+     * synced row's key is scoped to the profile that wrote it, while the pull
+     * below only applies the active profile's rows. The tracker feeds (Simkl,
+     * MDBList) are account-wide, so a show watched under a sibling profile came
+     * back as a Continue Watching card on this one, with no local history to
+     * explain it - "there's a kids show in my continue watching on profile 1
+     * that's supposed to be in profile 3". Recording the owners here means the
+     * attribution is already complete after the first sync, instead of only
+     * once each profile has been opened since the map existed (see
+     * TitleProfileOwnership).
+     *
+     * Legacy unscoped rows name no profile and are skipped: they predate the
+     * profile system, and guessing one would be worse than leaving the title
+     * unattributed.
+     */
+    private fun recordHistoryTitleOwners(rows: List<SyncRowDto>) {
+        if (rows.isEmpty()) return
+
+        val context = appContextRef?.get() ?: return
+        val owners = LinkedHashMap<String, String>()
+
+        for (row in rows) {
+            val storedId = row.itemId ?: continue
+            val profileId = SyncKeys.scopeOf(storedId) ?: continue
+            val remote = row.payload
+
+            val key = com.kennyb1201.kbstream.data.history.titleProfileKey(
+                type = remote.str("type"),
+                title = remote.str("name")
+            ) ?: continue
+
+            owners[key] = profileId
+        }
+
+        com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+            .recordAll(context, owners)
+    }
+
     /** Account-wide keys (the profiles list itself) bypass the profile filter. */
     private fun storedKeyApplies(storedKey: String): Boolean {
         if (storedKey == PrefsPayloadBuilder.KEY_PROFILES) return true
@@ -1147,6 +1189,11 @@ object SupabaseSync {
             val rows = c.from(TABLE_HISTORY)
                 .select()
                 .decodeList<SyncRowDto>()
+
+            // Which profile each title belongs to, taken from the rows of ALL
+            // profiles (see recordHistoryTitleOwners) - done before the merge
+            // below, which only applies this profile's.
+            recordHistoryTitleOwners(rows)
 
             val db = WatchHistoryDatabase.getInstanceScoped(context)
             // Batch-load every local row once, then merge in memory: the old

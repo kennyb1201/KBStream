@@ -1251,18 +1251,24 @@ Log.d(
         // already profile-scoped; Simkl is not).
         val kidsSafe = kidsFilterUpNext(items)
 
+        // Profile gate, the same account-wide-feed problem one step further:
+        // a title THIS device has watched under one profile must not come back
+        // on another profile through the tracker feed (see
+        // [applyTrackerTitleOwnership]).
+        val profileSafe = applyTrackerTitleOwnership(kidsSafe)
+
         if (
             dismissedContinueWatching.isEmpty() ||
-            kidsSafe.isEmpty()
+            profileSafe.isEmpty()
         ) {
-            return kidsSafe
+            return profileSafe
         }
 
         var changed =
             false
 
         val filtered =
-            kidsSafe.filter { item ->
+            profileSafe.filter { item ->
 
                 val key =
                     showDedupeKey(item)
@@ -1291,6 +1297,67 @@ Log.d(
         }
 
         return filtered
+    }
+
+    /**
+     * Keeps the tracker feeds out of profiles they do not belong to.
+     *
+     * Reported: "there's a kids show in my continue watching on profile 1
+     * that's supposed to be in profile 3". Profile 1 had no history for it -
+     * local history is per profile - but the card came from Simkl, whose
+     * library is one per ACCOUNT, so a show watched on any profile came back
+     * on every one of them.
+     *
+     * The device knows the missing half: a local card only exists for a title
+     * the ACTIVE profile watched, so every local card in this list is recorded
+     * as that profile's (TitleProfileOwnership), and a tracker card whose
+     * title is owned by a different profile is dropped. Nothing else is: a
+     * title with no owner was watched on another device (or before this TV had
+     * profiles) and hiding it would break the cross-device Continue Watching
+     * the tracker feeds exist for, and a local card is never in question.
+     */
+    private fun applyTrackerTitleOwnership(
+        items: List<UpNextItem>
+    ): List<UpNextItem> {
+
+        if (items.isEmpty()) return items
+
+        val activeProfileId =
+            com.kennyb1201.kbstream.data.sync.ProfileManager
+                .activeProfile.value?.id
+                ?.takeIf { it.isNotBlank() }
+
+        // Every local card claims its title for the active profile, on every
+        // pass: this is the only place that knows both the profile and the
+        // titles its history holds, and a later watch on another profile has
+        // to be able to take the title over.
+        items
+            .filterNot { item -> isTrackerSourcedCard(item) }
+            .forEach { item ->
+                com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+                    .record(
+                        context = getApplication(),
+                        type = item.parentType ?: item.showTitle,
+                        title = item.title,
+                        profileId = activeProfileId
+                    )
+            }
+
+        if (activeProfileId == null) return items
+
+        val owners =
+            com.kennyb1201.kbstream.data.history.TitleProfileOwnership
+                .snapshot(getApplication())
+
+        if (owners.isEmpty()) return items
+
+        return items.filterNot { item ->
+            trackerCardOwnedByAnotherProfile(
+                item = item,
+                ownerByTitleKey = owners,
+                activeProfileId = activeProfileId
+            )
+        }
     }
 
     /**
@@ -1666,7 +1733,10 @@ Log.d(
         // tracker-sourced cards use.
         val nextUpBadge =
             if (
-                SeasonRules.isSeasonPremiere(target.episode) &&
+                target.episode
+                    ?.let { episode ->
+                        SeasonRules.isSeasonPremiere(episode)
+                    } == true &&
                     target.airDate
                         ?.let { isWithinDays(it, NEW_RELEASE_WINDOW_DAYS) } == true
             ) {
@@ -3841,7 +3911,10 @@ Log.d(
                 UpNextBadge.NEXT_UP
             }
 
-        var subtitle =
+        // Nullable: the resolution below can replace it with the badge's pair,
+        // and a card whose pair is unknown keeps the tracker's own line (see
+        // upNextTrackerSubtitle).
+        var subtitle: String? =
             buildSimklSubtitle(
                 item,
                 isExplicitResume
@@ -4066,9 +4139,15 @@ episodesTotal =
                             }
 
                             airedRecently &&
-                                SeasonRules
-                                    .isSeasonPremiere(
-                                        resolvedEpisode
+                                (
+                                    resolvedEpisode
+                                        ?.let { episode ->
+                                            SeasonRules
+                                                .isSeasonPremiere(
+                                                    episode
+                                                )
+                                        }
+                                        ?: false
                                     ) -> {
 
                                 UpNextBadge.NEW_SEASON
@@ -4085,52 +4164,34 @@ episodesTotal =
                             }
                         }
 
+                    // The pair is printed only when it is known; a card
+                    // whose resolution came back with nothing keeps the
+                    // tracker's own line instead of a dangling "Up Next - ",
+                    // or the invented "S1 E1" the empty walk used to leave.
                     subtitle =
-                        when {
+                        upNextTrackerSubtitle(
+                            prefix =
+                                when (badge) {
 
-                            badge ==
-                                UpNextBadge.CONTINUE_WATCHING -> {
+                                    UpNextBadge.CONTINUE_WATCHING ->
+                                        "Resume"
 
-                                "Resume - ${
-                                    formatSeasonEpisode(
-                                        resolvedSeason,
-                                        resolvedEpisode
-                                    )
-                                }"
-                            }
+                                    UpNextBadge.NEW_SEASON ->
+                                        "New Season"
 
-                            badge ==
-                                UpNextBadge.NEW_SEASON -> {
+                                    UpNextBadge.NEW_EPISODE ->
+                                        "New Episode"
 
-                                "New Season - ${
-                                    formatSeasonEpisode(
-                                        resolvedSeason,
-                                        resolvedEpisode
-                                    )
-                                }"
-                            }
-
-                            badge ==
-                                UpNextBadge.NEW_EPISODE -> {
-
-                                "New Episode - ${
-                                    formatSeasonEpisode(
-                                        resolvedSeason,
-                                        resolvedEpisode
-                                    )
-                                }"
-                            }
-
-                            else -> {
-
-                                "Up Next - ${
-                                    formatSeasonEpisode(
-                                        resolvedSeason,
-                                        resolvedEpisode
-                                    )
-                                }"
-                            }
-                        }
+                                    else ->
+                                        "Up Next"
+                                },
+                            season =
+                                resolvedSeason,
+                            episode =
+                                resolvedEpisode,
+                            fallback =
+                                subtitle
+                        )
                 }
             }
         }
@@ -4907,30 +4968,50 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     /*
      * Find the next unwatched episode in the current season.
      */
-    // With no Simkl-provided starting point, resume from the furthest watched
-    // episode rather than S1E1: Continue Watching is "continue", not
-    // "backfill every gap", and it must not snap back to an abandoned
-    // episode.
-    val startingSeason =
-        simklSeason ?: furthestWatchedSeason ?: 1
+    // The continue point, when one is actually KNOWN: the tracker's own
+    // episode, or the furthest episode this profile has watched. With no
+    // tracker-provided point that is the furthest watched episode rather than
+    // S1E1 - Continue Watching is "continue", not "backfill every gap", and
+    // it must not snap back to an abandoned episode. Both are real data;
+    // neither is a guess.
+    //
+    // Null matters. The pair used to fall back to season 1 / episode 1 so the
+    // walks below always had a floor, and the fall-through at the end of this
+    // function then handed that invented floor back as the show's continue
+    // point. For a show whose season walk resolved NOTHING - an episode list
+    // that never answered, a tracker id TMDB has no show for - the card read
+    // "season 1 episode 1" for a show the viewer was part-way through, which
+    // is what was reported. A pair this function cannot know is now null.
+    val knownSeason =
+        simklSeason ?: furthestWatchedSeason
 
     // A tracker episode number of 0 is "no episode": see
     // EpisodeNumbering. Kept as one, it was returned verbatim below - the
     // card read "S02 · E00", the player "Season 2 Episode 00", for a
     // show whose next episode TMDB knows perfectly well. Dropping it here
     // lets the furthest-watched walk pick the right one.
-    val startingEpisode =
+    val knownEpisode =
         namedEpisodeNumber(
             simklEpisode
         )
             ?: if (
-                startingSeason == furthestWatchedSeason &&
+                knownSeason != null &&
+                knownSeason == furthestWatchedSeason &&
                 furthestWatchedEpisode > 0
             ) {
                 furthestWatchedEpisode
             } else {
-                1
+                null
             }
+
+    // Where the walks below START. A missing pair still needs a floor - season
+    // 1, episode 1 is "search from the beginning" - but a floor is not a
+    // finding: it never leaves this function as an answer.
+    val startingSeason =
+        knownSeason ?: 1
+
+    val startingEpisode =
+        knownEpisode ?: 1
 
     val currentSeasonEpisodes =
         try {
@@ -5232,13 +5313,18 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         return null
     }
 
+    // Nothing was resolved to continue AT, so the pair comes from what is
+    // actually known - the tracker's own episode or the furthest one watched
+    // - and stays null when nothing is. This is the fall-through that made a
+    // show whose season walk came back empty read "season 1 episode 1": the
+    // invented floor was returned as if it were a finding.
     return ResolvedHomeSeriesTarget(
 
         season =
-            startingSeason,
+            knownSeason,
 
         episode =
-            startingEpisode,
+            knownEpisode,
 
         episodesWatched =
             episodesWatched,

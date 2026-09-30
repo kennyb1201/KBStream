@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.data.tmdb
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -66,5 +68,33 @@ class NamedSeasonEpisodesTest {
     @Test
     fun `an empty season stays empty`() {
         assertEquals(emptyList<ResolvedEpisode>(), emptyList<ResolvedEpisode>().namedEpisodesOnly())
+    }
+
+    // ── what may be kept as TMDB's answer ───────────────────────────────
+
+    @Test
+    fun `a real episode list is an answer`() {
+        assertTrue(seasonEpisodesAreAnAnswer(listOf(episode(1), episode(2))))
+        assertTrue(seasonEpisodesAreAnAnswer(listOf(episode(7))))
+    }
+
+    @Test
+    fun `an empty list is not an answer`() {
+        // The season cache holds a lookup that never answered (a rate limit, a
+        // dropped connection) and a season TMDB has no episodes for as the
+        // same empty list. Remembering it is what pinned "No episodes found
+        // for this season." on every season of a show for a week, and what
+        // left Continue Watching with no episode to resolve for it.
+        assertFalse(seasonEpisodesAreAnAnswer(emptyList()))
+        assertFalse(seasonEpisodesAreAnAnswer(null))
+    }
+
+    @Test
+    fun `a list of only unnamed rows is not an answer either`() {
+        // Read the way the cache reads: the filter runs first, and what is
+        // left of a list of nothing but "episode 0" rows is empty.
+        val onlyUnnamed = listOf(episode(0, "Special"), episode(-1))
+
+        assertFalse(seasonEpisodesAreAnAnswer(onlyUnnamed.namedEpisodesOnly()))
     }
 }

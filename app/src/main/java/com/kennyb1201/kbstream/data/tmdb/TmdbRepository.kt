@@ -185,6 +185,33 @@ data class ResolvedEpisode(
 internal fun List<ResolvedEpisode>.namedEpisodesOnly(): List<ResolvedEpisode> =
     filter { episode -> namedEpisodeNumber(episode.episodeNumber) != null }
 
+/**
+ * Whether a season's episode list may be treated as TMDB's ANSWER for that
+ * (show, season).
+ *
+ * An empty list is not one. Continue Watching scans every season of a show to
+ * find the next episode and to count watched/total, and the Detail screen
+ * fetches the season the viewer is looking at - both through
+ * [TmdbRepository.getSeasonEpisodes]. A lookup that never answered (a rate
+ * limit, a dropped connection, an API key that had not loaded) and a season
+ * TMDB genuinely has no episodes for both come out as an empty list, and both
+ * were stored under the same twelve-hour memory / seven-day disk TTLs the real
+ * ones get. One interrupted refresh therefore pinned "this show has no
+ * episodes" for a week: the season browser read "No episodes found for this
+ * season." on EVERY season of that show, and the Continue Watching walk could
+ * not resolve a single episode - so the card for a show the viewer was
+ * part-way through fell through to its last-ditch pair and read "S1 · E1".
+ * Both are the same report.
+ *
+ * The rule is therefore: an empty answer is a MISS - never cached, never
+ * served - and the lookup is retried, so a bad answer cannot outlive the
+ * session that produced it. Top level and pure so a test can pin it without
+ * standing up a repository (see NamedSeasonEpisodesTest).
+ */
+internal fun seasonEpisodesAreAnAnswer(
+    episodes: List<ResolvedEpisode>?
+): Boolean = !episodes.isNullOrEmpty()
+
 class TmdbRepository private constructor(context: Context) :
     MemoryPressure.Releasable {
 
@@ -1269,8 +1296,14 @@ class TmdbRepository private constructor(context: Context) :
         pruneMemoryCaches()
         val cached = seasonEpisodesCache[key]
 
+        // Neither cache may serve an empty list as an answer: see
+        // [seasonEpisodesAreAnAnswer]. A cached failure is skipped, not
+        // returned, so the lookup below runs and the real list replaces it.
         if (cached != null && now - cached.first < seasonEpisodesCacheTtlMs) {
-            return cached.second.namedEpisodesOnly()
+            val named = cached.second.namedEpisodesOnly()
+            if (seasonEpisodesAreAnAnswer(named)) {
+                return named
+            }
         }
 
         // Disk cache so the season scans also survive restarts.
@@ -1282,8 +1315,8 @@ class TmdbRepository private constructor(context: Context) :
             val parsed = runCatching {
                 seasonEpisodesJsonAdapter.fromJson(diskCached.json)
             }.getOrNull()
-            if (parsed != null) {
-                val named = parsed.namedEpisodesOnly()
+            val named = parsed?.namedEpisodesOnly()
+            if (named != null && seasonEpisodesAreAnAnswer(named)) {
                 seasonEpisodesCache[key] = now to named
                 return named
             }
@@ -1312,8 +1345,12 @@ class TmdbRepository private constructor(context: Context) :
             )
         }
 
-        seasonEpisodesCache[key] = now to episodes
-        cacheJson(diskKey, seasonEpisodesJsonAdapter.toJson(episodes), now)
+        // An empty list is a question, not an answer: remembering it is what
+        // kept a transient failure on screen for a week.
+        if (seasonEpisodesAreAnAnswer(episodes)) {
+            seasonEpisodesCache[key] = now to episodes
+            cacheJson(diskKey, seasonEpisodesJsonAdapter.toJson(episodes), now)
+        }
         return episodes
     }
 
