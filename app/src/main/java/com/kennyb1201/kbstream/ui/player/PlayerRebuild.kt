@@ -35,3 +35,45 @@ internal fun rebuildSettleRemainingMs(settleMs: Long, releasedAtMs: Long, nowMs:
     if (elapsed < 0L) return settleMs
     return (settleMs - elapsed).coerceAtLeast(0L)
 }
+
+/**
+ * Whether a screen that has just come back to the foreground owes a rebuild.
+ *
+ * The fullscreen player is a separate Activity and a TV remote's Home button
+ * STOPS it: the task, and the instance, survive. The viewer who leaves from the
+ * launcher and comes back therefore arrives at a screen that is still composed
+ * - and whose player, MediaSession and trickplay decoder [onStop] had already
+ * released, with nothing left to build them again. The overlay drew over the
+ * last frame, the play and restart presses ran against a null player, and the
+ * only press that worked was a source switch, because that is the one path that
+ * builds an ExoPlayer ([recreatePlayer]).
+ *
+ * The stop itself stays as it is: this box hands out one 4K decode per process,
+ * so a backgrounded player holding it is what leaves the Home hero's pooled
+ * trailer with no decoder to prepare in. The rebuild is the half that was
+ * missing.
+ *
+ * @param finishing the screen is going away for good, so there is nothing to
+ *   come back to.
+ * @param destroyed the Activity has already been destroyed.
+ * @param tornDownAtStop [onStop] released this screen's player.
+ * @param playerPresent a player is already built, so there is nothing to do -
+ *   true for a session continued in place (Picture-in-Picture stops nothing)
+ *   and for a return that another path rebuilt first.
+ * @param handingOver the session is being continued in another engine: the MPV
+ *   switch, an installed external player, or the next-episode chain. Each of
+ *   those opens the file and plays it itself, and a second player here would
+ *   fight them for that one decoder.
+ */
+internal fun shouldRebuildAfterStop(
+    finishing: Boolean,
+    destroyed: Boolean,
+    tornDownAtStop: Boolean,
+    playerPresent: Boolean,
+    handingOver: Boolean
+): Boolean {
+    if (finishing || destroyed) return false
+    if (!tornDownAtStop) return false
+    if (playerPresent) return false
+    return !handingOver
+}

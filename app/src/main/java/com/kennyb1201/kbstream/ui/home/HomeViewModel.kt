@@ -16,6 +16,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
+import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
@@ -2470,9 +2471,21 @@ Log.d(
 
                     try {
 
+                        // Skipped, not held, while a fullscreen player holds
+                        // the screen. This tick is a full Simkl pull plus a
+                        // watched-status rebuild over every rail and the TMDB
+                        // work that resolves it - a burst of network the
+                        // video's loader shares the link with. Holding it would
+                        // not help either: the gate's hold budget is per
+                        // viewing session and a film is longer, so it would
+                        // land mid-playback anyway. Nothing is lost by letting
+                        // this one go - the next tick is fifteen minutes away,
+                        // and Home's ON_RESUME path refreshes watched status
+                        // the moment the viewer comes back.
                         if (
                             simklRepository.isConfigured() &&
-                            simklRepository.hasToken()
+                            simklRepository.hasToken() &&
+                            !EpgWriteGate.isPlayerActive
                         ) {
 
                             Log.e(
@@ -7099,6 +7112,23 @@ private suspend fun calculateEpisodesRemaining(
             // not. Bump the trigger so the up-next rail re-merges against a
             // FRESH Simkl feed instead of the list built before the change
             // (the debounce keeps a burst of writes to one recompute).
+            // Hold this rebuild out of a playing video's way (see
+            // EpgWriteGate). The event behind it is a watch write, and a
+            // session files one as it starts - the first seconds of playback -
+            // so the three-second debounce in front of this lands exactly in
+            // the window a viewer reports as "started playing, then buffered
+            // for a second or two". What runs then is a FULL rails rebuild:
+            // clearCatalogCache forces real network fetches, up to
+            // MAX_CONCURRENT_CATALOG_REQUESTS of them at once, plus the TMDB
+            // enrichment each rail resolves through - all of it on the link
+            // the video's own loader is filling from. The gate is what already
+            // keeps guide writes out of a starting player for the same reason
+            // (it is named in EpgWriteGate's own file after a 6.9s rebuffer
+            // stall from exactly this overlap); the rebuild now waits with
+            // them. A HOLD, not a skip: the marks that triggered it still have
+            // to show, and Home's ON_RESUME path is where the viewer sees it.
+            EpgWriteGate.holdWhilePlaying()
+
             _refreshTrigger.value += 1
 
             runCatchingCancellable {

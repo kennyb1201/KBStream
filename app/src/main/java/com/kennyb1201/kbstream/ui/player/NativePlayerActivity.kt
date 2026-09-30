@@ -1897,6 +1897,19 @@ class NativePlayerActivity : ComponentActivity() {
     /// resets it), but never on mid-playback rebuffers or when returning from
     /// the actor overlay (fromActorReturn).
     private var hasPlayedOnce = false
+
+    /**
+     * True when [onStop] took this screen's player down with it.
+     *
+     * [onStop] here is the viewer leaving the APP, not leaving the title: on a
+     * TV the remote's Home button stops this Activity while the task (and this
+     * instance) survive, and the release it does is deliberate - the box hands
+     * out one 4K decode per process, so a backgrounded player holding it is
+     * what leaves the Home hero's pooled trailer with no decoder to prepare in.
+     * What was missing is the other half: [onStart] has to know a rebuild is
+     * owed, rather than reading its own first call as a launch.
+     */
+    private var playerTornDownAtStop = false
     private var historyId = ""
 
     /// Cached canonical id for the playback-history row (see
@@ -9206,6 +9219,51 @@ class NativePlayerActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() { super.onUserLeaveHint(); enterPipIfEnabled() }
 
+    /**
+     * Playback torn down by [onStop] comes back here.
+     *
+     * [shouldRebuildAfterStop] decides whether a return owes a rebuild at all,
+     * and carries the why; this is what the rebuild is made of. It happens at
+     * the position [onStop] carried in [carryPositionMs] - [createPlayer] seeks
+     * to it as it prepares, so nothing starts at 0 and jumps. The splash comes
+     * back with it, because this IS a load: a session that has to refill its
+     * buffer is not the mid-playback rebuffer the small spinner exists for, and
+     * [markFirstFrameRendered] takes it down again on the first painted frame.
+     * [hasPlayedOnce] goes back with it, exactly as a source switch resets it,
+     * so the load gets the splash rather than the spinner.
+     */
+    private fun resumeAfterBackgroundReturn() {
+        val owesRebuild = shouldRebuildAfterStop(
+            finishing = isFinishing,
+            destroyed = isDestroyed,
+            tornDownAtStop = playerTornDownAtStop,
+            playerPresent = exoPlayer != null,
+            handingOver = mpvHandoffStarted || externalHandoffStarted || nextEpisodeHandoffStarted
+        )
+        // Spent either way: the marker describes ONE stop, so a return that
+        // could not rebuild (a handover, say) must not leave it set to fire
+        // against the next one.
+        playerTornDownAtStop = false
+        if (!owesRebuild) return
+        // This screen holds the decoder again, so the bulk background work that
+        // waits on the gate (guide writes, the home catalog rebuild) goes back
+        // to waiting: onStop handed the screen to whatever sits behind it.
+        EpgWriteGate.setPlayerActive(true)
+        Log.i(
+            "PLAYER_REBUILD",
+            "back on screen after a stop: rebuilding playback at ${carryPositionMs}ms"
+        )
+        hasPlayedOnce = false
+        showSplash()
+        setupIntroDb()
+        recreatePlayer()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        resumeAfterBackgroundReturn()
+    }
+
     override fun onPause() {
         super.onPause()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !isInPictureInPictureMode && AppPreferences.getEnablePip(this)) {
@@ -9305,6 +9363,12 @@ class NativePlayerActivity : ComponentActivity() {
         subtitleCueHandler = null
         exoPlayer?.release()
         exoPlayer = null
+        // Marked with the release, not before it: this is the stop that took
+        // the screen's player with it, and [resumeAfterBackgroundReturn] is
+        // what answers it when the viewer comes back to a screen that is still
+        // here. Cleared as that rebuild runs, and never set on a session that
+        // is merely being re-created: a new instance gets a new field.
+        playerTornDownAtStop = true
         mediaSession?.release()
         mediaSession = null
     }
