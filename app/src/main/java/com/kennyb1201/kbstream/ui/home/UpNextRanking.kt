@@ -15,13 +15,15 @@ internal fun dedupeAndSortUpNext(
     items: List<UpNextItem>
 ): List<UpNextItem> {
 
-    return clusterByIdentityKeys(
-        collapseDuplicateUpNextCards(
-            items
-        )
-    ) { item ->
-        upNextGroupingKeys(item)
-    }
+    return mergeTitleTwinClusters(
+        clusterByIdentityKeys(
+            collapseDuplicateUpNextCards(
+                items
+            )
+        ) { item ->
+            upNextGroupingKeys(item)
+        }
+    )
         .mapNotNull { candidates ->
 
             candidates.maxWithOrNull(

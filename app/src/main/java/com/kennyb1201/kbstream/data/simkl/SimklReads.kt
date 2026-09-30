@@ -212,15 +212,25 @@ object ShowCompletionRules {
      * left to watch means nothing to resume (the caught-up show stays off).
      * Only with no tally at all does the status fall back to deciding, and
      * only a genuinely finished show with nothing queued next is excluded.
-     * The one unconditional exclusion is "dropped": the user took it off
-     * their list, so it never belongs on the rail.
+     *
+     * Two exclusions are unconditional. "dropped": the user took it off
+     * their list, so it never belongs on the rail. And NEVER STARTED: a show
+     * the account has no watched episode for is not something to continue, no
+     * matter what its list status says. That gate is what keeps a title that
+     * merely sits on the tracker's list off Continue Watching - reported as a
+     * kids show leaking onto another profile's rail reading "Next Up S1E1"
+     * with no watch history anywhere, which is exactly what the season walk
+     * resolves for a show nobody has watched (its first aired episode).
+     * "Started" is the account's own tally, or an episode the tracker records
+     * as last watched for a show whose tally it has not filled in.
      */
     fun isContinueWatchingCandidate(
         status: String?,
         watchedEpisodesCount: Int?,
         totalEpisodesCount: Int?,
         notAiredEpisodesCount: Int?,
-        nextToWatch: String?
+        nextToWatch: String?,
+        lastWatched: String? = null
     ): Boolean {
 
         val normalizedStatus =
@@ -231,6 +241,20 @@ object ShowCompletionRules {
         // Deliberately off the user's list: never a rail card.
         if (
             normalizedStatus == "dropped"
+        ) {
+            return false
+        }
+
+        // Nothing to continue: the account has never watched an episode of
+        // this show. A tracker list membership is not a watch. Without this
+        // the show resolved to its first aired episode and printed
+        // "Up Next - S1E1" over a title the viewer had never opened.
+        val started =
+            (watchedEpisodesCount ?: 0) > 0 ||
+                !lastWatched.isNullOrBlank()
+
+        if (
+            !started
         ) {
             return false
         }
@@ -441,7 +465,10 @@ internal fun SimklRepository.isContinueWatchingCandidate(
             item.notAiredEpisodesCount,
 
         nextToWatch =
-            item.nextToWatch
+            item.nextToWatch,
+
+        lastWatched =
+            item.lastWatched
     )
 
 /**

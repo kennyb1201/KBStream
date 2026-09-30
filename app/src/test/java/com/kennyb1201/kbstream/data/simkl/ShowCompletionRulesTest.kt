@@ -189,6 +189,79 @@ class ShowCompletionRulesTest {
     }
 
     /**
+     * Reported bug: a kids show leaked onto another profile's Continue
+     * Watching reading "Next Up S1E1" with no watch history anywhere. The
+     * show was merely on the tracker's list and had never been watched, so
+     * the season walk resolved its first aired episode. A list membership is
+     * not a watch.
+     */
+    @Test
+    fun `a show the account has never watched is not a continue watching card`() {
+        assertFalse(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "watching",
+                watchedEpisodesCount = 0,
+                totalEpisodesCount = 24,
+                notAiredEpisodesCount = 0,
+                nextToWatch = "S1E1",
+                lastWatched = null
+            )
+        )
+
+        // No tally at all, and Simkl still queues episode 1: same trap - the
+        // status alone used to be enough to put it on the rail.
+        assertFalse(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "watching",
+                watchedEpisodesCount = null,
+                totalEpisodesCount = null,
+                notAiredEpisodesCount = null,
+                nextToWatch = "S1E1",
+                lastWatched = null
+            )
+        )
+
+        // Plantowatch is a list membership too.
+        assertFalse(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "plantowatch",
+                watchedEpisodesCount = 0,
+                totalEpisodesCount = 12,
+                notAiredEpisodesCount = 0,
+                nextToWatch = "S1E1",
+                lastWatched = null
+            )
+        )
+    }
+
+    @Test
+    fun `one watched episode is enough to be a continue watching card`() {
+        assertTrue(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "watching",
+                watchedEpisodesCount = 1,
+                totalEpisodesCount = 24,
+                notAiredEpisodesCount = 0,
+                nextToWatch = "S1E2",
+                lastWatched = "S1E1"
+            )
+        )
+
+        // The tally is missing but the tracker knows the last episode watched:
+        // that is still a started show, not a list membership.
+        assertTrue(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "watching",
+                watchedEpisodesCount = null,
+                totalEpisodesCount = null,
+                notAiredEpisodesCount = null,
+                nextToWatch = "S1E2",
+                lastWatched = "S1E1"
+            )
+        )
+    }
+
+    /**
      * Reported bug: an episode the user never started showed up on Continue
      * Watching at "99% watched". A tracker session that late is a finished
      * record (the player treats 95% as complete), not a resume point.

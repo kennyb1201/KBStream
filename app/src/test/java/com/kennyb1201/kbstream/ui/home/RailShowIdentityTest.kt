@@ -127,6 +127,77 @@ class RailShowIdentityTest {
         )
     }
 
+    @Test
+    fun `an unresolved twin still meets its named card`() {
+        // Reported: a couple of shows stayed doubled on Continue Watching
+        // because one side's TMDB lookup failed - so it carried only its own
+        // flavor's parent id, no resolved id, and had nothing to meet the
+        // other flavor on. Strict grouping leaves them as two; the title-key
+        // merge is what brings them back to one.
+        val unresolved = card(
+            parentId = "tt0898266",
+            title = "PAW Patrol",
+            tmdbId = null,
+            startPositionMs = 60_000L
+        )
+        val resolved = card(
+            parentId = "tmdb:97546",
+            title = "PAW Patrol",
+            tmdbId = 97546
+        )
+
+        assertEquals(
+            2,
+            clusterByIdentityKeys(
+                listOf(unresolved, resolved),
+                ::upNextGroupingKeys
+            ).size
+        )
+        assertEquals(1, dedupeAndSortUpNext(listOf(unresolved, resolved)).size)
+    }
+
+    @Test
+    fun `a namesake is merged only when one card has no resolved id`() {
+        // A card with no resolved id has nothing but its name to be found by,
+        // so it joins a same-named card; two cards that BOTH resolved their
+        // own TMDB ids are two different shows however they are named.
+        val unresolved = card(
+            parentId = "tt0898266",
+            title = "Ghostbusters",
+            parentType = "movie",
+            tmdbId = null,
+            season = null,
+            episode = null
+        )
+        val namesakeResolved = card(
+            parentId = "tt1289401",
+            title = "Ghostbusters",
+            parentType = "movie",
+            tmdbId = 43074,
+            season = null,
+            episode = null
+        )
+
+        assertEquals(
+            1,
+            dedupeAndSortUpNext(listOf(unresolved, namesakeResolved)).size
+        )
+
+        val originalResolved = card(
+            parentId = "tt0087332",
+            title = "Ghostbusters",
+            parentType = "movie",
+            tmdbId = 620,
+            season = null,
+            episode = null
+        )
+
+        assertEquals(
+            2,
+            dedupeAndSortUpNext(listOf(originalResolved, namesakeResolved)).size
+        )
+    }
+
     // ── transitive clustering ────────────────────────────────────────
 
     @Test

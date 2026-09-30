@@ -673,6 +673,83 @@ internal fun upNextGroupingKeys(
 }
 
 /**
+ * The second half of the rail's one-card-per-show rule: merges the strict
+ * [upNextGroupingKeys] clusters that name the same show but could not meet on
+ * an id.
+ *
+ * [upNextGroupingKeys] pairs a show through its resolved TMDB id, which is
+ * exact - and that is the only id a card from another flavor is guaranteed to
+ * share. When one side's TMDB resolution FAILED it carries just its own
+ * flavor's parent id (an imdb one, typically) and the two clusters sit side by
+ * side, which is the "a couple of shows stay doubled on Continue Watching"
+ * report. The name is then the only common ground, so clusters are merged on
+ * the title key - guarded, so the merge can never swallow a genuinely
+ * different show: two clusters that each resolved a TMDB id are two different
+ * shows however they are named (the two "Ghostbusters"), and only a pair whose
+ * resolved ids do not contradict may merge. One unresolved twin therefore
+ * joins its show, and two fully-resolved namesakes stay two cards.
+ */
+internal fun mergeTitleTwinClusters(
+    groups: List<List<UpNextItem>>
+): List<List<UpNextItem>> {
+    if (groups.size < 2) return groups
+
+    val parent = IntArray(groups.size) { it }
+
+    fun root(index: Int): Int {
+        var node = index
+        while (parent[node] != node) node = parent[node]
+        var cursor = index
+        while (parent[cursor] != cursor) {
+            val next = parent[cursor]
+            parent[cursor] = node
+            cursor = next
+        }
+        return node
+    }
+
+    // The TMDB ids each CLUSTER has resolved. Merging is only allowed while
+    // the union of the two does not claim two different ids.
+    val idsByRoot =
+        groups
+            .map { group ->
+                group.mapNotNull { item -> item.tmdbId?.takeIf { it > 0 } }
+                    .toMutableSet()
+            }
+            .toMutableList()
+
+    fun union(a: Int, b: Int) {
+        val rootA = root(a)
+        val rootB = root(b)
+        if (rootA == rootB) return
+        val winner = if (rootA < rootB) rootA else rootB
+        val loser = if (winner == rootA) rootB else rootA
+        idsByRoot[winner] += idsByRoot[loser]
+        idsByRoot[loser] = mutableSetOf()
+        parent[loser] = winner
+    }
+
+    val firstByTitle = HashMap<String, Int>()
+
+    groups.forEachIndexed { index, group ->
+        for (key in group.mapTo(linkedSetOf()) { item -> upNextTitleKey(item) }) {
+            val first = firstByTitle.putIfAbsent(key, index)
+            if (first != null) {
+                val unionIds = idsByRoot[root(first)] + idsByRoot[root(index)]
+                if (unionIds.size <= 1) union(first, index)
+            }
+        }
+    }
+
+    val merged = LinkedHashMap<Int, MutableList<UpNextItem>>()
+    groups.forEachIndexed { index, group ->
+        merged.getOrPut(root(index)) { mutableListOf() }.addAll(group)
+    }
+
+    return merged.values.toList()
+}
+
+/**
  * Groups [items] into clusters that share at least one key, transitively:
  * A-B and B-C land in one cluster even when A and C have no key in common.
  *
