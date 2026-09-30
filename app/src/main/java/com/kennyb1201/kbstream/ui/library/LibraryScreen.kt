@@ -56,6 +56,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -100,6 +101,8 @@ fun LibraryScreen(
         HiddenTitles.hides(
             hiddenTitleKeys,
             item.mediaType,
+            item.title,
+            item.year,
             item.imdbId,
             item.tmdbId?.toString()
         )
@@ -359,7 +362,8 @@ private fun LibraryItemMenu(
             item.title,
             item.mediaType,
             item.posterUrl,
-            listOf(item.imdbId, item.tmdbId?.toString())
+            listOf(item.imdbId, item.tmdbId?.toString()),
+            year = item.year
         ),
         actions = buildList {
             item.navigationId?.let { id ->
@@ -760,7 +764,12 @@ private fun LibraryPosterCard(
                 .width(posterSize.width)
                 .height(posterSize.height)
         ) {
-            Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    // The faint poster edge, matching every other poster tile.
+                    .then(posterBorderModifier())
+            ) {
                 if (isWatched) {
                     // Same checkmark badge language the other poster grids
                     // use for fully-watched titles.

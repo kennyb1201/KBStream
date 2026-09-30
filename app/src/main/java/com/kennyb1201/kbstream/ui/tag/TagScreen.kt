@@ -103,6 +103,9 @@ fun TagScreen(
                 HiddenTitles.hides(
                     hiddenTitleKeys,
                     mediaType,
+                    railItem.item.title ?: railItem.item.name,
+                    railItem.item.releaseDate?.take(4)?.toIntOrNull()
+                        ?: railItem.item.firstAirDate?.take(4)?.toIntOrNull(),
                     railItem.item.id.toString(),
                     resolvedIds[
                         viewModel.lookupKey(railItem.item.id, mediaType)

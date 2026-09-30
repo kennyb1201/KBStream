@@ -3560,6 +3560,10 @@ fun DetailScreen(
                                     HiddenTitles.hides(
                                         hiddenTitleKeys,
                                         normalizedType,
+                                        rec.title ?: rec.name,
+                                        rec.releaseDate?.take(4)?.toIntOrNull()
+                                            ?: rec.firstAirDate
+                                                ?.take(4)?.toIntOrNull(),
                                         "tmdb:${rec.id}"
                                     )
                                 }

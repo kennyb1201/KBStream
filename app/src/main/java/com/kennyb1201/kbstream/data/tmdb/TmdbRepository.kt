@@ -47,7 +47,15 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
  */
 data class BrowseShortcutArt(
     val backdropUrl: String? = null,
-    val clearlogoUrl: String? = null
+    val clearlogoUrl: String? = null,
+    /**
+     * Every brand-mark candidate for a service or studio, best first (empty for
+     * a genre / keyword / decade, whose clearlogo is a single spotlight
+     * wordmark). [clearlogoUrl] is the first of these; the tile and the hero
+     * both walk the list, so a brand whose top mark is undrawable still gets
+     * one of its own instead of showing nothing.
+     */
+    val clearlogoUrls: List<String> = emptyList()
 )
 
 data class StudioItem(val item: TmdbDiscoverItem, val mediaType: String)
@@ -2676,6 +2684,7 @@ class TmdbRepository private constructor(context: Context) :
 
         var backdropUrl: String? = null
         var clearlogoUrl: String? = null
+        var clearlogoUrls: List<String> = emptyList()
 
         if (categoryKey == "collections") {
             val collection = getCollection(entryId)
@@ -2719,28 +2728,39 @@ class TmdbRepository private constructor(context: Context) :
         // title's; the spotlight logo above is only the fallback for a brand
         // whose entity artwork TMDB does not hold.
         if (categoryKey == "services" || categoryKey == "studios") {
-            clearlogoUrl =
-                runCatchingCancellable {
-                    getEntityLogoUrls(
-                        entityId = networkOrCompanyId ?: entryId,
-                        isNetwork = categoryKey == "services" && !networkIsCompany,
-                        providerId = providerId,
-                        // The chip's own label and production company: the name
-                        // is what lets a twin be verified, and the company id is
-                        // the brand's other entity TMDB may have given the mark
-                        // to (see getEntityLogoUrls).
-                        name = name,
-                        originalsCompanyId = originalsCompanyId
-                    ).firstOrNull()
-                }.getOrNull()
-                    ?: clearlogoUrl
+            // The WHOLE ranked list, not just its head: the tile and the hero
+            // walk it past marks that cannot be drawn on a dark surface
+            // (BrandMarkLogo), and a service whose top mark is a blank plate
+            // then still gets one of its own. A non-empty list also replaces
+            // the spotlight fallback above - the brand's mark beats another
+            // title's wordmark, which is what a service tile should never be
+            // drawn with.
+            val brandCandidates = runCatchingCancellable {
+                getEntityLogoUrls(
+                    entityId = networkOrCompanyId ?: entryId,
+                    isNetwork = categoryKey == "services" && !networkIsCompany,
+                    providerId = providerId,
+                    // The chip's own label and production company: the name
+                    // is what lets a twin be verified, and the company id is
+                    // the brand's other entity TMDB may have given the mark
+                    // to (see getEntityLogoUrls).
+                    name = name,
+                    originalsCompanyId = originalsCompanyId
+                )
+            }.getOrDefault(emptyList())
+
+            if (brandCandidates.isNotEmpty()) {
+                clearlogoUrls = brandCandidates
+                clearlogoUrl = brandCandidates.first()
+            }
         }
 
         if (backdropUrl == null && clearlogoUrl == null) return null
 
         return BrowseShortcutArt(
             backdropUrl = backdropUrl,
-            clearlogoUrl = clearlogoUrl
+            clearlogoUrl = clearlogoUrl,
+            clearlogoUrls = clearlogoUrls
         )
     }
 
@@ -2783,7 +2803,36 @@ class TmdbRepository private constructor(context: Context) :
         } else {
             ranked
         }
-        return ordered.map { LOGO_BASE + it.filePath }
+        return preferWideWordmark(ordered).map { LOGO_BASE + it.filePath }
+    }
+
+    /**
+     * Promotes a wide wordmark above a square-ish icon.
+     *
+     * A brand's mark is frequently filed twice - the ICON alone (Peacock's
+     * colorful dots, a stand-alone glyph) and the wide wordmark lockup - and
+     * the icon can win the ranking on its vote average. Drawn on a tile or in
+     * the Home hero, the icon is a fragment of the logo: Peacock showed its
+     * row of dots and no name. When the current head is clearly square and some
+     * candidate is clearly wide, the wide one leads. Ties, single-candidate
+     * lists, and lists already headed by a wide mark are returned untouched, so
+     * the common case costs nothing and changes nothing.
+     */
+    private fun preferWideWordmark(
+        ranked: List<TmdbCompanyLogo>
+    ): List<TmdbCompanyLogo> {
+        val head = ranked.firstOrNull() ?: return ranked
+        if (markAspect(head) >= SQUARE_MARK_MAX_ASPECT) return ranked
+        val wide = ranked.firstOrNull { markAspect(it) >= WIDE_MARK_MIN_ASPECT }
+            ?: return ranked
+        return listOf(wide) + ranked.filterNot { it === wide }
+    }
+
+    /** A mark's width/height, or 0 when TMDB reported no dimensions. */
+    private fun markAspect(logo: TmdbCompanyLogo): Float {
+        val width = logo.width ?: return 0f
+        val height = logo.height ?: return 0f
+        return if (height <= 0) 0f else width.toFloat() / height
     }
 
     /**
@@ -2950,6 +2999,15 @@ class TmdbRepository private constructor(context: Context) :
          * screen walks past an unreadable mark on its own.
          */
         private const val MIN_LOGO_PIXELS = 16
+
+        /**
+         * Aspect bounds for the icon-vs-wordmark choice in [preferWideWordmark].
+         * A mark at or under the first is treated as an icon; a candidate at or
+         * over the second is a wordmark. The gap is deliberate: only a clear
+         * difference reorders the list.
+         */
+        private const val SQUARE_MARK_MAX_ASPECT = 1.25f
+        private const val WIDE_MARK_MIN_ASPECT = 1.6f
 
         /** Company pages the brand-name fallback will read before giving up. */
         private const val MAX_BRAND_NAME_CANDIDATES = 5

@@ -122,6 +122,7 @@ object PrefsPayloadBuilder {
         "browse_english_only",               // catalog language filter, not device-specific
         "home_landscape_cards",
         "poster_partial_watch_badge",
+        "poster_border_strength",           // poster edge strength: same look on every device
         "badges_above_file",                // badge chip placement: same layout preference on every device
         "binge_group_prefer",                // binge continuity, not device-specific
         "binge_group_reuse",

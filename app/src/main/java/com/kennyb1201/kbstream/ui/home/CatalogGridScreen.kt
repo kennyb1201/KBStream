@@ -79,6 +79,8 @@ fun CatalogGridScreen(
                     HiddenTitles.hides(
                         hiddenTitleKeys,
                         meta.type,
+                        meta.name,
+                        meta.yearOrNull,
                         meta.id
                     )
                 }
@@ -322,7 +324,8 @@ fun CatalogGridScreen(
                 target.name,
                 target.type,
                 target.poster,
-                listOf(target.id)
+                listOf(target.id),
+                year = target.yearOrNull
             ),
             actions = listOf(
                 PosterContextAction(

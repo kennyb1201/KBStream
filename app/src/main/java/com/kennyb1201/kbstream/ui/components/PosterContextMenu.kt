@@ -118,7 +118,10 @@ data class HideTarget(
     val title: String,
     val mediaType: String?,
     val posterUrl: String?,
-    val ids: List<String?>
+    val ids: List<String?>,
+    /** The title's year, when the surface has one, so the hidden entry can be
+     *  matched by name without catching a different title that shares it. */
+    val year: Int? = null
 )
 
 /**
@@ -130,7 +133,8 @@ fun hideTarget(
     title: String,
     mediaType: String?,
     posterUrl: String?,
-    ids: List<String?>
+    ids: List<String?>,
+    year: Int? = null
 ): HideTarget? {
     val usable = ids.filterNotNull().mapNotNull { HiddenTitles.normalizeId(it) }
     if (usable.isEmpty()) return null
@@ -138,7 +142,8 @@ fun hideTarget(
         title = title.trim(),
         mediaType = mediaType,
         posterUrl = posterUrl?.takeIf { it.isNotBlank() },
-        ids = ids
+        ids = ids,
+        year = year
     )
 }
 
@@ -520,7 +525,8 @@ fun PosterContextMenu(
                         title = target.title,
                         mediaType = target.mediaType,
                         posterUrl = target.posterUrl,
-                        ids = target.ids
+                        ids = target.ids,
+                        year = target.year
                     )
                     if (stored) {
                         // The card leaves the screen the instant this runs, so

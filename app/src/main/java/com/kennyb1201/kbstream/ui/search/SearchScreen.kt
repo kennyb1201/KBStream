@@ -89,6 +89,8 @@ fun SearchScreen(
         return HiddenTitles.hides(
             hiddenTitleKeys,
             result.type,
+            result.name,
+            result.year,
             result.id,
             imdb
         )
@@ -530,7 +532,8 @@ fun SearchScreen(
                         result.id,
                         resultIds.imdbId,
                         resultIds.tmdbId?.toString()
-                    )
+                    ),
+                    year = result.year
                 ),
                 actions = listOf(
                     PosterContextAction(

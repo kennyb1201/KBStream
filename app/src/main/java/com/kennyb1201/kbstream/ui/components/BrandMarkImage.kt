@@ -80,6 +80,51 @@ internal fun BrandMarkImage(
 }
 
 /**
+ * ONE brand mark drawn from a RANKED candidate list, walking past the
+ * candidates that cannot be drawn on a dark surface.
+ *
+ * A brand's ranked list is not the same as a drawable one: TMDB holds some
+ * networks only as a plate the dark surface reads as blank, as a 1x1 stub, or
+ * as artwork that never arrives, and the best-ranked mark is often one of
+ * those. Drawing a single URL - what the Home hero used to do - is what made a
+ * service look logo-less there while its tile, which walks the list, showed the
+ * brand's name instead. Both surfaces are given the same list now and walk it
+ * the same way.
+ *
+ * Nothing is drawn, and [onUnusable] fires, only once every candidate has been
+ * rejected - so the caller can stand in for the mark (the tile keeps its
+ * wordmark) rather than leaving a slot the artwork silently failed to fill.
+ */
+@Composable
+internal fun BrandMarkLogo(
+    urls: List<String>,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    onUnusable: () -> Unit = {}
+) {
+    var index by remember(urls) { mutableStateOf(0) }
+    // Set when every candidate has been rejected; nothing is drawn after that.
+    var exhausted by remember(urls) { mutableStateOf(false) }
+
+    val url = urls.getOrNull(index)
+    if (url == null || exhausted) return
+
+    BrandMarkImage(
+        url = url,
+        contentDescription = contentDescription,
+        modifier = modifier,
+        onUnusable = {
+            if (index + 1 < urls.size) {
+                index += 1
+            } else {
+                exhausted = true
+                onUnusable()
+            }
+        }
+    )
+}
+
+/**
  * Samples a decoded logo down to one 48x48 tile and hands the pixels to
  * [brandMarkTreatment], which owns the decision (and is unit-tested there).
  *

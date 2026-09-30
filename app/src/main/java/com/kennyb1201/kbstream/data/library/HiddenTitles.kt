@@ -37,6 +37,12 @@ object HiddenTitles {
     private const val PREFS_BASE = "kbstream_hidden_titles"
     private const val KEY_ENTRIES = "entries_v1"
 
+    /** Prefix of a derived name key (never stored, only matched). */
+    private const val TITLE_KEY_PREFIX = "title::"
+
+    /** Stands in for a year the hiding surface did not know. */
+    private const val ANY_YEAR = "*"
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     @Serializable
@@ -46,7 +52,19 @@ object HiddenTitles {
         val title: String = "",
         val mediaType: String = "",
         val posterUrl: String? = null,
-        val at: Long = 0L
+        val at: Long = 0L,
+        /**
+         * The release/first-air year, when the hiding surface knew it.
+         *
+         * [keys] alone cannot catch every surface: the app runs two id
+         * namespaces (TMDB's "tmdb:603" and an add-on's "tt0133093") and the
+         * bridge between them needs a network lookup, so a title hidden from
+         * a TMDB rail used to come back in an add-on search rail keyed by its
+         * IMDB id. The title is matched too (see [hides]), and the year keeps
+         * that from also hiding an unrelated title that shares the name -
+         * "The Office" (US) must not hide "The Office" (UK).
+         */
+        val year: Int? = null
     )
 
     @Serializable
@@ -110,10 +128,45 @@ object HiddenTitles {
     fun keysFor(mediaType: String?, ids: List<String?>): Set<String> =
         ids.mapNotNull { keyFor(mediaType, it) }.toCollection(LinkedHashSet())
 
-    /** True when any spelling of this title is hidden. */
-    fun hides(hidden: Set<String>, mediaType: String?, vararg ids: String?): Boolean =
-        hidden.isNotEmpty() &&
-            ids.any { keyFor(mediaType, it)?.let { key -> key in hidden } == true }
+    /**
+     * True when this title is hidden - by an id spelling it carries, or by its
+     * name.
+     *
+     * The id check is the precise one and covers the common case. The name
+     * check exists because the two id namespaces are not bridged offline: a
+     * title hidden from a TMDB rail ("movie::tmdb:603") and the same film in an
+     * add-on rail ("id::tt0133093") cannot be matched through ids without a
+     * TMDB lookup, which is exactly how a hidden title came back in add-on
+     * search. [title] and [year] close that gap; [year] keeps the match from
+     * catching a different title that shares the name (it is only skipped when
+     * a surface truly has no year to give).
+     */
+    fun hides(
+        hidden: Set<String>,
+        mediaType: String?,
+        title: String?,
+        year: Int?,
+        vararg ids: String?
+    ): Boolean {
+        if (hidden.isEmpty()) return false
+
+        if (ids.any { keyFor(mediaType, it)?.let { key -> key in hidden } == true }) {
+            return true
+        }
+
+        val name = normalizeTitle(title) ?: return false
+        val prefix = "$TITLE_KEY_PREFIX${normalizedType(mediaType)}::$name::"
+        return when {
+            // A year on the surface: match that year, or a hidden entry that
+            // never recorded one (hidden from a surface that had no year).
+            year != null ->
+                ("$prefix$year") in hidden || ("$prefix$ANY_YEAR") in hidden
+
+            // No year to compare: any entry with this name and type matches.
+            // Permissive on purpose - the user explicitly removed the title.
+            else -> hidden.any { it.startsWith(prefix) }
+        }
+    }
 
     /**
      * The active profile's hidden keys. Read on demand (a prefs string set is
@@ -123,8 +176,26 @@ object HiddenTitles {
     fun keys(context: Context): Set<String> {
         val app = context.applicationContext
         ensureLoaded(app)
-        return _entries.value.flatMapTo(LinkedHashSet()) { it.keys }
+        return _entries.value.flatMapTo(LinkedHashSet()) { entry ->
+            // Both index forms: the id spellings, and the derived name key the
+            // fallback in [hides] looks up.
+            entry.keys + listOfNotNull(titleKey(entry.mediaType, entry.title, entry.year))
+        }
     }
+
+    /**
+     * The name key one entry is stored and matched under. Alphanumerics only,
+     * lowercased, so "The  Office" and "The Office" agree. The year is "*"
+     * when the hiding surface had none.
+     */
+    internal fun titleKey(mediaType: String?, title: String?, year: Int?): String? {
+        val name = normalizeTitle(title) ?: return null
+        return "$TITLE_KEY_PREFIX${normalizedType(mediaType)}::$name::${year ?: ANY_YEAR}"
+    }
+
+    /** Lowercased, alphanumerics only; null when nothing usable is left. */
+    internal fun normalizeTitle(raw: String?): String? =
+        raw?.lowercase()?.filter { it.isLetterOrDigit() }?.takeIf { it.isNotEmpty() }
 
     /**
      * Publishes the active profile's set. Cheap and idempotent, so any screen
@@ -145,7 +216,8 @@ object HiddenTitles {
         title: String,
         mediaType: String?,
         posterUrl: String?,
-        ids: List<String?>
+        ids: List<String?>,
+        year: Int? = null
     ): Boolean {
         val app = context.applicationContext
         ensureLoaded(app)
@@ -170,7 +242,12 @@ object HiddenTitles {
             posterUrl = posterUrl ?: current.firstOrNull { entry ->
                 entry.keys.any { it in keys }
             }?.posterUrl,
-            at = System.currentTimeMillis()
+            at = System.currentTimeMillis(),
+            // Keep an earlier year when this hide does not carry one, so a
+            // second hide from a year-less surface does not widen the match.
+            year = year ?: current.firstOrNull { entry ->
+                entry.keys.any { it in keys }
+            }?.year
         )
 
         write(app, Store(kept + merged))

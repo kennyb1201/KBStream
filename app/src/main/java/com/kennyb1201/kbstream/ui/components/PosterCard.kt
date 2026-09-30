@@ -125,6 +125,10 @@ fun PosterCard(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBSurface) // Visual fallback background container
+                // The faint edge every poster tile draws (Settings → Interface).
+                // On the tile's own box, so it outlines the artwork and not the
+                // card's focus glow.
+                .then(posterBorderModifier())
         ) {
             if (!posterUrl.isNullOrBlank() && !hasError) {
                 AsyncImage(

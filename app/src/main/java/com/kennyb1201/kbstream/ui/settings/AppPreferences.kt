@@ -92,6 +92,7 @@ object AppPreferences {
     private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
     private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
+    private const val KEY_POSTER_BORDER_STRENGTH = "poster_border_strength" // 0=off, 1=subtle (default), 2=medium, 3=strong
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
     // Which settings pane to reopen on, by SettingsPane name. Device-local on
     // purpose: the pane someone was last reading says nothing about the
@@ -1233,6 +1234,23 @@ object AppPreferences {
 
     fun setPosterPartialWatchBadge(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_POSTER_PARTIAL_WATCH_BADGE, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Poster border: the faint edge every poster tile draws ─────────
+    // A display pref like poster size, so it rides the same sync blob: the
+    // strength someone likes is a viewing preference, not a device capability.
+    // Stored as an Int ordinal (see PosterBorder), read through the tolerant
+    // dual-type helper because the sync applier writes numbers back as Long.
+    fun getPosterBorderStrength(context: Context): Int =
+        readIntPref(
+            context,
+            KEY_POSTER_BORDER_STRENGTH,
+            com.kennyb1201.kbstream.ui.components.PosterBorder.DEFAULT.ordinal
+        )
+
+    fun setPosterBorderStrength(context: Context, strength: Int) {
+        prefs(context).edit().putInt(KEY_POSTER_BORDER_STRENGTH, strength).apply()
         syncDisplayPrefsBlob(context)
     }
 

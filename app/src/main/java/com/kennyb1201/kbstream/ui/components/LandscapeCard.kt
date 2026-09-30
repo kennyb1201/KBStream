@@ -104,6 +104,9 @@ fun LandscapeCard(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBSurface)
+                // Same faint poster edge the tiles draw, so the two card
+                // shapes mix cleanly in a rail.
+                .then(posterBorderModifier())
         ) {
             // Corner logo scales with the card (210dp-wide rails -> ~28dp
             // logo) instead of the old fixed 20dp that read as tiny.

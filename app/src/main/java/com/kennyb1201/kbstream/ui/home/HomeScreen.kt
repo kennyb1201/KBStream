@@ -112,6 +112,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
@@ -797,7 +798,8 @@ internal fun HomeHeroArtwork(
     muted: Boolean,
     heroHeight: Dp = HomeHeroHeight,
     heroLogoWidth: Dp = HeroLogoWidth,
-    heroLogoHeight: Dp = HeroLogoHeight
+    heroLogoHeight: Dp = HeroLogoHeight,
+    heroLogoUrls: List<String> = emptyList()
 ) {
     HomeHero(
         preview = preview,
@@ -810,7 +812,8 @@ internal fun HomeHeroArtwork(
         muted = muted,
         heroHeight = heroHeight,
         heroLogoWidth = heroLogoWidth,
-        heroLogoHeight = heroLogoHeight
+        heroLogoHeight = heroLogoHeight,
+        heroLogoUrls = heroLogoUrls
     )
 }
 
@@ -828,6 +831,13 @@ private fun HomeHero(
     heroHeight: Dp = HomeHeroHeight,
     heroLogoWidth: Dp = HeroLogoWidth,
     heroLogoHeight: Dp = HeroLogoHeight,
+    // A focused Browse tile's service/studio mark as its WHOLE ranked
+    // candidate list (see BrowseShortcutArt). Drawn through BrandMarkLogo so
+    // the hero walks past a mark that cannot be drawn on the dark panel - the
+    // same walk the tile does - instead of showing nothing, which is what a
+    // single top-ranked plate used to do here. Empty for a catalog title, a KB
+    // folder and the non-browse cases, which keep HeroClearLogo below.
+    heroLogoUrls: List<String> = emptyList(),
     // A hero that is nothing but a logo - the Browse chip a tile hands up -
     // centres that logo in the whole hero instead of anchoring it to the
     // bottom. A catalog title and a KB folder are letters + metadata + buttons
@@ -848,6 +858,10 @@ private fun HomeHero(
     val clearLogo = heroLogoUrl
         ?: meta?.logo
         ?: preview.logo
+
+    // Whether the browse brand mark was rejected in full: the hero then shows
+    // the shortcut's name, mirroring the tile's wordmark fallback.
+    var brandMarkUnusable by remember(heroLogoUrls) { mutableStateOf(false) }
 
     val trailerPlaying =
         !trailerKey.isNullOrBlank() && autoPlayTrailer
@@ -1324,7 +1338,18 @@ private fun HomeHero(
             verticalArrangement =
                 if (centerLogo) Arrangement.Center else Arrangement.Bottom
         ) {
-            if (!clearLogo.isNullOrBlank()) {
+            if (heroLogoUrls.isNotEmpty() && !brandMarkUnusable) {
+                // A focused Browse tile's brand mark, walked past the
+                // candidates that cannot be drawn (see heroLogoUrls).
+                BrandMarkLogo(
+                    urls = heroLogoUrls,
+                    contentDescription = title,
+                    onUnusable = { brandMarkUnusable = true },
+                    modifier = Modifier
+                        .width(heroLogoWidth)
+                        .height(heroLogoHeight)
+                )
+            } else if (heroLogoUrls.isEmpty() && !clearLogo.isNullOrBlank()) {
                 HeroClearLogo(
                     url = clearLogo,
                     name = title,
@@ -1921,6 +1946,11 @@ private fun HomeHeroHost(
                 heroFolder != null -> CollectionHeroLogoHeight
                 else -> HeroLogoHeight
             },
+            // The focused Browse tile's brand-mark candidates, so the hero
+            // draws its service/studio mark the same way the tile does (and
+            // shows the shortcut's name if none can be drawn). Empty for every
+            // other hero owner, which keeps the single-URL HeroClearLogo path.
+            heroLogoUrls = browseArt?.clearlogoUrls.orEmpty(),
             // A browse chip's hero is its clearlogo alone, so the mark sits in
             // the middle of the panel rather than at the bottom of it.
             centerLogo = heroBrowse != null
@@ -2312,7 +2342,13 @@ fun HomeScreen(
             if (railsBuiltForProfile == activeProfileId) railsRaw else emptyList()
         built.mapNotNull { rail ->
             val visible = rail.items.filterNot { meta ->
-                HiddenTitles.hides(hiddenTitleKeys, meta.type, meta.id)
+                HiddenTitles.hides(
+                    hiddenTitleKeys,
+                    meta.type,
+                    meta.name,
+                    meta.yearOrNull,
+                    meta.id
+                )
             }
             rail.takeIf { visible.isNotEmpty() }?.copy(items = visible)
         }
@@ -2329,6 +2365,8 @@ fun HomeScreen(
                 hiddenTitleKeys,
                 item.parentType
                     ?: if (item.season != null) "series" else "movie",
+                item.showTitle ?: item.title,
+                null,
                 item.parentId,
                 item.id
             )
@@ -3577,7 +3615,8 @@ fun HomeScreen(
                         target.meta.id,
                         railIds.imdbId,
                         railIds.tmdbId?.toString()
-                    )
+                    ),
+                    year = target.meta.yearOrNull
                 ),
                 actions = listOf(
                     PosterContextAction(

@@ -82,6 +82,8 @@ fun CollectionScreen(
                         HiddenTitles.hides(
                             hiddenTitleKeys,
                             "movie",
+                            part.title ?: part.name,
+                            part.releaseDate?.take(4)?.toIntOrNull(),
                             part.id.toString(),
                             resolvedIds[
                                 viewModel.lookupKey(part.id, "movie")
@@ -295,7 +297,8 @@ fun CollectionScreen(
                         resolvedIds[
                             viewModel.lookupKey(part.id, "movie")
                         ]
-                    )
+                    ),
+                    year = part.releaseDate?.take(4)?.toIntOrNull()
                 ),
                 actions = listOf(
                     PosterContextAction(

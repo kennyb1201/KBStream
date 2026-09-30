@@ -286,6 +286,7 @@ fun SettingsScreen(
     var browseEnglishOnly by remember { mutableStateOf(AppPreferences.getBrowseEnglishOnly(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
     var partialWatchBadge by remember { mutableStateOf(AppPreferences.getPosterPartialWatchBadge(context)) }
+    var posterBorderIdx by remember { mutableIntStateOf(AppPreferences.getPosterBorderStrength(context)) }
     var amoledBlack by remember { mutableStateOf(AppPreferences.getAmoledBlack(context)) }
     var pureBlackSurface by remember { mutableStateOf(AppPreferences.getPureBlackSurface(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
@@ -1727,6 +1728,33 @@ fun SettingsScreen(
                             AppPreferences.setPosterSize(context, index.toLong())
                         }) {
                             PillChip(label, posterSizeIdx == index)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Poster Border",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "A faint edge around every poster, so dark artwork separates on the near-black background.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    com.kennyb1201.kbstream.ui.components.PosterBorder.entries.forEachIndexed {
+                            index,
+                            option ->
+                        KBCard(onClick = {
+                            posterBorderIdx = index
+                            AppPreferences.setPosterBorderStrength(context, index)
+                        }) {
+                            PillChip(option.label, posterBorderIdx == index)
                         }
                     }
                 }

@@ -46,7 +46,7 @@ import com.kennyb1201.kbstream.data.kb.browseRailArrangementOf
 import com.kennyb1201.kbstream.data.kb.browseRowPlacement
 import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
-import com.kennyb1201.kbstream.ui.components.BrandMarkImage
+import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
@@ -625,11 +625,18 @@ private fun BrowseShortcutTile(
         if (it.isFocused) onFocus?.invoke()
     }
 
-    val clearlogoUrl = art?.clearlogoUrl?.takeIf { it.isNotBlank() }
-    // Set when the resolved mark turns out to be undrawable on this surface:
+    // The brand's WHOLE candidate list when it has one (see BrowseShortcutArt):
+    // the tile must be able to step past a mark that cannot be drawn, or a
+    // service whose top mark is a blank plate shows its name instead of a logo.
+    // A genre / keyword / decade has only the single spotlight wordmark.
+    val clearlogoUrls = art?.clearlogoUrls.orEmpty()
+        .ifEmpty {
+            listOfNotNull(art?.clearlogoUrl?.takeIf { it.isNotBlank() })
+        }
+    // Set when every resolved mark turns out to be undrawable on this surface:
     // the chip's own name is then the tile, rather than a blank card that
     // looks like the artwork is still loading.
-    var markUnusable by remember(clearlogoUrl) { mutableStateOf(false) }
+    var markUnusable by remember(clearlogoUrls) { mutableStateOf(false) }
 
     KBCard(
         onClick = onClick,
@@ -642,7 +649,7 @@ private fun BrowseShortcutTile(
                 .background(KBSurface),
             contentAlignment = Alignment.Center
         ) {
-            if (clearlogoUrl == null || markUnusable) {
+            if (clearlogoUrls.isEmpty() || markUnusable) {
                 // No clearlogo (no art at all, a category TMDB has no logo
                 // for, or the first frame): the chip's own name is the mark.
                 Column(
@@ -659,8 +666,8 @@ private fun BrowseShortcutTile(
                     )
                 }
             } else {
-                BrandMarkImage(
-                    url = clearlogoUrl,
+                BrandMarkLogo(
+                    urls = clearlogoUrls,
                     contentDescription = shortcut.name,
                     onUnusable = { markUnusable = true },
                     modifier = Modifier
