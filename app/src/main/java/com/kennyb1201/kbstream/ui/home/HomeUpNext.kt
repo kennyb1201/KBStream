@@ -313,6 +313,44 @@ internal fun upNextEpisodeLabel(
 }
 
 /**
+ * The season/episode pair a Continue Watching card should print, given the
+ * watch-history row's own pair and the episode the show resolved to continue
+ * at.
+ *
+ * A resume row does not always name an episode. A row written as "season 2,
+ * episode 0" (before the 0-is-not-an-episode rule) or one a hand-off wrote
+ * with a season but no episode reaches the builder as season 2 with no
+ * episode, and the card then printed the season alone - "S02" with no episode
+ * beside it - even though the show's next episode was perfectly well known.
+ * The pair is therefore completed from the resolution, and only from it:
+ *
+ *  - a row that already names a real episode keeps its own pair, untouched, so
+ *    a genuine resume still points at the episode it was paused on;
+ *  - a row with a season but no episode keeps that season and takes the
+ *    resolved episode (the resolution walked that same season);
+ *  - a row with neither takes both from the resolution;
+ *  - a row with an episode but no season keeps its episode and invents no
+ *    season, because the resolution cannot know which season that episode
+ *    belonged to.
+ */
+internal fun upNextCardEpisodePair(
+    rowSeason: Int?,
+    rowEpisode: Int?,
+    resolvedSeason: Int?,
+    resolvedEpisode: Int?
+): Pair<Int?, Int?> {
+
+    val namedRowEpisode =
+        namedEpisodeNumber(rowEpisode)
+
+    if (namedRowEpisode != null) {
+        return rowSeason to namedRowEpisode
+    }
+
+    return (rowSeason ?: resolvedSeason) to resolvedEpisode
+}
+
+/**
  * The Home hero's Continue Watching line: the card's own season/episode label
  * behind its action prefix ("Resume  •  S02 · E08").
  *

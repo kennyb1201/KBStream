@@ -2931,6 +2931,25 @@ Log.d(
         val isEpisodePlayback =
             entry.season != null && entry.episode != null
 
+        // A series row is a series whatever it says about one episode, and the
+        // app must not read "season 2, episode 0" as "not an episode
+        // playback". Such a row used to fall through this builder's whole TMDB
+        // path: the next episode was never resolved, the watched count came
+        // out as 0, and the rail showed "S02" over "0 of 310 aired episodes
+        // watched" for a show the viewer is deep into. Rows that carry an
+        // episode pair are still resolved whatever their type - an
+        // anime-typed row is still an episode - so this only widens the set.
+        val isSeriesRow =
+            upNextMediaType(entry.type) == "series"
+
+        val resolvesAsSeries =
+            isSeriesRow || isEpisodePlayback
+
+        // The row's episode through the same 0-is-not-an-episode rule the card
+        // prints with (see EpisodeNumbering).
+        val namedRowEpisode =
+            namedEpisodeNumber(entry.episode)
+
         var episodeRating: Double? = null
         var episodeThumbnail: String? = null
         var backdropUrl: String? = entry.backdropUrl
@@ -2960,7 +2979,7 @@ Log.d(
         // Cache completed episode keys per show so we only query the
         // DAO once per parentId instead of once per history row.
         val localCompletedForParent: Set<Pair<Int, Int>> =
-            if (isEpisodePlayback) {
+            if (resolvesAsSeries) {
                 try {
                     val resolvedParentId = entry.parentId.trim().ifBlank { entry.id.trim() }
                     historyDao.getCompletedForParent(resolvedParentId)
@@ -2999,10 +3018,11 @@ Log.d(
         var localSeriesFinale =
             false
 
-        if (
-            isEpisodePlayback &&
-            entry.season != null && entry.episode != null
-        ) {
+        // The episode the show resolves to continue at; used to complete the
+        // pair a card prints when the row itself names no episode.
+        var resolvedSeriesTarget: ResolvedHomeSeriesTarget? = null
+
+        if (resolvesAsSeries) {
             try {
                 val parentId =
                     entry.parentId
@@ -3042,10 +3062,12 @@ Log.d(
                         }
                     }
 
-                backdropUrl =
-                    tmdbDetail?.backdropPath
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { "https://image.tmdb.org/t/p/w780$it" }
+                // Only replace stored art with art that actually resolved: a
+                // failed detail lookup must not blank a card that already had a
+                // backdrop.
+                tmdbDetail?.backdropPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { backdropUrl = "https://image.tmdb.org/t/p/w780$it" }
 
                 resolvedLocalName =
                     upNextDisplayTitleOrNull(
@@ -3074,35 +3096,65 @@ Log.d(
                         tmdbShowId = tmdbId
                     )
                     val cachedTotals = showEpisodeTotalsCache[tmdbId]
-                    if (cachedTotals != null) {
-                        // Same show already walked its full season list in
-                        // this pass - reuse the counts instead of repeating
-                        // the whole TMDB season walk for every row. Finale
-                        // flags stay false here: detecting them needs the
-                        // full season walk, and post-dedupe cached rows are
-                        // rare same-show duplicates.
-                        tmdbEpisodeTotals = cachedTotals
-                    } else {
-                        val target = resolveSeriesTargetFromSharedWatchedState(
-                            parentId = parentId,
-                            tmdbId = tmdbId,
-                            simklSeason = entry.season,
-                            simklEpisode = entry.episode
-                        )
+
+                    // Resolve the show's continue point when no earlier row of
+                    // this show has walked it in this pass, and whenever THIS
+                    // row names no episode: the card has to be able to print
+                    // one, and the counted totals come from the shared watched
+                    // state the resolution builds. A row that says "season 2,
+                    // no episode" therefore resolves to the next unwatched
+                    // episode of season 2 instead of falling through with no
+                    // episode and a watched count of zero.
+                    val needsResolvedEpisode =
+                        namedRowEpisode == null || entry.season == null
+
+                    val target =
+                        if (cachedTotals == null || needsResolvedEpisode) {
+                            resolveSeriesTargetFromSharedWatchedState(
+                                parentId = parentId,
+                                tmdbId = tmdbId,
+                                simklSeason = entry.season,
+                                simklEpisode = entry.episode
+                            )
+                        } else {
+                            null
+                        }
+
+                    if (target != null) {
+                        resolvedSeriesTarget = target
                         localSeasonFinale =
-                            target?.isSeasonFinale == true
+                            target.isSeasonFinale
                         localSeriesFinale =
-                            target?.isSeriesFinale == true
-                        tmdbEpisodesRemaining = target?.episodesRemaining
-                        tmdbEpisodeTotals =
-                            target?.episodesWatched?.let { w ->
-                                target.episodesTotal?.let { t -> ShowEpisodeTotals(w, t) }
+                            target.isSeriesFinale
+                        tmdbEpisodesRemaining = target.episodesRemaining
+                    }
+
+                    tmdbEpisodeTotals =
+                        target
+                            ?.let { resolved ->
+                                resolved.episodesWatched?.let { watched ->
+                                    resolved.episodesTotal?.let { total ->
+                                        ShowEpisodeTotals(watched, total)
+                                    }
+                                }
                             }
-                        tmdbEpisodeTotals?.let { showEpisodeTotalsCache[tmdbId] = it }
+                            ?: cachedTotals
+
+                    tmdbEpisodeTotals?.let { totals ->
+                        showEpisodeTotalsCache[tmdbId] = totals
                     }
                 }
 
-                if (tmdbId != null && tmdbId > 0) {
+                // The rating and still exist only for a row that names a real
+                // episode; a season-only series row has none to look up, and
+                // its episode (and totals) already came from the resolution
+                // above.
+                if (
+                    tmdbId != null &&
+                    tmdbId > 0 &&
+                    entry.season != null &&
+                    namedRowEpisode != null
+                ) {
                     // Single season lookup gives us both the episode's
                     // rating and its still image, instead of firing a
                     // second redundant getEpisodeRating call for the
@@ -3113,7 +3165,7 @@ Log.d(
                             season = entry.season,
                             imdbId = parentId
                         ).firstOrNull {
-                            it.episodeNumber == entry.episode
+                            it.episodeNumber == namedRowEpisode
                         }
 
                     episodeRating =
@@ -3157,6 +3209,35 @@ Log.d(
             tmdbEpisodesRemaining
                 ?: localEpisodesTotal?.let { (it - localWatchedCount).coerceAtLeast(0) }
 
+        // The pair the card prints: the row's own season/episode, with the
+        // episode filled from the show's resolved continue point when the row
+        // names none (see upNextCardEpisodePair).
+        val (cardSeason, cardEpisode) =
+            upNextCardEpisodePair(
+                rowSeason = entry.season,
+                rowEpisode = entry.episode,
+                resolvedSeason = resolvedSeriesTarget?.season,
+                resolvedEpisode = resolvedSeriesTarget?.episode
+            )
+
+        val cardEpisodeTitle =
+            entry.episodeTitle
+                ?.takeIf { it.isNotBlank() }
+                ?: resolvedSeriesTarget?.episodeTitle
+
+        val cardEpisodeDescription =
+            entry.overview
+                ?.takeIf { it.isNotBlank() }
+                ?: resolvedSeriesTarget?.episodeDescription
+
+        // A stream id keys an episode; the row's own is kept only when the row
+        // named one, otherwise the resolved episode's stream opens the right
+        // thing.
+        val cardEpisodeStreamId =
+            entry.episodeStreamId
+                .takeIf { namedRowEpisode != null }
+                ?: resolvedSeriesTarget?.streamId
+
         UpNextItem(
             id = buildString {
                 append("history:")
@@ -3180,10 +3261,10 @@ Log.d(
             badge = UpNextBadge.CONTINUE_WATCHING,
 
             showTitle =
-                if (isEpisodePlayback) entry.name else null,
+                if (resolvesAsSeries) entry.name else null,
 
-            episodeTitle = entry.episodeTitle?.takeIf { it.isNotBlank() },
-            episodeDescription = entry.overview?.takeIf { it.isNotBlank() },
+            episodeTitle = cardEpisodeTitle,
+            episodeDescription = cardEpisodeDescription,
             episodesWatched = localWatchedCount.takeIf { it > 0 },
             episodesTotal = localEpisodesTotal,
             episodesRemaining = localEpisodesRemaining,
@@ -3191,8 +3272,10 @@ Log.d(
             // Episode-specific TMDB rating.
             // Your UI currently calls this field imdbRating.
             tmdbRating = null,
-            imdbRating = episodeRating,
-            episodeThumbnail = episodeThumbnail,
+            imdbRating =
+                episodeRating ?: resolvedSeriesTarget?.episodeRating,
+            episodeThumbnail =
+                episodeThumbnail ?: resolvedSeriesTarget?.episodeThumbnail,
             backdrop = backdropUrl,
             clearLogo = entry.clearLogo,
 
@@ -3226,12 +3309,11 @@ Log.d(
 
             parentType = entry.type,
 
-            season = entry.season,
-            episode = namedEpisodeNumber(entry.episode),
+            season = cardSeason,
+            episode = cardEpisode,
             // Dropped with the number: a stream id keys an episode, and the
             // source's 0 names none, so keeping it only opened a phantom.
-            episodeStreamId = entry.episodeStreamId
-                .takeIf { namedEpisodeNumber(entry.episode) != null },
+            episodeStreamId = cardEpisodeStreamId,
 
             startPositionMs = entry.positionMs,
             recencyTimestamp = entry.updatedAt,
