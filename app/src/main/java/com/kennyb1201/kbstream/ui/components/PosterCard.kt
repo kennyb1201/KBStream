@@ -25,8 +25,8 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
-import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
@@ -39,7 +39,7 @@ fun WatchedCheckBadge(
             .size(24.dp)
             .clip(CircleShape)
             .background(KBVoid.copy(alpha = 0.8f))
-            .border(1.dp, KBTextHi.copy(alpha = 0.95f), CircleShape)
+            .border(1.dp, KBAccent.copy(alpha = 0.95f), CircleShape)
             // The badge is the only place this state is stated, so it needs a
             // spoken label: without it a screen reader announces the bare
             // "✓" glyph (or nothing) beside the poster's title.
@@ -48,7 +48,7 @@ fun WatchedCheckBadge(
     ) {
         Text(
             text = "✓",
-            color = KBTextHi,
+            color = KBAccent,
             fontSize = 13.sp
         )
     }
@@ -56,8 +56,8 @@ fun WatchedCheckBadge(
 
 /**
  * Eye badge for shows the user has STARTED but not finished. Identical
- * treatment to [WatchedCheckBadge] — same circle, same scrim, same warm
- * white for border and glyph — so the two read as one marker family; the
+ * treatment to [WatchedCheckBadge] — same circle, same scrim, same brass
+ * accent for border and glyph — so the two read as one marker family; the
  * eye shape itself is what distinguishes started-but-unfinished from the
  * completed check.
  */
@@ -70,13 +70,13 @@ fun WatchedEyeBadge(
             .size(24.dp)
             .clip(CircleShape)
             .background(KBVoid.copy(alpha = 0.8f))
-            .border(1.dp, KBTextHi.copy(alpha = 0.95f), CircleShape),
+            .border(1.dp, KBAccent.copy(alpha = 0.95f), CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = Icons.Filled.Visibility,
             contentDescription = "Started, not finished",
-            tint = KBTextHi,
+            tint = KBAccent,
             modifier = Modifier.size(13.dp)
         )
     }
