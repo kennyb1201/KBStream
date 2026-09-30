@@ -2,8 +2,6 @@ package com.kennyb1201.kbstream.ui.search
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,16 +10,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material3.Icon
@@ -46,7 +40,6 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.Card
 import androidx.tv.material3.CardDefaults
@@ -382,191 +375,6 @@ internal fun SearchHero(
 // focused poster borders + glow never get cut off at the first/last item.
 internal val SEARCH_RAIL_EDGE_PADDING = 20.dp
 
-// Browse-submenu lazy grid. The cell floor is wide enough that the longest
-// curated name - "The Sisterhood of the Traveling Pants Collection", 48
-// characters - wraps onto a second line instead of being ellipsized away,
-// which is the trade a uniform-cell grid makes for laziness.
-private val SUBMENU_CHIP_MIN_WIDTH = 216.dp
-
-// The grid is a lazy scroll container sitting inside the screen's LazyColumn,
-// so its height must be definite: an unbounded (infinite) height would make
-// Compose refuse to measure it. Tall enough to read as the submenu's own
-// scroll surface, short enough to leave the page above it in view.
-private val SUBMENU_CHIP_MAX_HEIGHT = 360.dp
-
-@Composable
-internal fun SearchBrowseBrowser(
-    viewModel: SearchViewModel,
-    categories: List<BrowseCategory>,
-    submenuLoading: Boolean,
-    onChipLongPress: ((String, BrowseEntry) -> Unit)? = null,
-    onCategoryLongPress: ((BrowseCategory) -> Unit)? = null
-) {
-    // Selected category lives in the activity-scoped ViewModel, so backing
-    // out of a discover screen re-opens the same submenu instead of the
-    // browser resetting to no selection.
-    val selectedKey by viewModel.selectedBrowseCategoryKey.collectAsStateWithLifecycle()
-    val activeCategory = categories.firstOrNull { it.key == selectedKey }
-
-    // Re-focus the chip that launched the discover screen we just backed
-    // out of. The matching chip renders with grabInitialFocus so the TV
-    // focus system lands on it (which also scrolls it into view); the
-    // stored chip is cleared once consumed so later recompositions don't
-    // steal focus back. Consumption is tracked inside SubmenuChipGrid
-    // (scoped to the submenu that actually rendered the chip).
-    val returnChip = viewModel.browseReturnChip
-
-    Column(modifier = Modifier.padding(top = 8.dp)) {
-        KBSectionHeader(title = "Browse")
-
-        // Sidebar: one scrollable category row (the "separate categories"
-        // strip; selecting one reveals its submenu below).
-        Row(
-            modifier = Modifier
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = SEARCH_RAIL_EDGE_PADDING),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            categories.forEach { category ->
-                SearchChip(
-                    label = category.label,
-                    accent = activeCategory?.key == category.key,
-                    onClick = {
-                        viewModel.selectBrowseCategory(category.key)
-                    },
-                    onLongClick = onCategoryLongPress?.let { handler ->
-                        { handler(category) }
-                    }
-                )
-            }
-        }
-
-        // Submenu chips for the active category; each opens a dedicated
-        // discover screen (Tag / Studio / Collection / Decade). Wrapped rows,
-        // not one long scrolling row: the big submenus (387 keywords, 279
-        // collections after the 2026-09 expansion) would otherwise need a
-        // D-pad right-press per chip to reach the end — wrapped rows let
-        // focus move straight DOWN.
-        val category = activeCategory
-        if (category != null) {
-            if (submenuLoading) {
-                Text(
-                    text = "Resolving ${category.label.lowercase()}...",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = KBTextLo,
-                    modifier = Modifier.padding(
-                        top = 12.dp,
-                        start = SEARCH_RAIL_EDGE_PADDING
-                    )
-                )
-            } else if (category.entries.isNotEmpty()) {
-                SubmenuChipGrid(
-                    entries = category.entries,
-                    categoryKey = category.key,
-                    onEntryClicked = viewModel::onBrowseEntryClicked,
-                    onEntryLongClick = onChipLongPress,
-                    returnChip = returnChip,
-                    onReturnChipConsumed = {
-                        viewModel.browseReturnChip = null
-                    }
-                )
-            }
-        }
-    }
-}
-
-/**
- * Wrapped multi-row chip grid for the browse submenu, composed lazily.
- *
- * One long horizontal row stops scaling once a category holds dozens of
- * entries: the Fire TV D-pad would need a right-press per chip to reach the
- * far end. Wrapping into rows keeps every entry a few presses away, and
- * vertical D-pad movement walks the rows naturally.
- *
- * This used to be a FlowRow, which wraps just as well but builds EVERY chip
- * on the frame the submenu opens. With the 2026-09 curated expansion the big
- * submenus hold hundreds of entries (387 keywords, 279 collections), so
- * opening one composed hundreds of focusable Cards at once and stuttered. A
- * lazy grid composes only the cells on screen, so the cost no longer grows
- * with the list.
- */
-@Composable
-private fun SubmenuChipGrid(
-    entries: List<BrowseEntry>,
-    categoryKey: String,
-    onEntryClicked: (String, BrowseEntry) -> Unit,
-    onEntryLongClick: ((String, BrowseEntry) -> Unit)? = null,
-    returnChip: Pair<String, Int>?,
-    onReturnChipConsumed: () -> Unit
-) {
-    // Keyed on the armed chip, not a plain `remember`: consuming one arm used
-    // to latch this flag for the rest of the composition, so the NEXT arm -
-    // which hideBrowseChip sets to move focus onto a hidden chip's neighbor -
-    // found `returnChipConsumed` already true and never grabbed focus. Only
-    // the first Hide could place focus; every later one fell back to the
-    // strip's first chip again.
-    var returnChipConsumed by remember(returnChip) { mutableStateOf(false) }
-
-    val gridState = rememberLazyGridState()
-    val armedIndex = returnChip
-        ?.takeIf { !returnChipConsumed && it.first == categoryKey }
-        ?.second
-
-    // A lazy grid composes only the cells it shows, so a returning chip deep
-    // in a big submenu is NOT in the composition when the submenu re-opens:
-    // its grabInitialFocus effect would never run and focus would fall back
-    // to the first chip instead of the one the viewer left. Scroll the grid
-    // to it first; the chip's own effect then places focus once it composes.
-    LaunchedEffect(armedIndex) {
-        if (armedIndex != null && armedIndex in entries.indices) {
-            runCatching { gridState.scrollToItem(armedIndex) }
-        }
-    }
-
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = SUBMENU_CHIP_MIN_WIDTH),
-        state = gridState,
-        // Horizontal edge padding matches the category strip / poster rails
-        // so chip borders never clip at the screen edge, and the top/bottom
-        // room is load-bearing: a lazy grid clips its own viewport, so a
-        // focused chip's scale-up and glow would be sliced flat along the
-        // first and last row without it.
-        contentPadding = PaddingValues(
-            top = 10.dp,
-            bottom = 18.dp,
-            start = SEARCH_RAIL_EDGE_PADDING,
-            end = SEARCH_RAIL_EDGE_PADDING
-        ),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = SUBMENU_CHIP_MAX_HEIGHT)
-    ) {
-        itemsIndexed(
-            items = entries,
-            // The same identity the hide feature keys a chip by
-            // ("category\u0001name"): names are unique within a category, so
-            // two cells can never share a key (which a lazy grid rejects)
-            // and a chip keeps its identity across a re-resolve.
-            key = { _, entry -> BrowseChipVisibility.key(categoryKey, entry.name) }
-        ) { entryIndex, entry ->
-            SearchChip(
-                label = entry.name,
-                onClick = { onEntryClicked(categoryKey, entry) },
-                onLongClick = onEntryLongClick?.let { handler ->
-                    { handler(categoryKey, entry) }
-                },
-                grabInitialFocus = armedIndex == entryIndex,
-                onInitialFocusConsumed = {
-                    returnChipConsumed = true
-                    onReturnChipConsumed()
-                },
-                labelMaxLines = 2
-            )
-        }
-    }
-}
 
 @Composable
 internal fun SearchRail(
@@ -603,7 +411,12 @@ internal fun SearchChip(
     // Browse-submenu chips sit in a fixed-width lazy grid cell, so a long
     // curated name wraps onto a second line rather than being ellipsized
     // away. Every other chip is one line.
-    labelMaxLines: Int = 1
+    labelMaxLines: Int = 1,
+    // Browse-submenu chips open a dedicated discover screen; a chevron is what
+    // says so, and it is the difference between a chip that filters in place
+    // and one that leaves the screen. Plain select chips (suggestions, recent
+    // searches) leave it off.
+    showChevron: Boolean = false
 ) {
     var focused by remember { mutableStateOf(false) }
     // Return-chip restore: when this chip is the one that opened the
@@ -656,13 +469,36 @@ internal fun SearchChip(
             .focusRequester(returnFocusRequester)
             .onFocusChanged { focused = it.isFocused }
     ) {
-        Text(
-            text = label,
-            maxLines = labelMaxLines,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
-        )
+        if (showChevron) {
+            Row(
+                verticalAlignment = Alignment.Top,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+            ) {
+                Text(
+                    text = label,
+                    maxLines = labelMaxLines,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Filled.ChevronRight,
+                    contentDescription = null,
+                    tint = if (focused) KBAccent else KBTextLo.copy(alpha = 0.6f),
+                    modifier = Modifier
+                        .padding(start = 6.dp, top = 1.dp)
+                        .size(14.dp)
+                )
+            }
+        } else {
+            Text(
+                text = label,
+                maxLines = labelMaxLines,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+            )
+        }
     }
 }
 
