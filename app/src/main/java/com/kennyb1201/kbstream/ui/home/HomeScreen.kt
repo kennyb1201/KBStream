@@ -827,7 +827,14 @@ private fun HomeHero(
     continueWatchingItem: UpNextItem? = null,
     heroHeight: Dp = HomeHeroHeight,
     heroLogoWidth: Dp = HeroLogoWidth,
-    heroLogoHeight: Dp = HeroLogoHeight
+    heroLogoHeight: Dp = HeroLogoHeight,
+    // A hero that is nothing but a logo - the Browse chip a tile hands up -
+    // centres that logo in the whole hero instead of anchoring it to the
+    // bottom. A catalog title and a KB folder are letters + metadata + buttons
+    // stacked up from the seam, so they keep the bottom anchor; a browse chip
+    // brings no metadata at all, and left on the bottom anchor its wordmark
+    // floats in the lower third of an otherwise empty panel.
+    centerLogo: Boolean = false
 ) {
     val context = LocalContext.current
     val title = meta?.name ?: preview.name
@@ -1309,9 +1316,13 @@ private fun HomeHero(
                 .padding(
                     start = 32.dp,
                     end = 20.dp,
-                    bottom = 16.dp
+                    // The 16dp seam inset belongs to the bottom-anchored
+                    // layout; centred, it would pull the logo up off the
+                    // hero's true middle by half of it.
+                    bottom = if (centerLogo) 0.dp else 16.dp
                 ),
-            verticalArrangement = Arrangement.Bottom
+            verticalArrangement =
+                if (centerLogo) Arrangement.Center else Arrangement.Bottom
         ) {
             if (!clearLogo.isNullOrBlank()) {
                 HeroClearLogo(
@@ -1909,7 +1920,10 @@ private fun HomeHeroHost(
             heroLogoHeight = when {
                 heroFolder != null -> CollectionHeroLogoHeight
                 else -> HeroLogoHeight
-            }
+            },
+            // A browse chip's hero is its clearlogo alone, so the mark sits in
+            // the middle of the panel rather than at the bottom of it.
+            centerLogo = heroBrowse != null
         )
     }
 }

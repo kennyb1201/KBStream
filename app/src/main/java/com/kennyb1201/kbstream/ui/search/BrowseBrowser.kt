@@ -379,14 +379,22 @@ private fun BrowseCategoryTab(
                     focused -> KBTextHi
                     else -> KBTextLo
                 },
+                // The open tab must not go AMBER ON AMBER while focused,
+                // which is what brought the D-pad back up to it: an accent
+                // wash under an accent label left the whole chip one color and
+                // its name unreadable. Focus instead deepens the wash a step
+                // and puts the label in the light tone, so the open tab keeps
+                // its amber identity AND stays legible - and the accent rule
+                // under it still says which submenu is showing, as it does
+                // when focus is down in the grid.
                 focusedContainerColor = if (selected) {
-                    KBAccent.copy(alpha = 0.24f)
+                    KBAccent.copy(alpha = 0.28f)
                 } else {
                     KBSurfaceRaised
                 },
-                focusedContentColor = if (selected) KBAccent else KBTextHi,
+                focusedContentColor = KBTextHi,
                 pressedContainerColor = KBAccent.copy(alpha = 0.3f),
-                pressedContentColor = KBAccent
+                pressedContentColor = KBTextHi
             ),
             scale = ClickableSurfaceDefaults.scale(
                 focusedScale = KBFocusChip,
@@ -449,10 +457,14 @@ private fun BrowseCategoryTab(
                     Text(
                         text = category.entries.size.toString(),
                         style = MaterialTheme.typography.labelSmall,
-                        color = if (selected || focused) {
-                            KBAccent
-                        } else {
-                            KBTextLo.copy(alpha = 0.75f)
+                        // Follows the label's own tone rather than pinning
+                        // amber: with the tab focused the count sits on the
+                        // amber wash the label just left, and an accent count
+                        // there was the other half of the unreadable chip.
+                        color = when {
+                            focused -> KBTextHi.copy(alpha = 0.8f)
+                            selected -> KBAccent
+                            else -> KBTextLo.copy(alpha = 0.75f)
                         },
                         modifier = Modifier.padding(start = 7.dp)
                     )
