@@ -1897,19 +1897,19 @@ private fun HomeHeroHost(
             muted = AppPreferences.getHeroTrailerMuted(context),
             continueWatchingItem = continueWatchingItem.value,
             // Collection manifests supply their own wordmark logo — render it
-            // larger than the shared TMDB hero logo.
-            heroLogoWidth =
-                if (heroOverridden) {
-                    CollectionHeroLogoWidth
-                } else {
-                    HeroLogoWidth
-                },
-            heroLogoHeight =
-                if (heroOverridden) {
-                    CollectionHeroLogoHeight
-                } else {
-                    HeroLogoHeight
-                }
+            // larger than the shared TMDB hero logo. A browse shortcut is NOT
+            // in that group even though it also overrides the hero: its
+            // clearlogo comes from TMDB, so it takes the standard TMDB box and
+            // reads at the same size as a catalog title's logo rather than
+            // looming over the hero in the collection wordmark's frame.
+            heroLogoWidth = when {
+                heroFolder != null -> CollectionHeroLogoWidth
+                else -> HeroLogoWidth
+            },
+            heroLogoHeight = when {
+                heroFolder != null -> CollectionHeroLogoHeight
+                else -> HeroLogoHeight
+            }
         )
     }
 }
