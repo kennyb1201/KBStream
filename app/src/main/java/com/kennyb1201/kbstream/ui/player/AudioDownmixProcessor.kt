@@ -1,5 +1,3 @@
-@file:OptIn(androidx.media3.common.util.UnstableApi::class)
-
 package com.kennyb1201.kbstream.ui.player
 
 import android.annotation.SuppressLint
@@ -150,6 +148,7 @@ internal class AudioDownmixProcessor : BaseAudioProcessor() {
         }
     }
 
+    @Suppress("OVERRIDE_DEPRECATION") // media3's AudioProcessor.onFlush is deprecated.
     override fun onFlush() {
         limiter.reset()
         matrixSignature = Int.MIN_VALUE

@@ -102,6 +102,10 @@ object NewPipeManager {
      * the current Media3 player expects one directly playable URL
      * containing both audio and video.
      */
+    // VideoStream.isVideoOnly is deprecated in NewPipeExtractor and has no
+    // drop-in replacement that answers the same question ("is this stream
+    // missing the audio track"), so the flag is still what decides it.
+    @Suppress("DEPRECATION")
     suspend fun getPlayableUrl(
         videoId: String
     ): Result<PlayableSource> = withContext(Dispatchers.IO) {

@@ -197,6 +197,7 @@ object ExternalPlayer {
      * Int from either, but reading it through Bundle.get() covers whichever
      * type a given build uses instead of throwing on a Long.
      */
+    @Suppress("DEPRECATION") // Bundle.get: the read is deliberately untyped, see above.
     fun reportedPositionMs(result: Intent?): Long? {
         val extras = result?.extras ?: return null
         val raw = runCatching { extras.get("position") }.getOrNull() ?: return null
@@ -210,6 +211,7 @@ object ExternalPlayer {
     }
 
     /** The duration an external player reported back, in milliseconds. */
+    @Suppress("DEPRECATION") // Bundle.get: same untyped read as reportedPositionMs.
     fun reportedDurationMs(result: Intent?): Long? {
         val extras = result?.extras ?: return null
         val raw = runCatching { extras.get("duration") }.getOrNull() ?: return null

@@ -171,6 +171,9 @@ internal class P5PlaneDecoder(
         drainPendingInputs()
     }
 
+    // INFO_OUTPUT_BUFFERS_CHANGED below is a deprecated constant; it is a
+    // no-op branch kept for API < 21 decoders and is the only such reference.
+    @Suppress("DEPRECATION")
     override fun dequeueOutputBuffer(): P5OutputBuffer? {
         drainPendingInputs()
         var drained = 0
@@ -353,7 +356,7 @@ internal class P5PlaneDecoder(
                 oversizedSamples = 0
                 buffer.put(data)
                 var flags = 0
-                if (input.isKeyFrame()) flags = flags or MediaCodec.BUFFER_FLAG_SYNC_FRAME
+                if (input.isKeyFrame()) flags = flags or MediaCodec.BUFFER_FLAG_KEY_FRAME
                 try {
                     codec.queueInputBuffer(index, 0, buffer.position(), input.timeUs, flags)
                 } catch (e: Exception) {

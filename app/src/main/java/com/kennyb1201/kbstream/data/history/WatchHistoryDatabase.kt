@@ -203,8 +203,11 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     // every open, i.e. an app that cannot show history at all,
                     // and the rows come back from the account's cloud copy
                     // (SupabaseSync) once the newer build is back.
-                    .fallbackToDestructiveMigrationFrom(*legacyWipeVersions)
-                    .fallbackToDestructiveMigrationOnDowngrade()
+                    // dropAllTables = true is exactly what the deprecated
+                    // no-arg overloads did, so the wipe behaviour is unchanged -
+                    // only the signature is the current one.
+                    .fallbackToDestructiveMigrationFrom(true, *legacyWipeVersions)
+                    .fallbackToDestructiveMigrationOnDowngrade(true)
                     // WAL lets readers and the sync writer proceed in
                     // parallel instead of failing with SQLITE_BUSY.
                     .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
@@ -249,8 +252,8 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 .addMigrations(*migrations.toTypedArray())
                 // Same scoping as getInstance(): wipe only the legacy versions,
                 // require a real migration from the first one onwards.
-                .fallbackToDestructiveMigrationFrom(*legacyWipeVersions)
-                .fallbackToDestructiveMigrationOnDowngrade()
+                .fallbackToDestructiveMigrationFrom(true, *legacyWipeVersions)
+                .fallbackToDestructiveMigrationOnDowngrade(true)
                 .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
                 .addCallback(RoomBusyTimeout)
                 .build()

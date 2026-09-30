@@ -26,9 +26,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -173,7 +173,7 @@ fun AddonsScreen(
                 Spacer(modifier = Modifier.width(8.dp))
                 ActionButton(
                     label = "HOME / COLLECTIONS",
-                    icon = Icons.Filled.List,
+                    icon = Icons.AutoMirrored.Filled.List,
                     onClick = { showCatalogManager = true }
                 )
                 Spacer(modifier = Modifier.width(8.dp))

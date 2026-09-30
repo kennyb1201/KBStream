@@ -255,6 +255,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             emptyList()
         )
 
+    // flatMapLatest is still a @ExperimentalCoroutinesApi API; opting in here
+    // rather than at file scope keeps the acceptance to this one property.
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val lineupSource: StateFlow<List<IptvChannelWithEpg>> = combine(
         combine(
             _playlist,

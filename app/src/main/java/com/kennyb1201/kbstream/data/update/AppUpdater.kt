@@ -8,6 +8,7 @@ import android.content.pm.PackageInstaller
 import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
+import androidx.core.content.IntentCompat
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -183,7 +184,13 @@ object AppUpdater {
                 intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
             when (status) {
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                    val confirm = intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
+                    // IntentCompat, not Intent.getParcelableExtra(String, Class):
+                    // the two-arg form is API 33, and this app ships minSdk 23.
+                    val confirm = IntentCompat.getParcelableExtra(
+                        intent,
+                        Intent.EXTRA_INTENT,
+                        Intent::class.java
+                    )
                     if (confirm != null) {
                         confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         try {
@@ -714,6 +721,10 @@ object AppUpdater {
         }
     }
 
+    // ACTION_INSTALL_PACKAGE is deprecated (the PackageInstaller session above
+    // is the modern path) but it is the only fallback when a session could not
+    // be created, and it still works on every API this app ships to.
+    @Suppress("DEPRECATION")
     private fun intentInstall(context: Context, apk: File) {
         val uri = FileProvider.getUriForFile(
             context, "${context.packageName}.updateprovider", apk

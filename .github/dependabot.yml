@@ -1,0 +1,42 @@
+# Dependency upgrades, the half of THIRD_PARTY_NOTICES.md that was missing:
+# that file has always said "Dependabot (.github/dependabot.yml) opens the
+# upgrade PRs", and until now the file did not exist, so nothing ever opened
+# one and the pinned versions drifted years behind (see the audit that added
+# this file).
+#
+# Deliberately conservative. This app ships a player built on media3, and its
+# toolchain (AGP / Kotlin / Gradle) is pinned as one unit, so a wall of major
+# bump PRs would be worse than useless: minor and patch updates are grouped
+# into a single PR per ecosystem so they can be reviewed and landed together,
+# while a MAJOR bump (okhttp 4 -> 5, retrofit 2 -> 3, sentry 7 -> 8, ktor 2 ->
+# 3, supabase 2 -> 3, media3 across a minor, the toolchain) still arrives on
+# its own, where it can be treated as the migration it is.
+#
+# Neither ecosystem's PRs are auto-merged; landing one still means the normal
+# gates (ktlint, unit tests, Android Lint, both APKs) plus, for anything that
+# touches playback, a device.
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 5
+    groups:
+      gradle-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - "minor"
+          - "patch"

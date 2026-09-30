@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
@@ -24,7 +25,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -131,9 +131,11 @@ internal fun AddonListCard(
             .then(
                 if (onRight != null) {
                     Modifier.onPreviewKeyEvent { event ->
+                        // onRight is already non-null on this branch. The local
+                        // val is only what keeps the target stable for the
+                        // lambda, so no second null check is wanted here.
                         val handler = onRight
-                        if (handler != null &&
-                            event.type == KeyEventType.KeyDown &&
+                        if (event.type == KeyEventType.KeyDown &&
                             event.key == Key.DirectionRight
                         ) {
                             // Deterministic Right → detail panel's action buttons,
@@ -423,7 +425,7 @@ internal fun AddonDetails(
             )
             SmallAction(
                 label = "OPEN URL",
-                icon = Icons.Filled.OpenInNew,
+                icon = Icons.AutoMirrored.Filled.OpenInNew,
                 onClick = onOpenManifest,
                 modifier = Modifier.weight(1f)
             )

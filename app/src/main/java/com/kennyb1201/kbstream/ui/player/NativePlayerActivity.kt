@@ -394,6 +394,9 @@ private class SplitModeRenderersFactory(
      * channel count is baked into the AudioTrack at configure time) is heard
      * while the film keeps playing instead of on the next stream start.
      */
+    // setEnableAudioTrackPlaybackParams is deprecated in media3 1.9 with no
+    // replacement offered; revisit when media3 is upgraded.
+    @Suppress("DEPRECATION")
     override fun buildAudioSink(
         context: Context,
         enableFloatOutput: Boolean,
@@ -483,6 +486,10 @@ class NativePlayerActivity : ComponentActivity() {
      * the system's document UI, next-episode hands its result back to
      * MainActivity, and the now-playing intent goes out as a PendingIntent).
      */
+    // The override-and-rewrite IS the point here: this is the one choke point
+    // every component switch passes through, and the Activity Result API has no
+    // equivalent interposition. Suppressed rather than migrated.
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
         if (intent.component?.className == NativePlayerActivity::class.java.name &&
             intent.getBooleanExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK, false)
@@ -1566,8 +1573,12 @@ class NativePlayerActivity : ComponentActivity() {
         val now = System.currentTimeMillis()
         val isFresh = cached != null && now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS
         val noSource = epgUrl.isBlank() || epgChannelId.isNullOrBlank()
+        // isNullOrBlank() above already contract-proved epgChannelId non-null
+        // whenever noSource is false, so an explicit null check on the third
+        // operand here was unreachable (the compiler said so). The local val is
+        // what carries that smart cast into the branch below.
         val resolvedEpgChannelId = epgChannelId
-        return if (isFresh || noSource || resolvedEpgChannelId == null) {
+        return if (isFresh || noSource) {
             cached ?: ZapEpgInfo(now = null, next = null, fetchedAtMillis = now)
         } else {
             withContext(Dispatchers.IO) {
@@ -4382,6 +4393,10 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Player Creation ---
+    // DefaultTrackSelector.Parameters.Builder(Context) is deprecated in media3
+    // 1.9; the no-arg Builder() is not a drop-in for the context-derived
+    // defaults, so this waits for the media3 upgrade.
+    @Suppress("DEPRECATION")
     private fun createPlayer() {
         // Fresh attempt at the current URL: reset per-attempt state so the
         // black-video watchdog can re-arm and report at most once per attempt.

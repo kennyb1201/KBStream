@@ -1,5 +1,3 @@
-@file:OptIn(androidx.media3.common.util.UnstableApi::class)
-
 package com.kennyb1201.kbstream.ui.player
 
 import android.util.Log

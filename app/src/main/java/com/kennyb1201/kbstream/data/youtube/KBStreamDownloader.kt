@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.youtube
 
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.schabi.newpipe.extractor.downloader.Downloader
 import org.schabi.newpipe.extractor.downloader.Request
 import org.schabi.newpipe.extractor.downloader.Response
@@ -45,7 +46,7 @@ class KBStreamDownloader private constructor(
             .method(
                 request.httpMethod(),
                 request.dataToSend()?.let {
-                    okhttp3.RequestBody.create(null, it)
+                    it.toRequestBody()
                 }
             )
             .header("User-Agent", USER_AGENT)

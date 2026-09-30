@@ -130,6 +130,8 @@ private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 48
 private val clockLabelFormatter = SimpleDateFormat("EEE, h:mm a", Locale.US)
 
 @Composable
+// debounce() (the channel-prefetch window below) is still a @FlowPreview API.
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 fun GuideScreen(
     viewModel: IptvViewModel = viewModel(),
     modifier: Modifier = Modifier,

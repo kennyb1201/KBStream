@@ -3441,8 +3441,18 @@ Log.d(
                         // rail's own identity vocabulary. Tracked so a tracker
                         // card for one of them can be dropped below without
                         // waiting for the tracker feed to catch up.
+                        //
+                        // Deliberately NOT ConcurrentHashMap.newKeySet(): its
+                        // KeySetView is API 24, and this app ships minSdk 23,
+                        // so on a Fire OS 6 / Android 6 box the call would
+                        // NoSuchMethodError the moment the Continue Watching
+                        // rail built (and it failed Android Lint's NewApi
+                        // check on every other build). A synchronized wrapper
+                        // is API 1 and is enough for this set, which is only
+                        // added to and emptiness-checked - never iterated
+                        // while its concurrent writers are still running.
                         val locallyFinishedShowKeys =
-                            java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+                            java.util.Collections.synchronizedSet(HashSet<String>())
 
                         fun withoutLocallyFinishedTrackerCards(
                             items: List<UpNextItem>

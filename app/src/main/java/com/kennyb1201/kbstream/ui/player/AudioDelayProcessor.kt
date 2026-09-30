@@ -1,5 +1,3 @@
-@file:OptIn(androidx.media3.common.util.UnstableApi::class)
-
 package com.kennyb1201.kbstream.ui.player
 
 import android.annotation.SuppressLint
@@ -115,6 +113,7 @@ internal class AudioDelayProcessor : BaseAudioProcessor() {
         return inputAudioFormat
     }
 
+    @Suppress("OVERRIDE_DEPRECATION") // media3's AudioProcessor.onFlush is deprecated.
     override fun onFlush() {
         // A seek/track change starts a fresh stream: re-apply the whole offset
         // so it stays constant for the session. A reconfigure of the running

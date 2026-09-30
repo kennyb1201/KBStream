@@ -119,6 +119,9 @@ class MpvPlayerActivity : ComponentActivity() {
      * opens the system's document UI, next-episode hands its result back to
      * MainActivity, and the now-playing intent goes out as a PendingIntent.
      */
+    // Same interposition as NativePlayerActivity's: the switch-back to
+    // ExoPlayer is rewritten here, which the Activity Result API cannot express.
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
         if (intent.component?.className == MpvPlayerActivity::class.java.name) {
             intent.setClass(this, NativePlayerActivity::class.java)

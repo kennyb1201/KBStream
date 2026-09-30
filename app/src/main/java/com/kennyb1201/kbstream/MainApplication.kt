@@ -351,6 +351,12 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
      * database read to rebuild, so they wait for real pressure or for the app
      * going away — by then the user is not looking at the guide anyway.
      */
+    // TRIM_MEMORY_RUNNING_LOW / _CRITICAL are deprecated in API 35 because the
+    // platform stopped DELIVERING those two levels in API 34. The thresholds
+    // are still the right ones: they classify the levels that ARE delivered
+    // (UI_HIDDEN 20, BACKGROUND 40, MODERATE 60, COMPLETE 80) as real pressure,
+    // while deliberately not firing on RUNNING_MODERATE (5).
+    @Suppress("DEPRECATION")
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         runCatching {

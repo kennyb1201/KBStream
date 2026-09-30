@@ -59,7 +59,10 @@ internal class OutboxQueue(
 
     val size: Int get() = rows.size
 
-    val isEmpty: Boolean get() = rows.isEmpty
+    // Call the function explicitly: `rows.isEmpty` read as a synthetic property
+    // is the shape newer Kotlin compilers reject when the getter is Kotlin's own
+    // (kotlin.collections.Map.isEmpty), not Java's.
+    val isEmpty: Boolean get() = rows.isEmpty()
 
     fun put(row: OutboxItem) {
         rows[id(row)] = row
