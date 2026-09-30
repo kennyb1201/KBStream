@@ -44,7 +44,6 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.browseHomeRails
 import com.kennyb1201.kbstream.data.kb.browseRailArrangementOf
 import com.kennyb1201.kbstream.data.kb.browseRowPlacement
-import com.kennyb1201.kbstream.data.kb.browseShortcutCategoryLabel
 import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -527,8 +526,9 @@ private fun CollectionFolderTile(
  * chip's own category decides (genre, keyword, service/network, studio,
  * collection, decade), so the row can never drift from what the browse browser
  * shows. Its artwork is resolved separately, after the row has drawn: a browse
- * chip carries no manifest cover and no curated art, so each tile's backdrop
- * and clearlogo come from one TMDB discover lookup (see KBHomeViewModel and
+ * chip carries no manifest cover and no curated art, so the tile's clearlogo -
+ * and the backdrop the HERO swaps in while that tile is focused - come from one
+ * TMDB discover lookup (see KBHomeViewModel and
  * TmdbRepository.getBrowseShortcutArt), and a shortcut TMDB has nothing for
  * simply keeps the wordmark it has always drawn.
  */
@@ -586,11 +586,18 @@ fun KBHomeBrowseRail(
 }
 
 /**
- * One Browse tile: a landscape card that draws the shortcut's resolved
- * backdrop as its cover, with the shortcut's clearlogo over it (and its
- * category underneath).
+ * One Browse tile: a landscape card that draws the shortcut's clearlogo on the
+ * card's own surface, and nothing else.
  *
- * The wordmark is the fallback, not the design. A shortcut TMDB has no art
+ * No backdrop on the tile. A category's resolved still reads as a mismatched
+ * thumbnail under a wordmark rather than as a cover, and it no longer has a job
+ * to do here: the caption that would have been under the logo is gone, and the
+ * rail's own name (see [BrowseHomeRail.title]) is what says where the chip came
+ * from. The backdrop is not wasted - the HERO still swaps in the resolved
+ * backdrop and clearlogo while a tile is focused (see HomeScreen's
+ * HomeHeroHost), which is where a full-bleed still belongs.
+ *
+ * The wordmark is the fallback, not the design. A shortcut TMDB has no logo
  * for - and every tile on the first frame, before the lookups land - keeps
  * the plain surface with the chip's name on it, so the row is legible
  * immediately and upgrades in place rather than holding the rail back for a
@@ -609,7 +616,6 @@ private fun BrowseShortcutTile(
         if (it.isFocused) onFocus?.invoke()
     }
 
-    val backdropUrl = art?.backdropUrl?.takeIf { it.isNotBlank() }
     val clearlogoUrl = art?.clearlogoUrl?.takeIf { it.isNotBlank() }
 
     KBCard(
@@ -623,73 +629,19 @@ private fun BrowseShortcutTile(
                 .background(KBSurface),
             contentAlignment = Alignment.Center
         ) {
-            if (backdropUrl != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(backdropUrl).build(),
-                    contentDescription = shortcut.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .matchParentSize()
-                )
-            }
-
             if (clearlogoUrl != null) {
-                // A resolved clearlogo is a transparent wordmark, so it sits
-                // on the artwork with a light scrim behind it - the same
-                // treatment the collection tiles give a cover.
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(
-                            androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    KBVoid.copy(alpha = 0.12f),
-                                    KBVoid.copy(alpha = 0.58f)
-                                )
-                            )
-                        )
-                )
-
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(clearlogoUrl).build(),
                     contentDescription = shortcut.name,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
-                        .fillMaxWidth(0.68f)
-                        .height(CollectionTileHeight * 0.46f)
-                )
-
-                Text(
-                    text = browseShortcutCategoryLabel(shortcut.categoryKey),
-                    color = KBTextHi.copy(alpha = 0.72f),
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(8.dp)
+                        .fillMaxWidth(0.72f)
+                        .height(CollectionTileHeight * 0.5f)
                 )
             } else {
-                // No clearlogo (no art at all, a keyword TMDB has no logo for,
-                // or the first frame): the chip's own name is the mark, over
-                // the backdrop when there is one.
-                if (backdropUrl != null) {
-                    Box(
-                        modifier = Modifier
-                            .matchParentSize()
-                            .background(
-                                androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(
-                                        KBVoid.copy(alpha = 0.20f),
-                                        KBVoid.copy(alpha = 0.78f)
-                                    )
-                                )
-                            )
-                    )
-                }
-
+                // No clearlogo (no art at all, a category TMDB has no logo
+                // for, or the first frame): the chip's own name is the mark.
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.padding(horizontal = 10.dp)
@@ -701,14 +653,6 @@ private fun BrowseShortcutTile(
                         fontWeight = FontWeight.Bold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = browseShortcutCategoryLabel(shortcut.categoryKey),
-                        color = KBTextHi.copy(alpha = 0.62f),
-                        style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 3.dp)
                     )
                 }
             }
