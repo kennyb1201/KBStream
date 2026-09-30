@@ -137,6 +137,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private var currentNetworkIsCompany: Boolean = false
     private var currentOriginalsCompanyId: Int? = null
 
+    // The route's own label for the brand. Read by the logo lookup: a brand
+    // TMDB holds no artwork for is looked for under its name, and a twin id is
+    // only trusted when its entry carries the same name (see
+    // TmdbRepository.getEntityLogoUrls).
+    private var currentName: String? = null
+
     /**
      * The rail load currently in flight, if any.
      *
@@ -203,6 +209,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             currentNetworkOrCompanyId,
             currentNetworkIsCompany,
             currentOriginalsCompanyId,
+            currentName,
             genreId
         )
     }
@@ -219,6 +226,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         networkOrCompanyId: Int? = null,
         networkIsCompany: Boolean = false,
         originalsCompanyId: Int? = null,
+        // The route's label for the brand; see [currentName].
+        name: String? = null,
         genreId: Int? = null
     ) {
         val isSameRoute =
@@ -227,6 +236,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             currentProviderId == providerId &&
             currentNetworkOrCompanyId == networkOrCompanyId &&
             currentOriginalsCompanyId == originalsCompanyId &&
+            currentName == name &&
             currentGenreId == genreId &&
             _sections.value.isNotEmpty()
 
@@ -236,6 +246,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         currentIsNetwork = isNetwork
         currentProviderId = providerId
         currentNetworkOrCompanyId = networkOrCompanyId
+        currentName = name
         currentGenreId = genreId
         _selectedGenreId.value = genreId
         currentNetworkIsCompany = networkIsCompany
@@ -298,7 +309,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             // instead of the slowest one.
             val logoDeferred = async {
                 try {
-                    tmdbRepository.getEntityLogoUrls(id, isNetwork, providerId)
+                    tmdbRepository.getEntityLogoUrls(
+                        entityId = id,
+                        isNetwork = isNetwork,
+                        providerId = providerId,
+                        name = currentName,
+                        originalsCompanyId = currentOriginalsCompanyId
+                    )
                 } catch (e: Exception) {
                     Log.w("STUDIO_VM", "Logo lookup failed for id=$id", e)
                     emptyList()

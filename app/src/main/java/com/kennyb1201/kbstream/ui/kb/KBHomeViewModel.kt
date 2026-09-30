@@ -146,7 +146,12 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
                                 entryId = shortcut.id,
                                 providerId = shortcut.providerId,
                                 networkOrCompanyId = shortcut.networkOrCompanyId,
-                                networkIsCompany = shortcut.networkIsCompany
+                                networkIsCompany = shortcut.networkIsCompany,
+                                // The chip's label and its production company:
+                                // the two things the brand-logo fallbacks
+                                // need, and the chip already carries both.
+                                name = shortcut.name,
+                                originalsCompanyId = shortcut.originalsCompanyId
                             )
                         }.getOrNull() ?: return@withPermit
 

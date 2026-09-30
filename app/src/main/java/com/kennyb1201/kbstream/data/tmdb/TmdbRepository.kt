@@ -2445,32 +2445,131 @@ class TmdbRepository private constructor(context: Context) :
      * candidate (see BrandLogo). The candidates, in order:
      *
      *  1. the entity's own logos, in its own ID space (a network id is not a
-     *     company id);
-     *  2. the same id in the OTHER space - a network's company twin, and vice
-     *     versa. This is what E! needs (its network page holds plates the
-     *     header cannot read, while its company page has the real 1997x1211
-     *     mark) and what TNT needs (a single 1x1 network stub against seven
-     *     company logos);
-     *  3. for a service whose brand has no entity artwork at all (The Roku
+     *     company id) - see [brandIdSpaces] for why the other space is offered
+     *     second rather than not at all;
+     *  2. the SAME BRAND's other entity, where the caller knows one. A service
+     *     chip carries its brand's production company alongside its
+     *     network/company id (see BrowseHomeShortcut), and that company entry
+     *     is often the one TMDB gave a mark to;
+     *  3. the same NUMBER in the other space, and only when the two entries
+     *     really are one brand (see [entityNamesMatch]). The number alone
+     *     means nothing - 41 is TNT as a network and Orion Pictures as a
+     *     company, 76 is E! and Zentropa Entertainments - so an unverified
+     *     twin is how an unrelated studio's mark ended up on a network whose
+     *     own artwork the header rejects;
+     *  4. for a service whose brand has no entity artwork at all (The Roku
      *     Channel, Plex, ALLBLK, fuboTV, Xumo Play), the logo TMDB holds for
-     *     its WATCH PROVIDER - the only place that brand mark lives. Looked up
-     *     only when 1 and 2 came back empty, so every page that has real
-     *     entity artwork pays nothing for it.
+     *     its WATCH PROVIDER - the only place that brand mark lives;
+     *  5. failing all of that, the brand's own name looked up as a company
+     *     page. TMDB carries one studio under several ids and the artwork
+     *     often sits on a different one: the app's Dimension Films (147786)
+     *     has nothing, while 7405 and 51166 hold the mark. This is the step
+     *     the catalogue used to do by hand. An exact-or-contained name match
+     *     is required, so a search result cannot put another brand's logo on
+     *     the page.
+     *
+     * Every step is cheap before it is reached and only runs when the ones
+     * above it came back empty, so a page whose own artwork is real pays for
+     * nothing but that first read.
      */
     suspend fun getEntityLogoUrls(
         entityId: Int,
         isNetwork: Boolean,
-        providerId: Int? = null
+        providerId: Int? = null,
+        /** The brand's own name, for the twin check and the name search. */
+        name: String? = null,
+        /** The brand's production company, when the caller holds one. */
+        originalsCompanyId: Int? = null
     ): List<String> {
         if (apiKey.isBlank()) return emptyList()
 
+        val spaces = brandIdSpaces(isNetwork)
+        val twinSpace = spaces.getOrNull(1)
+
+        // The brand's name, read once and only if a step needs it: callers with
+        // a route or chip label hand it over for free, and a caller without one
+        // pays a single entity read - and only when a fallback got that far.
+        var brandName = name?.takeIf { it.isNotBlank() }
+        suspend fun brand(): String? {
+            if (brandName == null) {
+                brandName = getEntityDetail(entityId, isNetwork)?.name
+            }
+            return brandName
+        }
+
         val candidates = buildList {
-            if (isNetwork) addAll(entityLogoUrls(entityId, company = false))
-            addAll(entityLogoUrls(entityId, company = true))
+            addAll(
+                entityLogoUrls(entityId, company = spaces.first().isCompany)
+            )
+
+            if (originalsCompanyId != null && originalsCompanyId != entityId) {
+                addAll(entityLogoUrls(originalsCompanyId, company = true))
+            }
+
+            if (twinSpace != null) {
+                val twin = entityLogoUrls(entityId, company = twinSpace.isCompany)
+                if (twin.isNotEmpty()) {
+                    val twinName = getEntityDetail(
+                        entityId,
+                        twinSpace == BrandIdSpace.NETWORK
+                    )?.name
+                    // Same brand or nothing: the two id spaces are numbered
+                    // independently, so the number alone proves no relation.
+                    if (entityNamesMatch(brand(), twinName)) addAll(twin)
+                }
+            }
         }.distinct()
 
         if (candidates.isNotEmpty()) return candidates
-        return providerId?.let { listOfNotNull(watchProviderLogoUrl(it)) }.orEmpty()
+
+        providerId?.let { id ->
+            val providerLogo = runCatchingCancellable {
+                listOfNotNull(watchProviderLogoUrl(id))
+            }.getOrDefault(emptyList())
+            if (providerLogo.isNotEmpty()) return providerLogo
+        }
+
+        val sibling = brand()?.let { label ->
+            companyLogosByName(label, setOfNotNull(entityId, originalsCompanyId))
+        }.orEmpty()
+        return sibling
+    }
+
+    /**
+     * The mark TMDB holds on a DIFFERENT company page for the same brand.
+     *
+     * TMDB's company ids are full of duplicates - one studio filed two or
+     * three times, with the logo uploaded to whichever entry a contributor
+     * happened to pick - so a brand with no artwork of its own can still have
+     * a mark one search away. Only an exact or contained name match counts
+     * (see [entityNamesMatch]), and the ids the caller already tried are left
+     * out, so this can never hand back the page it was asked about.
+     */
+    private suspend fun companyLogosByName(
+        brand: String,
+        excludeIds: Set<Int>
+    ): List<String> {
+        val query = brand.trim()
+        if (query.isBlank()) return emptyList()
+
+        val results = runCatchingCancellable {
+            api.searchCompany(query, apiKey).results
+        }.getOrDefault(emptyList())
+
+        // A handful of candidates, not the whole page: the duplicates TMDB
+        // holds for one studio sit at the top of its own relevance ranking, and
+        // a brand nobody uploaded artwork for must not cost twenty reads. The
+        // search itself is one request; everything after it is guarded by the
+        // name match.
+        var checked = 0
+        for (result in results) {
+            if (result.id in excludeIds) continue
+            if (!entityNamesMatch(brand, result.name)) continue
+            if (checked++ >= MAX_BRAND_NAME_CANDIDATES) break
+            val logos = entityLogoUrls(result.id, company = true)
+            if (logos.isNotEmpty()) return logos
+        }
+        return emptyList()
     }
 
     /**
@@ -2569,7 +2668,9 @@ class TmdbRepository private constructor(context: Context) :
         entryId: Int,
         providerId: Int? = null,
         networkOrCompanyId: Int? = null,
-        networkIsCompany: Boolean = false
+        networkIsCompany: Boolean = false,
+        name: String? = null,
+        originalsCompanyId: Int? = null
     ): BrowseShortcutArt? {
         if (apiKey.isBlank()) return null
 
@@ -2623,7 +2724,13 @@ class TmdbRepository private constructor(context: Context) :
                     getEntityLogoUrls(
                         entityId = networkOrCompanyId ?: entryId,
                         isNetwork = categoryKey == "services" && !networkIsCompany,
-                        providerId = providerId
+                        providerId = providerId,
+                        // The chip's own label and production company: the name
+                        // is what lets a twin be verified, and the company id is
+                        // the brand's other entity TMDB may have given the mark
+                        // to (see getEntityLogoUrls).
+                        name = name,
+                        originalsCompanyId = originalsCompanyId
                     ).firstOrNull()
                 }.getOrNull()
                     ?: clearlogoUrl
@@ -2843,6 +2950,9 @@ class TmdbRepository private constructor(context: Context) :
          * screen walks past an unreadable mark on its own.
          */
         private const val MIN_LOGO_PIXELS = 16
+
+        /** Company pages the brand-name fallback will read before giving up. */
+        private const val MAX_BRAND_NAME_CANDIDATES = 5
         private const val MAX_IMDB_DISK_AGE_MS = 90L * 24L * 60L * 60L * 1000L
 
         /**

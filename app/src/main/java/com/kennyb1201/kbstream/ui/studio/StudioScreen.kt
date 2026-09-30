@@ -145,6 +145,10 @@ fun StudioScreen(
             networkOrCompanyId,
             networkIsCompany,
             originalsCompanyId,
+            // The route's label for the brand: the logo lookup searches for a
+            // brand TMDB holds no artwork for under its name, and only trusts
+            // a twin id whose entry carries this name.
+            name,
             viewModel.selectedGenreId.value
         )
     }
@@ -238,6 +242,7 @@ fun StudioScreen(
                                     networkOrCompanyId,
                                     networkIsCompany,
                                     originalsCompanyId,
+                                    name,
                                     viewModel.selectedGenreId.value
                                 )
                             },
