@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import com.kennyb1201.kbstream.MainActivity
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -198,10 +199,19 @@ object TvLauncherPublisher {
     ): ContentValues {
         val isSeries = type == "series" || type == "show" || type == "tv"
 
+        // A history row a source wrote as 0 is "no episode", not episode zero
+        // (see EpisodeNumbering). This row is the launcher's own "Continue
+        // watching" card, and the number goes into the card as the episode
+        // display number, so a raw 0 published a real-looking episode 0 titled
+        // with the show's name - the launcher rail saying what the in-app one
+        // no longer does. Published without it, the same row reads as the
+        // show's own continue card, which is the truthful thing to say.
+        val namedEpisode = namedEpisodeNumber(episode)
+
         return ContentValues().apply {
             put(
                 TvContract.WatchNextPrograms.COLUMN_TYPE,
-                if (season != null && episode != null) {
+                if (season != null && namedEpisode != null) {
                     TvContract.WatchNextPrograms.TYPE_TV_EPISODE
                 } else if (isSeries) {
                     TvContract.WatchNextPrograms.TYPE_TV_SERIES
@@ -225,11 +235,11 @@ object TvLauncherPublisher {
                 TvContract.WatchNextPrograms.COLUMN_SHORT_DESCRIPTION,
                 buildString {
                     append(name)
-                    if (season != null && episode != null) {
+                    if (season != null && namedEpisode != null) {
                         append(" · S")
                         append(season)
                         append("E")
-                        append(episode)
+                        append(namedEpisode)
                     }
                 }
             )
@@ -244,7 +254,7 @@ object TvLauncherPublisher {
             season?.let {
                 put(TvContract.WatchNextPrograms.COLUMN_SEASON_DISPLAY_NUMBER, it.toString())
             }
-            episode?.let {
+            namedEpisode?.let {
                 put(TvContract.WatchNextPrograms.COLUMN_EPISODE_DISPLAY_NUMBER, it.toString())
             }
         }

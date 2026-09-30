@@ -1446,8 +1446,19 @@ for ((metaAddon, response, error) in probeResults) {
                     _loadedSeason.value = season
 
                     val resume = _resumeInfo.value
-                    val targetEp = if (resume != null && resume.season == season) {
-                        seasonEpisodes.firstOrNull { it.episodeNumber == resume.episode }
+                    // A resume row's 0 is "no episode" (see EpisodeNumbering):
+                    // read as 0 it matched the season list's own 0 row - when
+                    // that list came from a cache written before the rule - and
+                    // parked the whole page on an episode with no name and no
+                    // still, which is the blank EPISODE 0 chip the report
+                    // describes.
+                    val resumeEpisode = namedEpisodeNumber(resume?.episode)
+                    val targetEp = if (
+                        resume != null &&
+                        resumeEpisode != null &&
+                        resume.season == season
+                    ) {
+                        seasonEpisodes.firstOrNull { it.episodeNumber == resumeEpisode }
                     } else {
                         seasonEpisodes.firstOrNull { ep ->
                             val eNum = ep.episodeNumber
@@ -1465,8 +1476,13 @@ for ((metaAddon, response, error) in probeResults) {
 
                     _targetEpisode.value = targetEp
 
-                    if (resume != null && resume.season == season && resume.positionMs > 0L) {
-                        _playButtonText.value = "Resume S${resume.season}E${resume.episode}"
+                    if (
+                        resume != null &&
+                        resumeEpisode != null &&
+                        resume.season == season &&
+                        resume.positionMs > 0L
+                    ) {
+                        _playButtonText.value = "Resume S${resume.season}E$resumeEpisode"
                     } else if (targetEp != null) {
                         val e = targetEp.episodeNumber
                         _playButtonText.value = "Play S${season}E${e}"

@@ -149,6 +149,28 @@ data class ResolvedEpisode(
     val voteAverage: Double?
 )
 
+/**
+ * The season list with any episode a source never really named dropped.
+ *
+ * [TmdbRepository.getSeasonEpisodes] already refuses such a row while it
+ * builds the list from TMDB, but both of that call's caches outlive the build
+ * that filled them - a memory entry for twelve hours and a disk entry for a
+ * week, the latter written into the app's own database. A list cached before
+ * the rule existed therefore kept handing its "episode 0" row back: a season
+ * browser of blank chips reading EPISODE 0, and a resume row numbered 0
+ * matched onto that row, so the show resolved straight back to E00 instead of
+ * the next episode TMDB actually knows about. That is why the report came
+ * back after the rule itself had been fixed - the data outlived the fix.
+ * Re-applying the filter on the way OUT is what makes the rule reach a season
+ * list cached before it.
+ *
+ * Top level rather than a member so a test can reach it without standing up a
+ * repository, the same way the rule it applies is pinned (see
+ * EpisodeNumberingTest).
+ */
+internal fun List<ResolvedEpisode>.namedEpisodesOnly(): List<ResolvedEpisode> =
+    filter { episode -> namedEpisodeNumber(episode.episodeNumber) != null }
+
 class TmdbRepository private constructor(context: Context) :
     MemoryPressure.Releasable {
 
@@ -1234,7 +1256,7 @@ class TmdbRepository private constructor(context: Context) :
         val cached = seasonEpisodesCache[key]
 
         if (cached != null && now - cached.first < seasonEpisodesCacheTtlMs) {
-            return cached.second
+            return cached.second.namedEpisodesOnly()
         }
 
         // Disk cache so the season scans also survive restarts.
@@ -1247,8 +1269,9 @@ class TmdbRepository private constructor(context: Context) :
                 seasonEpisodesJsonAdapter.fromJson(diskCached.json)
             }.getOrNull()
             if (parsed != null) {
-                seasonEpisodesCache[key] = now to parsed
-                return parsed
+                val named = parsed.namedEpisodesOnly()
+                seasonEpisodesCache[key] = now to named
+                return named
             }
         }
 

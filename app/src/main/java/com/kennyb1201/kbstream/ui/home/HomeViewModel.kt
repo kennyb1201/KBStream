@@ -4697,8 +4697,15 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // Ignore a resume row a LATER watched episode has already overtaken: the
     // show resumes from the furthest point below, not from the abandoned
     // episode. This is the "Continue S1E5 while on S3E15" report.
+    //
+    // The episode is read through namedEpisodeNumber for the same reason the
+    // card's label is: a row written before the 0-is-not-an-episode rule
+    // carries the source's 0, and 0 is a number the season list below used to
+    // contain, so the match succeeded and the season resolved straight back to
+    // E00 - which is how a resume row outlived the fix and kept the rail
+    // reading "S02 · E00" over a blank episode line.
     val resumeSeason = resume?.season
-    val resumeEpisode = resume?.episode
+    val resumeEpisode = namedEpisodeNumber(resume?.episode)
     val furthestWatched = furthestWatchedSeason
     val resumeIsSuperseded =
         furthestWatched != null &&
@@ -4715,7 +4722,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     if (
         resume != null &&
         resume.season != null &&
-        resume.episode != null &&
+        resumeEpisode != null &&
         resume.positionMs > 0L &&
         !resumeIsSuperseded
     ) {
@@ -4736,7 +4743,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
         val matchedResumeEpisode =
             resumeEpisodes.firstOrNull {
                 it.episodeNumber ==
-                    resume.episode
+                    resumeEpisode
             }
 
         if (matchedResumeEpisode != null) {
@@ -4794,7 +4801,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                         startingSeason =
                             resume.season,
                         startingEpisode =
-                            resume.episode
+                            resumeEpisode
                     ),
 
                 isSeasonFinale =
