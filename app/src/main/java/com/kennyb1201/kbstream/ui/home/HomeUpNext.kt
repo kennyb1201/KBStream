@@ -421,6 +421,55 @@ internal fun isTrackerSourcedCard(item: UpNextItem): Boolean =
         item.id.startsWith("mdblist:", ignoreCase = true)
 
 /**
+ * The parent identity keys a show is known by, in the same vocabulary as
+ * [upNextGroupingKeys]. Built from raw fields because a locally CAUGHT-UP show
+ * has no card to read them off - it is precisely the show that must not appear
+ * on the rail.
+ */
+internal fun upNextShowParentKeys(
+    parentId: String?,
+    parentType: String?,
+    tmdbId: Int?
+): Set<String> {
+    val mediaType =
+        upNextMediaType(parentType)
+
+    return buildSet {
+        upNextIdentifier(parentId)
+            ?.let { add("parent:$mediaType:$it") }
+
+        tmdbId
+            ?.takeIf { it > 0 }
+            ?.let { add("parent:$mediaType:$it") }
+    }
+}
+
+/**
+ * True when a tracker card (Simkl, MDBList) names a show this profile has
+ * already finished locally.
+ *
+ * The local pass proves a show is caught up - every aired episode it counted
+ * is watched and nothing is left to resume (see [hasNothingLeftToWatch]) -
+ * while the tracker feed keeps listing the show until the local completion is
+ * pushed AND the tracker's own feed catches up. That gap is what kept a
+ * finished title on Continue Watching for as long as another server took to
+ * agree.
+ *
+ * Making the local verdict authoritative here removes that dependency: the card
+ * leaves the rail the moment the last watched episode is filed, whatever the
+ * tracker still says. Matching is by the id vocabulary the duplicate collapse
+ * already uses, so the card still pairs with the caught-up show across the
+ * "tt..." / "tmdb:<n>" flavors.
+ */
+internal fun trackerCardLocallyFinished(
+    item: UpNextItem,
+    finishedShowKeys: Set<String>
+): Boolean =
+    isTrackerSourcedCard(item) &&
+        finishedShowKeys.isNotEmpty() &&
+        upNextGroupingKeys(item).any { it in finishedShowKeys }
+
+/**
  * Whether a tracker card must stay off the active profile's rails because the
  * title belongs to a sibling profile.
  *

@@ -1586,7 +1586,14 @@ Log.d(
      * shows stay off Continue Watching as before.
      */
     private suspend fun loadLocalNextUpItems(
-        existing: List<UpNextItem>
+        existing: List<UpNextItem>,
+        /**
+         * Collects the identity keys of shows this pass proves are caught up
+         * locally. The caller drops any tracker card for one of them, so a
+         * finished title leaves Continue Watching without waiting on the
+         * tracker feed (see trackerCardLocallyFinished).
+         */
+        caughtUpShowKeys: MutableSet<String>
     ): List<UpNextItem> {
 
         val completedRows =
@@ -1629,7 +1636,11 @@ Log.d(
                     async {
                         semaphore.withPermit {
                             runCatchingCancellable {
-                                buildLocalNextUpItem(parentId, row)
+                                buildLocalNextUpItem(
+                                    parentId,
+                                    row,
+                                    caughtUpShowKeys
+                                )
                             }.getOrNull()
                         }
                     }
@@ -1647,7 +1658,8 @@ Log.d(
      */
     private suspend fun buildLocalNextUpItem(
         parentId: String,
-        row: WatchHistoryEntity
+        row: WatchHistoryEntity,
+        caughtUpShowKeys: MutableSet<String>
     ): UpNextItem? {
 
         val detail =
@@ -1700,7 +1712,22 @@ Log.d(
                 tmdbId = tmdbId,
                 simklSeason = null,
                 simklEpisode = null
-            ) ?: return null
+            )
+
+        if (target == null) {
+            // The show resolved, but there is nothing left to watch: the
+            // profile finished it locally. Record it so its tracker twin -
+            // which the tracker keeps listing until its own feed catches up -
+            // is dropped from the rail immediately (see
+            // trackerCardLocallyFinished).
+            caughtUpShowKeys += upNextShowParentKeys(
+                parentId,
+                "series",
+                tmdbId
+            )
+
+            return null
+        }
 
         // A resume target here means the show already has an in-progress row
         // (and therefore its own card); don't duplicate it.
@@ -3410,15 +3437,41 @@ Log.d(
     }.awaitAll().filterNotNull()
 }
 
+                        // Shows this pass proves are finished locally, in the
+                        // rail's own identity vocabulary. Tracked so a tracker
+                        // card for one of them can be dropped below without
+                        // waiting for the tracker feed to catch up.
+                        val locallyFinishedShowKeys =
+                            java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+                        fun withoutLocallyFinishedTrackerCards(
+                            items: List<UpNextItem>
+                        ): List<UpNextItem> =
+                            if (locallyFinishedShowKeys.isEmpty()) {
+                                items
+                            } else {
+                                items.filterNot { item ->
+                                    trackerCardLocallyFinished(
+                                        item,
+                                        locallyFinishedShowKeys
+                                    )
+                                }
+                            }
+
                         // A series with watched episodes but no in-progress row
                         // still has unwatched aired episodes, so it belongs on the
                         // rail pointing at the next one. Marking episodes watched
                         // (or finishing them) removes the resume rows the rail is
                         // built from, which dropped a show with plenty left to
                         // watch. Caught-up shows resolve to no next episode and are
-                        // still kept off the rail.
+                        // still kept off the rail - and their names are recorded
+                        // so their tracker twins leave too.
                         val localCards =
-                            localItems + loadLocalNextUpItems(localItems)
+                            localItems +
+                                loadLocalNextUpItems(
+                                    localItems,
+                                    locallyFinishedShowKeys
+                                )
 
                         // Publish local cards first: the enriched local rows
                         // are ready here, so the rail shows real content while
@@ -3443,7 +3496,10 @@ Log.d(
                             _upNext.value =
                                 applyContinueWatchingDismissals(
                                     dedupeAndSortUpNext(
-                                        localCards + previousSimklUpNextItems()
+                                        localCards +
+                                            withoutLocallyFinishedTrackerCards(
+                                                previousSimklUpNextItems()
+                                            )
                                     )
                                 )
                             // Warm hero art for the resume rows too: their
@@ -3494,8 +3550,10 @@ Log.d(
                                     applyContinueWatchingDismissals(
                                         dedupeAndSortUpNext(
                                             localCards +
-                                                previousSimklUpNextItems() +
-                                                mdbListItems
+                                                withoutLocallyFinishedTrackerCards(
+                                                    previousSimklUpNextItems() +
+                                                        mdbListItems
+                                                )
                                         )
                                     )
                             }
@@ -3516,7 +3574,12 @@ Log.d(
                             loadMdbListUpNextItems()
 
                         val merged =
-                            dedupeAndSortUpNext(localCards + simklItems + mdbListItems)
+                            dedupeAndSortUpNext(
+                                localCards +
+                                    withoutLocallyFinishedTrackerCards(
+                                        simklItems + mdbListItems
+                                    )
+                            )
 
                         if (!isLatestUpNextRequest(requestVersion)) {
                             return@collectLatest
