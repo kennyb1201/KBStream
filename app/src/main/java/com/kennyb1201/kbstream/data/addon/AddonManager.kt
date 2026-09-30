@@ -86,7 +86,7 @@ class AddonManager(
 
     private val moshi =
         Moshi.Builder()
-            .add(KotlinJsonAdapterFactory())
+            .addLast(KotlinJsonAdapterFactory())
             .build()
 
     private val listType =

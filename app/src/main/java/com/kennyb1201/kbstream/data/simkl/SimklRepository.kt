@@ -55,9 +55,6 @@ class SimklRepository(
     internal val clientId =
         BuildConfig.SIMKL_CLIENT_ID
 
-    private val clientSecret =
-        BuildConfig.SIMKL_CLIENT_SECRET
-
     private val prefs
         get() = context?.applicationContext?.let { appContext ->
             appContext.getSharedPreferences(
@@ -75,7 +72,7 @@ class SimklRepository(
     // pattern, for the same reason, as TmdbRepository.
     private val moshi by lazy {
         Moshi.Builder()
-            .add(
+            .addLast(
                 KotlinJsonAdapterFactory()
             )
             .build()
@@ -397,9 +394,20 @@ class SimklRepository(
     @Volatile
     internal var cachedCompletedMovieKeysToken: String? = null
 
+    /**
+     * Simkl is usable as soon as a client id is present - and only then.
+     *
+     * This used to also require SIMKL_CLIENT_SECRET, which was wrong twice
+     * over: the app authenticates through Simkl's PIN (device) flow, where
+     * only client_id is ever sent, so the secret gated Simkl on a value
+     * nothing consumed; and having it compiled into the APK (buildConfigField)
+     * published a live secret in a public GPL-3.0 repository. Both halves are
+     * gone - see the SIMKL_CLIENT_ID comment in app/build.gradle.kts - so the
+     * check now says exactly what it means. A build with a client id and no
+     * secret is fully functional, which is the point.
+     */
     fun isConfigured(): Boolean {
-        return clientId.isNotBlank() &&
-            clientSecret.isNotBlank()
+        return clientId.isNotBlank()
     }
 
     fun hasToken(): Boolean {

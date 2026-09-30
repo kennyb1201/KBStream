@@ -138,8 +138,8 @@ class AddonRepository private constructor() {
 
     private val moshi =
         Moshi.Builder()
-            .add(KotlinJsonAdapterFactory())
             .add(ManifestResourcesAdapterFactory)
+            .addLast(KotlinJsonAdapterFactory())
             .build()
 
     // Shared, file-scope instances (declared above): all repository

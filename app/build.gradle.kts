@@ -47,9 +47,18 @@ val simklClientId = localProps.getProperty("SIMKL_CLIENT_ID")
     ?: System.getenv("SIMKL_CLIENT_ID")
     ?: ""
 
-val simklClientSecret = localProps.getProperty("SIMKL_CLIENT_SECRET")
-    ?: System.getenv("SIMKL_CLIENT_SECRET")
-    ?: ""
+// There is deliberately no SIMKL_CLIENT_SECRET here, and it must not come
+// back. Simkl is reached through its PIN (device) flow: the app asks
+// /oauth/pin for a user_code, shows it, and polls /oauth/pin/{user_code}
+// until the user approves on simkl.com. That flow is a PUBLIC-client flow -
+// only client_id (which is public: it is in every authorize URL) travels,
+// and no request the app makes has ever carried the secret. Baking it in
+// therefore bought nothing and cost plenty: buildConfigField put a live
+// secret in a public GPL-3.0 repo's CI configuration and inside every
+// distributed APK, where a `strings`-style scan recovers it in seconds.
+// SimklRepository.isConfigured() used to require it, which is why its absence
+// was invisible: the only effect of the secret was to gate the question
+// "is Simkl set up?" on a value nothing consumed.
 
 val sentryDsn = localProps.getProperty("SENTRY_DSN")
     ?: System.getenv("SENTRY_DSN")
@@ -126,7 +135,6 @@ android {
 
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
-        buildConfigField("String", "SIMKL_CLIENT_SECRET", "\"$simklClientSecret\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
@@ -316,6 +324,24 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-moshi:2.11.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    // Moshi, the code-generation half. Every model in this app is annotated
+    // @JsonClass(generateAdapter = true), and without this processor those
+    // 129 annotations do nothing at all: Moshi falls back to kotlin-reflect
+    // for every single type. KSP emits one *JsonAdapter per model, so JSON
+    // parsing runs generated code instead of reflection.
+    //
+    // It is also what makes the R8 rules in app/proguard-rules.pro narrowable:
+    // a generated adapter reads its model's fields directly, so the model no
+    // longer has to be kept member-for-member, only name-for-name (Moshi finds
+    // the adapter by name). Keep this version in lockstep with moshi-kotlin
+    // below — the generated adapters and the runtime are the same artifact's
+    // two halves.
+    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.1")
+    // The reflective half, kept as the FALLBACK for a type with no annotation.
+    // Every Moshi.Builder below adds it with addLast() rather than add():
+    // Moshi consults factories in order, so adding it first would let
+    // reflection claim every model before the generated adapter is ever
+    // looked up, and this dependency would be dead weight.
     implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
     implementation("com.google.zxing:core:3.5.3")
 

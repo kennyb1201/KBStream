@@ -123,11 +123,11 @@ private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
 private const val GUIDE_PREFETCH_AFTER_COUNT = 36
 private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 48
 
-// Reused rather than allocated per-call/per-row; both are only ever touched
-// from the main thread (composition + the clock's own LaunchedEffect), so a
-// shared mutable SimpleDateFormat is safe here.
+// Reused rather than allocated per-composition: only ever touched from the
+// main thread (composition, and the clock's own LaunchedEffect), so a shared
+// mutable SimpleDateFormat is safe here. The program-clock formatter went to
+// GuideRules.kt with the label helpers that use it.
 private val clockLabelFormatter = SimpleDateFormat("EEE, h:mm a", Locale.US)
-private val programTimeFormatter = SimpleDateFormat("h:mm a", Locale.US)
 
 @Composable
 fun GuideScreen(
@@ -1901,30 +1901,6 @@ private fun CompactSetupDiagnostics(
     }
 }
 
-private fun buildSetupDiagnosticsText(
-    playlistUrl: String,
-    epgUrl: String,
-    playlistName: String,
-    playlist: IptvPlaylist?,
-    channelCount: Int,
-    isImportingGuide: Boolean,
-    guideImportLabel: String,
-    extraEpgUrls: String = ""
-): String {
-    return buildList {
-        add(if (playlistUrl.isBlank()) "Playlist missing" else "Playlist ready")
-        add(if (epgUrl.isBlank()) "EPG optional" else "EPG provided")
-        val extraEpgCount = extraEpgUrls.split('\n', ';').count { it.isNotBlank() }
-        if (extraEpgCount > 0) add("Extra EPG x$extraEpgCount")
-        if (playlist != null) add("Channels $channelCount")
-        if (guideImportLabel.isNotBlank()) {
-            add("EPG importing: $guideImportLabel")
-        } else if (isImportingGuide) {
-            add("EPG importing")
-        }
-        if (playlistName.isNotBlank()) add("Name: $playlistName")
-    }.joinToString("  •  ")
-}
 @Composable
 private fun GroupChip(
     name: String,
@@ -2497,27 +2473,6 @@ private fun rememberNowMillis(): Long {
     return now
 }
 
-private fun formatRemainingLabel(msUntilEnd: Long): String? {
-    if (msUntilEnd <= 0L) return null
-    val totalMinutes = ((msUntilEnd + 59_999L) / 60_000L).toInt()
-    val hours = totalMinutes / 60
-    val minutes = totalMinutes % 60
-    return when {
-        hours > 0 && minutes > 0 -> "$hours hr $minutes min left"
-        hours > 0 -> "$hours hr left"
-        else -> "$minutes min left"
-    }
-}
-
-private fun formatStartsInLabel(msUntilStart: Long): String =
-    when {
-        msUntilStart <= 0L -> "starting"
-        msUntilStart < 60_000L -> "in <1 min"
-        msUntilStart < 3_600_000L -> "in ${msUntilStart / 60_000L} min"
-        msUntilStart < 86_400_000L -> "in ${msUntilStart / 3_600_000L} hr"
-        else -> "in ${msUntilStart / 86_400_000L} d"
-    }
-
 @Composable
 private fun rememberCurrentTimeLabel(): String {
     var timeLabel by remember {
@@ -2533,11 +2488,6 @@ private fun rememberCurrentTimeLabel(): String {
 
     return timeLabel
 }
-
-private fun formatTimeRange(startMillis: Long, endMillis: Long): String {
-    return "${programTimeFormatter.format(Date(startMillis))} - ${programTimeFormatter.format(Date(endMillis))}"
-}
-
 
 @Composable
 private fun ChannelActionsDialog(
@@ -2693,34 +2643,6 @@ private fun CatchupDialog(
             }
         }
     }
-}
-
-private fun formatCatchupWindow(startUtcMillis: Long, endUtcMillis: Long): String {
-    fun fmt(millis: Long): String {
-        val cal = java.util.Calendar.getInstance()
-        cal.timeInMillis = millis
-        val hour = cal.get(java.util.Calendar.HOUR_OF_DAY)
-        val h12 = if (hour % 12 == 0) 12 else hour % 12
-        return String.format(
-            java.util.Locale.US,
-            "%d:%02d%s",
-            h12,
-            cal.get(java.util.Calendar.MINUTE),
-            if (hour >= 12) "pm" else "am"
-        )
-    }
-    val now = java.util.Calendar.getInstance()
-    val dayStart = now.clone() as java.util.Calendar
-    dayStart.set(java.util.Calendar.HOUR_OF_DAY, 0)
-    dayStart.set(java.util.Calendar.MINUTE, 0)
-    dayStart.set(java.util.Calendar.SECOND, 0)
-    dayStart.set(java.util.Calendar.MILLISECOND, 0)
-    val dayLabel: String = when {
-        startUtcMillis < dayStart.timeInMillis -> "Yesterday"
-        startUtcMillis < dayStart.timeInMillis + 86_400_000L -> "Today"
-        else -> java.text.SimpleDateFormat("EEE", java.util.Locale.US).format(java.util.Date(startUtcMillis))
-    }
-    return "$dayLabel \u00b7 ${fmt(startUtcMillis)}\u2013${fmt(endUtcMillis)}"
 }
 
 /** One EPG title match bound to the visible channel it airs on. */

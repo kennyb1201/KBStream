@@ -39,7 +39,7 @@ class TvmazeAirDateRepository private constructor(context: Context) {
 
     private val moshi by lazy {
         Moshi.Builder()
-            .add(KotlinJsonAdapterFactory())
+            .addLast(KotlinJsonAdapterFactory())
             .build()
     }
 

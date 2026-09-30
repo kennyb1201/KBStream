@@ -11,9 +11,46 @@
 -keep class kotlin.Metadata { *; }
 -dontwarn kotlin.reflect.jvm.internal.**
 
-# --- App data models: adapted reflectively at runtime by Moshi ---
--keep class com.kennyb1201.kbstream.data.** { *; }
--keep class com.kennyb1201.kbstream.domain.** { *; }
+# --- Moshi: generated adapters are resolved BY NAME at runtime -----------
+#
+# Every model in this app is @JsonClass(generateAdapter = true) and KSP emits
+# a *JsonAdapter for each one (see the ksp(...) entry in app/build.gradle.kts).
+# Moshi finds that adapter by BUILDING ITS NAME:
+#
+#   Class.forName(modelClass.name.replace('$', '_') + "JsonAdapter")
+#
+# (Types.generatedJsonAdapterName + Util.generatedJsonAdapter), using the name
+# the class has at RUNTIME. So in a minified build both halves of that string
+# have to survive the optimizer, and R8 cannot work either one out for itself:
+# the concatenation happens inside Moshi, not in the APK.
+#
+#  - the model keeps its NAME, so the name Moshi builds is the real one;
+#  - the adapter is kept with its name, so that name resolves to something.
+#
+# Members are deliberately NOT kept. A generated adapter reads its model's
+# fields directly, so field/property/method names are free to shrink and be
+# obfuscated - which is the payoff, and the reason the two blanket
+# `-keep class ...data.** { *; }` / `...domain.** { *; }` rules that used to
+# live here (one for every model, kept for reflection) are gone.
+#
+# Anything that is NOT annotated still works: KotlinJsonAdapterFactory is added
+# with addLast() by every Moshi.Builder in the app, so it only sees types with
+# no generated adapter, and it reads its member names out of kotlin.Metadata
+# (kept above) rather than out of the class name - obfuscation does not disturb
+# it.
+#
+# Worth knowing: the failure mode here is NOT a crash, which is why it must be
+# pinned by a rule rather than by review. KotlinJsonAdapterFactory swallows the
+# failed lookup (it catches the ClassNotFoundException and carries on) and
+# adapts the type reflectively instead - so a rule this file gets wrong costs
+# the speed and the shrinking that made codegen worth adding, silently, in the
+# release build only. That is also why adding codegen is safe to ship: if a
+# name is ever not preserved, the app degrades to the behaviour it shipped
+# with before rather than breaking.
+-keepnames @com.squareup.moshi.JsonClass class *
+-keep class **JsonAdapter {
+    <init>(...);
+}
 
 # --- Player diagnostics: class names are printed into PLAYER_DV / PLAYER_VIDEO ---
 # The Dolby Vision compat layer narrates itself through javaClass.simpleName

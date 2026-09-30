@@ -463,7 +463,7 @@ object MdbListClient {
     private const val RATINGS_DISK_TTL_MS = 7 * 24 * 60 * 60 * 1000L
 
     private val diskMoshi by lazy {
-        Moshi.Builder().add(KotlinJsonAdapterFactory()).build()
+        Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
     }
     private val ratingsJsonAdapter: JsonAdapter<MdbListRatings> by lazy {
         diskMoshi.adapter(MdbListRatings::class.java)

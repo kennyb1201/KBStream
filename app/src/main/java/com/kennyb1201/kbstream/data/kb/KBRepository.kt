@@ -39,7 +39,7 @@ class KBRepository private constructor(context: Context) {
     }
 
     private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
+        .addLast(KotlinJsonAdapterFactory())
         .build()
 
     private val profileListAdapter: JsonAdapter<List<KBCollectionProfile>> =

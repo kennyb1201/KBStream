@@ -69,7 +69,7 @@ object StreamBadgeEngine {
     private const val KEY_PACK_URL = "badge_pack_url"
 
     private val moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
+        .addLast(KotlinJsonAdapterFactory())
         .build()
 
     private val packAdapter = moshi.adapter(StreamBadgePack::class.java)

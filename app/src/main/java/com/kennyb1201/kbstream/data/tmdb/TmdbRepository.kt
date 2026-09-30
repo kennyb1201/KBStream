@@ -165,7 +165,7 @@ class TmdbRepository private constructor(context: Context) :
     // costs only the cheap fields; warmUpReflectionStack() builds the rest on IO.
     private val moshi by lazy {
         Moshi.Builder()
-            .add(KotlinJsonAdapterFactory())
+            .addLast(KotlinJsonAdapterFactory())
             .build()
     }
 

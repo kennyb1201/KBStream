@@ -1,0 +1,166 @@
+package com.kennyb1201.kbstream.ui.iptv
+
+import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+
+/**
+ * The pure half of the TV guide: what a program card SAYS.
+ *
+ * The audit finding this answers is that `GuideScreen.kt` — 3,200 lines, the
+ * one screen in the app with no test at all — kept its text rules inside
+ * composables, where nothing could reach them. "3 hr 20 min left", "in <1 min",
+ * "Today · 9:05pm–10:00pm" and the setup panel's diagnostic line are all
+ * decisions, not layout, and every one of them has an edge case that a viewer
+ * sees as a bug: a program that already ended, a start time under a minute
+ * away, a window that began yesterday.
+ *
+ * They are `internal`, not `private`, so `GuideRulesTest` can call them
+ * directly — the same split the home rail's rules use (`LocalNextUpRules.kt`),
+ * and the reason this file has no Compose import: nothing here needs one.
+ */
+
+// Reused rather than allocated per call: formatTimeRange runs once per program
+// card, and a guide row is up to two dozen of them. SimpleDateFormat is mutable
+// and not thread-safe, so this is safe only because every caller is either
+// composition (the main thread) or a single-threaded unit test.
+private val programTimeFormatter = SimpleDateFormat("h:mm a", Locale.US)
+
+private const val DAY_MS = 86_400_000L
+
+/**
+ * Time left in the program now on air, or null when there is none to show.
+ *
+ * Rounds UP to the next whole minute, so the last 30 seconds of a program read
+ * "1 min left" rather than "0 min left" — a zero would look like a bug and a
+ * negative would be nonsense. Null (rather than "0 min left") is the signal to
+ * render no badge at all.
+ */
+internal fun formatRemainingLabel(msUntilEnd: Long): String? {
+    if (msUntilEnd <= 0L) return null
+    val totalMinutes = ((msUntilEnd + 59_999L) / 60_000L).toInt()
+    val hours = totalMinutes / 60
+    val minutes = totalMinutes % 60
+    return when {
+        hours > 0 && minutes > 0 -> "$hours hr $minutes min left"
+        hours > 0 -> "$hours hr left"
+        else -> "$minutes min left"
+    }
+}
+
+/**
+ * How long until the next program starts, as the guide's "Up next" caption.
+ *
+ * The unit changes with the distance — minutes, then hours, then days — and
+ * anything under a minute collapses to "in <1 min" instead of "in 0 min".
+ * A start time that has already passed reads "starting": the schedule is
+ * refreshed on a 30s tick, so a program whose start just went by is genuinely
+ * starting, not late.
+ */
+internal fun formatStartsInLabel(msUntilStart: Long): String =
+    when {
+        msUntilStart <= 0L -> "starting"
+        msUntilStart < 60_000L -> "in <1 min"
+        msUntilStart < 3_600_000L -> "in ${msUntilStart / 60_000L} min"
+        msUntilStart < 86_400_000L -> "in ${msUntilStart / 3_600_000L} hr"
+        else -> "in ${msUntilStart / 86_400_000L} d"
+    }
+
+/** `9:05 AM - 10:00 AM`, in the device's own zone. */
+internal fun formatTimeRange(startMillis: Long, endMillis: Long): String {
+    return "${programTimeFormatter.format(Date(startMillis))} - ${programTimeFormatter.format(Date(endMillis))}"
+}
+
+/**
+ * The catch-up dialog's window caption: `Today · 9:05pm–10:00pm`.
+ *
+ * The day is relative to *the current day*, not to the window, which is why
+ * this one takes an explicit `nowMillis`: a caption that depends on the wall
+ * clock cannot be tested, and this is exactly the label that says "Yesterday"
+ * when it should say "Today" if the day boundary is computed wrongly. Callers
+ * leave it at the default.
+ *
+ * The three-way split is today / yesterday / weekday, and it replaced a
+ * yesterday / today / weekday split that could not label the past correctly.
+ * The old order tested `start < midnight` first and answered "Yesterday" for
+ * EVERY earlier day, so the weekday branch only ever ran for a start in the
+ * future and a three-day-old catch-up programme - catch-up reaches back a week
+ * - was captioned "Yesterday". Writing this file's test is what surfaced it:
+ * the caption is shown in a dialog nobody diffs.
+ *
+ * The en dash and the middle dot are deliberate (`\u2013`, `\u00b7`) — the file
+ * is ASCII and these are the characters the rest of the UI uses.
+ */
+internal fun formatCatchupWindow(
+    startUtcMillis: Long,
+    endUtcMillis: Long,
+    nowMillis: Long = System.currentTimeMillis()
+): String {
+    fun fmt(millis: Long): String {
+        val cal = Calendar.getInstance()
+        cal.timeInMillis = millis
+        val hour = cal.get(Calendar.HOUR_OF_DAY)
+        val h12 = if (hour % 12 == 0) 12 else hour % 12
+        return String.format(
+            Locale.US,
+            "%d:%02d%s",
+            h12,
+            cal.get(Calendar.MINUTE),
+            if (hour >= 12) "pm" else "am"
+        )
+    }
+
+    val now = Calendar.getInstance()
+    now.timeInMillis = nowMillis
+    val dayStart = now.clone() as Calendar
+    dayStart.set(Calendar.HOUR_OF_DAY, 0)
+    dayStart.set(Calendar.MINUTE, 0)
+    dayStart.set(Calendar.SECOND, 0)
+    dayStart.set(Calendar.MILLISECOND, 0)
+    val today = dayStart.timeInMillis
+    val dayLabel: String = when {
+        // Today, then yesterday, then the weekday name for anything older - and
+        // for anything in the future, which is what this branch did before the
+        // past was handled properly.
+        startUtcMillis >= today && startUtcMillis < today + DAY_MS -> "Today"
+        startUtcMillis >= today - DAY_MS && startUtcMillis < today -> "Yesterday"
+        else -> SimpleDateFormat("EEE", Locale.US).format(Date(startUtcMillis))
+    }
+    return "$dayLabel \u00b7 ${fmt(startUtcMillis)}\u2013${fmt(endUtcMillis)}"
+}
+
+/**
+ * The setup panel's single diagnostic line, e.g.
+ * `Playlist ready  •  EPG provided  •  Extra EPG x2  •  Channels 412`.
+ *
+ * Only facts that are actually known are listed: a channel count with no
+ * playlist loaded, or a name that is blank, would be noise. The extra-EPG
+ * count splits on both newline and semicolon because that field is the user's
+ * own paste of several URLs and they arrive in either shape.
+ */
+internal fun buildSetupDiagnosticsText(
+    playlistUrl: String,
+    epgUrl: String,
+    playlistName: String,
+    playlist: IptvPlaylist?,
+    channelCount: Int,
+    isImportingGuide: Boolean,
+    guideImportLabel: String,
+    extraEpgUrls: String = ""
+): String {
+    return buildList {
+        add(if (playlistUrl.isBlank()) "Playlist missing" else "Playlist ready")
+        add(if (epgUrl.isBlank()) "EPG optional" else "EPG provided")
+        val extraEpgCount = extraEpgUrls.split('\n', ';').count { it.isNotBlank() }
+        if (extraEpgCount > 0) add("Extra EPG x$extraEpgCount")
+        if (playlist != null) add("Channels $channelCount")
+        if (guideImportLabel.isNotBlank()) {
+            add("EPG importing: $guideImportLabel")
+        } else if (isImportingGuide) {
+            add("EPG importing")
+        }
+        if (playlistName.isNotBlank()) add("Name: $playlistName")
+    }.joinToString("  \u2022  ")
+}

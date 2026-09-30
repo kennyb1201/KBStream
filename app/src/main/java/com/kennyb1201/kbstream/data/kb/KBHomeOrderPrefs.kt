@@ -174,7 +174,7 @@ object KBHomeOrderPrefs {
     private const val KEY_SYNCED_AT = "home_order_synced_at"
 
     private val adapter = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
+        .addLast(KotlinJsonAdapterFactory())
         .build()
         .adapter(KBHomeOrder::class.java)
 

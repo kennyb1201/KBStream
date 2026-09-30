@@ -42,7 +42,7 @@ class TmdbHeroArtworkRepository(
     // TmdbRepository.
     private val moshi by lazy {
         Moshi.Builder()
-            .add(KotlinJsonAdapterFactory())
+            .addLast(KotlinJsonAdapterFactory())
             .build()
     }
 
@@ -311,14 +311,18 @@ class TmdbHeroArtworkRepository(
         }.getOrNull()
     }
 
+    // internal, not private: Moshi's generator refuses to emit an adapter for
+    // a private type (the generated adapter is a separate file and has to be
+    // able to name it), and these two are the only wire models in the app
+    // that were declared private.
     @JsonClass(generateAdapter = true)
-    private data class TmdbImagesResponse(
+    internal data class TmdbImagesResponse(
         val backdrops: List<TmdbImage> = emptyList(),
         val logos: List<TmdbImage> = emptyList()
     )
 
     @JsonClass(generateAdapter = true)
-    private data class TmdbImage(
+    internal data class TmdbImage(
         @Json(name = "file_path") val filePath: String? = null,
         @Json(name = "iso_639_1") val iso6391: String? = null,
         @Json(name = "vote_average") val voteAverage: Double? = null,

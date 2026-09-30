@@ -32,8 +32,11 @@ jobs:
 
     env:
       TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+      # Client id only: Simkl auth is the PIN (device) flow, which is a
+      # public-client flow and never sends a secret. There is no
+      # SIMKL_CLIENT_SECRET secret to pass, and no buildConfigField to receive
+      # one (see app/build.gradle.kts).
       SIMKL_CLIENT_ID: ${{ secrets.SIMKL_CLIENT_ID }}
-      SIMKL_CLIENT_SECRET: ${{ secrets.SIMKL_CLIENT_SECRET }}
       SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
       # Authenticates the Sentry Gradle plugin's R8-mapping upload so release
       # crash traces arrive deobfuscated (real class/method names).
