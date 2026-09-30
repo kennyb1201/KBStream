@@ -360,7 +360,7 @@ dependencies {
     implementation("io.sentry:sentry-android:7.19.0")
 
     // Supabase (cross-device sync): auth + Postgres REST + realtime channels.
-    implementation(platform("io.github.jan-tennert.supabase:bom:2.6.1"))
+    implementation(platform("io.github.jan-tennert.supabase:bom:3.8.0"))
     implementation("io.github.jan-tennert.supabase:gotrue-kt")
     implementation("io.github.jan-tennert.supabase:postgrest-kt")
     implementation("io.github.jan-tennert.supabase:realtime-kt")
