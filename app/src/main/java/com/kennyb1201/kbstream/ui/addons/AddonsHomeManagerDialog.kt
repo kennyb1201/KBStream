@@ -67,6 +67,8 @@ import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+import com.kennyb1201.kbstream.data.kb.mergedHomeRailKeys
+import com.kennyb1201.kbstream.data.kb.railMoveChangesOrder
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -178,20 +180,33 @@ internal fun CatalogManagerDialog(
         // rail that cannot be seen in the manager cannot be arranged.
         val browseRailByKey =
             collectionsState.browseRails.associateBy { rail -> rail.key }
-        val known = addonByKey.keys + collectionsState.collections.map { it.key } +
-            browseRailByKey.keys
-        // Best-effort merged order read (same prefs the ViewModel writes);
-        // keys not found keep their default slot at the end.
+        // Best-effort merged order read (same prefs the ViewModel writes), and
+        // the same rule it moves a row with: one shared function, so the list
+        // the user aims at is the list the move acts on. Deriving it here as
+        // well is what let the two disagree - the Browse rails were listed
+        // last here while the move buttons treated them as already first, so
+        // pressing UP on one did nothing and they could not be interleaved
+        // with the catalogs at all.
+        //
+        // The default order is the contract [mergedHomeRailKeys] documents:
+        // Browse rails, then catalogs, then collections.
+        //
+        // Rails the loader fixes the position of (the Top Today rows) are not
+        // part of that order at all: Home always draws them first, so they lead
+        // this list as a block of their own and the movable order starts under
+        // them. Listing them inside the order would put them somewhere other
+        // than where Home draws them AND let a neighbouring rail be "moved"
+        // into a slot that does not exist.
         val prefs = KBHomeOrderPrefs.readOrder()
-        val orderedKeys = buildList {
-            prefs.pinned.filter { it in known }.forEach { add(it) }
-            prefs.order.filter { it in known && it !in prefs.pinned }.forEach { add(it) }
-            known.forEach { if (it !in this) add(it) }
-        }
+        val fixedKeys = addonByKey.keys.filter { KBHomeOrderPrefs.isPositionFixedKey(it) }
+        val movableDefaults = browseRailByKey.keys.toList() +
+            addonByKey.keys.filterNot { KBHomeOrderPrefs.isPositionFixedKey(it) } +
+            collectionsState.collections.map { it.key }
+        val orderedKeys = fixedKeys + mergedHomeRailKeys(prefs, movableDefaults)
 
         orderedKeys.mapNotNull { key ->
             val browseRail = browseRailByKey[key]
-            if (browseRail != null) {
+            val row = if (browseRail != null) {
                 // isCollection is the flag that carries the PIN control, and
                 // this row has one. Its hidden state is the stored flag
                 // alone: unlike a collection, a never-arranged browse rail
@@ -240,11 +255,28 @@ internal fun CatalogManagerDialog(
                     config = config,
                     collectionKey = null,
                     title = config.catalog.displayName.ifBlank { config.catalog.id },
-                    subtitle = "${config.catalog.type} · ${config.addonName}",
+                    subtitle = if (KBHomeOrderPrefs.isPositionFixedKey(key)) {
+                        "${config.catalog.type} · ${config.addonName} · fixed at the top"
+                    } else {
+                        "${config.catalog.type} · ${config.addonName}"
+                    },
                     isPinned = key in prefs.pinned.toSet(),
-                    isHidden = !config.catalog.showOnHome
+                    isHidden = !config.catalog.showOnHome,
+                    isPositionFixed = KBHomeOrderPrefs.isPositionFixedKey(key)
                 )
             }
+            // Exact, not a guess: an arrow is offered when pressing it would
+            // actually change where the rail sits on Home, and the same
+            // transforms decide that as perform the move (see
+            // railMoveChangesOrder). The per-kind heuristics this replaced left
+            // arrows live that did nothing at all - a catalog with nothing but
+            // pinned rails above it, and the loader-positioned rows.
+            row.copy(
+                canMoveTop = railMoveChangesOrder(prefs, movableDefaults, key, Int.MIN_VALUE),
+                canMoveUp = railMoveChangesOrder(prefs, movableDefaults, key, -1),
+                canMoveDown = railMoveChangesOrder(prefs, movableDefaults, key, +1),
+                canMoveBottom = railMoveChangesOrder(prefs, movableDefaults, key, Int.MAX_VALUE)
+            )
         }
     }
 
@@ -540,17 +572,7 @@ internal fun CatalogManagerDialog(
                     UnifiedManagerRow(
                         row = row,
                         position = index,
-                        total = visibleRows.size,
                         rowFocus = rowFocus,
-                        // A catalog's TOP means "head of the list", and pinned
-                        // collections render above that — so with one pinned
-                        // and no catalog before it, the press would do
-                        // nothing. Show it as unavailable instead.
-                        topEnabled = if (row.isCollection) {
-                            index > 0
-                        } else {
-                            visibleRows.take(index).any { !it.isCollection }
-                        },
                         // Hide keeps focus in the list (next row's toggle)
                         // instead of dumping it on the dialog header.
                         onToggle = { hideRowKeepFocus(row) },
@@ -589,7 +611,6 @@ internal fun CatalogManagerDialog(
                         UnifiedManagerRow(
                             row = row,
                             position = -1,
-                            total = -1,
                             rowFocus = rowFocus,
                             // A hidden rail has no Home slot to reorder, rename
                             // or pin, so it shows none of those controls instead
@@ -667,10 +688,8 @@ internal fun ConfirmRemoveCollectionDialog(
 private fun UnifiedManagerRow(
     row: CatalogManagerDialogRow,
     position: Int,
-    total: Int,
     rowFocus: CatalogRowFocus,
     isHiddenSection: Boolean = false,
-    topEnabled: Boolean = true,
     onToggle: () -> Unit,
     onPin: () -> Unit,
     onMove: (CatalogRowFocus.Slot, Int) -> Unit,
@@ -761,6 +780,10 @@ private fun UnifiedManagerRow(
             // the rails list to rename and no placement to pin, so it shows
             // none of these. Dimmed buttons that do nothing were most of the
             // clutter — the only live control is the SHOW beside the title.
+            //
+            // Same rule for a rail the loader positions (Top Today): hide and
+            // rename still apply, but the arrows are not drawn at all, because
+            // there is no arrangement that could move it.
             if (!isHiddenSection) {
                 // Rename is catalogs-only, pin is collections-only and the
                 // OTHER kind's slot is reserved, so each row's arrow cluster
@@ -791,50 +814,52 @@ private fun UnifiedManagerRow(
                 } else {
                     Spacer(modifier = Modifier.width(38.dp))
                 }
-                Spacer(modifier = Modifier.width(10.dp))
-                CatalogIconButton(
-                    icon = Icons.Filled.KeyboardDoubleArrowUp,
-                    contentDescription = if (row.isCollection) {
-                        "Pin to the very top of your rails"
-                    } else {
-                        "Move to the top of the list"
-                    },
-                    tint = KBTextHi,
-                    enabled = topEnabled,
-                    onClick = { onMove(CatalogRowFocus.Slot.TOP, Int.MIN_VALUE) },
-                    modifier = Modifier.size(38.dp).focusRequester(rowFocus.top)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                CatalogIconButton(
-                    icon = Icons.Filled.ArrowUpward,
-                    contentDescription = "Move up one",
-                    tint = KBTextHi,
-                    enabled = position > 0,
-                    onClick = { onMove(CatalogRowFocus.Slot.UP, -1) },
-                    modifier = Modifier.size(38.dp).focusRequester(rowFocus.up)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                CatalogIconButton(
-                    icon = Icons.Filled.ArrowDownward,
-                    contentDescription = "Move down one",
-                    tint = KBTextHi,
-                    enabled = position in 0 until (total - 1),
-                    onClick = { onMove(CatalogRowFocus.Slot.DOWN, +1) },
-                    modifier = Modifier.size(38.dp).focusRequester(rowFocus.down)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                CatalogIconButton(
-                    icon = Icons.Filled.KeyboardDoubleArrowDown,
-                    contentDescription = if (row.isCollection) {
-                        "Unpin and move to the bottom"
-                    } else {
-                        "Move to the bottom of the list"
-                    },
-                    tint = KBTextHi,
-                    enabled = position in 0 until (total - 1),
-                    onClick = { onMove(CatalogRowFocus.Slot.BOTTOM, Int.MAX_VALUE) },
-                    modifier = Modifier.size(38.dp).focusRequester(rowFocus.bottom)
-                )
+                if (!row.isPositionFixed) {
+                    Spacer(modifier = Modifier.width(10.dp))
+                    CatalogIconButton(
+                        icon = Icons.Filled.KeyboardDoubleArrowUp,
+                        contentDescription = if (row.isCollection) {
+                            "Pin to the very top of your rails"
+                        } else {
+                            "Move to the top of the list"
+                        },
+                        tint = KBTextHi,
+                        enabled = row.canMoveTop,
+                        onClick = { onMove(CatalogRowFocus.Slot.TOP, Int.MIN_VALUE) },
+                        modifier = Modifier.size(38.dp).focusRequester(rowFocus.top)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    CatalogIconButton(
+                        icon = Icons.Filled.ArrowUpward,
+                        contentDescription = "Move up one",
+                        tint = KBTextHi,
+                        enabled = row.canMoveUp,
+                        onClick = { onMove(CatalogRowFocus.Slot.UP, -1) },
+                        modifier = Modifier.size(38.dp).focusRequester(rowFocus.up)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    CatalogIconButton(
+                        icon = Icons.Filled.ArrowDownward,
+                        contentDescription = "Move down one",
+                        tint = KBTextHi,
+                        enabled = row.canMoveDown,
+                        onClick = { onMove(CatalogRowFocus.Slot.DOWN, +1) },
+                        modifier = Modifier.size(38.dp).focusRequester(rowFocus.down)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    CatalogIconButton(
+                        icon = Icons.Filled.KeyboardDoubleArrowDown,
+                        contentDescription = if (row.isCollection) {
+                            "Unpin and move to the bottom"
+                        } else {
+                            "Move to the bottom of the list"
+                        },
+                        tint = KBTextHi,
+                        enabled = row.canMoveBottom,
+                        onClick = { onMove(CatalogRowFocus.Slot.BOTTOM, Int.MAX_VALUE) },
+                        modifier = Modifier.size(38.dp).focusRequester(rowFocus.bottom)
+                    )
+                }
             }
         }
     }
@@ -855,7 +880,21 @@ private data class CatalogManagerDialogRow(
      * collection: the kind tag says BROWSE, and [isCollection] carries the pin
      * control both kinds use.
      */
-    val isBrowseRail: Boolean = false
+    val isBrowseRail: Boolean = false,
+    /**
+     * The loader fixes this rail's position on Home (the Top Today rows), so it
+     * has no slot to arrange: the row shows no reorder controls at all, and
+     * [canMoveTop] and friends are false. Hide and rename still apply.
+     */
+    val isPositionFixed: Boolean = false,
+    /**
+     * Whether each reorder press would actually change where the rail sits on
+     * Home, decided by the same transforms that perform the move.
+     */
+    val canMoveTop: Boolean = false,
+    val canMoveUp: Boolean = false,
+    val canMoveDown: Boolean = false,
+    val canMoveBottom: Boolean = false
 )
 
 /** Tiny kind tag: collections, catalogs and the browse rails share one list. */

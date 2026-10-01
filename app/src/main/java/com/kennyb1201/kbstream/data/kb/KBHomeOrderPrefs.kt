@@ -88,6 +88,118 @@ internal fun moveRailToEnd(
 }
 
 /**
+ * The merged rail order one arrangement produces from [defaults].
+ *
+ * This is the single answer to "which order are the manageable rails in?", and
+ * every place that shows or changes that order has to ask it: the home
+ * manager's row list, the reorder core, and (through KBHomeSlots) Home itself.
+ * They used to each derive it separately, and the manager's own copy put the
+ * Browse rails LAST while Home and the reorder core put them FIRST - so a
+ * Browse rail was drawn at the bottom of the manager's list while its move
+ * buttons treated it as already sitting at the top, and pressing UP on it did
+ * nothing at all. Interleaving a Browse rail with the catalogs was therefore
+ * impossible from the manager, which is the one thing the manager exists for.
+ *
+ * [defaults] is every manageable rail key in its DEFAULT order, and that order
+ * is part of the contract: Browse rails first, then catalog rails, then
+ * collections - which is where Home falls back to for a rail nothing has
+ * arranged yet.
+ *
+ * Pinned keys lead in pin order, then the stored order, then whatever is left
+ * in default order. Keys in neither list keep their default slot, which is how
+ * a rail added since the last arrangement still appears somewhere.
+ */
+internal fun mergedHomeRailKeys(
+    prefs: KBHomeOrder,
+    defaults: List<String>
+): List<String> {
+    val known = defaults.toSet()
+    val positioned = mutableListOf<String>()
+    val seen = mutableSetOf<String>()
+    for (key in prefs.pinned) {
+        if (key in known && seen.add(key)) positioned += key
+    }
+    for (key in prefs.order) {
+        if (key in known && seen.add(key)) positioned += key
+    }
+    for (key in defaults) {
+        if (seen.add(key)) positioned += key
+    }
+    return positioned
+}
+
+/**
+ * Moves one rail one slot in the merged visible order (see
+ * [mergedHomeRailKeys]), which is the order the manager draws and Home renders.
+ *
+ * The whole visible list is written into [KBHomeOrder.order] (pinned keys
+ * staying pinned, in their new relative order), so a single move makes the
+ * arrangement explicit: from then on the stored order alone decides where every
+ * rail sits, and any rail that first appears later takes its default slot until
+ * it too is moved. That is what makes the three rail families genuinely
+ * interchangeable rather than only movable within their own block.
+ *
+ * A move that would not change the order - already at that edge, or a key the
+ * arrangement does not know - returns [prefs] unchanged, so the caller can skip
+ * the write and the dialog does not look like it swallowed the press.
+ */
+internal fun moveRailInMergedOrder(
+    prefs: KBHomeOrder,
+    defaults: List<String>,
+    key: String,
+    delta: Int
+): KBHomeOrder {
+    val visible = mergedHomeRailKeys(prefs, defaults)
+        .filter { it !in prefs.hiddenSet }
+    val from = visible.indexOf(key)
+    if (from == -1) return prefs
+    val to = (from + delta).coerceIn(0, visible.lastIndex)
+    if (from == to) return prefs
+
+    val ordered = visible.toMutableList()
+    ordered.add(to, ordered.removeAt(from))
+
+    // Re-split by pin membership: a moved PIN keeps its pinned status (it is
+    // re-ordered within the pinned block), and a key that is not pinned cannot
+    // sneak into the head.
+    val pinnedSet = prefs.pinned.toSet()
+    return prefs.copy(
+        order = ordered.filter { it !in pinnedSet },
+        pinned = ordered.filter { it in pinnedSet }
+    )
+}
+
+/**
+ * Whether the given move would actually change the arrangement.
+ *
+ * The manager uses this for its arrow buttons' enabled state, so an arrow is
+ * offered exactly when pressing it does something: the same transforms decide
+ * the answer as perform the move, so the two cannot drift, and a rail whose
+ * position is fixed ([KBHomeOrderPrefs.isPositionFixedKey]) reports every move
+ * as a no-op rather than showing an arrow that cannot land.
+ *
+ * [delta] takes the same values [moveRailInMergedOrder] and [moveRailToEnd]
+ * do, with Int.MIN_VALUE meaning "the very top" and Int.MAX_VALUE "the very
+ * bottom".
+ */
+internal fun railMoveChangesOrder(
+    prefs: KBHomeOrder,
+    defaults: List<String>,
+    key: String,
+    delta: Int
+): Boolean {
+    // A rail the loader positions has nowhere to move to, whatever the stored
+    // order says - and the TOP/BOTTOM transforms would happily rewrite the
+    // order for it, so the guard has to live here rather than in the caller.
+    if (KBHomeOrderPrefs.isPositionFixedKey(key)) return false
+    return when (delta) {
+        Int.MIN_VALUE -> moveRailToEnd(prefs, key, toTop = true) != prefs
+        Int.MAX_VALUE -> moveRailToEnd(prefs, key, toTop = false) != prefs
+        else -> moveRailInMergedOrder(prefs, defaults, key, delta) != prefs
+    }
+}
+
+/**
  * Pin or unpin one PINNABLE rail (a collection or a Browse rail). Keys with
  * no pin control are returned unchanged (a catalog has no pin control, and one
  * sitting in `pinned` could never be taken back out — see [moveRailToEnd]).
@@ -214,6 +326,27 @@ object KBHomeOrderPrefs {
      */
     fun isPinnableKey(key: String): Boolean =
         isCollectionKey(key) || BrowseHomeShortcuts.isShortcutKey(key)
+
+    /**
+     * Host of the "Top Today" addon, whose rails the home loader forces to the
+     * head of Home (see `loadPinnedTopTodayRails`).
+     *
+     * Those rails are catalogs like any other - hideable, renameable - but they
+     * have no position to arrange: the merge always emits them first, whatever
+     * the stored order says. So the manager offers them no reorder control, and
+     * they are kept out of the merged order entirely, which is what stops a rail
+     * beside one from being "moved" into a slot that does not exist. Matched as
+     * a prefix of the arrangement key because the manifest URL carries a long
+     * query string ahead of "/manifest.json" and only its host is stable.
+     */
+    private const val TOP_TODAY_KEY_PREFIX = "addon:https://toptoday.llamayu.com/"
+
+    /**
+     * True for a rail whose Home position is fixed by the loader rather than by
+     * the stored order - see [TOP_TODAY_KEY_PREFIX].
+     */
+    fun isPositionFixedKey(key: String?): Boolean =
+        key?.startsWith(TOP_TODAY_KEY_PREFIX) == true
 
     /**
      * Resolves the arrangement key for a collection, honoring history: when

@@ -15,6 +15,7 @@ import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
 import com.kennyb1201.kbstream.data.kb.KBRepository
+import com.kennyb1201.kbstream.data.kb.moveRailInMergedOrder
 import com.kennyb1201.kbstream.data.kb.moveRailToEnd
 import com.kennyb1201.kbstream.data.kb.BrowseHomeRail
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
@@ -450,43 +451,31 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
 
                 Int.MAX_VALUE -> moveRailToEnd(prefs, key, toTop = false)
 
-                else -> {
-                    val visible =
-                        mergedRailKeys(prefs).filter { it !in prefs.hiddenSet }
-                    val from = visible.indexOf(key)
-                    if (from == -1) return@persistHomeOrder prefs
-                    val to = (from + delta).coerceIn(0, visible.lastIndex)
-                    if (from == to) return@persistHomeOrder prefs
-
-                    val ordered = visible.toMutableList()
-                    val item = ordered.removeAt(from)
-                    ordered.add(to, item)
-
-                    // Re-split by pin membership: a moved PIN keeps its
-                    // pinned status (re-ordered within the pinned block),
-                    // and hidden/stale pins can never inflate the head.
-                    val pinnedSet = prefs.pinned.toSet()
-                    prefs.copy(
-                        order = ordered.filter { it !in pinnedSet },
-                        pinned = ordered.filter { it in pinnedSet }
-                    )
-                }
+                // The order the manager draws and Home renders, so a press
+                // lands where the user aimed - see [moveRailInMergedOrder].
+                else -> moveRailInMergedOrder(prefs, homeRailDefaults(), key, delta)
             }
         }
     }
 
     /**
-     * Merged visible rail keys in display order: pinned (pin order) first,
-     * then stored order, then defaults (import order for collections, global
-     * catalog order for addons). Mirrors KBHomeSlots.buildMergedEntries.
+     * Every ARRANGEABLE rail key in its default order: the Browse rails, then
+     * the catalog rails, then the collections.
+     *
+     * The order is the contract [mergedHomeRailKeys] documents, and it is the
+     * one Home falls back to for a rail nothing has arranged (see KBHomeSlots).
+     * The manager dialog builds the same list from the same rule, so the row a
+     * user aims at is the row a move acts on.
+     *
+     * Two kinds are left out, both because they have no position to move to:
+     *  - a catalog that is not shown on Home (the manager lists it in its hidden
+     *    section, with no reorder controls);
+     *  - a rail whose position the loader fixes, i.e. the Top Today rows - the
+     *    merge always emits those first, so listing them here would let a rail
+     *    be "moved" into a slot that does not exist, and it would put them
+     *    somewhere in the manager other than where Home draws them.
      */
-    private fun mergedRailKeys(prefs: KBHomeOrder): List<String> {
-        val collectionKeys = _collections.value.collections.map { it.key }
-        // The browse rails are managed rails too - each can be pinned and
-        // moved on its own - so the manager has to know about every one that
-        // renders on Home, or it could never be arranged at all. They lead the
-        // default block: Home puts them directly under the Top Today rows,
-        // which are the head of the addon block here.
+    private fun homeRailDefaults(): List<String> {
         val browseKeys = _collections.value.browseRails.map { rail -> rail.key }
         val urls = manifestUrlByAddonId
         val addonKeys = _catalogConfigurations.value
@@ -498,21 +487,9 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     it.catalog.id
                 )
             }
-        val defaults = browseKeys + collectionKeys + addonKeys
-        val known = defaults.toSet()
-
-        val positioned = mutableListOf<String>()
-        val seen = mutableSetOf<String>()
-        for (key in prefs.pinned) {
-            if (key in known && seen.add(key)) positioned += key
-        }
-        for (key in prefs.order) {
-            if (seen.add(key) && key in known) positioned += key
-        }
-        for (key in defaults) {
-            if (seen.add(key)) positioned += key
-        }
-        return positioned
+            .filterNot { KBHomeOrderPrefs.isPositionFixedKey(it) }
+        val collectionKeys = _collections.value.collections.map { it.key }
+        return browseKeys + addonKeys + collectionKeys
     }
 
     private fun persistHomeOrder(

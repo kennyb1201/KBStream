@@ -173,10 +173,12 @@ object KBHomeSlots {
         // merged arrangement must never demote them into the middle/tail,
         // or a stored order key for any other rail pushes them to the
         // bottom. Identify them by the manifest base URL and keep them
-        // first, exactly like HomeViewModel does.
+        // first, exactly like HomeViewModel does - and through the shared
+        // predicate the home manager uses to deny them reorder controls, so
+        // the two cannot disagree about which rails have a fixed position.
         val topTodayKeys = addonEntries
             .map { entry -> addonKeyByRail[(entry as HomeEntry.AddonRail).rail] }
-            .filter { it?.startsWith("addon:https://toptoday.llamayu.com/") == true }
+            .filter { KBHomeOrderPrefs.isPositionFixedKey(it) }
             .toSet()
         val topTodayRails = addonEntries.filter { entry ->
             addonKeyByRail[(entry as HomeEntry.AddonRail).rail] in topTodayKeys
@@ -272,15 +274,25 @@ object KBHomeSlots {
             }
         }
 
-        // The browse rails' default spot: directly under the Top Today rows,
-        // which is where the rest of Home's doors to the catalog begin. Only
-        // a rail the user has never touched lands here - once it is pinned or
+        // The browse rails' default spot: with the rest of the unarranged
+        // rails, below everything that has been arranged - and ABOVE the
+        // unarranged catalogs and collections, matching the default order the
+        // home manager lists and moves rows in (see mergedHomeRailKeys). Only
+        // a rail the user has never touched lands here; once it is pinned or
         // placed in the stored order, the walk above owns where it sits.
+        //
+        // It used to be hoisted directly under the Top Today rows instead,
+        // which put it above pinned rails and above everything arranged - a
+        // position the manager could neither show nor reproduce, so a Browse
+        // rail sat somewhere the user could not aim at and could not be
+        // interleaved with the catalogs. With nothing arranged (the common
+        // case) this still lands them right under the hardcoded rails, so a
+        // chip just added from Browse is still visible without hunting.
         val defaultBrowse = placedBrowse
             .filter { (_, placement) -> placement == BrowseRowPlacement.BELOW_TOP_TODAY }
             .map { (entry, _) -> entry }
 
-        return topTodayRails + defaultBrowse + hardcodedRails + pinned + middle + tail
+        return topTodayRails + hardcodedRails + pinned + middle + defaultBrowse + tail
     }
 
     /**
