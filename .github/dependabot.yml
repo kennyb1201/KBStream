@@ -8,13 +8,35 @@
 # toolchain (AGP / Kotlin / Gradle) is pinned as one unit, so a wall of major
 # bump PRs would be worse than useless: minor and patch updates are grouped
 # into a single PR per ecosystem so they can be reviewed and landed together,
-# while a MAJOR bump (okhttp 4 -> 5, retrofit 2 -> 3, sentry 7 -> 8, ktor 2 ->
-# 3, supabase 2 -> 3, media3 across a minor, the toolchain) still arrives on
-# its own, where it can be treated as the migration it is.
+# while a MAJOR bump (okhttp 4 -> 5, retrofit 2 -> 3, sentry 7 -> 8, ktor 2 -> 3,
+# supabase 2 -> 3, media3 across a minor, the toolchain) still arrives on its
+# own, where it can be treated as the migration it is.
 #
 # Neither ecosystem's PRs are auto-merged; landing one still means the normal
 # gates (ktlint, unit tests, Android Lint, both APKs) plus, for anything that
-# touches playback, a device.
+# touches playback, a device. .github/workflows/pr-checks.yml now runs the
+# secret-free half of those gates on every pull request, so a bump is answered
+# before it is merged instead of after it is on main.
+#
+# ---------------------------------------------------------------------------
+# The floor everything Gradle-side is currently measured against
+# ---------------------------------------------------------------------------
+# AGP 8.6.0 · compileSdk 35 · minSdk 23 · Kotlin 2.0.21 · KSP 2.0.21-1.0.25.
+# As of the September 2026 PR batch, essentially nothing on the newer side fits
+# under that ceiling, which is why the group below is now scoped down rather
+# than merged:
+#
+#   * androidx.core 1.19 and the Compose 1.12 that tv-material 1.1 and
+#     coil3 3.6 resolve both require AGP 9.1.0 or higher AND compileSdk 37.
+#   * KSP 2.3.12 against AGP 8.6.0 fails at configuration time with
+#     NoSuchMethodError on AndroidComponentsExtension.addKspConfigurations.
+#   * work-runtime 2.12 declares minSdk 24, above this app's minSdk 23.
+#   * the Gradle 9.8 wrapper is unsupported by AGP 8.6.0.
+#
+# So the toolchain move (AGP 9.x + compileSdk 37 + Kotlin/KSP + Gradle 9, and a
+# decision on minSdk 23) is the prerequisite for all of it, and it is a real
+# migration rather than a merge. Until then, bumps that drag the toolchain are
+# kept out of the group so they cannot make a routine drop unlandable.
 version: 2
 updates:
   - package-ecosystem: "gradle"
@@ -28,6 +50,21 @@ updates:
         update-types:
           - "minor"
           - "patch"
+        # Dependabot's semver reading calls Kotlin 2.0 -> 2.4, media3 1.9 ->
+        # 1.11 and tv-material 1.0 -> 1.1 "minor" updates, so this group swept
+        # the toolchain and the player into what looked like a routine patch
+        # drop. They are not routine, and each one is excluded here so it
+        # arrives as its own PR where it can be read as the migration it is.
+        exclude-patterns:
+          - "org.jetbrains.kotlin*"
+          - "org.jetbrains.kotlinx*"
+          - "com.google.devtools.ksp"
+          - "androidx.media3*"
+          - "androidx.tv*"
+          - "androidx.compose*"
+          - "androidx.core*"
+          - "androidx.work*"
+          - "io.coil-kt*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
