@@ -48,6 +48,7 @@ import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
 import com.kennyb1201.kbstream.ui.home.TvSafeAreaHorizontal
@@ -646,7 +647,11 @@ private fun BrowseShortcutTile(
             modifier = Modifier
                 .width(CollectionTileWidth)
                 .height(CollectionTileHeight)
-                .background(KBSurface),
+                .background(KBSurface)
+                // The faint edge every poster tile draws (Settings →
+                // Interface), so a browse/network chip sits in the rail with
+                // the same border as the catalog posters around it.
+                .then(posterBorderModifier()),
             contentAlignment = Alignment.Center
         ) {
             if (clearlogoUrls.isEmpty() || markUnusable) {
