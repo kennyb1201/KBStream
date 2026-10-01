@@ -286,8 +286,6 @@ fun SearchScreen(
                         viewModel = viewModel,
                         categories = browseCategories,
                         submenuLoading = browseSubmenuLoading,
-                        hiddenChipKeys = hiddenBrowseChips,
-                        onUnhideAllChips = viewModel::restoreAllBrowseChips,
                         onChipLongPress = { categoryKey, entry ->
                             hiddenChipMenu = categoryKey to entry
                         },

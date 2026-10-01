@@ -26,7 +26,6 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Collections
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.Tag
@@ -104,8 +103,6 @@ internal fun SearchBrowseBrowser(
     viewModel: SearchViewModel,
     categories: List<BrowseCategory>,
     submenuLoading: Boolean,
-    hiddenChipKeys: Set<String> = emptySet(),
-    onUnhideAllChips: (() -> Unit)? = null,
     onChipLongPress: ((String, BrowseEntry) -> Unit)? = null,
     onCategoryLongPress: ((BrowseCategory) -> Unit)? = null
 ) {
@@ -145,23 +142,6 @@ internal fun SearchBrowseBrowser(
         ) {
             KBSectionHeader(title = "Browse")
             Spacer(modifier = Modifier.weight(1f))
-            // The visible way back from Hide. Hiding a chip is a long-press
-            // and the per-category undo is another long-press on the tab it
-            // came from, so a viewer who forgot which tab that was had no
-            // findable restore at all. This button appears only while
-            // something is hidden and brings every one of them back.
-            if (hiddenChipKeys.isNotEmpty() && onUnhideAllChips != null) {
-                BrowseActionChip(
-                    label = if (hiddenChipKeys.size == 1) {
-                        "Restore 1 hidden chip"
-                    } else {
-                        "Restore ${hiddenChipKeys.size} hidden chips"
-                    },
-                    icon = Icons.Filled.Restore,
-                    onClick = onUnhideAllChips,
-                    modifier = Modifier.padding(end = 12.dp, bottom = 6.dp)
-                )
-            }
             Text(
                 text = "${categories.size} categories",
                 style = MaterialTheme.typography.labelMedium,
@@ -184,10 +164,6 @@ internal fun SearchBrowseBrowser(
                 BrowseCategoryTab(
                     category = category,
                     selected = activeCategory?.key == category.key,
-                    hiddenCount = BrowseChipVisibility.countHidden(
-                        category.key,
-                        hiddenChipKeys
-                    ),
                     onClick = { viewModel.selectBrowseCategory(category.key) },
                     onLongClick = onCategoryLongPress?.let { handler ->
                         { handler(category) }
@@ -357,10 +333,10 @@ internal fun SearchBrowseBrowser(
 }
 
 /**
- * The glyph for a browse category (its tab in the browser, and the kind badge
- * on a Home shortcut tile). Unknown keys fall back to a plain tag.
+ * The glyph for a browse category's tab in the browser strip. Unknown keys fall
+ * back to a plain tag.
  */
-internal fun browseCategoryIcon(key: String): ImageVector = when (key.trim().lowercase()) {
+private fun browseCategoryIcon(key: String): ImageVector = when (key.trim().lowercase()) {
     "genres" -> Icons.Filled.Movie
     "keywords" -> Icons.Filled.Tag
     "services" -> Icons.Filled.Tv
@@ -386,7 +362,6 @@ internal fun browseCategoryIcon(key: String): ImageVector = when (key.trim().low
 private fun BrowseCategoryTab(
     category: BrowseCategory,
     selected: Boolean,
-    hiddenCount: Int = 0,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
@@ -493,25 +468,6 @@ private fun BrowseCategoryTab(
                             focused -> KBTextHi.copy(alpha = 0.8f)
                             selected -> KBAccent
                             else -> KBTextLo.copy(alpha = 0.75f)
-                        },
-                        modifier = Modifier.padding(start = 7.dp)
-                    )
-                }
-                // A chip hidden under this tab drops the tab's own count with
-                // nothing saying why, and the way back (long-press on the
-                // tab) is invisible. Naming how many are tucked away explains
-                // the missing entries and makes that gesture discoverable.
-                if (hiddenCount > 0) {
-                    Text(
-                        text = if (hiddenCount == 1) {
-                            "1 hidden"
-                        } else {
-                            "$hiddenCount hidden"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = when {
-                            focused -> KBTextHi.copy(alpha = 0.8f)
-                            else -> KBAccent
                         },
                         modifier = Modifier.padding(start = 7.dp)
                     )

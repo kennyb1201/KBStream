@@ -52,17 +52,6 @@ object BrowseChipVisibility {
         return updated
     }
 
-    /**
-     * Brings back EVERY chip hidden on this profile, across all categories;
-     * returns the empty set. The broad counterpart to the per-category
-     * [unhideAll] above, for when the viewer wants the whole browse list back
-     * without hunting down which category each chip was hidden under.
-     */
-    fun unhideAll(context: Context): Set<String> {
-        prefs(context).edit().putStringSet(KEY_HIDDEN, emptySet()).apply()
-        return emptySet()
-    }
-
     /** How many chips of [categoryKey] are currently hidden. */
     fun countHidden(categoryKey: String, hidden: Set<String>): Int {
         val prefix = "$categoryKey$SEPARATOR"
