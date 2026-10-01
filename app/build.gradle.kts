@@ -336,14 +336,14 @@ dependencies {
     // the adapter by name). Keep this version in lockstep with moshi-kotlin
     // below — the generated adapters and the runtime are the same artifact's
     // two halves.
-    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.1")
+    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.2")
     // The reflective half, kept as the FALLBACK for a type with no annotation.
     // Every Moshi.Builder below adds it with addLast() rather than add():
     // Moshi consults factories in order, so adding it first would let
     // reflection claim every model before the generated adapter is ever
     // looked up, and this dependency would be dead weight.
-    implementation("com.squareup.moshi:moshi-kotlin:1.15.1")
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.squareup.moshi:moshi-kotlin:1.15.2")
+    implementation("com.google.zxing:core:3.5.4")
 
     // Baseline profiles, runtime half. The profile itself (a list of the
     // classes/methods startup touches) is captured by :baselineprofile on a
@@ -442,7 +442,7 @@ dependencies {
     // PlayerEngine refuses to select MPV below API 26 rather than loading the
     // native libraries on a device they were not built for.
     implementation("dev.jdtech.mpv:libmpv:0.5.1")
-    implementation("androidx.recyclerview:recyclerview:1.3.2")
+    implementation("androidx.recyclerview:recyclerview:1.4.0")
     // Pinned to the COMMIT behind tag v0.26.4 (43f8e6ebeef4…, full hash
     // 43f8e6ebeef469db7c5328714bc5f33c9f06f092), not the tag itself: tags are
     // mutable, so "v0.26.4" can silently resolve to different code than the
@@ -451,9 +451,9 @@ dependencies {
     implementation("com.github.TeamNewPipe:NewPipeExtractor:43f8e6ebeef4")
 
 
-    implementation("androidx.room:room-runtime:2.7.1")
-    ksp("androidx.room:room-compiler:2.7.1")
-    implementation("androidx.room:room-ktx:2.7.1")
+    implementation("androidx.room:room-runtime:2.8.5")
+    ksp("androidx.room:room-compiler:2.8.5")
+    implementation("androidx.room:room-ktx:2.8.5")
 
     implementation("androidx.work:work-runtime-ktx:2.10.1")
 
@@ -468,7 +468,7 @@ dependencies {
     // focusGifUrl / focusGifEnabled); base Coil shows only the first frame.
     implementation("io.coil-kt.coil3:coil-gif:3.0.0")
 
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.4")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
 
     // JVM unit tests (KidsMode rating matrix, catalog invariants).
     testImplementation("junit:junit:4.13.2")
@@ -483,16 +483,16 @@ dependencies {
     // against the exported schema - the one class of test the JVM-only suite
     // could not reach, and the gap that let the watch-history schema sit one
     // version bump away from being dropped unnoticed.
-    testImplementation("androidx.room:room-testing:2.7.1")
+    testImplementation("androidx.room:room-testing:2.8.5")
     // ...and Robolectric is what supplies the Android runtime room-testing and
     // MigrationTestHelper's instrumentation need, so it stays a UNIT test: no
     // device, no emulator, no androidTest variant, run by the same
     // `./gradlew testDebugUnitTest` gate as everything else.
     // 4.14 is the floor here: it is the first release with API 35 support, and
     // this module compiles against 35 (Robolectric picks the target SDK).
-    testImplementation("org.robolectric:robolectric:4.14.1")
-    testImplementation("androidx.test.ext:junit:1.2.1")
-    testImplementation("androidx.test:core-ktx:1.6.1")
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test.ext:junit:1.3.0")
+    testImplementation("androidx.test:core-ktx:1.7.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

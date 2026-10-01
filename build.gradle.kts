@@ -14,5 +14,5 @@ plugins {
     // `./gradlew :app:generateBaselineProfile` captures a profile from a
     // connected device and writes it into app/src/release/generated/
     // baselineProfiles/ for the release build to consume.
-    id("androidx.baselineprofile") version "1.3.4" apply false
+    id("androidx.baselineprofile") version "1.5.0" apply false
 }
