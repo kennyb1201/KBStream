@@ -2,9 +2,10 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.app.Activity
 import android.graphics.Bitmap
-import android.graphics.PixelFormat
+import android.graphics.ImageFormat
 import android.media.Image
 import android.media.ImageReader
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -13,17 +14,19 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
-import okhttp3.OkHttpClient
-import java.util.concurrent.TimeUnit
+import java.io.IOException
 
 /**
  * Decoded scrub-preview frames: a real frame of the stream the viewer is
@@ -48,9 +51,10 @@ import java.util.concurrent.TimeUnit
  *
  * ## What it deliberately does not do
  *
- *  - **No addon stack.** The preview reads with the playback headers through the
- *    main player's `SimpleCache`, and none of the rest of its stack (the DV
- *    re-write, the HDR10+ stripping, the YouTube chunked source). The cache is
+ *  - **No addon stack.** The preview reads through the main player's
+ *    `SimpleCache` and nothing else - no headers, and none of the rest of the
+ *    player's stack (the DV re-write, the HDR10+ stripping, the YouTube chunked
+ *    source). The cache is
  *    not an optimization here but a requirement: without it the preview opens a
  *    SECOND connection to a source that is already serving the main player, and
  *    the hosts this app plays from - debrid links, usenet - commonly allow a
@@ -77,7 +81,6 @@ import java.util.concurrent.TimeUnit
 internal class TrickplayFrames(
     private val activity: Activity,
     private val url: String,
-    private val headers: Map<String, String>,
     private val resolvedMimeType: String? = null,
     /**
      * Where the main player has read to, sampled per call.
@@ -229,40 +232,25 @@ internal class TrickplayFrames(
     }
 
     private fun buildPreview(): ExoPlayer {
-        val agent = headers["User-Agent"] ?: headers["user-agent"] ?: DEFAULT_USER_AGENT
-        val client = OkHttpClient.Builder()
-            // Tighter than playback's: a frame that is not here in a couple of
-            // seconds is not going to be here in time to be worth showing.
-            .connectTimeout(10L, TimeUnit.SECONDS)
-            .readTimeout(15L, TimeUnit.SECONDS)
-            .build()
-        val http = OkHttpDataSource.Factory(client).setUserAgent(agent)
-        val extraHeaders = headers
-            .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
-            .filterValues { it.isNotBlank() }
-        if (extraHeaders.isNotEmpty()) http.setDefaultRequestProperties(extraHeaders)
-
-        // Read through the SAME disk cache the main player is filling.
+        // Read through the SAME disk cache the main player is filling, and
+        // NOTHING else.
         //
         // This is the difference between a preview that works and one that never
         // can. The preview is a second player over the same URL, and a plain
-        // OkHttp source means a SECOND CONNECTION to a source that is already
-        // serving the first one - and the hosts this app plays from (debrid
-        // links, usenet) routinely allow a link exactly one. That connection
-        // does not fail, it hangs: no player error, no frame, nothing but the
-        // extraction timeout. Which is exactly the field report - frames=0, two
-        // failures ending at 6004ms and 6008ms against a 6000ms budget - while
-        // the main player opened the same stream in 2058ms beside it.
+        // source means a SECOND CONNECTION to a source that is already serving
+        // the first one - and the hosts this app plays from (debrid links,
+        // usenet) routinely allow a link exactly one. That connection does not
+        // fail, it hangs: no player error, no frame, nothing but the extraction
+        // timeout - and, worse, it holds a read on the shared cache span the
+        // main player is about to read, which is what leaves a scrub
+        // "buffering forever" after the attempt.
         //
-        // Through the cache, scrubbing near the playhead (which is what
-        // scrubbing is) reads bytes the main player has already stored - and
-        // nothing outside that range is ever decoded, because
-        // [trickplayServableFromCache] admits a bucket only once the main player
-        // has read it. So there is no miss to fall through to, and no
-        // connection to contend for. The upstream is still wired - a cache needs
-        // one to be a cache - but a bucket that reaches this player is inside
-        // the cached range by construction, and FLAG_IGNORE_CACHE_ON_ERROR keeps
-        // a cache fault from being what stops the frame.
+        // So the upstream does not merely go unused, it REFUSES: a cache miss
+        // fails the extraction there and then instead of falling through to a
+        // second connection the source may never give.
+        // [trickplayServableFromCache] still admits a bucket only once the main
+        // player has read past it, so an ordinary scrub near the playhead reads
+        // bytes already on disk and never comes here at all.
         //
         // The cache key has to match the main player's or the entries are
         // missed rather than shared. Both wrap the same URL string with the
@@ -271,58 +259,92 @@ internal class TrickplayFrames(
         // NativePlayerActivity.
         val cached = CacheDataSource.Factory()
             .setCache(StreamDiskCache.get(activity))
-            .setUpstreamDataSourceFactory(http)
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            .setUpstreamDataSourceFactory(CacheOnlyUpstream)
 
-        val imageReader = ImageReader.newInstance(
-            TRICKPLAY_CAPTURE_WIDTH,
-            TRICKPLAY_CAPTURE_HEIGHT,
-            PixelFormat.RGBA_8888,
-            TRICKPLAY_CAPTURE_IMAGES
-        )
+        // No capture surface yet. It is built in [ensureCaptureSurface] once the
+        // stream's own size is known, because an ImageReader's buffers are
+        // FIXED at creation: a decoder asked to render a 1080p frame into a
+        // 480x270 reader never delivers a frame at all - the field report's
+        // `player=buffering, loading=false, images=0` - and the reader's format
+        // has to be the one a decoder surface is guaranteed to support
+        // (YUV_420_888, not RGBA_8888). See [ensureCaptureSurface].
+        return ExoPlayer.Builder(activity)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(cached))
+            // A preview needs the buffer at ONE position, not a runway: the
+            // defaults would spend megabytes and seconds filling ahead of a
+            // frame nobody is going to watch.
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(1_500, 8_000, 500, 1_000)
+                    .setPrioritizeTimeOverSizeThresholds(true)
+                    .build()
+            )
+            .build()
+            .apply {
+                // The nearest keyframe, not the exact millisecond: decoding
+                // a whole GOP to land on a frame the viewer will look at
+                // for as long as they hold the button is work with no
+                // visible result.
+                setSeekParameters(SeekParameters.CLOSEST_SYNC)
+                volume = 0f
+                trackSelectionParameters = trackSelectionParameters
+                    .buildUpon()
+                    // Disabling the track keeps the audio decoder from being
+                    // created at all, which is one fewer codec than muting.
+                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
+                    .build()
+                addListener(listener)
+            }
+    }
+
+    /**
+     * Builds the capture surface for the stream's own video size, once.
+     *
+     * Two things about an ImageReader decide whether a decoder can render into
+     * it, and both were wrong before this existed:
+     *
+     *  - **The format must be one a decoder surface supports.** Android's own
+     *    decoder-to-ImageReader test uses [ImageFormat.YUV_420_888] and asserts
+     *    the reader's format matches the codec's; RGBA_8888 is not a guaranteed
+     *    decoder output anywhere. A reader in the wrong format is accepted by
+     *    the codec and then never handed a buffer, which is a player stuck in
+     *    `STATE_BUFFERING` with `isLoading == false`, no error, and
+     *    `images=0` - exactly the report. So the reader is YUV_420_888 and
+     *    [bitmapFrom] does the conversion itself.
+     *  - **The size is fixed at creation.** The reader's buffers cannot be
+     *    resized, so a reader smaller than the video gets no frames. It is
+     *    therefore created at the video's decoded size (once media3 reports it)
+     *    and [bitmapFrom] subsamples down to [TRICKPLAY_CAPTURE_WIDTH].
+     */
+    private fun ensureCaptureSurface(width: Int, height: Int) {
+        if (width <= 0 || height <= 0) return
+        val existing = reader
+        if (existing != null && existing.width == width && existing.height == height) {
+            // Already the right size: just make sure the player running now is
+            // rendering into it, since a player rebuilt after an idle teardown
+            // arrives with no surface and would otherwise capture nothing.
+            runCatching { preview?.setVideoSurface(existing.surface) }
+            return
+        }
+        runCatching { reader?.close() }
+        val imageReader = runCatching {
+            ImageReader.newInstance(
+                width,
+                height,
+                ImageFormat.YUV_420_888,
+                TRICKPLAY_CAPTURE_IMAGES
+            )
+        }.getOrNull() ?: run {
+            reader = null
+            return
+        }
         imageReader.setOnImageAvailableListener({ available -> onImageAvailable(available) }, handler)
         // The reader owns the surface it hands out; the player renders into it
         // and closing the reader is what releases the capture buffers.
-        val frameSurface = imageReader.surface
         reader = imageReader
-
-        // A player that fails to build must not leave the reader (and its two
-        // capture buffers) behind: this is the path taken by the box that has
-        // no decoder left, which is exactly the case that then tries again.
-        return runCatching {
-            ExoPlayer.Builder(activity)
-                .setMediaSourceFactory(DefaultMediaSourceFactory(cached))
-                // A preview needs the buffer at ONE position, not a runway: the
-                // defaults would spend megabytes and seconds filling ahead of a
-                // frame nobody is going to watch.
-                .setLoadControl(
-                    DefaultLoadControl.Builder()
-                        .setBufferDurationsMs(1_500, 8_000, 500, 1_000)
-                        .setPrioritizeTimeOverSizeThresholds(true)
-                        .build()
-                )
-                .build()
-                .apply {
-                    // The nearest keyframe, not the exact millisecond: decoding
-                    // a whole GOP to land on a frame the viewer will look at
-                    // for as long as they hold the button is work with no
-                    // visible result.
-                    setSeekParameters(SeekParameters.CLOSEST_SYNC)
-                    volume = 0f
-                    trackSelectionParameters = trackSelectionParameters
-                        .buildUpon()
-                        // Disabling the track keeps the audio decoder from being
-                        // created at all, which is one fewer codec than muting.
-                        .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
-                        .build()
-                    setVideoSurface(frameSurface)
-                    addListener(listener)
-                }
-        }.getOrElse { error ->
-            runCatching { imageReader.close() }
-            reader = null
-            throw error
-        }
+        // Swap it in under the running player, which reconfigures the decoder
+        // onto the new surface; the next decoded frame lands in the reader.
+        runCatching { preview?.setVideoSurface(imageReader.surface) }
     }
 
     private val listener = object : Player.Listener {
@@ -339,6 +361,13 @@ internal class TrickplayFrames(
             // Nothing to wait for: an end-of-stream while seeking means the
             // position asked for is not in this stream.
             if (playbackState == Player.STATE_ENDED) fail(inFlightBucket, "end of stream")
+        }
+
+        override fun onVideoSizeChanged(videoSize: VideoSize) {
+            // The stream's decoded size, known before the first frame, which is
+            // the earliest a correctly sized capture surface can exist - see
+            // [ensureCaptureSurface] for why it cannot be built any sooner.
+            ensureCaptureSurface(videoSize.width, videoSize.height)
         }
     }
 
@@ -575,34 +604,114 @@ internal class TrickplayFrames(
     }
 
     /**
-     * The captured image as a bitmap, cropping the row padding the capture
-     * buffer comes with (its stride is padded to an alignment, and a bitmap
-     * built from the raw buffer without accounting for it comes out skewed).
+     * The captured image as a bitmap, subsampled down to the card's size.
+     *
+     * The reader is [ImageFormat.YUV_420_888] (see [ensureCaptureSurface]) - the
+     * only format a decoder surface is guaranteed to accept - so this converts
+     * the three planes itself rather than copying a packed buffer. A capture at
+     * the video's own size is also far larger than a 480px card needs, so the
+     * first pixel of every [sample]-th row and column is taken, the same
+     * power-of-two rule the libmpv path decodes with.
+     *
+     * Each plane has its own strides, and the chroma planes are half resolution,
+     * so the index of a pixel's U and V is derived from its (x/2, y/2) - not
+     * from its index in the luma plane. [IntArray] output rather than a byte
+     * buffer because there is no packed ARGB here to copy from.
      */
     private fun bitmapFrom(image: Image): Bitmap {
-        val plane = image.planes[0]
-        val pixelStride = plane.pixelStride.takeIf { it > 0 } ?: 4
-        val padding = plane.rowStride - pixelStride * image.width
-        if (padding <= 0) {
-            return Bitmap.createBitmap(image.width, image.height, Bitmap.Config.ARGB_8888).apply {
-                copyPixelsFromBuffer(plane.buffer)
+        val width = image.width
+        val height = image.height
+        val sample = trickplaySampleSize(width, height)
+        val outWidth = (width / sample).coerceAtLeast(1)
+        val outHeight = (height / sample).coerceAtLeast(1)
+        val planes = image.planes
+        if (planes.size < 3) return fallbackBitmap(image)
+        val y = planes[0]
+        val u = planes[1]
+        val v = planes[2]
+        val yBuffer = y.buffer
+        val uBuffer = u.buffer
+        val vBuffer = v.buffer
+        val yRowStride = y.rowStride
+        val yPixelStride = y.pixelStride
+        val uRowStride = u.rowStride
+        val uPixelStride = u.pixelStride
+        val vRowStride = v.rowStride
+        val vPixelStride = v.pixelStride
+        val pixels = IntArray(outWidth * outHeight)
+        var out = 0
+        for (row in 0 until outHeight) {
+            val sourceY = (row * sample).coerceAtMost(height - 1)
+            val yBase = sourceY * yRowStride
+            val chromaBase = (sourceY / 2)
+            val uRowBase = chromaBase * uRowStride
+            val vRowBase = chromaBase * vRowStride
+            for (column in 0 until outWidth) {
+                val sourceX = (column * sample).coerceAtMost(width - 1)
+                val yValue = yBuffer.get(yBase + sourceX * yPixelStride).toInt() and 0xFF
+                val chromaColumn = sourceX / 2
+                val uValue =
+                    (uBuffer.get(uRowBase + chromaColumn * uPixelStride).toInt() and 0xFF) - 128
+                val vValue =
+                    (vBuffer.get(vRowBase + chromaColumn * vPixelStride).toInt() and 0xFF) - 128
+                val scaledY = 298 * yValue
+                val red = ((scaledY + 409 * vValue + 128) shr 8).coerceIn(0, 255)
+                val green = ((scaledY - 100 * uValue - 208 * vValue + 128) shr 8).coerceIn(0, 255)
+                val blue = ((scaledY + 516 * uValue + 128) shr 8).coerceIn(0, 255)
+                pixels[out++] = (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
             }
         }
-        val padded = Bitmap.createBitmap(
-            image.width + padding / pixelStride,
-            image.height,
+        return Bitmap.createBitmap(pixels, outWidth, outHeight, Bitmap.Config.ARGB_8888)
+    }
+
+    /** An image with no readable planes, so a card is never left empty. */
+    private fun fallbackBitmap(image: Image): Bitmap {
+        val sample = trickplaySampleSize(image.width, image.height)
+        val plane = image.planes.firstOrNull()
+        return Bitmap.createBitmap(
+            (image.width / sample).coerceAtLeast(1),
+            (image.height / sample).coerceAtLeast(1),
             Bitmap.Config.ARGB_8888
-        )
-        padded.copyPixelsFromBuffer(plane.buffer)
-        val cropped = Bitmap.createBitmap(padded, 0, 0, image.width, image.height)
-        if (cropped !== padded) padded.recycle()
-        return cropped
+        ).apply {
+            plane?.let { copyPixelsFromBuffer(it.buffer.duplicate()) }
+        }
     }
 
     private fun mediaItem(): MediaItem {
         val builder = MediaItem.Builder().setUri(url)
         trickplayMimeHint(url, resolvedMimeType)?.let { builder.setMimeType(it) }
         return builder.build()
+    }
+
+    /**
+     * The upstream a cache miss reaches: one that refuses to open.
+     *
+     * The preview must never open its own connection - see [buildPreview] for
+     * why a second connection to a source already serving the main player is
+     * worse than no preview at all. Rather than trusting the callers to keep it
+     * cache-only, the source itself is a wall: a cache miss fails the
+     * extraction there and then, instead of falling through to a connection the
+     * host may never grant and leave the main player's own read blocked behind
+     * it (the filed report's "buffers endlessly" after a scrub).
+     */
+    private object CacheOnlyUpstream : DataSource.Factory {
+        override fun createDataSource(): DataSource = CacheOnlySource
+    }
+
+    private object CacheOnlySource : DataSource {
+        override fun addTransferListener(transferListener: TransferListener) = Unit
+
+        override fun open(dataSpec: DataSpec): Long =
+            throw IOException("scrub previews read the shared cache only")
+
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
+            throw IOException("scrub previews read the shared cache only")
+
+        override fun getUri(): Uri? = null
+
+        override fun getResponseHeaders(): Map<String, List<String>> = emptyMap()
+
+        override fun close() = Unit
     }
 
     private companion object {
@@ -627,9 +736,5 @@ internal class TrickplayFrames(
          * produce frames for the same card.
          */
         const val TRICKPLAY_CAPTURE_IMAGES = 2
-
-        const val DEFAULT_USER_AGENT =
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
     }
 }

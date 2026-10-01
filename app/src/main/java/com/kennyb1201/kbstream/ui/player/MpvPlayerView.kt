@@ -6,6 +6,7 @@ import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.kennyb1201.kbstream.data.player.LanguageMatch
+import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import dev.jdtech.mpv.MPVLib
 import java.util.Locale
@@ -39,7 +40,7 @@ class MpvPlayerView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : SurfaceView(context, attrs, defStyleAttr), SurfaceHolder.Callback,
-    MPVLib.EventObserver {
+    MPVLib.EventObserver, MPVLib.LogObserver {
 
     /** A stream to play, with everything mpv needs to open it. */
     data class LoadRequest(
@@ -129,6 +130,16 @@ class MpvPlayerView @JvmOverloads constructor(
 
     private var fileLoaded = false
     private var endNotified = false
+
+    /**
+     * mpv's own last error-level line, if it has said anything.
+     *
+     * A failed load reports as "this stream could not be played" and nothing
+     * else: mpv knows whether that was a 403, an unsupported protocol or a
+     * refused connection, and the only place it says so is its log. Kept so the
+     * notice a viewer sees can name the actual reason instead of guessing.
+     */
+    private var lastErrorLine: String? = null
     private var durationSec: Double? = null
     private var pauseState = false
     private var cacheStall = false
@@ -209,6 +220,9 @@ class MpvPlayerView @JvmOverloads constructor(
         }
 
         MPVLib.addObserver(this)
+        // mpv's own account of a failed open (an HTTP status, a refused
+        // connection) is only ever delivered here - see [logMessage].
+        MPVLib.addLogObserver(this)
         observeProperties()
         holder.addCallback(this)
         initialized = true
@@ -237,6 +251,7 @@ class MpvPlayerView @JvmOverloads constructor(
         holder.removeCallback(this)
         if (initialized) {
             runCatching { MPVLib.removeObserver(this) }
+            runCatching { MPVLib.removeLogObserver(this) }
             // Detach the surface before destroying the instance: mpv's
             // renderer must stop using the window first.
             runCatching {
@@ -695,6 +710,23 @@ class MpvPlayerView @JvmOverloads constructor(
         )
     }
 
+    /**
+     * Sets a per-load mpv option, falling back to a runtime property when the
+     * option form is refused.
+     *
+     * `setOptionString` reports an mpv error code instead of throwing, so a
+     * refusal used to be entirely silent - headers that never reached mpv
+     * looked exactly like headers the host rejected, and both look like "this
+     * stream could not be played". A refusal is at least named in the log; the
+     * VALUE is not, because a header field can carry a Cookie or a token.
+     */
+    private fun setStreamOption(name: String, value: String) {
+        val code = runCatching { MPVLib.setOptionString(name, value) }.getOrDefault(-1)
+        if (code == 0) return
+        runCatching { MPVLib.command(arrayOf("set", name, value)) }
+        Log.w(TAG, "mpv refused the $name option (code $code); set it as a property instead")
+    }
+
     /** A subtitle style option before init, the same thing as a property after. */
     private fun styleOption(name: String, value: String) {
         if (initialized) {
@@ -748,6 +780,14 @@ class MpvPlayerView @JvmOverloads constructor(
         // sitting on a spinner, and TLS is verified.
         MPVLib.setOptionString("tls-verify", "yes")
         MPVLib.setOptionString("network-timeout", "30")
+
+        // The identity the app plays as. mpv asks as `mpv/<version>` by
+        // default, which the hosts this app streams from routinely refuse -
+        // and because the ExoPlayer path sends the browser agent below, the
+        // same stream played in the main player and failed here, presenting as
+        // "this stream could not be played" on every press of Switch Player.
+        // A source that names its own agent overrides this per load.
+        MPVLib.setOptionString("user-agent", StreamUserAgent.DEFAULT)
 
         // Caching: mpv's defaults are sized for a desktop; 64 MB matches what
         // the reference Android player uses. Low Latency (the panel's own
@@ -945,20 +985,31 @@ class MpvPlayerView @JvmOverloads constructor(
         endNotified = false
         durationSec = null
         cacheStall = false
+        // The previous load's mpv errors say nothing about this one, and
+        // leaving one behind would name the wrong reason for a later failure.
+        lastErrorLine = null
         // The playhead is published from mpv itself from here on.
         lastPositionMs = 0L
         lastDurationMs = 0L
         pendingSeekMs = request.startPositionMs.coerceAtLeast(0L)
 
-        if (request.headers.isNotEmpty()) {
-            val fields = request.headers.entries.joinToString(",") { (key, value) ->
-                "$key: ${value.replace(',', ';')}"
+        // The source's own User-Agent if it named one, else the app's - never
+        // mpv's default. Set through the option AND as a header field, because
+        // a CDN may read whichever of the two it was written against.
+        val userAgent = StreamUserAgent.resolve(request.headers)
+        setStreamOption("user-agent", userAgent)
+        val fields = buildList {
+            add("User-Agent" to userAgent)
+            request.headers.forEach { (key, value) ->
+                if (!key.equals("User-Agent", ignoreCase = true)) add(key to value)
             }
+        }.joinToString(",") { (key, value) ->
             // mpv reads a comma-separated field list here; commas inside a
             // value are what would split one field into two, so they are
             // replaced rather than allowed to corrupt the rest of the list.
-            MPVLib.setOptionString("http-header-fields", fields)
+            "$key: ${value.replace(',', ';')}"
         }
+        setStreamOption("http-header-fields", fields)
         // Resume position: applied by the demuxer at open time, so playback
         // starts there instead of seeking after a flash of the opening frames.
         MPVLib.setOptionString("start", "${request.startPositionMs.coerceAtLeast(0L) / 1000.0}")
@@ -996,8 +1047,19 @@ class MpvPlayerView @JvmOverloads constructor(
                 // A file that never opened is a failure; one that reached its
                 // end is handled by eof-reached (keep-open pauses there).
                 if (!fileLoaded) {
-                    Log.w(TAG, "MPV could not open the stream")
-                    post { onPlaybackError?.invoke("This stream could not be played.") }
+                    // mpv's own words, when it had any: "HTTP error 403",
+                    // "Protocol not found" and a refused connection are the
+                    // same sentence on screen and want different fixes.
+                    val reason = lastErrorLine?.takeIf { it.isNotBlank() }
+                    Log.w(TAG, "MPV could not open the stream: ${reason ?: "no reason reported"}")
+                    post {
+                        onPlaybackError?.invoke(
+                            when (reason) {
+                                null -> "This stream could not be played."
+                                else -> "This stream could not be played. $reason"
+                            }
+                        )
+                    }
                 }
             }
 
@@ -1011,6 +1073,20 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     override fun eventProperty(property: String) = Unit
+
+    /**
+     * mpv's log, kept only at error level.
+     *
+     * The one channel that says WHY a stream would not open. The library
+     * requests log messages for its clients; anything below an error is noise
+     * here (and, on a stream host that dislikes the agent, an unreadable
+     * flood).
+     */
+    override fun logMessage(prefix: String, level: Int, text: String) {
+        if (level > MPVLib.MPV_LOG_LEVEL_ERROR) return
+        lastErrorLine = (prefix + text).trim().takeIf { it.isNotEmpty() }
+        Log.w(TAG, "mpv: ${lastErrorLine ?: ""}")
+    }
 
     override fun eventProperty(property: String, value: Long) {
         when (property) {

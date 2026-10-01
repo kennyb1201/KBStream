@@ -81,6 +81,7 @@ import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
+import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -4249,7 +4250,6 @@ class NativePlayerActivity : ComponentActivity() {
         val frames = trickplay ?: TrickplayFrames(
             activity = this,
             url = currentUrl,
-            headers = streamHeaders,
             // The same container the player itself settled on, so a playlist
             // whose marker lives only in the query is fetched through the HLS
             // source instead of the progressive extractors.
@@ -4451,8 +4451,9 @@ class NativePlayerActivity : ComponentActivity() {
         // blackVideoWatchdogToken++ # delayed to allow native window recovery
         autoSourceSwitchCount = 0
 
-        val agent = streamHeaders["User-Agent"] ?: streamHeaders["user-agent"]
-            ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        // Shared with the MPV engine, which used to ask as `mpv/<version>` for
+        // the same stream - see StreamUserAgent.
+        val agent = StreamUserAgent.resolve(streamHeaders)
 
         // Some addon hosts / CDNs need more than the default 20 s connect
         // timeout, especially during peak hours or on first-byte waits.
@@ -4509,8 +4510,7 @@ class NativePlayerActivity : ComponentActivity() {
                     )
             }
 
-        val extraHeaders = streamHeaders
-            .filterKeys { !it.equals("User-Agent", ignoreCase = true) }
+        val extraHeaders = StreamUserAgent.withoutUserAgent(streamHeaders)
             .filterValues { it.isNotBlank() }
         if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
         // Non-UA headers (e.g. Referer for addon hosts) must also reach
@@ -9055,6 +9055,16 @@ class NativePlayerActivity : ComponentActivity() {
             } else {
                 "Continuing in the MPV backup engine…"
             }
+        // Give up this engine's read of the stream BEFORE the other one opens
+        // it. Android runs the new activity's onCreate/onResume first and this
+        // activity's onStop - which is what releases the player - second, so
+        // the backup engine was opening the file while this one still held it.
+        // On a debrid or usenet link, which commonly allows exactly one
+        // connection, that is the backup failing with "this stream could not be
+        // played" every time it is reached from here. stop() closes the loaders
+        // without resetting the player or the position, and onStop writes no
+        // history for a handoff (mpvHandoffStarted), so nothing reads it after.
+        runCatching { exoPlayer?.stop() }
         mpvFallbackLauncher.launch(launch)
         return true
     }
