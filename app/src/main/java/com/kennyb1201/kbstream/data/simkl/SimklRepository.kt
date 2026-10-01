@@ -320,8 +320,14 @@ class SimklRepository(
 
     /**
      * Add to Watchlist (Plan to Watch): POST /sync/add-to-list with the
-     * destination status on the request root. Title/year ride along so
-     * Simkl can resolve titles that only carry a TMDB id.
+     * destination status on EACH item. Title/year ride along so Simkl can
+     * resolve titles that only carry a TMDB id.
+     *
+     * The status used to be sent once, on the request root, which Simkl no
+     * longer accepts — it answers `400 empty_field` — so every mirror from
+     * "Add to Library" failed while the local My List write succeeded and
+     * the menu closed silently. The response is read too: a 201 whose item
+     * came back under `not_found` is a rejection, not a save.
      */
     suspend fun addToWatchlist(
         mediaType: String,
@@ -342,15 +348,20 @@ class SimklRepository(
         }
 
         val isMovie = mediaType.lowercase() == "movie"
-        val entry = SimklAddToListEntry(title = title, ids = ids)
-        val body = SimklAddToListRequest(
+        val entry = SimklAddToListEntry(
             to = "plantowatch",
+            title = title,
+            year = year,
+            ids = ids
+        )
+        val body = SimklAddToListRequest(
             movies = if (isMovie) listOf(entry) else emptyList(),
             shows = if (!isMovie) listOf(entry) else emptyList()
         )
 
         return runCatchingCancellable {
-            api.addToWatchlist(bearer(requireAccessToken()), body).isSuccessful
+            val response = api.addToWatchlist(bearer(requireAccessToken()), body)
+            response.isSuccessful && response.body()?.landed != false
         }.getOrDefault(false)
     }
 

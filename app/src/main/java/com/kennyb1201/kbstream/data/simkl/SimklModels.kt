@@ -111,19 +111,27 @@ data class SimklWatchlistShowsResponse(
 )
 
 /*
- * POST /sync/add-to-list request: per-type arrays of id-bearing entries;
- * the destination status travels on the request ROOT, not per item.
+ * POST /sync/add-to-list request: per-type arrays of id-bearing entries.
+ *
+ * The destination status travels on EACH ITEM, not on the request root.
+ * The root-level `to` this used to send is no longer accepted: Simkl answers
+ * it with `400 empty_field` ("Missed \"to\" parameter"), which is why an
+ * "Add to Library" landed on the app's own My List and on neither tracker's
+ * watchlist while looking like a success. See
+ * https://api.simkl.org/api-reference/simkl/add-to-list.
  */
 @JsonClass(generateAdapter = true)
 data class SimklAddToListRequest(
-    @Json(name = "to") val to: String,
     @Json(name = "movies") val movies: List<SimklAddToListEntry> = emptyList(),
     @Json(name = "shows") val shows: List<SimklAddToListEntry> = emptyList()
 )
 
 @JsonClass(generateAdapter = true)
 data class SimklAddToListEntry(
+    /** Destination status for this item: watching / plantowatch / hold / dropped / completed. */
+    @Json(name = "to") val to: String,
     @Json(name = "title") val title: String? = null,
+    @Json(name = "year") val year: Int? = null,
     @Json(name = "ids") val ids: SimklAddToListIds
 )
 
@@ -132,6 +140,45 @@ data class SimklAddToListIds(
     @Json(name = "imdb") val imdb: String? = null,
     @Json(name = "tmdb") val tmdb: Int? = null,
     @Json(name = "simkl") val simkl: Int? = null
+)
+
+/*
+ * POST /sync/add-to-list response. It always answers 201 — even when it could
+ * not match the item — with `added` holding the entries its resolver took and
+ * `not_found` holding verbatim copies of the ones it did not. Reading only the
+ * status code, as this did, reports "Simkl has no such title" as a save.
+ */
+@JsonClass(generateAdapter = true)
+data class SimklAddToListResponse(
+    @Json(name = "added") val added: SimklAddToListBuckets? = null,
+    @Json(name = "not_found") val notFound: SimklAddToListBuckets? = null
+) {
+    /**
+     * True unless the server positively said it could not match the item.
+     * An unparsed or empty body is taken at its word: the 2xx already said so.
+     */
+    val landed: Boolean
+        get() {
+            val addedAny = added?.hasAny == true
+            val notFoundAny = notFound?.hasAny == true
+            return addedAny || !notFoundAny
+        }
+}
+
+@JsonClass(generateAdapter = true)
+data class SimklAddToListBuckets(
+    @Json(name = "movies") val movies: List<SimklAddToListAddedItem> = emptyList(),
+    @Json(name = "shows") val shows: List<SimklAddToListAddedItem> = emptyList()
+) {
+    val hasAny: Boolean get() = movies.isNotEmpty() || shows.isNotEmpty()
+}
+
+/** One entry of an `added`/`not_found` bucket; only its presence matters. */
+@JsonClass(generateAdapter = true)
+data class SimklAddToListAddedItem(
+    @Json(name = "to") val to: String? = null,
+    @Json(name = "year") val year: Int? = null,
+    @Json(name = "type") val type: String? = null
 )
 
 @JsonClass(generateAdapter = true)

@@ -1108,7 +1108,15 @@ object MdbListClient {
     private suspend fun postSync(
         apiKey: String,
         url: String,
-        payload: JSONObject
+        payload: JSONObject,
+        /**
+         * The add endpoints (/watchlist/items/add, /lists/{id}/items/add)
+         * answer 200 with {added, existing, not_found}: an item the API could
+         * not resolve still comes back 200, with the id in `not_found` and
+         * nothing added. Reading the status code alone is what let a rejected
+         * "add to watchlist" render as a saved one.
+         */
+        validateAddResult: Boolean = false
     ): Boolean = withContext(Dispatchers.IO) {
         runCatching {
             val request = Request.Builder()
@@ -1120,16 +1128,26 @@ object MdbListClient {
                 .tag(WRITE_TAG)
                 .build()
             client.newCall(request).execute().use { response ->
+                val text = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
+                    Log.w(TAG, "sync post failed code=${response.code} ${text.take(200)}")
+                    return@use false
+                }
+                invalidateWatchedSnapshot()
+                if (!validateAddResult) return@use true
+
+                val root = runCatching { JSONObject(text) }.getOrNull() ?: return@use true
+                val added = root.optInt("added", 0)
+                val existing = root.optInt("existing", 0)
+                val notFound = root.optInt("not_found", 0)
+                if (added == 0 && existing == 0 && notFound > 0) {
                     Log.w(
                         TAG,
-                        "sync post failed code=${response.code} " +
-                            response.body?.string().orEmpty().take(200)
+                        "add resolved nothing: not_found=$notFound ${text.take(200)}"
                     )
-                } else {
-                    invalidateWatchedSnapshot()
+                    return@use false
                 }
-                response.isSuccessful
+                true
             }
         }.getOrDefault(false)
     }
@@ -1731,7 +1749,8 @@ object MdbListClient {
         return postSync(
             apiKey,
             "$BASE/lists/$listId/items/add?apikey=$apiKey",
-            payload
+            payload,
+            validateAddResult = true
         )
     }
 
@@ -1828,7 +1847,8 @@ object MdbListClient {
         return postSync(
             apiKey,
             "$BASE/watchlist/items/add?apikey=$apiKey",
-            payload
+            payload,
+            validateAddResult = true
         )
     }
 

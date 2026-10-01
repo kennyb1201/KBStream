@@ -151,14 +151,16 @@ interface SimklApiService {
     /*
      * Watchlist write: POST /sync/add-to-list moves an item into a
      * watchlist status (plantowatch here) WITHOUT recording a watch
-     * event — exactly the "Add to Library" semantics. The `to` field
-     * sits at the request root, not per item, on this endpoint family.
+     * event — exactly the "Add to Library" semantics. `to` sits on each
+     * ITEM, not at the request root; the server rejects a root-only `to`
+     * with 400 empty_field. The response reports what landed, which is why
+     * it is parsed rather than merely checked for success.
      */
     @POST("sync/add-to-list")
     suspend fun addToWatchlist(
         @Header("Authorization") authorization: String,
         @Body body: SimklAddToListRequest
-    ): Response<ResponseBody>
+    ): Response<SimklAddToListResponse>
 
     @POST("scrobble/start")
     suspend fun scrobbleStart(
