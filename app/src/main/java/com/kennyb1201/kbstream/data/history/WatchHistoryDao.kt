@@ -124,6 +124,28 @@ interface WatchHistoryDao {
     )
     suspend fun getInProgressForParents(parentIds: List<String>): List<WatchHistoryEntity>
 
+    /**
+     * Reactive form of [getInProgressForParents]: the same rows, re-emitted
+     * whenever the table changes.
+     *
+     * The Detail screen's resume bar and per-episode progress bars used to read
+     * these rows ONCE per load, so a progress write that landed after that read
+     * (the player finishing an episode as the viewer leaves it) left the bars
+     * on an episode that was already marked watched until the page was reopened.
+     * Collecting them makes those bars follow the database instead of a snapshot
+     * of it.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND positionMs > 0
+          AND isCompleted = 0
+        ORDER BY updatedAt DESC
+        """
+    )
+    fun observeInProgressForParents(parentIds: List<String>): Flow<List<WatchHistoryEntity>>
+
     @Query(
         """
         SELECT * FROM watch_history

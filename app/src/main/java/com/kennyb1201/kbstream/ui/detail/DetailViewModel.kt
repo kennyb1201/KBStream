@@ -35,6 +35,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
@@ -43,6 +44,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -100,6 +102,37 @@ fun computeEpisodeWatched(
     val key = WatchedEpisodeState.buildEpisodeKey(parentId, season, episode) ?: return false
     return key in watchedKeys
 }
+
+/**
+ * In-progress rows keyed the way an episode card looks its progress up.
+ *
+ * Rows arrive newest-first; iterating them oldest-first over a single map lets
+ * the newest row win per key, which matters when a title holds several rows for
+ * one episode (a re-watch, or a row written under each id flavor). Each row is
+ * filed under BOTH its own episodeStreamId and the route-flavored
+ * "<parentId>:<season>:<episode>", because a row written under the title's
+ * other id flavor carries a streamId the card on this flavor never matches (see
+ * [refreshLocalWatchState]).
+ */
+internal fun indexInProgressByStreamId(
+    parentId: String,
+    rows: List<WatchHistoryEntity>
+): Map<String, WatchHistoryEntity> =
+    rows.reversed()
+        .flatMap { row ->
+            buildList {
+                row.episodeStreamId
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { add(it to row) }
+
+                val season = row.season
+                val episode = row.episode
+                if (season != null && episode != null) {
+                    add("$parentId:$season:$episode" to row)
+                }
+            }
+        }
+        .toMap()
 
 /**
  * True when [resume] names an episode that [completedEntries] shows finished.
@@ -280,6 +313,14 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
      * episode keys without paying for the cloud snapshot again.
      */
     private var mdbListWatchedEpisodes: Set<Pair<Int, Int>> = emptySet()
+
+    /**
+     * Collects this title's in-progress rows so the RESUME bar and the episode
+     * cards' progress bars follow the watch-history table instead of a snapshot
+     * of it. Restarted per load (the ViewModel is shared across titles and
+     * outlives the composable), cancelled when a fresh load tears the page down.
+     */
+    private var watchProgressJob: Job? = null
 
     // Hot reactive StateFlow checking if stream addons are configured and present globally
     val hasStreamAddons: StateFlow<Boolean> = addonManager.streamAddons
@@ -513,21 +554,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
          */
         val historyParentIds = localHistoryParentIds(parentId)
 
-        val localResume = runCatchingCancellable {
-            historyDao.getResumeForParents(historyParentIds)
-        }.getOrNull()
+        // The per-episode map the cards draw their bars from, and the local
+        // RESUME row the hero's bar falls back to. One reader for both, so the
+        // one-shot load and the reactive observer that follows it cannot
+        // disagree about what is in progress.
+        val inProgressRows = runCatchingCancellable {
+            historyDao.getInProgressForParents(historyParentIds)
+        }.getOrDefault(emptyList())
 
-        if (localResume != null && localResume.positionMs > 0L) {
-            _resumeInfo.value = localResume
-            resumeFromLocalHistory = true
-        } else if (resumeFromLocalHistory) {
-            // The row this screen was showing is gone - the title was finished
-            // or cleared while the screen was away - so drop it rather than
-            // leave a RESUME row pointing at a position the device no longer
-            // has.
-            _resumeInfo.value = null
-            resumeFromLocalHistory = false
-        }
+        publishLocalProgress(parentId, inProgressRows)
 
         // Simkl cloud-session fallback: when local history has no in-progress
         // position for this title, derive a display-only resume row from the
@@ -544,34 +579,6 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 tmdbId = tmdbId
             )
         }
-
-        // Per-episode in-progress map for the episode cards: every card derives
-        // its own progress bar / time left from its episodeStreamId instead of
-        // only the single latest row.
-        _inProgressByStreamId.value = runCatchingCancellable {
-            historyDao.getInProgressForParents(historyParentIds)
-        }.getOrDefault(emptyList())
-            // Rows arrive newest-first and toMap keeps the LAST entry per key
-            // - reverse so the newest row wins per streamId.
-            .reversed()
-            .flatMap { row ->
-                // Index each row by its own streamId AND by the route-flavored
-                // episode id: a row written under the title's other id flavor
-                // carries "tt123:2:5" while this screen's cards compare
-                // "tmdb:456:2:5".
-                buildList {
-                    row.episodeStreamId
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { add(it to row) }
-
-                    val season = row.season
-                    val episode = row.episode
-                    if (season != null && episode != null) {
-                        add("$parentId:$season:$episode" to row)
-                    }
-                }
-            }
-            .toMap()
 
         val localCompletedEntries = runCatchingCancellable {
             historyDao.getCompletedForParents(historyParentIds)
@@ -601,7 +608,65 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
             _resumeInfo.value = null
         }
 
+        // Follow the table from here on: the one-shot read above is only the
+        // first frame, and a progress write that lands after it must not leave
+        // a bar behind on an episode that is already done.
+        startWatchProgressObserver(parentId, historyParentIds)
+
         return localCompletedEntries
+    }
+
+    /**
+     * Publishes the local in-progress snapshot: the per-episode map the cards
+     * draw their bars from, and the RESUME row (which the hero's bar falls back
+     * to). Shared by the one-shot read in [refreshLocalWatchState] and the
+     * reactive observer that follows it, so the two cannot disagree.
+     *
+     * The rows arrive newest-first, which is what makes "the first in-progress
+     * row" the same row [WatchHistoryDao.getResumeForParents] would return.
+     */
+    private fun publishLocalProgress(
+        parentId: String,
+        inProgressRows: List<WatchHistoryEntity>
+    ) {
+        _inProgressByStreamId.value =
+            indexInProgressByStreamId(parentId, inProgressRows)
+
+        val localResume = inProgressRows.firstOrNull { it.positionMs > 0L }
+        if (localResume != null) {
+            _resumeInfo.value = localResume
+            resumeFromLocalHistory = true
+        } else if (resumeFromLocalHistory) {
+            // The row this screen was showing is gone - the episode was
+            // finished or cleared while the screen was away - so drop it rather
+            // than leave a RESUME row pointing at a position the device no
+            // longer has.
+            _resumeInfo.value = null
+            resumeFromLocalHistory = false
+        }
+    }
+
+    /**
+     * Collects this title's in-progress rows for as long as the title is
+     * loaded, so the hero's RESUME bar and every episode card's progress bar
+     * track the watch-history table instead of a snapshot taken at load time.
+     *
+     * Restarted per load because the ViewModel outlives the composable and is
+     * shared across titles: without the cancel, a previous title's rows would
+     * keep being published into the new page's bars.
+     */
+    private fun startWatchProgressObserver(
+        parentId: String,
+        historyParentIds: List<String>
+    ) {
+        watchProgressJob?.cancel()
+
+        watchProgressJob = viewModelScope.launch {
+            historyDao.observeInProgressForParents(historyParentIds)
+                .collect { rows ->
+                    publishLocalProgress(parentId, rows)
+                }
+        }
     }
 
     /**
@@ -682,6 +747,9 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         _episodeError.value = null
         _episodesLoading.value = false
         _inProgressByStreamId.value = emptyMap()
+        // Stop the previous title's progress observer with the state it was
+        // feeding; a new one starts once this load knows the id twins.
+        watchProgressJob?.cancel()
         latestEpisodeSeasonRequest = initialSeason
         _collection.value = null
         _mdbListRatings.value = null
