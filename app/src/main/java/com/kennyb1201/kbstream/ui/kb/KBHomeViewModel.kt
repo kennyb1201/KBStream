@@ -40,8 +40,8 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
         /**
          * Resolved tile/hero artwork per browse shortcut, keyed by
          * [BrowseHomeShortcut.chipKey]. Filled in after the row has already
-         * drawn, so a tile that has no art yet (or none at all) keeps its
-         * wordmark instead of holding the rail back.
+         * drawn, so a tile that has no art yet (or none at all) keeps its name
+         * instead of holding the rail back.
          */
         val browseShortcutArt: Map<String, BrowseShortcutArt> = emptyMap(),
         val isLoading: Boolean = true
@@ -109,9 +109,9 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
      *
      * The work is a single discover page (plus a brand logo, for a service or
      * studio) per shortcut - see [TmdbRepository.getBrowseShortcutArt] - and it
-     * is deliberately NOT awaited by [load]: Home's first frame draws the
-     * wordmark tiles and each one upgrades to its backdrop/clearlogo when its
-     * art arrives.
+     * is deliberately NOT awaited by [load]: Home's first frame draws the name
+     * tiles and each one upgrades to its backdrop (and, for a service or
+     * studio, its brand mark) when its art arrives.
      */
     private fun resolveBrowseShortcutArt(
         shortcuts: List<BrowseHomeShortcut>
@@ -119,8 +119,8 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
         browseArtJob?.cancel()
 
         // Publish whatever the session already resolved before starting new
-        // work, so a resume does not flash the wordmark fallback over a tile
-        // whose art is sitting in the cache.
+        // work, so a resume does not flash the name fallback over a tile whose
+        // art is sitting in the cache.
         if (browseArtCache.isNotEmpty()) {
             _state.value = _state.value.copy(
                 browseShortcutArt = browseArtCache.toMap()

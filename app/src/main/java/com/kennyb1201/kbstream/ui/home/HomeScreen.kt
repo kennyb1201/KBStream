@@ -838,12 +838,13 @@ private fun HomeHero(
     // single top-ranked plate used to do here. Empty for a catalog title, a KB
     // folder and the non-browse cases, which keep HeroClearLogo below.
     heroLogoUrls: List<String> = emptyList(),
-    // A hero that is nothing but a logo - the Browse chip a tile hands up -
-    // centres that logo in the whole hero instead of anchoring it to the
+    // A hero that is nothing but a mark or a name - the Browse chip a tile
+    // hands up - centres that in the whole hero instead of anchoring it to the
     // bottom. A catalog title and a KB folder are letters + metadata + buttons
     // stacked up from the seam, so they keep the bottom anchor; a browse chip
-    // brings no metadata at all, and left on the bottom anchor its wordmark
-    // floats in the lower third of an otherwise empty panel.
+    // brings no metadata at all, and left on the bottom anchor its mark (or the
+    // genre/decade name standing in for one) floats in the lower third of an
+    // otherwise empty panel.
     centerLogo: Boolean = false
 ) {
     val context = LocalContext.current
@@ -860,7 +861,7 @@ private fun HomeHero(
         ?: preview.logo
 
     // Whether the browse brand mark was rejected in full: the hero then shows
-    // the shortcut's name, mirroring the tile's wordmark fallback.
+    // the shortcut's name, mirroring the tile's own fallback.
     var brandMarkUnusable by remember(heroLogoUrls) { mutableStateOf(false) }
 
     val trailerPlaying =
@@ -1934,10 +1935,11 @@ private fun HomeHeroHost(
             continueWatchingItem = continueWatchingItem.value,
             // Collection manifests supply their own wordmark logo — render it
             // larger than the shared TMDB hero logo. A browse shortcut is NOT
-            // in that group even though it also overrides the hero: its
-            // clearlogo comes from TMDB, so it takes the standard TMDB box and
-            // reads at the same size as a catalog title's logo rather than
-            // looming over the hero in the collection wordmark's frame.
+            // in that group even though it also overrides the hero: the only
+            // mark it can bring is a service's or studio's TMDB brand logo, so
+            // it takes the standard TMDB box and reads at the same size as a
+            // catalog title's logo rather than looming over the hero in the
+            // collection wordmark's frame.
             heroLogoWidth = when {
                 heroFolder != null -> CollectionHeroLogoWidth
                 else -> HeroLogoWidth
@@ -1949,10 +1951,11 @@ private fun HomeHeroHost(
             // The focused Browse tile's brand-mark candidates, so the hero
             // draws its service/studio mark the same way the tile does (and
             // shows the shortcut's name if none can be drawn). Empty for every
-            // other hero owner, which keeps the single-URL HeroClearLogo path.
+            // other hero owner - and for a genre / tag / decade / collection,
+            // which own no mark at all and let the hero say their name.
             heroLogoUrls = browseArt?.clearlogoUrls.orEmpty(),
-            // A browse chip's hero is its clearlogo alone, so the mark sits in
-            // the middle of the panel rather than at the bottom of it.
+            // A browse chip's hero is its mark or its name and nothing else, so
+            // it sits in the middle of the panel rather than at the bottom.
             centerLogo = heroBrowse != null
         )
     }

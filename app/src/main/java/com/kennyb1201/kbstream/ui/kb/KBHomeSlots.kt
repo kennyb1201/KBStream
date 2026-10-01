@@ -10,11 +10,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +26,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -54,10 +53,8 @@ import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
 import com.kennyb1201.kbstream.ui.home.TvSafeAreaHorizontal
-import com.kennyb1201.kbstream.ui.search.browseCategoryIcon
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.CardShape
-import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -539,11 +536,12 @@ private fun CollectionFolderTile(
  * chip's own category decides (genre, keyword, service/network, studio,
  * collection, decade), so the row can never drift from what the browse browser
  * shows. Its artwork is resolved separately, after the row has drawn: a browse
- * chip carries no manifest cover and no curated art, so the tile's clearlogo -
+ * chip carries no manifest cover and no curated art, so the tile's backdrop -
  * and the backdrop the HERO swaps in while that tile is focused - come from one
  * TMDB discover lookup (see KBHomeViewModel and
- * TmdbRepository.getBrowseShortcutArt), and a shortcut TMDB has nothing for
- * simply keeps the wordmark it has always drawn.
+ * TmdbRepository.getBrowseShortcutArt), a service's or studio's brand mark
+ * comes from that same lookup, and a shortcut TMDB has nothing for simply keeps
+ * the name it has always drawn.
  */
 @Composable
 fun KBHomeBrowseRail(
@@ -599,22 +597,29 @@ fun KBHomeBrowseRail(
 }
 
 /**
- * One Browse tile: a landscape card that draws the shortcut's clearlogo on the
- * card's own surface, and nothing else.
+ * One Browse tile: a landscape card whose face IS the shortcut - the chip's own
+ * name, or a service's / studio's brand mark - over the dim backdrop the tile's
+ * lookup resolved.
  *
- * No backdrop on the tile. A category's resolved still reads as a mismatched
- * thumbnail under a wordmark rather than as a cover, and it no longer has a job
- * to do here: the caption that would have been under the logo is gone, and the
- * rail's own name (see [BrowseHomeRail.title]) is what says where the chip came
- * from. The backdrop is not wasted - the HERO still swaps in the resolved
- * backdrop and clearlogo while a tile is focused (see HomeScreen's
- * HomeHeroHost), which is where a full-bleed still belongs.
+ * The name is the card, not a caption on one. A tile used to carry a kind badge
+ * in its corner (a film reel, a calendar, a tag) and the chip's name in a
+ * caption under its logo; both are gone. The rail's own name (see
+ * [KBHomeBrowseRail]'s title) already says which KIND of door the row holds,
+ * so the badge only labelled the row a second time, and a name tucked into a
+ * corner under a logo reads as decoration rather than as the label it is.
  *
- * The wordmark is the fallback, not the design. A shortcut TMDB has no logo
- * for - and every tile on the first frame, before the lookups land - keeps
- * the plain surface with the chip's name on it, so the row is legible
- * immediately and upgrades in place rather than holding the rail back for a
- * network walk.
+ * No wordmark but a brand's own. A tile's clearlogo is a service's or studio's
+ * mark and nothing else (see [BrowseShortcutArt]); a category that owns no mark
+ * - a genre, a tag, a decade, a collection - says its own name instead of
+ * borrowing a popular title's wordmark, which is what made the Adventure tile
+ * and the hero above it look like a poster for whatever film TMDB happened to
+ * spotlight in that genre.
+ *
+ * The backdrop is TEXTURE here, not a thumbnail: kept well under full strength
+ * and then dimmed further by the scrim below, it gives the card its color
+ * without competing with the name on it. The lookup's backdrop is shared with
+ * the HERO (see HomeScreen's HomeHeroHost), which is where a full-bleed still
+ * belongs.
  *
  * A brand mark is drawn through [BrandMarkImage] rather than as a plain image,
  * and that is not cosmetic: a service's or studio's mark is as often as not
@@ -622,7 +627,7 @@ fun KBHomeBrowseRail(
  * to, which on this near-black card is a logo that is *there* and invisible.
  * The shared composable whitens exactly those, and reports the marks that
  * cannot be drawn at all - a featureless plate, art that never arrives - so
- * the wordmark stands in instead of an empty card.
+ * the chip's name stands in instead of an empty card.
  */
 @Composable
 private fun BrowseShortcutTile(
@@ -640,7 +645,9 @@ private fun BrowseShortcutTile(
     // The brand's WHOLE candidate list when it has one (see BrowseShortcutArt):
     // the tile must be able to step past a mark that cannot be drawn, or a
     // service whose top mark is a blank plate shows its name instead of a logo.
-    // A genre / keyword / decade has only the single spotlight wordmark.
+    // Empty for every category that owns no mark - a genre, a tag, a decade, a
+    // collection - which draws its own name, so the single-URL fallback below
+    // only ever carries a brand's first candidate.
     val clearlogoUrls = art?.clearlogoUrls.orEmpty()
         .ifEmpty {
             listOfNotNull(art?.clearlogoUrl?.takeIf { it.isNotBlank() })
@@ -697,8 +704,8 @@ private fun BrowseShortcutTile(
                 )
             }
 
-            // Legibility scrim: the logo, the badge and the caption all sit on
-            // it, so a bright backdrop cannot swallow any of them.
+            // Legibility scrim: the name or the brand mark sits on it, so a
+            // bright backdrop cannot swallow either.
             Box(
                 modifier = Modifier
                     .matchParentSize()
@@ -712,41 +719,24 @@ private fun BrowseShortcutTile(
                     )
             )
 
-            // What KIND of door this chip is (a genre, a tag, a service, a
-            // studio, a decade, a collection). The rail already groups the
-            // kinds it shares, but within "Genres & Tags" nothing else tells a
-            // genre from a keyword.
-            Box(
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(7.dp)
-                    .background(KBVoid.copy(alpha = 0.55f), KBShapePill)
-                    .padding(horizontal = 8.dp, vertical = 5.dp)
-            ) {
-                Icon(
-                    imageVector = browseCategoryIcon(shortcut.categoryKey),
-                    contentDescription = null,
-                    tint = KBAccent,
-                    modifier = Modifier.size(13.dp)
-                )
-            }
-
             if (clearlogoUrls.isEmpty() || markUnusable) {
-                // No clearlogo (no art at all, a category TMDB has no logo
-                // for, or the first frame): the chip's own name is the mark.
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(horizontal = 10.dp)
-                ) {
-                    Text(
-                        text = shortcut.name.uppercase(),
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+                // No brand mark: a genre, a tag, a decade or a collection owns
+                // none, a service's may all have turned out undrawable, and
+                // every tile is in this state on the first frame. The chip's
+                // own name IS the tile - centred and uppercased so it reads as
+                // the card's face rather than as a caption under one.
+                Text(
+                    text = shortcut.name.uppercase(),
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                )
             } else {
                 BrandMarkLogo(
                     urls = clearlogoUrls,
@@ -755,23 +745,6 @@ private fun BrowseShortcutTile(
                     modifier = Modifier
                         .fillMaxWidth(0.72f)
                         .height(CollectionTileHeight * 0.42f)
-                )
-            }
-
-            // A tile drawn from an abstract brand mark - a glyph, a row of
-            // dots - still has to say which door it is, so the chip's own name
-            // sits in the caption corner whenever a logo (rather than the
-            // fallback wordmark, which already IS the name) is on the card.
-            if (clearlogoUrls.isNotEmpty() && !markUnusable) {
-                Text(
-                    text = shortcut.name,
-                    color = KBTextHi.copy(alpha = 0.92f),
-                    style = MaterialTheme.typography.labelSmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(start = 8.dp, end = 8.dp, bottom = 5.dp)
                 )
             }
         }

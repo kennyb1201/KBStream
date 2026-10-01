@@ -37,23 +37,30 @@ import java.util.concurrent.atomic.AtomicInteger
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
- * Artwork for a Home Browse tile: a backdrop to draw as its cover and a
- * clearlogo to sit over it.
+ * Artwork for a Home Browse tile: a backdrop to draw as its cover, plus the
+ * brand mark a service or a studio sits over it.
  *
- * Null fields are the honest answer for a shortcut TMDB has no art for (a
- * keyword with no backdrop-carrying titles, a service whose brand mark is not
- * in the registry); the tile then falls back to its own wordmark rather than
+ * There is deliberately no wordmark field for a genre, a keyword or a decade.
+ * The only logo one of those could borrow is a spotlight title's, and drawing
+ * that says the wrong thing: it put a Spider-Man wordmark on the Adventure tile
+ * and across the hero while the viewer scrolled Genres or Decades. Those
+ * shortcuts come back with no clearlogo at all, and their tiles and hero say
+ * the chip's own name instead.
+ *
+ * Null / empty fields are the honest answer for a shortcut TMDB has no art for
+ * (a keyword with no backdrop-carrying titles, a service whose brand mark is
+ * not in the registry); the tile then falls back to its own name rather than
  * drawing a blank card.
  */
 data class BrowseShortcutArt(
     val backdropUrl: String? = null,
     val clearlogoUrl: String? = null,
     /**
-     * Every brand-mark candidate for a service or studio, best first (empty for
-     * a genre / keyword / decade, whose clearlogo is a single spotlight
-     * wordmark). [clearlogoUrl] is the first of these; the tile and the hero
-     * both walk the list, so a brand whose top mark is undrawable still gets
-     * one of its own instead of showing nothing.
+     * Every brand-mark candidate for a service or studio, best first. Empty for
+     * a genre / keyword / decade / collection, none of which owns a mark.
+     * [clearlogoUrl] is the first of these; the tile and the hero both walk the
+     * list, so a brand whose top mark is undrawable still gets one of its own
+     * instead of showing nothing.
      */
     val clearlogoUrls: List<String> = emptyList()
 )
@@ -2661,15 +2668,19 @@ class TmdbRepository private constructor(context: Context) :
      * browser's chips are text, and the destination screen resolves its own
      * header. So the tile is given what that screen shows first - one
      * spotlight title from the dimension itself (a genre's most popular, a
-     * studio's, a decade's, a service's, a keyword's) - as its backdrop, with
-     * the clearlogo drawn over it. A service or studio is the exception in the
-     * other direction: its BRAND mark is the clearlogo, the same rule the
-     * studio screen's header follows (see [getEntityLogoUrls]). A collection
-     * needs neither, because it has artwork of its own (see [getCollection]).
+     * studio's, a decade's, a service's, a keyword's) - as its backdrop. A
+     * service or a studio additionally draws its BRAND mark over that backdrop,
+     * the same rule the studio screen's header follows (see
+     * [getEntityLogoUrls]). A genre, a keyword or a decade draws nothing over it
+     * and says its own name instead: the spotlight title's wordmark is not that
+     * category's name, and standing it in for one put a Spider-Man logo on the
+     * Adventure tile and across the hero while the viewer scrolled Genres or
+     * Decades. A collection needs neither, because it has artwork of its own
+     * (see [getCollection]).
      *
      * Failure-tolerant throughout: a shortcut TMDB has no art for comes back
-     * with null fields (or as null), and the tile keeps the wordmark it draws
-     * today rather than showing a blank card.
+     * with null fields (or as null), and the tile keeps the name it draws today
+     * rather than showing a blank card.
      */
     suspend fun getBrowseShortcutArt(
         categoryKey: String,
@@ -2704,37 +2715,29 @@ class TmdbRepository private constructor(context: Context) :
                 networkIsCompany = networkIsCompany
             )
 
+            // The spotlight still is the tile's and the hero's backdrop - a
+            // category does reach the catalog through titles, so one of its
+            // popular ones is what the card has to show - and deliberately ONLY
+            // the backdrop. The spotlight's wordmark used to be taken here as
+            // the tile's clearlogo, which is what put a Spider-Man logo on the
+            // Adventure tile: a category's identity is its name, not one
+            // title's, so nothing title-shaped is borrowed here.
             if (spotlight != null) {
                 backdropUrl =
                     spotlight.backdropPath
                         ?.takeIf { it.isNotBlank() }
                         ?.let { BACKDROP_BASE + it }
-
-                // The spotlight's own wordmark: the only logo a genre,
-                // keyword or decade has to offer, since none of them owns a
-                // brand mark of its own.
-                clearlogoUrl =
-                    runCatchingCancellable {
-                        val mediaType =
-                            if (spotlight.title.isNullOrBlank()) "series" else "movie"
-                        fetchEnrichedMetaCached("tmdb:${spotlight.id}", mediaType)
-                            ?.bestLogoPath()
-                            ?.let { LOGO_BASE + it }
-                    }.getOrNull()
             }
         }
 
-        // A service or studio draws its brand mark, not the spotlight
-        // title's; the spotlight logo above is only the fallback for a brand
-        // whose entity artwork TMDB does not hold.
+        // The only clearlogo a browse shortcut has: a service's or a studio's
+        // own brand mark (see [getEntityLogoUrls]). Nothing else may lend a
+        // title's wordmark to a category that owns no mark.
         if (categoryKey == "services" || categoryKey == "studios") {
             // The WHOLE ranked list, not just its head: the tile and the hero
             // walk it past marks that cannot be drawn on a dark surface
             // (BrandMarkLogo), and a service whose top mark is a blank plate
-            // then still gets one of its own. A non-empty list also replaces
-            // the spotlight fallback above - the brand's mark beats another
-            // title's wordmark, which is what a service tile should never be
-            // drawn with.
+            // then still gets one of its own.
             val brandCandidates = runCatchingCancellable {
                 getEntityLogoUrls(
                     entityId = networkOrCompanyId ?: entryId,
