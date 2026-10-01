@@ -1228,6 +1228,17 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * Bring back every chip hidden on this profile, across all categories.
+     * The browse browser offers this as a single visible action so restoring
+     * a hidden chip never depends on remembering which category - or that a
+     * long-press on a category chip was the way back at all.
+     */
+    fun restoreAllBrowseChips() {
+        _hiddenBrowseChips.value = BrowseChipVisibility.unhideAll(app)
+        publishBrowseCategories(rawBrowseCategories)
+    }
+
+    /**
      * True while the ACTIVE profile is a kids profile (kidsMaxAge set).
      * Drives the kid-focused browse chips, keyword suggestions, search
      * certification filtering, and add-on rail suppression.
