@@ -1141,47 +1141,9 @@ Log.d(
                             "result=$removedFromSimkl"
                     )
 
-                    // Playback-sourced cards (paused mid-title) live in a
-                    // separate Simkl playback table - removing history alone
-                    // does not clear the paused session, so the card would
-                    // keep reappearing from the remote feed. A paused title
-                    // is usually backed by BOTH a local resume row and a
-                    // Simkl session, and the rail dedupe can surface the
-                    // local twin (which carries no playbackId) - so sweep
-                    // every open session matching this parent instead of
-                    // only the one this card happened to carry.
-                    simklRepository.deletePlaybackSessionsForParent(
-                        parentId = parentId,
-                        title = item.title
-                    )
-                    item.playbackId?.let { playbackId ->
-                        simklRepository.deletePlaybackSession(
-                            playbackId
-                        )
-                    }
                 }
 
-                // MDBList-backed cards come back from its paused playback
-                // feed the same way; POST /scrobble/clear drops that session
-                // so the removed title stops resurfacing.
-                if (MdbListClient.isConfigured(getApplication())) {
-                    runCatchingCancellable {
-                        MdbListClient.scrobbleClear(
-                            getApplication(),
-                            isMovie = item.parentType?.lowercase() == "movie",
-                            imdbId = item.parentId
-                                ?.takeIf { it.startsWith("tt") },
-                            tmdbId = item.tmdbId,
-                            season = item.season,
-                            episode = item.episode
-                        )
-                    }.onFailure {
-                        Log.w(
-                            "HOME_UPNEXT",
-                            "MDBList scrobble/clear failed: ${it.message}"
-                        )
-                    }
-                }
+                clearTrackerPlaybackSessions(item, parentId)
 
                 // Keep the TV launcher Continue Watching rail in sync with
                 // the in-app removal (full reconcile is cheap and self-healing).
@@ -1206,6 +1168,144 @@ Log.d(
                     "HOME_UPNEXT",
                     "Failed to remove continue watching parent=$parentId",
                     e
+                )
+            }
+        }
+    }
+
+    /**
+     * Long-press "Mark as Watched" on a Continue Watching card.
+     *
+     * A movie is marked watched through the shared whole-title path; a card
+     * that names an episode marks exactly that episode, so the rail advances
+     * to the next one instead of the whole show disappearing. Either way the
+     * card has to leave the rail for good, so the mark is followed by the
+     * same tracker-session cleanup and dismissal a Remove uses - otherwise
+     * the paused remote session keeps feeding the card back on the next
+     * refresh even though the local history was cleaned up.
+     */
+    fun markContinueWatchingAsWatched(item: UpNextItem) {
+
+        val target =
+            upNextWatchedTarget(item)
+                ?: return
+
+        viewModelScope.launch {
+
+            try {
+
+                // Local guarantee: a mark made while a stale feed snapshot is
+                // in flight must not be re-added by it. Watching the title
+                // again later clears this.
+                dismissedContinueWatching[
+                    showDedupeKey(item)
+                ] = System.currentTimeMillis()
+
+                persistDismissedContinueWatching()
+
+                when (target) {
+                    is UpNextWatchedTarget.WholeTitle ->
+                        watchedStatusRepository.markWatchedLocal(
+                            target.parentId,
+                            target.type
+                        )
+
+                    is UpNextWatchedTarget.Episode ->
+                        watchedStatusRepository.markEpisodeWatchedLocal(
+                            id = target.parentId,
+                            type = "series",
+                            season = target.season,
+                            episode = target.episode,
+                            episodeStreamId = target.episodeStreamId,
+                            showName = target.title,
+                            posterUrl = target.poster,
+                            tmdbId = target.tmdbId
+                        )
+                }
+
+                // Scoped to the marked episode when the card named one, so a
+                // paused session on ANOTHER episode of the same show stays
+                // on the rail.
+                clearTrackerPlaybackSessions(
+                    item = item,
+                    parentId = target.parentId,
+                    seasonsEpisodes =
+                        (target as? UpNextWatchedTarget.Episode)
+                            ?.let { setOf(it.season to it.episode) }
+                )
+
+                // Keep the TV launcher rail in sync with the in-app change
+                // (full reconcile is cheap and self-healing).
+                TvLauncherPublisher.sync(
+                    getApplication(),
+                    watchHistoryRepository.getAll()
+                )
+
+                _refreshTrigger.value += 1
+
+                Log.i(
+                    "HOME_UPNEXT",
+                    "Marked continue watching watched parent=${target.parentId}"
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(
+                    "HOME_UPNEXT",
+                    "Failed to mark continue watching watched ${target.parentId}",
+                    e
+                )
+            }
+        }
+    }
+
+    /**
+     * Mirrors a Continue Watching removal/mark to the trackers' open playback
+     * sessions. Playback-sourced cards (paused mid-title) live in a separate
+     * Simkl playback table and an MDBList paused session, so cleaning up
+     * local history alone leaves the card resurfacing from the remote feed. A
+     * paused title is usually backed by BOTH a local resume row and a remote
+     * session, and the rail dedupe can surface the local twin (which carries
+     * no playbackId), so this sweeps every open session for the parent
+     * instead of only the one the card happened to carry. When
+     * [seasonsEpisodes] is given, only those episodes are swept.
+     */
+    private suspend fun clearTrackerPlaybackSessions(
+        item: UpNextItem,
+        parentId: String,
+        seasonsEpisodes: Set<Pair<Int, Int>>? = null
+    ) {
+        if (
+            simklRepository.isConfigured() &&
+            simklRepository.hasToken()
+        ) {
+            simklRepository.deletePlaybackSessionsForParent(
+                parentId = parentId,
+                title = item.title,
+                seasonsEpisodes = seasonsEpisodes
+            )
+            item.playbackId?.let { playbackId ->
+                simklRepository.deletePlaybackSession(
+                    playbackId
+                )
+            }
+        }
+
+        if (MdbListClient.isConfigured(getApplication())) {
+            runCatchingCancellable {
+                MdbListClient.scrobbleClear(
+                    getApplication(),
+                    isMovie = item.parentType?.lowercase() == "movie",
+                    imdbId = item.parentId
+                        ?.takeIf { it.startsWith("tt") },
+                    tmdbId = item.tmdbId,
+                    season = item.season,
+                    episode = item.episode
+                )
+            }.onFailure {
+                Log.w(
+                    "HOME_UPNEXT",
+                    "MDBList scrobble/clear failed: ${it.message}"
                 )
             }
         }

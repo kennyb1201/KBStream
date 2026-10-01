@@ -315,51 +315,72 @@ class YoutubeChunkedDataSourceFactory(
             }
         }
 
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-            // googlevideo only serves Range requests from byte 0. Skip the
-            // prefix we already delivered to ExoPlayer from previous chunks.
+        /** Skips [bytesToSkip] bytes of the current response; false at end of input. */
+        private fun skipChunkPrefix(): Boolean {
             while (bytesToSkip > 0) {
                 val toRead = minOf(bytesToSkip, skipBuffer.size.toLong()).toInt()
                 val skipped = upstream.read(skipBuffer, 0, toRead)
                 if (skipped == C.RESULT_END_OF_INPUT) {
                     bytesToSkip = 0
-                    return C.RESULT_END_OF_INPUT
+                    return false
                 }
                 bytesToSkip -= skipped
             }
+            return true
+        }
 
-            if (!isYouTubeStream || !chunkedRange) {
-                // Not a YouTube stream, or googlevideo only let us start an
-                // open-ended read — just stream it straight through.
-                return upstream.read(buffer, offset, length)
-            }
+        override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            while (true) {
+                // googlevideo only serves Range requests from byte 0, so every
+                // chunk is requested from the start of the stream and the
+                // prefix already delivered to ExoPlayer is discarded here.
+                //
+                // This skip MUST also run against a freshly opened chunk: the
+                // old code read the next chunk directly, so the first read
+                // after a chunk boundary handed ExoPlayer bytes from the
+                // beginning of the stream again — the corruption that stalled
+                // and stopped trailers mid-play.
+                if (!skipChunkPrefix()) return C.RESULT_END_OF_INPUT
 
-            val bytesRead = upstream.read(buffer, offset, length)
-            if (bytesRead == C.RESULT_END_OF_INPUT) {
+                if (!isYouTubeStream || !chunkedRange) {
+                    // Not a YouTube stream, or googlevideo only let us start an
+                    // open-ended read — just stream it straight through.
+                    return upstream.read(buffer, offset, length)
+                }
+
+                val bytesRead = upstream.read(buffer, offset, length)
+                if (bytesRead != C.RESULT_END_OF_INPUT) {
+                    bytesReadInChunk += bytesRead
+                    return bytesRead
+                }
+
+                // This chunk is exhausted. A chunk that served less than was
+                // asked for is NOT the end of the stream (see
+                // youTubeChunkEndsStream): googlevideo truncates chunks, and
+                // reading that as the end is what stopped trailers mid-play.
                 val chunkBytesReceived = bytesReadInChunk
                 upstream.close()
 
-                // If this chunk returned fewer bytes than requested, the stream is done
-                if (chunkBytesReceived < (currentChunkEnd - currentChunkStart + 1)) {
+                if (
+                    youTubeChunkEndsStream(
+                        bytesDeliveredInChunk = chunkBytesReceived,
+                        lengthKnown = totalContentLength != C.LENGTH_UNSET.toLong(),
+                        remainingContentLength = totalContentLength
+                    )
+                ) {
                     return C.RESULT_END_OF_INPUT
                 }
 
                 currentChunkStart += chunkBytesReceived
                 if (totalContentLength != C.LENGTH_UNSET.toLong()) {
                     totalContentLength -= chunkBytesReceived
-                    if (totalContentLength <= 0) {
-                        return C.RESULT_END_OF_INPUT
-                    }
                 }
 
-                // Never mask a failed mid-stream open as end-of-input: that
-                // silently truncates playback. Surface the real cause.
+                // Open the next chunk and loop back so its prefix is skipped
+                // before any of its bytes are delivered. A failed mid-stream
+                // open still throws here rather than masquerading as EOF.
                 openNextChunk()
-                return upstream.read(buffer, offset, length)
             }
-
-            bytesReadInChunk += bytesRead
-            return bytesRead
         }
 
         override fun getUri(): Uri? = upstream.uri

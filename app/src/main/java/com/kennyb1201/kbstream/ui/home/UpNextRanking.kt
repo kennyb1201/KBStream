@@ -26,22 +26,42 @@ internal fun dedupeAndSortUpNext(
     )
         .mapNotNull { candidates ->
 
-            candidates.maxWithOrNull(
+            val winner =
+                candidates.maxWithOrNull(
 
-                compareBy<UpNextItem> {
-                    winnerScore(it)
-                }
-                    .thenByDescending {
-                        it.recencyTimestamp
+                    compareBy<UpNextItem> {
+                        winnerScore(it)
                     }
+                        .thenByDescending {
+                            it.recencyTimestamp
+                        }
 
-                    .thenBy {
-                        targetPrecisionScore(it)
-                    }
+                        .thenBy {
+                            targetPrecisionScore(it)
+                        }
 
-                    .thenBy {
-                        it.title.lowercase()
-                    }
+                        .thenBy {
+                            it.title.lowercase()
+                        }
+                )
+                    ?: return@mapNotNull null
+
+            // The rail orders by the viewer's most recent touch of the title,
+            // but each twin carries its OWN view of that time: a local resume
+            // row has the moment the app saved the position, while a paused
+            // tracker session can leave it unset. MDBList's session updated_at
+            // is optional, and a missing one reads as 0 - which sinks the card
+            // to the very end of the rail. The winner is picked for what it
+            // will DISPLAY (badge and precision) and can therefore be the twin
+            // with no time at all, so the cluster's newest time is carried
+            // onto it: the title the viewer just stopped can then never sort
+            // behind every card that merely has a timestamp.
+            winner.copy(
+                recencyTimestamp =
+                    maxOf(
+                        winner.recencyTimestamp,
+                        candidates.maxOf { it.recencyTimestamp }
+                    )
             )
         }
         // Watching first, most recently watched first, and the news

@@ -28,8 +28,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.runtime.snapshotFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlin.math.abs
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -114,6 +112,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
@@ -481,6 +480,27 @@ private fun heroSourceOrigin(source: PlayableSource): String =
                 }.getOrNull() ?: "?")
     }
 
+/**
+ * How long a trailer that has NOT yet rendered a frame may sit before the
+ * hero gives up and shows the backdrop.
+ *
+ * This one exists only to keep a blank hero from hanging on a source that
+ * never starts, so it stays short.
+ */
+private const val HeroTrailerStartGraceMs = 8_000L
+
+/**
+ * How long an already-playing trailer may sit in a mid-play re-buffer before
+ * the hero gives up and crossfades back to the backdrop.
+ *
+ * A trailer that has started is not a blank screen, and YouTube's 1 MB-chunked
+ * googlevideo streams re-buffer routinely. The old 5 s grace killed healthy
+ * trailers mid-play — the "trailers keep stopping" report. Thirty seconds is
+ * long enough for a chunk to come back on a slow link while still bounding a
+ * genuinely dead stream.
+ */
+private const val HeroTrailerRebufferGraceMs = 30_000L
+
 @Composable
 private fun HeroInlineTrailerPlayer(
     source: PlayableSource,
@@ -606,9 +626,10 @@ private fun HeroInlineTrailerPlayer(
             android.os.Looper.getMainLooper()
         )
 
-        // Watchdog: if the trailer doesn't actually start playing
-        // (or gets stuck buffering), bail out to the backdrop so the
-        // hero never stays on a blank gray screen.
+        // Watchdog with two budgets: a short one before the first frame
+        // (so the hero never hangs on a blank gray screen), and a much
+        // longer one for a mid-play re-buffer (so a healthy trailer is not
+        // killed at the first hiccup).
         val watchdog = object : Runnable {
             override fun run() {
                 val state = exoPlayer.playbackState
@@ -638,9 +659,10 @@ private fun HeroInlineTrailerPlayer(
                         startedPlaying = true
                         handler.removeCallbacks(watchdog)
                     } else if (playbackState == Player.STATE_BUFFERING && startedPlaying) {
-                        // Re-buffer mid-playback: give it a few seconds before bailing.
+                        // Re-buffer mid-playback: give it the long grace before
+                        // falling back to the backdrop.
                         handler.removeCallbacks(watchdog)
-                        handler.postDelayed(watchdog, 5_000L)
+                        handler.postDelayed(watchdog, HeroTrailerRebufferGraceMs)
                     }
                 }
 
@@ -669,9 +691,9 @@ private fun HeroInlineTrailerPlayer(
 
         exoPlayer.addListener(listener)
 
-        // Give the trailer up to 8s to start rendering; if it hasn't,
-        // fall back to the backdrop.
-        handler.postDelayed(watchdog, 8_000L)
+        // Give the trailer the short start budget to render a first frame;
+        // if it hasn't, fall back to the backdrop.
+        handler.postDelayed(watchdog, HeroTrailerStartGraceMs)
 
         onDispose {
             handler.removeCallbacks(watchdog)
@@ -3583,6 +3605,24 @@ fun HomeScreen(
                         )
                     },
                     PosterContextAction(
+                        label = "Mark as Watched",
+                        description = if (
+                            upNextWatchedTarget(menuItem) is
+                                UpNextWatchedTarget.Episode
+                        ) {
+                            "Mark this episode watched and move past it"
+                        } else {
+                            "Mark this title watched"
+                        }
+                    ) {
+                        val selectedItem = menuItem
+                        continueWatchingMenu = null
+                        viewModel.markContinueWatchingAsWatched(
+                            selectedItem
+                        )
+                        lastPosterFocusRequester?.requestFocus()
+                    },
+                    PosterContextAction(
                         label = "Remove",
                         description = "Hide this from Continue Watching",
                         isDestructive = true
@@ -3746,23 +3786,9 @@ private fun InfiniteRailPageHandler(
     railKey: String?,
     onLoadMore: (String) -> Unit
 ) {
-    LaunchedEffect(listState, itemCount, railKey) {
-        snapshotFlow {
-            val lastVisibleIndex =
-                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisibleIndex to itemCount
-        }
-            .distinctUntilChanged()
-            .collect { (lastVisibleIndex, totalItems) ->
-                val threshold = 6
-                val shouldLoadMore =
-                    railKey != null &&
-                        totalItems > 0 &&
-                        lastVisibleIndex >= totalItems - threshold
-
-                if (shouldLoadMore) {
-                    railKey?.let { onLoadMore(it) }
-                }
-            }
-    }
+    InfiniteScrollEffect(
+        listState = listState,
+        itemCount = itemCount,
+        onLoadMore = { railKey?.let(onLoadMore) }
+    )
 }

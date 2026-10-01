@@ -2128,11 +2128,6 @@ private fun SettingsNavRail(
     selected: SettingsPane,
     onSelect: (SettingsPane) -> Unit
 ) {
-    // The pane whose blurb the rail shows under its heading. On a TV the
-    // description has to arrive BEFORE a pane is opened, and a second line on
-    // every row pushed the rail past a 1080p screen, so it lives up here.
-    var focusedPane by remember { mutableStateOf<SettingsPane?>(null) }
-    val railHint = focusedPane ?: selected
     // TV entry point: focus lands on the first rail item once. Selecting a
     // pane must NOT move focus — the user stays on the rail to keep browsing.
     val firstItemFocus = remember { FocusRequester() }
@@ -2150,13 +2145,8 @@ private fun SettingsNavRail(
         Text(
             text = "SETTINGS",
             color = KBAccent,
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Text(
-            text = railHint.blurb,
-            color = KBTextLo,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(top = 6.dp, bottom = 18.dp)
+            style = MaterialTheme.typography.headlineMedium,
+            modifier = Modifier.padding(bottom = 8.dp)
         )
         // Group heading drawn inline, before the first row of each group. One
         // flat pass over the panes leaves the row layout and its braces below
@@ -2188,12 +2178,6 @@ private fun SettingsNavRail(
                             Modifier
                         }
                     )
-                    .onFocusChanged { focusState ->
-                        // Only ever SET the hint: the row being left reports
-                        // isFocused = false after the new row has already set
-                        // its own, so clearing here would blank it mid-walk.
-                        if (focusState.isFocused) focusedPane = pane
-                    }
             ) {
                 Row(
                     modifier = Modifier

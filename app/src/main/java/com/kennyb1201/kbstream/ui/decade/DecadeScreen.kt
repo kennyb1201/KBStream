@@ -24,7 +24,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +49,7 @@ import com.kennyb1201.kbstream.data.tmdb.StudioItem
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.GenreChipRow
+import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
@@ -70,7 +70,6 @@ import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
  * Decade screen (Screen.Decade): the genre-screen experience for decades —
@@ -628,24 +627,11 @@ private fun InfiniteDecadeRailHandler(
     isLoadingMore: Boolean,
     onLoadMore: () -> Unit
 ) {
-    LaunchedEffect(listState, itemCount, hasMore, isLoadingMore) {
-        snapshotFlow {
-            val lastVisibleIndex =
-                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisibleIndex to itemCount
-        }
-            .distinctUntilChanged()
-            .collect { (lastVisibleIndex, totalItems) ->
-                val threshold = 6
-                val shouldLoadMore =
-                    hasMore &&
-                    !isLoadingMore &&
-                    totalItems > 0 &&
-                    lastVisibleIndex >= totalItems - threshold
-
-                if (shouldLoadMore) {
-                    onLoadMore()
-                }
-            }
-    }
+    InfiniteScrollEffect(
+        listState = listState,
+        itemCount = itemCount,
+        hasMore = hasMore,
+        isLoadingMore = isLoadingMore,
+        onLoadMore = onLoadMore
+    )
 }

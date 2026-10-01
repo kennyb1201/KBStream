@@ -24,7 +24,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -40,6 +39,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.BrandMarkImage
 import com.kennyb1201.kbstream.ui.components.GenreChipRow
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -57,7 +57,6 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 
 @Composable
 fun StudioScreen(
@@ -678,24 +677,11 @@ private fun InfiniteStudioRailHandler(
     isLoadingMore: Boolean,
     onLoadMore: () -> Unit
 ) {
-    LaunchedEffect(listState, itemCount, hasMore, isLoadingMore) {
-        snapshotFlow {
-            val lastVisibleIndex =
-                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisibleIndex to itemCount
-        }
-            .distinctUntilChanged()
-            .collect { (lastVisibleIndex, totalItems) ->
-                val threshold = 6
-                val shouldLoadMore =
-                    hasMore &&
-                    !isLoadingMore &&
-                    totalItems > 0 &&
-                    lastVisibleIndex >= totalItems - threshold
-
-                if (shouldLoadMore) {
-                    onLoadMore()
-                }
-            }
-    }
+    InfiniteScrollEffect(
+        listState = listState,
+        itemCount = itemCount,
+        hasMore = hasMore,
+        isLoadingMore = isLoadingMore,
+        onLoadMore = onLoadMore
+    )
 }

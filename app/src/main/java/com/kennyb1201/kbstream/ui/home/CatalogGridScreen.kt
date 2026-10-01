@@ -37,6 +37,7 @@ import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
+import com.kennyb1201.kbstream.ui.components.shouldPrefetchNextPage
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -149,15 +150,25 @@ fun CatalogGridScreen(
 
     val gridState = rememberLazyGridState()
 
-    // Infinite scroll: one screenful from the bottom, ask for the next page.
+    // Infinite scroll: the same prefetch distance every other paginated
+    // surface uses, so the next page is asked for well before the grid's last
+    // row is on screen.
     LaunchedEffect(state.items.size, state.hasMore) {
         snapshotFlow {
-            gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            val info = gridState.layoutInfo
+            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisible to info.visibleItemsInfo.size
         }
             .distinctUntilChanged()
-            .collect { lastVisible ->
-                val total = state.items.size
-                if (total > 0 && lastVisible >= total - 12) {
+            .collect { (lastVisible, viewportItems) ->
+                if (
+                    state.hasMore &&
+                    shouldPrefetchNextPage(
+                        lastVisible,
+                        state.items.size,
+                        viewportItems
+                    )
+                ) {
                     viewModel.loadMoreGridItems()
                 }
             }

@@ -26,7 +26,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
@@ -47,6 +46,7 @@ import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
@@ -60,7 +60,6 @@ import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
 
 private val FolderPosterWidth = 124.dp
 private val FolderPosterHeight = 180.dp
@@ -463,20 +462,11 @@ private fun FolderRailPageHandler(
         }
     }
 
-    LaunchedEffect(listState, rail.items.size, rail.sourceId) {
-        snapshotFlow {
-            val lastVisibleIndex =
-                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisibleIndex to rail.items.size
-        }
-            .distinctUntilChanged()
-            .collect { (lastVisibleIndex, totalItems) ->
-                val threshold = 6
-                if (totalItems > 0 && lastVisibleIndex >= totalItems - threshold) {
-                    viewModel.loadMoreRail(rail.sourceId)
-                }
-            }
-    }
+    InfiniteScrollEffect(
+        listState = listState,
+        itemCount = rail.items.size,
+        onLoadMore = { viewModel.loadMoreRail(rail.sourceId) }
+    )
 }
 
 /** Everything a rail's cards need, bundled so FOLLOW_LAYOUT and ROWS share. */

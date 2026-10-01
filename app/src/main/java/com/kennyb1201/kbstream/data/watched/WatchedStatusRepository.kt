@@ -1778,6 +1778,219 @@ class WatchedStatusRepository(
     }
 
     /**
+     * Long-press "Mark as Watched" on a Continue Watching card that names a
+     * specific episode: marks exactly that episode watched, locally and on
+     * every connected tracker, without touching the rest of the show.
+     *
+     * The whole-title [markWatchedLocal] is the wrong tool here - pushing a
+     * series through it marks EVERY episode watched, which is not what
+     * "I finished this one episode" means. Instead this writes the same
+     * completed marker row Detail's episode mark writes, drops the paused
+     * resume row (the progress record the Continue Watching card is drawn
+     * from), and mirrors the mark to SIMKL / MDBList so the rail cannot be
+     * re-seeded with the episode it just left.
+     */
+    suspend fun markEpisodeWatchedLocal(
+        id: String,
+        type: String,
+        season: Int,
+        episode: Int,
+        episodeStreamId: String? = null,
+        showName: String = "",
+        posterUrl: String? = null,
+        tmdbId: Int? = null
+    ) {
+        val normalizedId =
+            id.trim()
+
+        if (normalizedId.isBlank() || season < 0 || episode <= 0) {
+            return
+        }
+
+        val normalizedType =
+            normalizeType(type)
+
+        val now =
+            System.currentTimeMillis()
+
+        // Every id flavor this show is reachable under, so the resume-row
+        // cleanup below finds a progress row written under the other one.
+        val idForms =
+            runCatchingCancellable {
+                watchedIdForms(normalizedId, normalizedType)
+            }.getOrDefault(setOf(normalizedId))
+
+        val parents =
+            (idForms + normalizedId).distinct()
+
+        // 1. Local: one completed marker row keyed on the id the mark was
+        // made from. This is the truth the next load re-derives the watched
+        // keys from, and what keeps the badge after the resume row below is
+        // deleted.
+        val markerKey =
+            WatchedEpisodeState.buildEpisodeKey(
+                parentId = normalizedId,
+                season = season,
+                episode = episode
+            )
+
+        if (markerKey != null) {
+            val row =
+                WatchHistoryEntity(
+                    id = markerKey,
+                    parentId = normalizedId,
+                    type = "series",
+                    name = showName,
+                    poster = posterUrl,
+                    streamUrl = null,
+                    positionMs = 0L,
+                    durationMs = 1L,
+                    season = season,
+                    episode = episode,
+                    updatedAt = now,
+                    isCompleted = true,
+                    completedAt = now
+                )
+
+            runCatchingCancellable {
+                historyDao.upsert(row)
+            }.onSuccess {
+                runCatching {
+                    com.kennyb1201.kbstream.data.sync.SupabaseSync
+                        .enqueueHistory(row)
+                }
+            }.onFailure { e ->
+                Log.e(
+                    "WATCHED_REPO",
+                    "mark episode watched marker failed s=$season e=$episode",
+                    e
+                )
+            }
+        }
+
+        // 2. The episode's paused progress row has nothing left to resume.
+        // Matched both by season/episode and by the stream id the player
+        // keys progress on, because the two identities can disagree (an
+        // add-on's numbering against TMDB's).
+        runCatchingCancellable {
+            val resumeRowsBefore =
+                historyDao.getInProgressForParents(parents)
+
+            historyDao.deleteResumeRowsForParentsSeasonEpisode(
+                parentIds = parents,
+                season = season,
+                episode = episode
+            )
+
+            val streamIds =
+                listOfNotNull(
+                    episodeStreamId
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                )
+
+            if (streamIds.isNotEmpty()) {
+                historyDao.deleteResumeRowsForParentsStreamIds(
+                    parentIds = parents,
+                    streamIds = streamIds
+                )
+            }
+
+            // Only rows that are GONE locally are sent: a completed marker
+            // that reused a resume row's id must keep its cloud copy.
+            val removedIds =
+                resumeRowsBefore
+                    .map { it.id }
+                    .distinct()
+                    .filter { rowId ->
+                        runCatchingCancellable { historyDao.getById(rowId) }
+                            .getOrNull() == null
+                    }
+
+            if (removedIds.isNotEmpty()) {
+                com.kennyb1201.kbstream.data.sync.SupabaseSync
+                    .deleteHistoryRows(removedIds)
+            }
+        }.onFailure { e ->
+            Log.e(
+                "WATCHED_REPO",
+                "mark episode watched resume cleanup failed s=$season e=$episode",
+                e
+            )
+        }
+
+        // 3. Trackers. The paused playback session is what the remote
+        // Continue Watching rail is fed from, so an explicit mark has to
+        // close that episode's session whatever its progress.
+        val imdbForm =
+            idForms.firstOrNull { it.startsWith("tt") }
+
+        val resolvedTmdbId =
+            tmdbId
+                ?: idForms.firstNotNullOfOrNull { form ->
+                    form.removePrefix("tmdb:")
+                        .toIntOrNull()
+                        ?.takeIf { form.startsWith("tmdb:") }
+                }
+
+        if (
+            simklRepository.isConfigured() &&
+            simklRepository.hasToken()
+        ) {
+            runCatchingCancellable {
+                simklRepository.pushWatchedSeason(
+                    showImdbId = imdbForm ?: normalizedId,
+                    season = season,
+                    episodes = listOf(episode),
+                    title = showName.takeIf { it.isNotBlank() },
+                    tmdbId = resolvedTmdbId
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "WATCHED_REPO",
+                    "mark episode watched simkl push failed s=$season e=$episode",
+                    e
+                )
+            }
+
+            runCatchingCancellable {
+                simklRepository.deletePlaybackSessionsForParent(
+                    parentId = normalizedId,
+                    title = showName.takeIf { it.isNotBlank() },
+                    seasonsEpisodes = setOf(season to episode)
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "WATCHED_REPO",
+                    "mark episode watched simkl session cleanup failed s=$season e=$episode",
+                    e
+                )
+            }
+        }
+
+        if (MdbListClient.isConfigured(context)) {
+            runCatchingCancellable {
+                MdbListClient.pushWatchedEpisodes(
+                    context,
+                    imdbId = imdbForm,
+                    tmdbId = resolvedTmdbId,
+                    season = season,
+                    episodes = listOf(episode)
+                )
+            }.onFailure { e ->
+                Log.e(
+                    "WATCHED_REPO",
+                    "mark episode watched mdblist push failed s=$season e=$episode",
+                    e
+                )
+            }
+        }
+
+        _watchedStateVersion.value = now
+        invalidateRemoteWatchSets()
+    }
+
+    /**
      * After PART of a series is unmarked: the title is no longer completed but
      * still has watched episodes, so it must resolve as started-but-unfinished
      * - the eye badge - instead of keeping the completed checkmark.
