@@ -48,7 +48,7 @@ jobs:
       # a lint-and-test run. app/build is never restored and org.gradle.caching
       # stays off, so every task below still executes for real.
       - name: Cache Gradle dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches/modules-2

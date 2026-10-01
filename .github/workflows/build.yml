@@ -110,7 +110,7 @@ jobs:
       # off so the build cache cannot answer a task with a previously-produced
       # output either. "Faster" here must never mean "compiled less".
       - name: Cache Gradle dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches/modules-2
@@ -174,7 +174,7 @@ jobs:
           echo "build signature: ${sig}"
 
       - name: Cache FFmpeg extension build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/ffmpeg-ext
           # v2: the v1 entries cached a media3 checkout built when the script
@@ -221,7 +221,7 @@ jobs:
       - name: Upload FFmpeg extension (optional)
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: media3-ffmpeg-decoder-video
           path: libs/media3-ffmpeg-decoder.aar
@@ -292,7 +292,7 @@ jobs:
 
       - name: Upload test report (on failure)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-report
           path: app/build/reports/tests/testDebugUnitTest/
@@ -316,7 +316,7 @@ jobs:
       # an artifact is the only way to read it without a local reproduction.
       - name: Upload lint report (on failure)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: android-lint-report
           path: |
@@ -360,13 +360,13 @@ jobs:
           KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
 
       - name: Upload debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kbstream-debug
           path: app/build/outputs/apk/debug/*.apk
 
       - name: Upload signed release APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: kbstream-release-signed
           path: app/build/outputs/apk/release/*.apk
