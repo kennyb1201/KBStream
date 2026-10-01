@@ -110,7 +110,7 @@ jobs:
       # off so the build cache cannot answer a task with a previously-produced
       # output either. "Faster" here must never mean "compiled less".
       - name: Cache Gradle dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches/modules-2
@@ -174,7 +174,7 @@ jobs:
           echo "build signature: ${sig}"
 
       - name: Cache FFmpeg extension build
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: build/ffmpeg-ext
           # v2: the v1 entries cached a media3 checkout built when the script
