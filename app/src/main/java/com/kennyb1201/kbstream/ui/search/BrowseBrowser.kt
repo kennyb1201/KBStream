@@ -103,6 +103,19 @@ internal fun SearchBrowseBrowser(
     viewModel: SearchViewModel,
     categories: List<BrowseCategory>,
     submenuLoading: Boolean,
+    /**
+     * The chip a just-closed long-press menu wants focus back on, as
+     * (category key, chip name).
+     *
+     * A chip menu is drawn over the screen in its own focus group, so closing
+     * it leaves nothing focused and the category strip takes focus instead -
+     * which is why "Add to Home", an action that does not move the chip at
+     * all, still threw the viewer to the top of the browser. This is the
+     * caller naming the chip to return to; it is consumed once the grid has
+     * placed focus, so it cannot re-grab later.
+     */
+    returnChipName: Pair<String, String>? = null,
+    onReturnChipNameConsumed: () -> Unit = {},
     onChipLongPress: ((String, BrowseEntry) -> Unit)? = null,
     onCategoryLongPress: ((BrowseCategory) -> Unit)? = null
 ) {
@@ -113,15 +126,23 @@ internal fun SearchBrowseBrowser(
     val activeCategory = categories.firstOrNull { it.key == selectedKey }
 
     // Re-focus the chip that launched the discover screen we just backed out
-    // of. The stored arm is (category, index-within-the-category), and the
-    // index is resolved to the chip's NAME here: the grid below renders a
-    // FILTERED list, whose numbering has nothing to do with the category's,
-    // so an index passed straight through would land on an unrelated chip.
-    // A filtered-out arm simply finds no cell to focus, which is correct -
-    // the chip is not on screen to be returned to.
-    val armedChipName = viewModel.browseReturnChip
+    // of, or the one a long-press menu was just closed over. The ViewModel's
+    // stored arm is (category, index-within-the-category), and the index is
+    // resolved to the chip's NAME here: the grid below renders a FILTERED
+    // list, whose numbering has nothing to do with the category's, so an index
+    // passed straight through would land on an unrelated chip. A filtered-out
+    // arm simply finds no cell to focus, which is correct - the chip is not on
+    // screen to be returned to.
+    //
+    // The menu's arm already names the chip, and it is preferred: it is the
+    // more recent intent, and an action that leaves the list alone ("Add to
+    // Home") would otherwise have nothing observable to recompose on.
+    val armedChipName = returnChipName
         ?.takeIf { it.first == activeCategory?.key }
-        ?.let { (_, index) -> activeCategory?.entries?.getOrNull(index)?.name }
+        ?.second
+        ?: viewModel.browseReturnChip
+            ?.takeIf { it.first == activeCategory?.key }
+            ?.let { (_, index) -> activeCategory?.entries?.getOrNull(index)?.name }
 
     // Filtering is per-category: opening another tab starts a clean list.
     var filterQuery by remember(activeCategory?.key) { mutableStateOf("") }
@@ -325,6 +346,7 @@ internal fun SearchBrowseBrowser(
                     armedChipName = armedChipName,
                     onReturnChipConsumed = {
                         viewModel.browseReturnChip = null
+                        onReturnChipNameConsumed()
                     }
                 )
             }

@@ -137,6 +137,26 @@ fun SearchScreen(
     var hiddenChipMenu by remember {
         mutableStateOf<Pair<String, BrowseEntry>?>(null)
     }
+
+    // The browse chip a long-press menu should hand focus back to when it
+    // closes, as (category key, chip name).
+    //
+    // The menu is drawn over this screen in its own focus group (see
+    // PosterContextMenu), so once it goes nothing holds focus and the browser's
+    // first focusable - the category strip - takes it. On a submenu of dozens
+    // of entries that threw the viewer back to the top of the browser after a
+    // menu that changed nothing about the list: "Add to Home" left the chip
+    // exactly where it was and still moved focus off it. Naming the chip here
+    // is what puts focus back on the one that was long-pressed.
+    //
+    // It lives in this composition rather than the ViewModel because closing
+    // the menu never leaves this screen - and unlike the ViewModel's own
+    // return-chip arm, it has to be observable state: adding a chip to Home
+    // changes nothing else the browser is given, so nothing else would make it
+    // recompose and notice the arm.
+    var browseChipMenuReturn by remember {
+        mutableStateOf<Pair<String, String>?>(null)
+    }
     var categoryChipMenu by remember {
         mutableStateOf<BrowseCategory?>(null)
     }
@@ -291,6 +311,8 @@ fun SearchScreen(
                         viewModel = viewModel,
                         categories = browseCategories,
                         submenuLoading = browseSubmenuLoading,
+                        returnChipName = browseChipMenuReturn,
+                        onReturnChipNameConsumed = { browseChipMenuReturn = null },
                         onChipLongPress = { categoryKey, entry ->
                             hiddenChipMenu = categoryKey to entry
                         },
@@ -615,6 +637,10 @@ fun SearchScreen(
                         } else {
                             viewModel.addBrowseChipToHome(categoryKey, entry)
                         }
+                        // Neither action moves the chip, so focus goes back to
+                        // the one the menu was opened on rather than to the top
+                        // of the browser.
+                        browseChipMenuReturn = categoryKey to entry.name
                         hiddenChipMenu = null
                     },
                     PosterContextAction(
@@ -623,10 +649,18 @@ fun SearchScreen(
                         isDestructive = true
                     ) {
                         viewModel.hideBrowseChip(categoryKey, entry)
+                        // Not this chip: it is the one leaving the list. The
+                        // ViewModel arms the chip that takes its place.
+                        browseChipMenuReturn = null
                         hiddenChipMenu = null
                     }
                 ),
-                onDismiss = { hiddenChipMenu = null }
+                onDismiss = {
+                    // Back out of the menu: the chip is still where it was, so
+                    // focus belongs on it exactly as after an action.
+                    browseChipMenuReturn = categoryKey to entry.name
+                    hiddenChipMenu = null
+                }
             )
         }
 
