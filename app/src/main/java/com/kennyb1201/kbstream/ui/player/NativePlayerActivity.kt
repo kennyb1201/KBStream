@@ -360,11 +360,10 @@ private class SplitModeRenderersFactory(
             Log.i("PLAYER_DV", "P5 plane renderer prepended (raw-plane ICtCp path)")
         }
         // Video: hardware first, FFmpeg software video BEHIND it. Mode ON
-        // (not OFF) so a video-enabled FFmpeg build is picked up as the
-        // fallback for a codec MediaCodec has no decoder for. Inert with the
-        // current audio-only FFmpeg: FfmpegLibrary.supportsFormat() answers
-        // UNSUPPORTED, so this renderer never claims a track and hardware
-        // behavior is unchanged.
+        // (not OFF) so the FFmpeg extension is picked up as the fallback for
+        // a codec MediaCodec has no decoder for. With no extension on the
+        // classpath (libs/media3-ffmpeg-decoder.aar absent) the renderer is
+        // never created at all and hardware behavior is unchanged.
         super.buildVideoRenderers(
             context,
             EXTENSION_RENDERER_MODE_ON,
@@ -4100,9 +4099,12 @@ class NativePlayerActivity : ComponentActivity() {
             putExtras(this@NativePlayerActivity.intent)
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
         }
-        val flags = if (Build.VERSION.SDK_INT >= 23)
-            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT
-        else android.app.PendingIntent.FLAG_UPDATE_CURRENT
+        // FLAG_IMMUTABLE has existed since API 23 and is REQUIRED from API 31;
+        // the app's floor is now 24, so the old below-23 branch (bare
+        // FLAG_UPDATE_CURRENT) is unreachable and gone.
+        val flags =
+            android.app.PendingIntent.FLAG_IMMUTABLE or
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
         return android.app.PendingIntent.getActivity(this, 1001, intent, flags)
     }
 

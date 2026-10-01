@@ -323,8 +323,22 @@ data class AddonManifest(
 /**
  * Marks a list whose entries may be Stremio resource strings or resource
  * objects, so [ManifestResourcesAdapter] can normalize them.
+ *
+ * There is deliberately NO `@Retention(AnnotationRetention.RUNTIME)` here even
+ * though RUNTIME is what this needs (and what Kotlin defaults to). Spelling the
+ * annotation out makes moshi-kotlin-codegen crash the whole KSP step under KSP2
+ * with
+ *
+ *   e: [ksp] Error preparing AddonManifest: jdk.proxy5/$ProxyNNN.value(Unknown Source)
+ *   ... MoshiApiUtilKt.generator(MoshiApiUtil.kt:77)
+ *
+ * because its qualifier check reads `Retention.value` off a KSP2 annotation
+ * proxy and the proxy does not implement that method (square/moshi#1874). That
+ * fix lives only on moshi's master and has no release; leaving the retention
+ * implicit keeps the qualifier working - Kotlin's default retention is already
+ * RUNTIME, which is what [ManifestResourcesAdapterFactory] matches on - and
+ * skips the broken check entirely. Do not add the annotation back.
  */
-@Retention(AnnotationRetention.RUNTIME)
 @JsonQualifier
 annotation class ManifestResources
 

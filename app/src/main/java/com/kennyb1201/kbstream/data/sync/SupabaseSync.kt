@@ -5,9 +5,9 @@ import android.util.Log
 import java.util.concurrent.atomic.AtomicBoolean
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.createSupabaseClient
-import io.github.jan.supabase.gotrue.Auth
-import io.github.jan.supabase.gotrue.SessionStatus
-import io.github.jan.supabase.gotrue.auth
+import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.filter.FilterOperator
@@ -391,7 +391,7 @@ object SupabaseSync {
         _authState.value = AuthState.SigningIn
         scope.launch {
             try {
-                c.auth.signInWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
+                c.auth.signInWith(io.github.jan.supabase.auth.providers.builtin.Email) {
                     this.email = email.trim()
                     this.password = password
                 }
@@ -435,7 +435,7 @@ object SupabaseSync {
         _authState.value = AuthState.SigningIn
         scope.launch {
             try {
-                c.auth.signUpWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
+                c.auth.signUpWith(io.github.jan.supabase.auth.providers.builtin.Email) {
                     this.email = email.trim()
                     this.password = password
                 }

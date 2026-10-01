@@ -14,18 +14,19 @@
 // half that installs the result on devices.
 plugins {
     id("com.android.test")
-    id("org.jetbrains.kotlin.android")
+    // AGP 9's built-in Kotlin replaces org.jetbrains.kotlin.android here too;
+    // see the root build file.
     id("androidx.baselineprofile")
 }
 
 android {
     namespace = "com.kennyb1201.kbstream.baselineprofile"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         // The generator runs on the device the profile is captured from - a TV
         // box or an emulator, both far above this. It does NOT constrain the
-        // app's own minSdk (23).
+        // app's own minSdk (24).
         minSdk = 28
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -36,9 +37,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
+    // No kotlinOptions block: AGP 9's built-in Kotlin takes the jvmTarget from
+    // compileOptions.targetCompatibility (17 above); the DSL is gone in AGP 9.
 
     // The profile is captured from the app itself, not from a copy of its code.
     targetProjectPath = ":app"
@@ -55,7 +55,7 @@ baselineProfile {
 }
 
 dependencies {
-    implementation("androidx.test.ext:junit:1.2.1")
-    implementation("androidx.test.uiautomator:uiautomator:2.3.0")
-    implementation("androidx.benchmark:benchmark-macro-junit4:1.3.4")
+    implementation("androidx.test.ext:junit:1.3.0")
+    implementation("androidx.test.uiautomator:uiautomator:2.4.0")
+    implementation("androidx.benchmark:benchmark-macro-junit4:1.5.0")
 }

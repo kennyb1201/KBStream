@@ -21,22 +21,31 @@
 # ---------------------------------------------------------------------------
 # The floor everything Gradle-side is currently measured against
 # ---------------------------------------------------------------------------
-# AGP 8.6.0 · compileSdk 35 · minSdk 23 · Kotlin 2.0.21 · KSP 2.0.21-1.0.25.
-# As of the September 2026 PR batch, essentially nothing on the newer side fits
-# under that ceiling, which is why the group below is now scoped down rather
-# than merged:
+# AGP 9.4.1 · compileSdk 37 · minSdk 24 · Kotlin 2.4.20 · KSP 2.3.12 ·
+# Gradle 9.8.0.
 #
-#   * androidx.core 1.19 and the Compose 1.12 that tv-material 1.1 and
-#     coil3 3.6 resolve both require AGP 9.1.0 or higher AND compileSdk 37.
-#   * KSP 2.3.12 against AGP 8.6.0 fails at configuration time with
-#     NoSuchMethodError on AndroidComponentsExtension.addKspConfigurations.
-#   * work-runtime 2.12 declares minSdk 24, above this app's minSdk 23.
-#   * the Gradle 9.8 wrapper is unsupported by AGP 8.6.0.
+# This used to read AGP 8.6.0 · compileSdk 35 · Kotlin 2.0.21 · KSP
+# 2.0.21-1.0.25, under which essentially nothing on the newer side fit - which
+# is why the group below was scoped down instead of merged. That ceiling is
+# gone: the toolchain moved, and the bumps it was blocking have landed
+# (androidx.core 1.19.1, the Compose 1.12.1 BOM, tv-material 1.1.0, coil3
+# 3.6.3, room 2.8.5, media3 1.11.1, supabase-kt 3.8.0, retrofit 3/okhttp 5).
+# AGP 9.1.0+ and compileSdk 37 were prerequisites for those and are now met,
+# and the Compose compiler shipping with Kotlin 2.x means a BOM bump is a
+# version bump rather than the compiler migration it used to be.
 #
-# So the toolchain move (AGP 9.x + compileSdk 37 + Kotlin/KSP + Gradle 9, and a
-# decision on minSdk 23) is the prerequisite for all of it, and it is a real
-# migration rather than a merge. Until then, bumps that drag the toolchain are
-# kept out of the group so they cannot make a routine drop unlandable.
+# Nothing on the newer side is out of reach now. The last item was
+# work-runtime 2.12, which declares minSdk 24 above the app's old floor of 23;
+# the floor moved to 24 and 2.12 landed with it. Note what the floor does and
+# does not decide: it is about which DEVICES an APK installs on, not about
+# which library versions are current, so a future bump that wants 25 or 26 is
+# still a product decision and not a routine drop.
+#
+# The excludes below stay even now that these versions fit, for the reason they
+# were added: they are the player/UI-critical lines (the toolchain, media3,
+# Compose, tv-material, coil), and the update-types list calls Kotlin 2.4 ->
+# 2.5, media3 1.11 -> 1.12 and tv-material 1.0 -> 1.1 "minor" updates, so
+# without them a routine patch drop would arrive carrying a migration.
 version: 2
 updates:
   - package-ecosystem: "gradle"

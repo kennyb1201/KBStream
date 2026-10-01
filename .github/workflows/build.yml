@@ -17,7 +17,7 @@ on:
       # Escape hatch for the rare case where the FFmpeg cross-compile is broken
       # by something outside this repo (an upstream tarball moving, a runner
       # image change). Without it a missing extension fails the whole job, so
-      # there would be no way to ship an audio-only release until it is fixed.
+      # there would be no way to ship a release at all until it is fixed.
       allow_missing_ffmpeg:
         description: "Ship the release even if the FFmpeg video extension is missing"
         type: boolean
@@ -78,8 +78,14 @@ jobs:
       # Optional video-enabled FFmpeg extension: the media3 tag to build it
       # against (MUST match app/build.gradle.kts) and the NDK it is linked
       # with. See scripts/build_ffmpeg_video.sh.
-      MEDIA3_TAG: "1.9.0"
-      NDK_VERSION: "26.1.10909125"
+      #
+      # The NDK is r28c because media3 1.10 moved 16 KB ELF alignment off the
+      # explicit "-Wl,-z,max-page-size=16384" linker flag and onto the NDK's
+      # ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES property, which only r27+ honours.
+      # Under r26 that argument is ignored, so the extension would be linked
+      # with 4 KB page alignment and crash on 16 KB page-size devices.
+      MEDIA3_TAG: "1.11.1"
+      NDK_VERSION: "28.2.13676358"
       
     steps:
       - name: Checkout
@@ -109,14 +115,21 @@ jobs:
       # execute for real on every single run, and org.gradle.caching is left
       # off so the build cache cannot answer a task with a previously-produced
       # output either. "Faster" here must never mean "compiled less".
+      #
+      # The last two paths follow Gradle's own layout: since Gradle 9 the
+      # per-version cache is caches/<gradle version>/ (the exploded AARs live at
+      # caches/9.8.0/transforms), and the old top-level transforms-4 / 8.7
+      # directories no longer exist. That path has to be renamed with the
+      # wrapper every time: a stale version here restores nothing and re-pays
+      # the whole transform step. Naming a path that is never written is not
+      # an error, just a silent loss of the biggest saving here.
       - name: Cache Gradle dependencies
         uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches/modules-2
             ~/.gradle/caches/jars-9
-            ~/.gradle/caches/transforms-4
-            ~/.gradle/caches/8.7
+            ~/.gradle/caches/9.8.0
             ~/.gradle/wrapper/dists
           # Keyed on the files that decide the resolved dependency graph, so a
           # dependency change (or a Gradle upgrade) misses and re-resolves.
@@ -202,8 +215,9 @@ jobs:
           "$SDKMANAGER" "ndk;${NDK_VERSION}" "cmake;3.22.1"
           # The runner image exports ANDROID_NDK pointing at a preinstalled NDK,
           # and the build script prefers it over NDK_VERSION. So this step
-          # installed 26.1.10909125 and then compiled FFmpeg with the image's
-          # 27.3.13750724, while the script pinned media3's ndkVersion to 26.1:
+          # installed ${NDK_VERSION} and then compiled FFmpeg with the image's
+          # preinstalled NDK, while the script pinned media3's ndkVersion to
+          # ${NDK_VERSION}:
           # the .a files and the CMake link that consumes them ended up on
           # different toolchains, which is exactly what the script's own
           # ndkVersion comment exists to prevent. Pin the whole build to the
@@ -236,10 +250,10 @@ jobs:
       # exits non-zero, the job stops, and no release is published, so the
       # failure is impossible to miss.
       #
-      # A missing extension is never a code bug in this repo's build -- the app
-      # deliberately falls back to the published audio-only artifact -- so a
-      # manual run can set allow_missing_ffmpeg to accept the fallback instead
-      # of blocking on an upstream break.
+      # A missing extension is never a code bug in this repo's build -- the AAR
+      # is built from an upstream tag by an upstream script, so a manual run can
+      # set allow_missing_ffmpeg to ship the release without software decoding
+      # instead of blocking on an upstream break.
       - name: Verify FFmpeg extension was produced
         if: always()
         env:
@@ -249,7 +263,7 @@ jobs:
             echo "media3-ffmpeg-decoder.aar built: $(wc -c < libs/media3-ffmpeg-decoder.aar) bytes"
             exit 0
           fi
-          message="media3-ffmpeg-decoder.aar was not produced, so this release's APK would fall back to the audio-only FFmpeg extension. See the 'Build FFmpeg video extension (optional)' step above."
+          message="media3-ffmpeg-decoder.aar was not produced, so this release's APK would ship with no FFmpeg extension at all: ExoPlayer would have no software video decoder, and the audio codecs MediaCodec does not guarantee would only be playable through the MPV engine. See the 'Build FFmpeg video extension (optional)' step above."
           if [[ "$ALLOW_MISSING_FFMPEG" == "true" ]]; then
             echo "::warning::${message} Continuing anyway because allow_missing_ffmpeg was set."
             exit 0

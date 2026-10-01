@@ -84,8 +84,9 @@
 
 # --- Media3 PlayerView internal surface swap (black-video TextureView fallback) ---
 # NativePlayerActivity reflects into this private field to switch the PlayerView's
-# video surface at runtime (Media3 1.9 has no public setSurfaceType). R8 would
-# otherwise rename the field in release builds and silently break the fallback.
+# video surface at runtime (Media3 1.11 still has no public surface-type setter).
+# R8 would otherwise rename the field in release builds and silently break the
+# fallback.
 -keepclassmembers class androidx.media3.ui.PlayerView {
     private final android.view.View surfaceView;
 }
@@ -101,10 +102,6 @@
 # RELEASE build — while still working in debug, where minification is off.
 -keep class androidx.media3.decoder.ffmpeg.ExperimentalFfmpegVideoRenderer { *; }
 -keep class androidx.media3.decoder.ffmpeg.FfmpegAudioRenderer { *; }
-
-# The published Jellyfin artifact's package name; harmless with the locally
-# built video-enabled AAR (same androidx.media3.decoder.ffmpeg package).
--dontwarn org.jellyfin.**
 
 -dontwarn javax.annotation.**
 -dontwarn org.conscrypt.**

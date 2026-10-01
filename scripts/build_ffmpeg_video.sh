@@ -7,14 +7,20 @@
 # Why this exists
 # ---------------
 # media3's decoder_ffmpeg extension is what lets ExoPlayer decode in software.
-# The published org.jellyfin.media3:media3-ffmpeg-decoder artifact is exactly
-# that extension, but built with AUDIO decoders only, so its video renderer
-# answers UNSUPPORTED for every video mime and never claims a track (the app
-# relies on that: SplitModeRenderersFactory already runs the video extension
-# renderer in EXTENSION_RENDERER_MODE_ON, so the software video decoder joins
-# behind MediaCodec the moment a build actually carries video decoders).
-# Turning software video decode on therefore means building this AAR ourselves,
-# with the video decoders appended to media3's FFmpeg configure line.
+# There is no published build of it we can consume: the extension subclasses
+# media3's decoder internals, so it only works when compiled against the exact
+# media3 release on the classpath, and the one prebuilt available
+# (org.jellyfin.media3:media3-ffmpeg-decoder) stopped at 1.9.0+1. It also
+# carried AUDIO decoders only, so its video renderer answered UNSUPPORTED for
+# every video mime and never claimed a track. This script is therefore the only
+# source of that extension: it builds it from the matching androidx/media tag,
+# with the video decoders appended to media3's FFmpeg configure line, and drops
+# the AAR where the app picks it up on the next Gradle build.
+#
+# The app relies on it being there: SplitModeRenderersFactory runs the video
+# extension renderer in EXTENSION_RENDERER_MODE_ON, so the software video
+# decoder joins behind MediaCodec the moment a build actually carries video
+# decoders.
 #
 # The result ships libffmpegJNI.so, which is what lets it coexist with libmpv
 # (dev.jdtech.mpv:libmpv). libmpv already brings libavcodec.so / libavutil.so /
@@ -28,7 +34,9 @@
 #   * Linux or macOS (media3 does not support building this module on Windows)
 #   * JDK 17 on PATH
 #   * Android SDK (ANDROID_HOME / ANDROID_SDK_ROOT) with platform-tools
-#   * Android NDK r26b (26.1.10909125) -- see ANDROID_NDK below
+#   * Android NDK r28c (28.2.13676358) -- see ANDROID_NDK below, and the
+#     16 KB page-size note that is why r28 and not the r26b media3's own
+#     README still names
 #   * several CPUs and ~10 GB free disk: the four ABIs of FFmpeg are the slow
 #     part (tens of minutes cold; the static libs are cacheable)
 #
@@ -37,29 +45,47 @@
 #   scripts/build_ffmpeg_video.sh
 #
 # Overridable environment:
-#   MEDIA3_TAG=1.9.0        androidx/media git tag to build. MUST match the
+#   MEDIA3_TAG=1.11.1       androidx/media git tag to build. MUST match the
 #                           media3 version in app/build.gradle.kts.
+#
+# 16 KB page sizes
+# ----------------
+# Android 15 devices can run with 16 KB pages, and a shared library linked for
+# 4 KB pages crashes on them. media3 used to force the alignment itself with
+# "-Wl,-z,max-page-size=16384"; 1.10 replaced that flag with the NDK's
+# ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES property, which NDK r27 and newer act on
+# and older ones silently ignore. On r26 that leaves libffmpegJNI.so 4 KB
+# aligned, so this script requires r28 (where 16 KB alignment is the default)
+# rather than the r26b the extension's README was written against.
 #   FFMPEG_TAG=release/6.0  FFmpeg branch media3's build_ffmpeg.sh expects
-#   ANDROID_NDK=/path       NDK root (default: $ANDROID_HOME/ndk/26.1.10909125)
-#   ANDROID_API=23          native API level (must be <= the app's minSdk 23)
+#   ANDROID_NDK=/path       NDK root (default: $ANDROID_HOME/ndk/28.2.13676358)
+#   ANDROID_API=23          native API level (must be <= the app's minSdk).
+#                           Held at 23 on purpose while the app sits at 24:
+#                           a LOWER floor is the permissive direction (the .so
+#                           only claims symbols that exist on 23), so this is
+#                           not a thing to bump with minSdk - raising it would
+#                           only make the library refuse to load on devices it
+#                           currently works on. It is also part of the CI cache
+#                           signature, so moving it forces a cold 4-ABI
+#                           cross-compile for no gain.
 #   WORK_DIR=<dir>          scratch dir (default: build/ffmpeg-ext, gitignored)
 #   OUTPUT=<file>           AAR destination
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-MEDIA3_TAG="${MEDIA3_TAG:-1.9.0}"
+MEDIA3_TAG="${MEDIA3_TAG:-1.11.1}"
 FFMPEG_TAG="${FFMPEG_TAG:-release/6.0}"
 ANDROID_API="${ANDROID_API:-23}"
-NDK_VERSION="${NDK_VERSION:-26.1.10909125}"
+NDK_VERSION="${NDK_VERSION:-28.2.13676358}"
 WORK_DIR="${WORK_DIR:-${REPO_ROOT}/build/ffmpeg-ext}"
 OUTPUT="${OUTPUT:-${REPO_ROOT}/libs/media3-ffmpeg-decoder.aar}"
 ANDROID_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 ANDROID_NDK="${ANDROID_NDK:-${ANDROID_SDK:+${ANDROID_SDK}/ndk/${NDK_VERSION}}}"
 
-# Audio decoders as the published Jellyfin build carries them, so the software
-# AUDIO path is unchanged by this swap, PLUS the audio decoders Android's
-# MediaCodec does NOT guarantee and the original list therefore left silent:
+# The audio decoders media3's own published extension carries, which keep the
+# software AUDIO path exactly as a stock media3 build has it, PLUS the audio
+# decoders Android's MediaCodec does NOT guarantee:
 #   mp2     MPEG-1 Layer II, the default audio in DVB/IPTV transport streams
 #   wmav1/2 WMA (the audio side of WMV files whose video side already decodes
 #           as wmv3/vc1 - without these the video plays with no sound)
@@ -97,7 +123,7 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 command -v git >/dev/null || die "git is not on PATH"
 command -v java >/dev/null || die "java is not on PATH (JDK 17 required)"
-[[ -n "$ANDROID_NDK" ]] || die "set ANDROID_NDK (or ANDROID_HOME) to an NDK r26b root"
+[[ -n "$ANDROID_NDK" ]] || die "set ANDROID_NDK (or ANDROID_HOME) to an NDK r28 root"
 [[ -d "$ANDROID_NDK" ]] || die "NDK not found at $ANDROID_NDK"
 if [[ -z "$ANDROID_SDK" || ! -d "$ANDROID_SDK" ]]; then
   die "set ANDROID_HOME or ANDROID_SDK_ROOT to your Android SDK root"
@@ -238,7 +264,7 @@ mkdir -p "$(dirname "$OUTPUT")"
 cp "$BUILT_AAR" "$OUTPUT"
 log "wrote $OUTPUT ($(wc -c < "$OUTPUT") bytes)"
 
-# --- Verify the AAR is a drop-in for the audio-only artifact --------------
+# --- Verify the AAR actually carries the native extension -----------------
 
 # An AAR stores native libraries under jni/<abi>/ -- that is the AAR on-disk
 # layout; Gradle relocates them to lib/<abi>/ only when it packages the APK.
@@ -267,6 +293,40 @@ done
 # file and then fail at runtime).
 if [[ "$ABIS_WITH_LIB" -eq 0 ]]; then
   die "$OUTPUT contains no libffmpegJNI.so for any ABI; not usable as a decoder extension"
+fi
+
+# --- Verify the 64-bit libraries are 16 KB page aligned -------------------
+
+# Android 15 devices can run with 16 KB pages, and a 4 KB-aligned shared
+# library crashes on them. media3 1.10 stopped passing
+# "-Wl,-z,max-page-size=16384" itself and relies on the NDK's
+# ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES property instead, which only NDK r27+
+# honours -- so a 4 KB-aligned library here means the NDK is too old, not that
+# something in this repo is wrong. 32-bit ABIs cannot request 16 KB pages, so
+# only the 64-bit ones are checked.
+READELF="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_PLATFORM}/bin/llvm-readelf"
+if [[ -x "$READELF" ]]; then
+  for abi in arm64-v8a x86_64; do
+    entry=""
+    for candidate in "jni/${abi}/libffmpegJNI.so" "lib/${abi}/libffmpegJNI.so"; do
+      if unzip -l "$OUTPUT" | grep -q "$candidate"; then
+        entry="$candidate"
+        break
+      fi
+    done
+    [[ -n "$entry" ]] || continue
+    SO_FILE="$(mktemp)"
+    unzip -p "$OUTPUT" "$entry" >"$SO_FILE"
+    if "$READELF" -l "$SO_FILE" | awk '$1 == "LOAD" { if ($NF == "0x4000") found = 1 } END { exit(found ? 0 : 1) }'; then
+      printf '  ok   %s is 16 KB aligned\n' "$entry"
+    else
+      rm -f "$SO_FILE"
+      die "$entry is not 16 KB aligned, so it crashes on 16 KB page-size devices; rebuild with NDK r28 (this run used ${ANDROID_NDK})"
+    fi
+    rm -f "$SO_FILE"
+  done
+else
+  log "llvm-readelf not found at ${READELF}; skipping the 16 KB alignment check"
 fi
 
 log "done. Rebuild the app (./gradlew assembleDebug) and it uses this AAR;"

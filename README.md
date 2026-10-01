@@ -61,7 +61,11 @@ EPG).
 
 ## Building
 
-Requirements: JDK 17, Android SDK (API 35), and `gradle` via the wrapper.
+Requirements: JDK 17, Android SDK platform API 37 (with SDK Build Tools 36),
+and Gradle via the wrapper (Gradle 9.8.0, Android Gradle Plugin 9.4.1, Kotlin
+2.4.20, KSP 2.3.12). AGP fetches the platform and build-tools itself once the
+SDK licenses are accepted, so only JDK 17 and an Android SDK install are
+strictly needed.
 
 1. Copy your API keys into `local.properties` at the repo root (gitignored):
 
@@ -90,27 +94,41 @@ Requirements: JDK 17, Android SDK (API 35), and `gradle` via the wrapper.
 ### Optional: software video decoding
 
 ExoPlayer's software video path needs a VIDEO-enabled build of media3's FFmpeg
-decoder extension. The published `org.jellyfin.media3:media3-ffmpeg-decoder`
-artifact carries audio decoders only, so by default the FFmpeg video renderer
-reports every video mime as unsupported and claims no track. Build the
-video-enabled AAR and drop it in:
+decoder extension, and there is no published artifact left to fall back on: the
+extension subclasses media3's decoder internals, so it only works compiled
+against the exact media3 release on the classpath, and the one prebuilt
+available (`org.jellyfin.media3:media3-ffmpeg-decoder`) stopped at `1.9.0+1`
+and carried audio decoders only. So the AAR this repo builds itself is the only
+source:
 
 ```sh
-# needs JDK 17, an Android SDK, and NDK r26b (26.1.10909125)
+# needs JDK 17, an Android SDK, and NDK r28c (28.2.13676358)
 scripts/build_ffmpeg_video.sh
 # -> libs/media3-ffmpeg-decoder.aar
 ./gradlew assembleDebug
 ```
 
-`app/build.gradle.kts` prefers `libs/media3-ffmpeg-decoder.aar` whenever it is
-present and falls back to the published artifact otherwise, so this is opt-in
-and reversible.
-
 You do **not** need an NDK on your own machine. The `Build KBStream APK`
-workflow runs the script in a cached, non-fatal step before the APK builds, so
-CI builds — including every published release — pick up software video
-decoding automatically once the cache is warm. If that step fails, the release
-still ships, just without software video decode.
+workflow runs the script in a cached step before the APK builds and uploads the
+result as the `media3-ffmpeg-decoder-video` artifact, so every published release
+ships software video decoding. The step after it fails the job if the AAR is
+missing, so a release without one cannot go out unnoticed — **download that
+artifact from any green run and drop it in `libs/`** instead of compiling it
+yourself. The AAR is built from the tag in `MEDIA3_TAG`, which must match the
+media3 version in `app/build.gradle.kts`.
+
+That step also needs NDK r28c, not the r26b upstream's own README still names:
+media3 1.10 moved 16 KB ELF alignment off the `-Wl,-z,max-page-size=16384`
+linker flag and onto the NDK's `ANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES` property,
+which r27 and newer honour and older NDKs silently ignore. Under r26 the
+library is linked for 4 KB pages and crashes on Android 15's 16 KB page-size
+devices, so the script refuses to hand over an AAR whose 64-bit libraries are
+not 16 KB aligned.
+
+Without the AAR `app/build.gradle.kts` logs a warning and builds anyway:
+ExoPlayer has no software video decoder and none of the audio codecs MediaCodec
+does not guarantee (AC-3/E-AC-3, DTS, TrueHD, MP2, WMA, AC-4), and the MPV
+engine — which bundles its own FFmpeg — is what covers those titles.
 
 `libs/` is gitignored: the AAR is a build product, not a source artifact.
 

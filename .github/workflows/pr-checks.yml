@@ -53,8 +53,7 @@ jobs:
           path: |
             ~/.gradle/caches/modules-2
             ~/.gradle/caches/jars-9
-            ~/.gradle/caches/transforms-4
-            ~/.gradle/caches/8.7
+            ~/.gradle/caches/9.8.0
             ~/.gradle/wrapper/dists
           key: gradle-deps-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', '**/*.gradle', 'gradle/wrapper/gradle-wrapper.properties', 'gradle.properties') }}
           restore-keys: |
