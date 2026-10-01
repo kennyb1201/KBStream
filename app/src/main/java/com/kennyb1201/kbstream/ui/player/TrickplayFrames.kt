@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.ImageFormat
 import android.media.Image
 import android.media.ImageReader
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -16,17 +15,17 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.DataSource
-import androidx.media3.datasource.DataSpec
-import androidx.media3.datasource.TransferListener
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
+import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
-import java.io.IOException
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 
 /**
  * Decoded scrub-preview frames: a real frame of the stream the viewer is
@@ -51,21 +50,15 @@ import java.io.IOException
  *
  * ## What it deliberately does not do
  *
- *  - **No addon stack.** The preview reads through the main player's
- *    `SimpleCache` and nothing else - no headers, and none of the rest of the
- *    player's stack (the DV re-write, the HDR10+ stripping, the YouTube chunked
- *    source). The cache is
- *    not an optimization here but a requirement: without it the preview opens a
- *    SECOND connection to a source that is already serving the main player, and
- *    the hosts this app plays from - debrid links, usenet - commonly allow a
- *    link exactly one, in which case the connection does not fail but hangs,
- *    and no frame is ever produced. See [buildPreview].
- *
- *    That requirement is enforced rather than intended: the preview decodes a
- *    bucket only once the main player has already read it
- *    ([trickplayServableFromCache]), so this pipeline opens no connection of
- *    its own, ever. A miss used to fall through to upstream, which is a second
- *    connection by definition - see that function for what it cost.
+ *  - **No addon stack.** The preview reads the main player's `SimpleCache`
+ *    first and the network only when that cache cannot serve the read, with the
+ *    same request headers the main player sends - and none of the rest of its
+ *    stack (the DV re-write, the HDR10+ stripping, the YouTube chunked source).
+ *    The cache is a saving, not a requirement: bytes already on disk cost no
+ *    connection at all, and [trickplayServableFromCache] admits a bucket the
+ *    main player has read past before anything else is tried. What it must not
+ *    become is the ONLY way to read - see [buildPreview] for what a
+ *    cache-only build cost.
  *  - **No audio.** Audio tracks are disabled in the track selection rather than
  *    muted, so the audio decoder is never instantiated at all.
  *  - **No HD.** Frames are captured at [TRICKPLAY_CAPTURE_WIDTH] and the
@@ -81,6 +74,14 @@ import java.io.IOException
 internal class TrickplayFrames(
     private val activity: Activity,
     private val url: String,
+    /**
+     * The same request headers the main player sends.
+     *
+     * The preview asks the same host for the same file, so a source gated on a
+     * Referer, an Origin or a Cookie is refused here exactly as it would be by
+     * the main player without them.
+     */
+    private val headers: Map<String, String> = emptyMap(),
     private val resolvedMimeType: String? = null,
     /**
      * Where the main player has read to, sampled per call.
@@ -232,34 +233,51 @@ internal class TrickplayFrames(
     }
 
     private fun buildPreview(): ExoPlayer {
-        // Read through the SAME disk cache the main player is filling, and
-        // NOTHING else.
+        // Read through the SAME disk cache the main player fills, and reach the
+        // network only when that cache cannot serve the read.
         //
-        // This is the difference between a preview that works and one that never
-        // can. The preview is a second player over the same URL, and a plain
-        // source means a SECOND CONNECTION to a source that is already serving
-        // the first one - and the hosts this app plays from (debrid links,
-        // usenet) routinely allow a link exactly one. That connection does not
-        // fail, it hangs: no player error, no frame, nothing but the extraction
-        // timeout - and, worse, it holds a read on the shared cache span the
-        // main player is about to read, which is what leaves a scrub
-        // "buffering forever" after the attempt.
+        // The cache comes first because it is free: bytes already on disk cost
+        // no connection at all, which is what makes dragging back over ground
+        // the viewer has passed instant. [trickplayServableFromCache] gates on
+        // exactly that, so an ordinary scrub near the playhead never opens
+        // anything.
         //
-        // So the upstream does not merely go unused, it REFUSES: a cache miss
-        // fails the extraction there and then instead of falling through to a
-        // second connection the source may never give.
-        // [trickplayServableFromCache] still admits a bucket only once the main
-        // player has read past it, so an ordinary scrub near the playhead reads
-        // bytes already on disk and never comes here at all.
+        // It cannot be the ONLY choice, and a build that tried has a field
+        // report of its own. "Servable" there was inferred from the main
+        // player's buffered position, which is a different question from "are
+        // these bytes on disk": the disk cache evicts least-recently-used
+        // spans, so once it fills - it holds ~128 MB of a 6 GB release - the
+        // spans just BEHIND the playhead, precisely the ones a preview asks
+        // for, are the first to go. A cache-only reader was then left failing
+        // every extraction with ERROR_CODE_IO_UNSPECIFIED while the frames it
+        // refused to fetch sat one connection away.
+        //
+        // So the upstream is real, and bounded: short timeouts, so a host that
+        // will not give a second connection fails the extraction in seconds
+        // instead of hanging on one - the failure mode this feature is most
+        // careful about, because the main player is reading the same source.
         //
         // The cache key has to match the main player's or the entries are
         // missed rather than shared. Both wrap the same URL string with the
         // default, URI-keyed factory, which is why no CacheKeyFactory is set on
         // either side - see the matching CacheDataSource in
         // NativePlayerActivity.
+        val okHttpClient = OkHttpClient.Builder()
+            .connectTimeout(10L, TimeUnit.SECONDS)
+            .readTimeout(20L, TimeUnit.SECONDS)
+            .callTimeout(20L, TimeUnit.SECONDS)
+            .build()
+        val upstream = OkHttpDataSource.Factory(okHttpClient)
+            // The same identity the main player asks as, and the source's own
+            // User-Agent when it named one - see StreamUserAgent.
+            .setUserAgent(StreamUserAgent.resolve(headers))
+        StreamUserAgent.withoutUserAgent(headers)
+            .filterValues { it.isNotBlank() }
+            .takeIf { it.isNotEmpty() }
+            ?.let { upstream.setDefaultRequestProperties(it) }
         val cached = CacheDataSource.Factory()
             .setCache(StreamDiskCache.get(activity))
-            .setUpstreamDataSourceFactory(CacheOnlyUpstream)
+            .setUpstreamDataSourceFactory(upstream)
 
         // No capture surface yet. It is built in [ensureCaptureSurface] once the
         // stream's own size is known, because an ImageReader's buffers are
@@ -681,37 +699,6 @@ internal class TrickplayFrames(
         val builder = MediaItem.Builder().setUri(url)
         trickplayMimeHint(url, resolvedMimeType)?.let { builder.setMimeType(it) }
         return builder.build()
-    }
-
-    /**
-     * The upstream a cache miss reaches: one that refuses to open.
-     *
-     * The preview must never open its own connection - see [buildPreview] for
-     * why a second connection to a source already serving the main player is
-     * worse than no preview at all. Rather than trusting the callers to keep it
-     * cache-only, the source itself is a wall: a cache miss fails the
-     * extraction there and then, instead of falling through to a connection the
-     * host may never grant and leave the main player's own read blocked behind
-     * it (the filed report's "buffers endlessly" after a scrub).
-     */
-    private object CacheOnlyUpstream : DataSource.Factory {
-        override fun createDataSource(): DataSource = CacheOnlySource
-    }
-
-    private object CacheOnlySource : DataSource {
-        override fun addTransferListener(transferListener: TransferListener) = Unit
-
-        override fun open(dataSpec: DataSpec): Long =
-            throw IOException("scrub previews read the shared cache only")
-
-        override fun read(buffer: ByteArray, offset: Int, length: Int): Int =
-            throw IOException("scrub previews read the shared cache only")
-
-        override fun getUri(): Uri? = null
-
-        override fun getResponseHeaders(): Map<String, List<String>> = emptyMap()
-
-        override fun close() = Unit
     }
 
     private companion object {

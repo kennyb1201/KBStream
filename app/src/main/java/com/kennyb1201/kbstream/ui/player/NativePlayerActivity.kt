@@ -4250,6 +4250,10 @@ class NativePlayerActivity : ComponentActivity() {
         val frames = trickplay ?: TrickplayFrames(
             activity = this,
             url = currentUrl,
+            // The same headers the main player sends: the preview asks the same
+            // host for the same file, so a source gated on a Referer or a
+            // Cookie refuses it without them.
+            headers = streamHeaders,
             // The same container the player itself settled on, so a playlist
             // whose marker lives only in the query is fetched through the HLS
             // source instead of the progressive extractors.
