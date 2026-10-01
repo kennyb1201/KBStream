@@ -426,6 +426,12 @@ private fun CollectionFolderTile(
             modifier = Modifier
                 .width(tileSize.width)
                 .height(tileSize.height)
+                // The same faint edge a poster tile draws (Settings →
+                // Interface → Poster Border): the folder tiles sit in a rail
+                // on Home beside catalog posters, so without it a folder with
+                // dark cover art reads as a borderless card among bordered
+                // ones.
+                .then(posterBorderModifier())
         ) {
             val coverUrl = folder.coverImageUrl?.takeIf { it.isNotBlank() }
             if (coverUrl != null) {
