@@ -1160,6 +1160,13 @@ class NativePlayerActivity : ComponentActivity() {
 
     // Retry
     private var retryAttempt = 0
+    /**
+     * The ladder has rolled over instead of parking on the error card (see
+     * [retryLoopRung]): this is a live channel that has spent the ladder at
+     * least once and is still reconnecting. Only the overlay's wording reads
+     * it, because "Reconnecting... (7/6)" is not something to show a viewer.
+     */
+    private var liveRetryLooping = false
     private var decoderResourceFallbackDone = false
     /**
      * True once a decoder failure has had the ladder's one meaningful retry,
@@ -1267,6 +1274,20 @@ class NativePlayerActivity : ComponentActivity() {
     private val stallNoProgressMs = 30_000L
     private val stallMaxRecoveries = 4
     private val stallTickMs = 2_000L
+
+    // Live watchdog: the stall watchdog above deliberately skips live
+    // channels, and the retry ladder only runs off a hard error - so a channel
+    // whose server simply stopped sending had nothing watching it at all, and
+    // the picture froze on the last frame with no error and no retry. Left
+    // running overnight (how a live channel is actually watched: falling
+    // asleep to it) that is the reported morning state. This watches the same
+    // progress the VOD watchdog does and hands a quiet session to the
+    // reconnect ladder, which rebuilds against the same URL - a re-tune, which
+    // is what zapping away and back did by hand. See [liveWatchdogAction].
+    private var liveWatchdogToken = 0
+    private var liveLastProgressAtMs = 0L
+    private var liveLastPositionMs = -1L
+    private var liveLastBufferedMs = -1L
 
     // History
     private var isLiveChannel = false
@@ -5104,6 +5125,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Disarm any outstanding stall/black-video timers tied to the old
         // player instance; fresh ones are armed when the new session is ready.
         stallWatchdogToken++
+        liveWatchdogToken++
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
         // Anything an earlier rebuild queued is stale once this one runs.
@@ -5161,6 +5183,7 @@ class NativePlayerActivity : ComponentActivity() {
                 // is over, so later buffering rebuffers use normal paths.
                 fromActorReturn = false
                 armStallWatchdog()
+                armLiveWatchdog()
                 if (controlsVisible && !showSettingsPanel && !isPickerShowing) {
                     scheduleAutoHide()
                 }
@@ -5216,11 +5239,13 @@ class NativePlayerActivity : ComponentActivity() {
                     updateUIReady()
                     retryAttempt = 0
                     retryExhausted = false
+                    liveRetryLooping = false
                     errorMessageStr = null
                     autoSelectPreferredLanguages()
                     subtitleCueHandler?.updateFromPosition()
                     armBlackVideoWatchdog()
                     armStallWatchdog()
+                    armLiveWatchdog()
                     // Actor-return session: the surface is prepared and
                     // paused (frame at the resume position on screen) —
                     // bring up the controls overlay exactly as if the user
@@ -6013,6 +6038,10 @@ class NativePlayerActivity : ComponentActivity() {
         if (firstFrameRendered) return
         firstFrameRendered = true
         firstFrameRenderedAtMs = System.currentTimeMillis()
+        // A live channel is watched FROM here: the keep-alive's clock starts on
+        // the first painted frame, so a launch that legitimately takes a while
+        // is the startup watchdog's business and not a stall.
+        armLiveWatchdog()
         // One actionable startup line. The right-hand gap is the decoder/GPU,
         // the left-hand one is the network + extractor (the DV strip rewrites
         // every sample on the way through) + buffer fill.
@@ -6451,7 +6480,9 @@ class NativePlayerActivity : ComponentActivity() {
     private fun armStallWatchdog() {
         // Only once real playback has begun (first frame rendered) — the slow
         // NNTP first-byte wait (up to ~90s) is legitimate and must never trip
-        // this. Live channels have their own handling.
+        // this. Live channels have their own handling: [armLiveWatchdog], which
+        // watches the same progress but re-tunes instead of seeking past a
+        // buffered edge a live stream does not have.
         if (isLiveChannel) return
         if (!firstFrameRendered) return
         if (errorContainer.visibility == View.VISIBLE) return
@@ -6557,6 +6588,99 @@ class NativePlayerActivity : ComponentActivity() {
         )
         player.seekTo(targetMs)
         handler.postDelayed({ tickStallWatchdog(token) }, stallTickMs)
+    }
+
+    /**
+     * Arms the live keep-alive, and is a no-op for everything else.
+     *
+     * Called from the same three places the VOD watchdog is (the first rendered
+     * frame, READY, and a resume), which between them mean one thing for a live
+     * session: it has picture on screen and is playing. Each call restarts the
+     * quiet window, so a session that has just proved it is playing is not
+     * judged on progress from before it stopped. [createPlayer] clears
+     * [firstFrameRendered] on every rebuild, so a re-tune arms this again on its
+     * own first frame rather than inheriting the old session's clock.
+     */
+    private fun armLiveWatchdog() {
+        // Any outstanding tick against the previous session is stale the moment
+        // this runs, armed or not.
+        liveWatchdogToken++
+        if (!isLiveChannel) return
+        if (isFinishing || isDestroyed) return
+        if (!firstFrameRendered) return
+        val token = liveWatchdogToken
+        liveLastProgressAtMs = System.currentTimeMillis()
+        liveLastPositionMs = exoPlayer?.currentPosition ?: 0L
+        liveLastBufferedMs = exoPlayer?.bufferedPosition ?: 0L
+        handler.postDelayed({ tickLiveWatchdog(token) }, LIVE_STALL_TICK_MS)
+    }
+
+    /**
+     * One live keep-alive tick: move the window forward while data is arriving,
+     * and re-tune the channel when it has stopped.
+     *
+     * The tick chain stops itself on a re-tune rather than re-posting: the
+     * ladder owns the session from there, and a tick left running against a
+     * player about to be released could ask for a second rebuild before the
+     * first one lands. The next session arms a fresh chain on its first frame.
+     */
+    private fun tickLiveWatchdog(token: Int) {
+        if (token != liveWatchdogToken) return
+        val player = exoPlayer
+        val positionMs = player?.currentPosition ?: 0L
+        val bufferedMs = player?.bufferedPosition ?: 0L
+        val now = System.currentTimeMillis()
+        val action = liveWatchdogAction(
+            live = isLiveChannel,
+            finishing = isFinishing || isDestroyed,
+            reconnecting = reconnectingContainer.visibility == View.VISIBLE,
+            playWhenReady = player?.playWhenReady == true,
+            playbackState = player?.playbackState ?: Player.STATE_IDLE,
+            firstFrameRendered = firstFrameRendered,
+            positionMs = positionMs,
+            bufferedMs = bufferedMs,
+            lastPositionMs = liveLastPositionMs,
+            lastBufferedMs = liveLastBufferedMs,
+            quietMs = now - liveLastProgressAtMs
+        )
+        when (action) {
+            LiveWatchdogAction.IGNORE -> return
+            LiveWatchdogAction.RETUNE -> {
+                // Disarm before handing over, so the one path that reconnects is
+                // the ladder. Its own backoff is what paces the retries from
+                // here - a channel that comes back at 4am cannot be re-tuned at
+                // this watchdog's cadence without rebuilding the player every
+                // twenty seconds against a provider that is down.
+                liveWatchdogToken++
+                val quietMs = now - liveLastProgressAtMs
+                Log.w(
+                    "PLAYER_LIVE",
+                    "No live progress for ${quietMs}ms (pos=${positionMs}ms " +
+                        "buf=${bufferedMs}ms) \u2014 re-tuning the channel"
+                )
+                com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
+                    "playback.live_stall",
+                    quietMs
+                )
+                scheduleRetry()
+                return
+            }
+            LiveWatchdogAction.KEEP_WAITING -> {
+                if (
+                    liveProgressed(
+                        positionMs = positionMs,
+                        bufferedMs = bufferedMs,
+                        lastPositionMs = liveLastPositionMs,
+                        lastBufferedMs = liveLastBufferedMs
+                    )
+                ) {
+                    liveLastProgressAtMs = now
+                    liveLastPositionMs = positionMs
+                    liveLastBufferedMs = bufferedMs
+                }
+                handler.postDelayed({ tickLiveWatchdog(token) }, LIVE_STALL_TICK_MS)
+            }
+        }
     }
 
     private fun updateHeaderInfo() {
@@ -7758,13 +7882,38 @@ class NativePlayerActivity : ComponentActivity() {
             ) {
                 return
             }
-            retryExhausted = true
-            updateUIError()
-            return
+            // A live channel never ends, so for one the spent ladder is not an
+            // outcome to report: it is a provider that is down right now, on a
+            // screen most often left running overnight. Roll back to the
+            // ladder's longest backoff and keep reconnecting until the channel
+            // answers again, rather than parking on a card nobody is awake to
+            // press. VOD keeps the card it has always shown. See
+            // [retryLoopRung].
+            val loopRung = retryLoopRung(
+                live = isLiveChannel,
+                rungCount = RETRY_BACKOFF_MS.size
+            )
+            if (loopRung < 0) {
+                retryExhausted = true
+                updateUIError()
+                return
+            }
+            Log.w(
+                "PLAYER_RETRY",
+                "Live channel spent the ladder (${retryAttempt} attempts) \u2014 " +
+                    "restarting it at the longest backoff instead of giving up"
+            )
+            liveRetryLooping = true
+            retryAttempt = loopRung
         }
         reconnectingContainer.visibility = View.VISIBLE
         hideBufferingSpinner()
-        reconnectingText.text = "Reconnecting... (${retryAttempt + 1}/$attemptLimit)"
+        reconnectingText.text = if (liveRetryLooping) {
+            // The counter has wrapped: "Reconnecting... (7/6)" reads as a bug.
+            "Reconnecting\u2026"
+        } else {
+            "Reconnecting... (${retryAttempt + 1}/$attemptLimit)"
+        }
 
         if (retryAttempt >= RAW_EXTRACTOR_PROBE_ATTEMPT) {
             Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: probing with raw extractor")
