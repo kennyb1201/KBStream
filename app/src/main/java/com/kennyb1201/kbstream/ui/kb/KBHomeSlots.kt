@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,7 +54,10 @@ import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
 import com.kennyb1201.kbstream.ui.home.TvSafeAreaHorizontal
+import com.kennyb1201.kbstream.ui.search.browseCategoryIcon
+import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.CardShape
+import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -645,6 +650,11 @@ private fun BrowseShortcutTile(
     // looks like the artwork is still loading.
     var markUnusable by remember(clearlogoUrls) { mutableStateOf(false) }
 
+    // The resolved spotlight still (a genre's / decade's / studio's most
+    // popular title, a collection's own art) drawn as a dim base so the tile
+    // has color and depth instead of an empty surface.
+    val backgroundUrl = art?.backdropUrl?.takeIf { it.isNotBlank() }
+
     KBCard(
         onClick = onClick,
         modifier = focusModifier
@@ -654,12 +664,73 @@ private fun BrowseShortcutTile(
                 .width(CollectionTileWidth)
                 .height(CollectionTileHeight)
                 .background(KBSurface)
+                // A soft accent wash under everything, so a shortcut with no
+                // resolved artwork is still a warm card rather than a flat
+                // grey rectangle.
+                .background(
+                    androidx.compose.ui.graphics.Brush.linearGradient(
+                        colors = listOf(
+                            KBAccent.copy(alpha = 0.12f),
+                            androidx.compose.ui.graphics.Color.Transparent
+                        )
+                    )
+                )
                 // The faint edge every poster tile draws (Settings →
                 // Interface), so a browse/network chip sits in the rail with
                 // the same border as the catalog posters around it.
                 .then(posterBorderModifier()),
             contentAlignment = Alignment.Center
         ) {
+            // The backdrop is TEXTURE here, not a thumbnail: kept well under
+            // full strength and then dimmed further by the scrim below, it
+            // gives the card its color without the "mismatched still under a
+            // wordmark" read that a full-strength image produced.
+            if (backgroundUrl != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(backgroundUrl).build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .matchParentSize()
+                        .graphicsLayer { alpha = 0.42f }
+                )
+            }
+
+            // Legibility scrim: the logo, the badge and the caption all sit on
+            // it, so a bright backdrop cannot swallow any of them.
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            colors = listOf(
+                                KBVoid.copy(alpha = 0.30f),
+                                KBVoid.copy(alpha = 0.90f)
+                            )
+                        )
+                    )
+            )
+
+            // What KIND of door this chip is (a genre, a tag, a service, a
+            // studio, a decade, a collection). The rail already groups the
+            // kinds it shares, but within "Genres & Tags" nothing else tells a
+            // genre from a keyword.
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(7.dp)
+                    .background(KBVoid.copy(alpha = 0.55f), KBShapePill)
+                    .padding(horizontal = 8.dp, vertical = 5.dp)
+            ) {
+                Icon(
+                    imageVector = browseCategoryIcon(shortcut.categoryKey),
+                    contentDescription = null,
+                    tint = KBAccent,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+
             if (clearlogoUrls.isEmpty() || markUnusable) {
                 // No clearlogo (no art at all, a category TMDB has no logo
                 // for, or the first frame): the chip's own name is the mark.
@@ -683,7 +754,24 @@ private fun BrowseShortcutTile(
                     onUnusable = { markUnusable = true },
                     modifier = Modifier
                         .fillMaxWidth(0.72f)
-                        .height(CollectionTileHeight * 0.5f)
+                        .height(CollectionTileHeight * 0.42f)
+                )
+            }
+
+            // A tile drawn from an abstract brand mark - a glyph, a row of
+            // dots - still has to say which door it is, so the chip's own name
+            // sits in the caption corner whenever a logo (rather than the
+            // fallback wordmark, which already IS the name) is on the card.
+            if (clearlogoUrls.isNotEmpty() && !markUnusable) {
+                Text(
+                    text = shortcut.name,
+                    color = KBTextHi.copy(alpha = 0.92f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(start = 8.dp, end = 8.dp, bottom = 5.dp)
                 )
             }
         }
