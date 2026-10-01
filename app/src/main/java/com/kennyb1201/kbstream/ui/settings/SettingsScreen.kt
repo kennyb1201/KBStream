@@ -442,8 +442,15 @@ fun SettingsScreen(
                     // Kids Mode "Lock add-ons": hide the management entry
                     // entirely. The deep-link path is gated in MainActivity;
                     // this hides the visible door.
-                    val profile = com.kennyb1201.kbstream.data.sync.ProfileManager
-                        .activeProfile.value
+                    // Collected rather than read as `.value`: reading a
+                    // StateFlow's value inside composition never observes it,
+                    // so switching to a kids profile left this row showing the
+                    // previous profile's lock state (and new lint treats the
+                    // `.value` call as an error).
+                    val profile =
+                        com.kennyb1201.kbstream.data.sync.ProfileManager
+                            .activeProfile.collectAsStateWithLifecycle()
+                            .value
                     val kidsAddonLock =
                         profile?.kidsMaxAge != null && profile.kidsHideAddons
                     if (!kidsAddonLock) {
