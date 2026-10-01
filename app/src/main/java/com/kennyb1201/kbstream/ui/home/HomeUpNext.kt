@@ -47,10 +47,30 @@ internal const val DISMISSALS_SYNCED_AT = "dismissals_synced_at"
  * season walk (see HomeViewModel's local next-up builder); the list is ordered
  * newest completion first, so the cap only trims the tail of a long history.
  */
-internal const val MAX_LOCAL_NEXT_UP_ITEMS = 25
+internal const val MAX_LOCAL_NEXT_UP_ITEMS = 25/** Parallel TMDB resolutions while building the local next-up cards. */
+internal const val LOCAL_NEXT_UP_CONCURRENCY =
+    4
 
-/** Parallel TMDB resolutions while building the local next-up cards. */
-internal const val LOCAL_NEXT_UP_CONCURRENCY = 4
+/**
+ * Parallel TMDB resolutions while building the MDBList cards. They each resolve
+ * the show's watched/total aired counts now, so the pass is no longer a cheap
+ * per-session metadata read (see [upNextArrivalBadge] and the counts the card
+ * carries).
+ */
+internal const val MDBLIST_UP_NEXT_CONCURRENCY =
+    4
+
+/**
+ * How long after it airs an episode still counts as news: the window the
+ * arrival badges read ("New Season" / "New Episode"), and the one the local
+ * next-up card uses to decide a premiere is a season RETURN rather than one
+ * more episode.
+ *
+ * Seven days is the same week a tracker's own "new" flag covers, so a card
+ * stops claiming to be news at the point the next episode is usually out.
+ */
+internal const val NEW_RELEASE_WINDOW_DAYS =
+    7
 
 data class Rail(
     val addonName: String,
@@ -522,6 +542,61 @@ internal fun upNextTrackerSubtitle(
     }
 }
 
+/**
+ * The badge a rail card carries for the episode it points at.
+ *
+ * One rule for all three sources of cards - this profile's history, MDBList and
+ * Simkl - because they were deciding it separately and disagreeing: the Simkl
+ * builder read the arrival window, the local builder handled only the season
+ * PREMIERE case, and the MDBList builder hardcoded "continue watching". So a
+ * viewer without a Simkl account never saw a "New Episode" chip at all, and one
+ * whose tracker was MDBList saw no arrival chip anywhere, however recently the
+ * episode had aired.
+ *
+ * A card with progress to resume is a resume, whatever aired: the viewer is
+ * mid-episode, and the chip belongs on the card for the episode they have not
+ * started. Otherwise a recently aired episode is news - a premiere is the show
+ * RETURNING ("New Season"), anything else is one more episode of a show still
+ * airing ("New Episode") - and anything older is simply what is up next.
+ *
+ * [episode] is the episode the CARD shows, so the season-premiere check
+ * describes the same episode the viewer is being pointed at.
+ */
+internal fun upNextArrivalBadge(
+    isResume: Boolean,
+    airDate: String?,
+    episode: Int?
+): UpNextBadge {
+    if (isResume) return UpNextBadge.CONTINUE_WATCHING
+
+    val airedRecently =
+        airDate?.let { isWithinDays(it, NEW_RELEASE_WINDOW_DAYS) } == true
+
+    if (!airedRecently) return UpNextBadge.NEXT_UP
+
+    return if (
+        episode?.let { SeasonRules.isSeasonPremiere(it) } == true
+    ) {
+        UpNextBadge.NEW_SEASON
+    } else {
+        UpNextBadge.NEW_EPISODE
+    }
+}
+
+/**
+ * The action word a card's subtitle leads with, matching [upNextArrivalBadge]
+ * so the chip and the line under the title never contradict each other (a
+ * "NEW SEASON" badge over "Resume - S2E1" was the previous MDBList behavior).
+ */
+internal fun upNextBadgePrefix(
+    badge: UpNextBadge
+): String = when (badge) {
+    UpNextBadge.CONTINUE_WATCHING -> "Resume"
+    UpNextBadge.NEW_SEASON -> "New Season"
+    UpNextBadge.NEW_EPISODE -> "New Episode"
+    UpNextBadge.NEXT_UP -> "Up Next"
+}
+
 /** One card per show: keyed by parent id when the card has one, title otherwise. */
 internal fun upNextShowKey(item: UpNextItem): String {
     val normalizedParentId =
@@ -931,6 +1006,44 @@ internal fun hasNothingLeftToWatch(
         totalAiredEpisodes != null &&
         totalAiredEpisodes > 0 &&
         watchedAiredEpisodes >= totalAiredEpisodes
+
+/**
+ * Upcoming's INCLUSION rule: only a show the viewer is CAUGHT UP on advertises
+ * its next unaired episode.
+ *
+ * Reported: "stuff I'm not caught up to is showing in the Upcoming because it
+ * has new aired episodes out - only shows I'm caught up to should be seeing the
+ * new unaired episodes". The rail is fed from Continue Watching, which carries
+ * every show with something left to watch, so a show three episodes behind and
+ * still airing was announcing "the next one airs Friday" over the episodes the
+ * viewer has not got to yet. Those already-aired episodes are what is waiting;
+ * the episode after them is not news.
+ *
+ * "Every aired episode watched" is the same caught-up the rest of the app
+ * already means by it - the detail page's caught-up state and the eye marker's
+ * rule (see `LocalSeriesProgress.isCaughtUp`) - so the rail now agrees with
+ * them instead of contradicting them.
+ *
+ * Continue Watching is deliberately NOT gated this way. The NEW SEASON and
+ * NEW EPISODE badges are the alert that an episode has ARRIVED, and they are
+ * exactly what tells the viewer there is something to catch up on; the user
+ * asked for those to be kept.
+ *
+ * A show whose episode list could not be counted ([UpNextItem.episodesTotal]
+ * null or zero - every season lookup failed) is kept: an offline device cannot
+ * prove a backlog, and the same reasoning keeps such a show on Continue
+ * Watching (see [hasNothingLeftToWatch]). A tracker's queued next episode is
+ * unaffected for the same reason - a show with every aired episode watched is
+ * caught up even when the tracker is pointing at an episode TMDB has not aired.
+ *
+ * Top level and pure so the rule can be pinned by a test: the rail itself is
+ * built by a private method that needs a database, a tracker session and a
+ * network.
+ */
+internal fun isCaughtUpForUpcoming(item: UpNextItem): Boolean {
+    val airedEpisodes = item.episodesTotal?.takeIf { it > 0 } ?: return true
+    return (item.episodesWatched ?: 0) >= airedEpisodes
+}
 
 /**
  * One row in the Home "Upcoming" rail: a show's next unaired episode,

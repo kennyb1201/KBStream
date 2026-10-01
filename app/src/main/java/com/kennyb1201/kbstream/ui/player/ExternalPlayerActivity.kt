@@ -17,17 +17,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import coil3.load
 import com.kennyb1201.kbstream.R
-import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
-import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
-import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -86,6 +84,15 @@ class ExternalPlayerActivity : ComponentActivity() {
     private var currentUrl = ""
     private var parentId = ""
     private var parentType = ""
+
+    /**
+     * The profile this playback session belongs to, pinned at launch and
+     * carried in the launch intent (see [PlaybackHistoryWriter]). Read from
+     * the launch intent rather than the active profile so that switching
+     * profiles during playback cannot make this session file its progress
+     * into the other profile's Continue Watching.
+     */
+    private var sessionProfileId: String? = null
     private var season: Int? = null
     private var episode: Int? = null
     private var episodeStreamId: String? = null
@@ -337,6 +344,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         currentUrl = intent.getStringExtra("stream_url").orEmpty()
         parentId = intent.getStringExtra("parent_id").orEmpty()
         parentType = intent.getStringExtra("parent_type").orEmpty()
+        sessionProfileId = PlaybackHistoryWriter.sessionProfileId(this, intent)
         season = intent.getIntExtra("season", -1).takeIf { it >= 0 }
         // A launch carrying 0 as its episode is carrying "no episode": see
         // EpisodeNumbering. Read as one, the up-next line said "Season 2
@@ -733,6 +741,12 @@ class ExternalPlayerActivity : ComponentActivity() {
             putExtra("stream_url", currentUrl)
             putExtra("parent_id", parentId)
             putExtra("parent_type", parentType)
+            // The in-app engine takes over THIS session, so it inherits the
+            // profile the session started on rather than re-reading whichever
+            // profile is active by the time the hand-off happens.
+            sessionProfileId?.let {
+                putExtra(PlaybackHistoryWriter.EXTRA_SESSION_PROFILE_ID, it)
+            }
             putExtra("season", season ?: -1)
             putExtra("episode", episode ?: -1)
             episodeStreamId?.let { putExtra("episode_stream_id", it) }
@@ -1170,11 +1184,11 @@ class ExternalPlayerActivity : ComponentActivity() {
                 "save progress: ${safePosition}ms / ${durationMs}ms completed=$completed"
             )
 
-            runCatchingCancellable {
-                val dao = WatchHistoryDatabase.getInstanceScoped(this@ExternalPlayerActivity)
-                    .watchHistoryDao()
-                val existing = dao.getById(historyId)
-                val entry = WatchHistoryEntity(
+            // The write goes through PlaybackHistoryWriter, which files the
+            // row under the profile this SESSION started on and refuses it if
+            // the user switched profiles while it was playing.
+            val entry =
+                WatchHistoryEntity(
                     id = historyId,
                     parentId = canonicalParentId(),
                     type = parentType,
@@ -1192,12 +1206,11 @@ class ExternalPlayerActivity : ComponentActivity() {
                     durationMs = durationMs,
                     updatedAt = now,
                     isCompleted = completed,
-                    completedAt = if (completed) existing?.completedAt ?: now else null
+                    // Completed rows keep the stamp of the first completion;
+                    // the writer reads it back from the row it replaces.
+                    completedAt = null
                 )
-                dao.upsert(entry)
-                SupabaseSync.enqueueHistory(entry)
-                TvLauncherPublisher.sync(this@ExternalPlayerActivity, dao.getAll())
-            }.onFailure { Log.w(TAG, "could not write watch history", it) }
+            PlaybackHistoryWriter.write(this@ExternalPlayerActivity, sessionProfileId, entry)
             if (completed) pushCompletion()
         }
     }

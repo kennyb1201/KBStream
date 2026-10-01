@@ -111,12 +111,20 @@ class WatchHistoryRepository(private val appContext: Context) {
      * Removes every in-progress (resume) row for a parent show/movie so it
      * disappears from Continue Watching, while preserving completed-episode
      * history used for watched badges and episode counts.
+     *
+     * Returns the ids it removed, for the reason [deleteById] does not need to:
+     * these are the rows of a card the viewer asked to be rid of, and a cloud
+     * copy of one that is deleted only locally is re-inserted by the next sync
+     * pull (the remote row is "newer" than a local row that is not there at
+     * all). The caller removes the cloud copies with those ids — see
+     * [com.kennyb1201.kbstream.data.sync.SupabaseSync.deleteHistoryRows].
      */
-    suspend fun deleteResumeRowsForParent(parentId: String) {
-        WatchHistoryDatabase.withScopedDao(appContext) {
-            it.deleteResumeRowsForParent(parentId)
+    suspend fun deleteResumeRowsForParent(parentId: String): List<String> =
+        WatchHistoryDatabase.withScopedDao(appContext) { dao ->
+            val removed = dao.getInProgressForParent(parentId).map { it.id }
+            dao.deleteResumeRowsForParent(parentId)
+            removed
         }
-    }
 
     /**
      * Every row with a saved resume position - used to rebuild the TV

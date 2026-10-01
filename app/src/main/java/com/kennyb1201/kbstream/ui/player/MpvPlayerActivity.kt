@@ -33,21 +33,19 @@ import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.cache.DiskSweep
-import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
+import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
-import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.withContext
-import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
@@ -528,6 +526,15 @@ class MpvPlayerActivity : ComponentActivity() {
     private var currentAudioUrl: String? = null
     private var parentId = ""
     private var parentType = ""
+
+    /**
+     * The profile this playback session belongs to, pinned at launch and
+     * carried in the launch intent (see [PlaybackHistoryWriter]). Read from
+     * the launch intent rather than the active profile so that switching
+     * profiles during playback - PiP makes that routine - cannot make this
+     * session file its progress into the other profile's Continue Watching.
+     */
+    private var sessionProfileId: String? = null
     private var season: Int? = null
     private var episode: Int? = null
     private var episodeStreamId: String? = null
@@ -750,6 +757,7 @@ class MpvPlayerActivity : ComponentActivity() {
         currentAudioUrl = intent.getStringExtra("audio_url")
         parentId = intent.getStringExtra("parent_id").orEmpty()
         parentType = intent.getStringExtra("parent_type").orEmpty()
+        sessionProfileId = PlaybackHistoryWriter.sessionProfileId(this, intent)
         season = intent.getIntExtra("season", -1).takeIf { it >= 0 }
         // A launch carrying 0 as its episode is carrying "no episode": see
         // EpisodeNumbering. Read as one, the up-next line said "Season 2
@@ -3092,11 +3100,11 @@ class MpvPlayerActivity : ComponentActivity() {
         // NonCancellable: this write must land even while the activity is being
         // torn down, exactly like the main player's exit save.
         lifecycleScope.launch(Dispatchers.IO + NonCancellable) {
-            runCatchingCancellable {
-                val dao = WatchHistoryDatabase.getInstanceScoped(this@MpvPlayerActivity)
-                    .watchHistoryDao()
-                val existing = dao.getById(historyId)
-                val entry = WatchHistoryEntity(
+            // The write goes through PlaybackHistoryWriter, which files the row
+            // under the profile this SESSION started on and refuses it if the
+            // user switched profiles while it was playing.
+            val entry =
+                WatchHistoryEntity(
                     id = historyId,
                     parentId = canonicalParentId(),
                     type = parentType,
@@ -3115,12 +3123,11 @@ class MpvPlayerActivity : ComponentActivity() {
                     durationMs = effectiveDuration,
                     updatedAt = now,
                     isCompleted = completed,
-                    completedAt = if (completed) existing?.completedAt ?: now else null
+                    // Completed rows keep the stamp of the first completion;
+                    // the writer reads it back from the row it replaces.
+                    completedAt = null
                 )
-                dao.upsert(entry)
-                SupabaseSync.enqueueHistory(entry)
-                TvLauncherPublisher.sync(this@MpvPlayerActivity, dao.getAll())
-            }.onFailure { Log.w(TAG, "could not write watch history", it) }
+            PlaybackHistoryWriter.write(this@MpvPlayerActivity, sessionProfileId, entry)
             if (completed) pushCompletion()
         }
     }

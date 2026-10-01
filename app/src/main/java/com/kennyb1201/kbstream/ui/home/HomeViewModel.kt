@@ -24,12 +24,14 @@ import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.simkl.UPCOMING_DIAGNOSTICS
+import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
+import com.kennyb1201.kbstream.data.watched.LocalSeriesProgress
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
@@ -262,7 +264,15 @@ class HomeViewModel(
     private val watchedRefreshMutex =
         Mutex()
 
-    private val simklWatchedEpisodesByShow =
+    // Watched episodes per show from the TRACKERS - Simkl and MDBList merged,
+    // not Simkl alone. It used to be Simkl's set, which meant a viewer who ran
+    // MDBList but no Simkl had every tracker-side signal read as "nothing
+    // watched": their shows ignored the tracker in Continue Watching progress,
+    // the episode counts and the caught-up rules, even though the very same
+    // episodes were ticked on Detail (which already merges both). Folding both
+    // sources into one map here is what gives the two trackers parity across
+    // the whole Home surface rather than only the MDBList rail card.
+    private val trackerWatchedEpisodesByShow =
         mutableMapOf<String, Set<Pair<Int, Int>>>()
 
     private val watchedEpisodeKeysByShow =
@@ -350,23 +360,47 @@ class HomeViewModel(
         _upNext.asStateFlow()
 
     /**
-     * Upcoming episodes: one entry per in-progress show whose TMDB detail
-     * carries a future "next episode to air", plus the next UNAIRED episode
-     * of every show this profile is caught up on
-     * ([loadCaughtUpUpcomingItems]) - a caught-up show has nothing to resume,
-     * so it never reaches Continue Watching and this is the only rail that
-     * can surface what it has coming, whether that is a new season or the
-     * next episode of one already airing. Sorted by air date.
+     * Upcoming episodes: one entry per CAUGHT-UP show whose TMDB detail carries
+     * a future "next episode to air", plus the next UNAIRED episode of every
+     * show this profile is caught up on but which is not on Continue Watching.
+     *
+     * A caught-up show has nothing to resume, so it never reaches Continue
+     * Watching - and this is the only rail that can surface what it has coming,
+     * whether that is a new season or the next episode of one already airing.
+     * The caught-up cards come from all three sources the account can have:
+     * Simkl's followed library ([loadCaughtUpUpcomingItems]), this profile's own
+     * watch history, and MDBList's watched snapshot
+     * ([loadLocalCaughtUpUpcomingItems]), so the rail is populated for a
+     * local-only or MDBList-only viewer too. Sorted by air date.
      *
      * Re-published whenever [upNext] changes, which is also when the watch
-     * state behind both sources is freshest.
+     * state behind those sources is freshest.
      */
     val upcomingSchedule: StateFlow<List<UpcomingEpisode>> =
         _upNext
             .asStateFlow()
             .map { items ->
+                // Only a show the viewer is caught up on advertises its next
+                // unaired episode; a show with aired episodes still waiting is
+                // announcing something the viewer cannot use yet (see
+                // isCaughtUpForUpcoming). Continue Watching keeps the show
+                // either way - the NEW SEASON / NEW EPISODE badge there is the
+                // alert that there is something to catch up on.
+                val caughtUp = items.filter(::isCaughtUpForUpcoming)
+
+                if (UPCOMING_DIAGNOSTICS && caughtUp.size != items.size) {
+                    Log.d(
+                        "UPCOMING_DIAG",
+                        "kept off Upcoming (not caught up): " +
+                            items.filterNot(::isCaughtUpForUpcoming)
+                                .joinToString { "'${it.title}'" }
+                    )
+                }
+
                 buildUpcomingSchedule(
-                    items + loadCaughtUpUpcomingItems()
+                    caughtUp +
+                        loadCaughtUpUpcomingItems() +
+                        loadLocalCaughtUpUpcomingItems()
                 )
             }
             .stateIn(
@@ -957,6 +991,8 @@ Log.d(
                     // the profile we just left may survive the switch.
                     lastCaughtUpUpcomingItems = emptyList()
                     caughtUpUpcomingProfileId = null
+                    lastLocalCaughtUpUpcomingItems = emptyList()
+                    localCaughtUpUpcomingProfileId = null
                     caughtUpUpcomingLoadedAt = 0L
 
                     // Same for the addon rails: catalog rails for a NON-kids
@@ -1053,13 +1089,23 @@ Log.d(
 
                 persistDismissedContinueWatching()
 
-                watchHistoryRepository.deleteResumeRowsForParent(parentId)
+                val removedResumeIds = watchHistoryRepository.deleteResumeRowsForParent(parentId)
 
                 // Fallback path removed a single row by its raw id; also
                 // drop that exact row so the item always leaves the rail.
                 item.historyRowId?.let { rowId ->
                     watchHistoryRepository.deleteById(rowId)
                 }
+
+                // The cloud copy has to go with the local one, or the row is
+                // back on the next sync: the pull re-inserts any remote row
+                // that is newer than a local row which no longer exists, so
+                // "Remove" looked like it had done nothing. That is also how
+                // a row another profile's session filed here (see
+                // PlaybackHistoryWriter) kept reappearing.
+                SupabaseSync.deleteHistoryRows(
+                    removedResumeIds + listOfNotNull(item.historyRowId)
+                )
 
                 // Simkl-backed cards come back from the remote Continue
                 // Watching feed on every load (and after a restart) unless
@@ -1375,6 +1421,28 @@ Log.d(
         0L
 
     /**
+     * The LOCAL half of the caught-up cards: shows this profile - or the
+     * MDBList account - has watched every aired episode of
+     * ([loadLocalCaughtUpUpcomingItems]). Held separately from the Simkl list
+     * above because the two answer different sources and fail independently: a
+     * Simkl outage must not take the locally-provable cards with it, and the
+     * cards built here are never handed to the Simkl path's "last good answer"
+     * fallback. Same profile stamp and TTL for the same reasons.
+     */
+    private var lastLocalCaughtUpUpcomingItems:
+        List<UpNextItem> =
+        emptyList()
+
+    /** When [lastLocalCaughtUpUpcomingItems] was built. */
+    private var localCaughtUpUpcomingLoadedAt =
+        0L
+
+    /** Profile [lastLocalCaughtUpUpcomingItems] belongs to. */
+    private var localCaughtUpUpcomingProfileId:
+        String? =
+        null
+
+    /**
      * Profile [lastCaughtUpUpcomingItems] belongs to. Simkl auth is
      * per-profile while the feed is account-wide, so the cached list must
      * never outlive a switch: without the stamp, a switch inside the TTL
@@ -1571,6 +1639,348 @@ Log.d(
     }
 
     /**
+     * The Upcoming rail's caught-up cards for the sources that do NOT need
+     * Simkl: this profile's own watch history, and MDBList's account-wide
+     * record of what has been watched.
+     *
+     * The rail lets a show advertise its next unaired episode only when the
+     * viewer is caught up on it (see [isCaughtUpForUpcoming]), and a caught-up
+     * show is on no other rail: it has nothing to resume, so Continue Watching
+     * drops it. The Simkl half above was the only thing that could put its next
+     * episode back, so a viewer with local history alone - or with MDBList as
+     * their tracker - had an empty Upcoming rail. These cards close that, using
+     * the app's own caught-up rule ([LocalSeriesProgress.isCaughtUp], the rule
+     * behind the eye marker and the detail page's caught-up state) over the
+     * episodes each source records watched, so both halves agree about who is
+     * caught up.
+     *
+     * The returned cards are Upcoming-only, exactly like the Simkl half's: they
+     * are handed straight to the schedule builder and never published to
+     * [upNext], which is what keeps a caught-up show off Continue Watching.
+     *
+     * Kids Mode and the rail's dismissals apply here too (one shared gate), and
+     * an MDBList card whose title another profile owns is dropped: that
+     * tracker's library is one per ACCOUNT, the same leak the tracker cards
+     * have always been subject to (see [trackerCardOwnedByAnotherProfile]).
+     */
+    private suspend fun loadLocalCaughtUpUpcomingItems(): List<UpNextItem> {
+
+        val profileId =
+            com.kennyb1201.kbstream.data.sync.ProfileManager
+                .activeProfile.value?.id
+                ?: ""
+
+        if (
+            profileId.isNotBlank() &&
+            profileId == localCaughtUpUpcomingProfileId &&
+            System.currentTimeMillis() -
+            localCaughtUpUpcomingLoadedAt <
+            CAUGHT_UP_UPCOMING_TTL_MS
+        ) {
+            return localCaughtUpUpcomingCache(
+                profileId
+            )
+        }
+
+        val candidates =
+            loadLocalCaughtUpCandidates()
+
+        if (
+            UPCOMING_DIAGNOSTICS
+        ) {
+            Log.d(
+                "UPCOMING_DIAG",
+                "caught-up candidates (local+mdb)=" +
+                    candidates.size + " " +
+                    candidates.joinToString {
+                        "'${it.parentId}'"
+                    }
+            )
+        }
+
+        val semaphore =
+            Semaphore(CAUGHT_UP_UPCOMING_CONCURRENCY)
+
+        val built =
+            coroutineScope {
+                candidates
+                    .map { candidate ->
+                        async {
+                            semaphore.withPermit {
+                                runCatchingCancellable {
+                                    buildCaughtUpUpcomingCard(candidate)
+                                }.getOrNull()
+                            }
+                        }
+                    }
+                    .toList()
+                    .awaitAll()
+                    .filterNotNull()
+            }
+
+        // ONE row per show: MDBList knows both id forms of a show, so the same
+        // one can reach here twice. The schedule builder collapses the rows it
+        // is given, but doing it first keeps the dismissal and profile gates
+        // from being spent on a duplicate.
+        val cards =
+            applyContinueWatchingDismissals(
+                built.distinctBy {
+                    upNextShowParentKeys(
+                        it.parentId,
+                        it.parentType,
+                        it.tmdbId
+                    )
+                }
+            )
+
+        if (
+            UPCOMING_DIAGNOSTICS
+        ) {
+            Log.d(
+                "UPCOMING_DIAG",
+                "caught-up cards (local+mdb)=" +
+                    cards.size + " " +
+                    cards.joinToString {
+                        "'${it.title}'"
+                    }
+            )
+        }
+
+        lastLocalCaughtUpUpcomingItems = cards
+        localCaughtUpUpcomingProfileId = profileId
+        localCaughtUpUpcomingLoadedAt =
+            System.currentTimeMillis()
+
+        return cards
+    }
+
+    /**
+     * [lastLocalCaughtUpUpcomingItems] only when it is THIS profile's, empty
+     * otherwise - the local half's twin of [caughtUpUpcomingCache], and
+     * separate because the two are built from different sources and are only
+     * coincidentally replaced together.
+     */
+    private fun localCaughtUpUpcomingCache(
+        profileId: String
+    ): List<UpNextItem> =
+        if (
+            profileId.isNotBlank() &&
+            profileId == localCaughtUpUpcomingProfileId
+        ) {
+            lastLocalCaughtUpUpcomingItems
+        } else {
+            emptyList()
+        }
+
+    /**
+     * Candidate shows from this profile's history and from MDBList's watched
+     * snapshot (the selection rules are pure and unit tested: see
+     * [localCaughtUpCandidates] and [mdbListCaughtUpCandidates]).
+     *
+     * Both halves fail soft - no rows, no snapshot, no key set, no budget left
+     * - and the rail simply has fewer cards rather than an error.
+     */
+    private suspend fun loadLocalCaughtUpCandidates():
+        List<CaughtUpShowCandidate> {
+
+        val rows =
+            try {
+                historyDao.getCompletedSeriesRows()
+            } catch (e: Exception) {
+                Log.w(
+                    "HOME_UPNEXT",
+                    "local caught-up rows failed: ${e.message}",
+                    e
+                )
+                emptyList()
+            }
+
+        val local =
+            localCaughtUpCandidates(
+                rows = rows,
+                max = MAX_LOCAL_CAUGHT_UP_UPCOMING_ITEMS
+            )
+
+        // The snapshot is the same account-wide blob the watched badges read,
+        // so this is usually already warm in memory (see WatchedStatusRepository
+        // .refreshMdbListSetsIfNeeded).
+        val mdbList =
+            if (
+                MdbListClient.isConfigured(getApplication())
+            ) {
+                runCatchingCancellable {
+                    MdbListClient.getWatchedSnapshot(getApplication())
+                }.getOrNull()
+                    ?.let { snapshot ->
+                        mdbListCaughtUpCandidates(
+                            startedShowKeys = snapshot.startedShowKeys,
+                            episodeKeys = snapshot.episodeKeys,
+                            max = MAX_MDBLIST_CAUGHT_UP_UPCOMING_ITEMS
+                        )
+                    }
+                    .orEmpty()
+            } else {
+                emptyList()
+            }
+
+        if (mdbList.isEmpty()) return local
+
+        // A show both halves know is one card, and the local one carries this
+        // profile's own name and artwork, so it wins.
+        val known =
+            local
+                .map { upNextIdentifier(it.parentId) ?: it.parentId }
+                .toMutableSet()
+
+        return local + mdbList.filter { candidate ->
+            known.add(
+                upNextIdentifier(candidate.parentId) ?: candidate.parentId
+            )
+        }
+    }
+
+    /**
+     * The Upcoming card for one caught-up candidate, or null when the show
+     * turns out not to be caught up, has no next episode to air, or cannot be
+     * resolved.
+     *
+     * The detail is the same cached lookup the Continue Watching cards make,
+     * and "caught up" is the app's own rule over the episodes the candidate's
+     * source recorded watched. Whether the next episode's date is in the future
+     * is deliberately left to the schedule builder: that is where the
+     * second-source air-date correction lives, and a date it cannot place is
+     * dropped there (the rail keeps one authority for "is this upcoming").
+     */
+    private suspend fun buildCaughtUpUpcomingCard(
+        candidate: CaughtUpShowCandidate
+    ): UpNextItem? {
+
+        val detail =
+            seriesDetailFor(candidate.parentId)
+                ?: return null
+
+        val air =
+            detail.nextEpisodeToAir
+                ?: return null
+
+        val caughtUp =
+            LocalSeriesProgress.isCaughtUp(
+                completedEpisodes =
+                    candidate.watchedEpisodes,
+
+                seasonEpisodeCounts =
+                    detail.seasons
+                        .mapNotNull { season ->
+                            val number = season.seasonNumber
+                            val count = season.episodeCount
+                            if (number > 0 && count != null && count > 0) {
+                                number to count
+                            } else {
+                                null
+                            }
+                        }
+                        .toMap(),
+
+                lastAiredSeason =
+                    detail.lastEpisodeToAir?.seasonNumber,
+
+                lastAiredEpisode =
+                    detail.lastEpisodeToAir?.episodeNumber
+            )
+
+        if (!caughtUp) return null
+
+        val title =
+            upNextDisplayTitleOrNull(
+                candidate.title,
+                !candidate.poster.isNullOrBlank()
+            )
+                ?: upNextDisplayTitleOrNull(detail.name, true)
+                ?: upNextDisplayTitleOrNull(detail.title, true)
+                ?: return null
+
+        val poster =
+            candidate.poster
+                ?: detail.posterPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { TmdbRepository.POSTER_BASE + it }
+
+        val backdrop =
+            candidate.backdrop
+                ?: detail.backdropPath
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { "https://image.tmdb.org/t/p/w780$it" }
+
+        return UpNextItem(
+            // An MDBList card is built as a TRACKER card on purpose: it comes
+            // from an account-wide library, so the gates that keep one
+            // profile's titles off another profile's rails have to apply to
+            // it. The local card is this profile's own and is never dropped
+            // that way.
+            id =
+                if (candidate.fromTracker) {
+                    "mdblist:caughtup:${candidate.parentId}"
+                } else {
+                    "caughtup:${candidate.parentId}"
+                },
+
+            title = title,
+            poster = poster,
+            badge = UpNextBadge.NEXT_UP,
+            showTitle = detail.name ?: title,
+            parentId = candidate.parentId,
+            parentType = "series",
+            season = air.seasonNumber,
+            episode = air.episodeNumber,
+            backdrop = backdrop,
+            clearLogo = candidate.clearLogo,
+            nextEpisodeAir = air,
+            tmdbId = detail.id
+        )
+    }
+
+    /**
+     * The TMDB series detail behind a parent id, in whichever id flavor the
+     * card carries - the same cached lookup (and the same flavor handling) the
+     * local next-up cards use.
+     */
+    private suspend fun seriesDetailFor(
+        parentId: String
+    ): TmdbDetail? =
+        try {
+            tmdbLookupSemaphore.withPermit {
+                when {
+                    parentId.startsWith("tmdb:", ignoreCase = true) ->
+                        parentId
+                            .substringAfter(":")
+                            .toIntOrNull()
+                            ?.let { id ->
+                                tmdbRepository.getDetailByTmdbId(
+                                    id,
+                                    "series"
+                                )
+                            }
+
+                    parentId.startsWith("tt", ignoreCase = true) ->
+                        tmdbRepository.fetchEnrichedMetaCached(
+                            parentId,
+                            "series"
+                        )
+
+                    parentId.toIntOrNull() != null ->
+                        tmdbRepository.getDetailByTmdbId(
+                            parentId.toInt(),
+                            "series"
+                        )
+
+                    else -> null
+                }
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+    /**
      * Local "next up" cards for shows that have watched episodes but nothing
      * in progress.
      *
@@ -1660,41 +2070,8 @@ Log.d(
         parentId: String,
         row: WatchHistoryEntity,
         caughtUpShowKeys: MutableSet<String>
-    ): UpNextItem? {
-
-        val detail =
-            try {
-                tmdbLookupSemaphore.withPermit {
-                    when {
-                        parentId.startsWith("tmdb:", ignoreCase = true) ->
-                            parentId
-                                .substringAfter(":")
-                                .toIntOrNull()
-                                ?.let { id ->
-                                    tmdbRepository.getDetailByTmdbId(
-                                        id,
-                                        "series"
-                                    )
-                                }
-
-                        parentId.startsWith("tt", ignoreCase = true) ->
-                            tmdbRepository.fetchEnrichedMetaCached(
-                                parentId,
-                                "series"
-                            )
-
-                        parentId.toIntOrNull() != null ->
-                            tmdbRepository.getDetailByTmdbId(
-                                parentId.toInt(),
-                                "series"
-                            )
-
-                        else -> null
-                    }
-                }
-            } catch (_: Exception) {
-                null
-            }
+    ): UpNextItem? {        val detail =
+            seriesDetailFor(parentId)
 
         val tmdbId = detail?.id ?: return null
         if (tmdbId <= 0) return null
@@ -1755,23 +2132,17 @@ Log.d(
                     ?.takeIf { it.isNotBlank() }
                     ?.let { "https://image.tmdb.org/t/p/w780$it" }
 
-        // A season's return reads NEW SEASON while it is still news: the
-        // card is about the show coming back, not about one more episode.
-        // Recency is what separates the two, and it is the same window the
-        // tracker-sourced cards use.
+        // A recently aired episode is news - a premiere reads NEW SEASON (the
+        // show is coming back, not one more episode), anything else NEW
+        // EPISODE. This card has no progress to resume (a resume target returns
+        // above), so the arrival decides it; the rule is shared with the
+        // tracker builders so a viewer without Simkl sees the same chips.
         val nextUpBadge =
-            if (
-                target.episode
-                    ?.let { episode ->
-                        SeasonRules.isSeasonPremiere(episode)
-                    } == true &&
-                    target.airDate
-                        ?.let { isWithinDays(it, NEW_RELEASE_WINDOW_DAYS) } == true
-            ) {
-                UpNextBadge.NEW_SEASON
-            } else {
-                UpNextBadge.NEXT_UP
-            }
+            upNextArrivalBadge(
+                isResume = false,
+                airDate = target.airDate,
+                episode = target.episode
+            )
 
         return UpNextItem(
             id = "nextup:$parentId",
@@ -1791,11 +2162,9 @@ Log.d(
             runtimeMinutes = target.runtimeMinutes,
             subtitle =
                 "${
-                    if (nextUpBadge == UpNextBadge.NEW_SEASON) {
-                        "New Season"
-                    } else {
-                        "Up Next"
-                    }
+                    upNextBadgePrefix(
+                        nextUpBadge
+                    )
                 } - ${
                     formatSeasonEpisode(
                         target.season,
@@ -2680,7 +3049,7 @@ Log.d(
 
         watchedStateMutex.withLock {
 
-            simklWatchedEpisodesByShow.clear()
+            trackerWatchedEpisodesByShow.clear()
 
             watchedEpisodeKeysByShow.clear()
 
@@ -3774,10 +4143,32 @@ Log.d(
                 runCatchingCancellable { MdbListClient.getPlaybackSessions(appContext) }
                     .getOrDefault(emptyList())
 
-            val items = sessions
-                .take(MAX_MDBLIST_UP_NEXT_ITEMS)
-                .mapNotNull { session ->
-                    buildMdbListUpNextItem(appContext, session)
+            // Resolved concurrently, bounded like the local next-up pass:
+            // each card now resolves the show's watched/total counts, so a
+            // serial pass would put up to MAX_MDBLIST_UP_NEXT_ITEMS season
+            // walks end to end on Home's critical path.
+            val semaphore =
+                Semaphore(MDBLIST_UP_NEXT_CONCURRENCY)
+
+            val items =
+                coroutineScope {
+                    sessions
+                        .take(MAX_MDBLIST_UP_NEXT_ITEMS)
+                        .map { session ->
+                            async {
+                                semaphore.withPermit {
+                                    runCatchingCancellable {
+                                        buildMdbListUpNextItem(
+                                            appContext,
+                                            session
+                                        )
+                                    }.getOrNull()
+                                }
+                            }
+                        }
+                        .toList()
+                        .awaitAll()
+                        .filterNotNull()
                 }
 
             Log.d(
@@ -3888,6 +4279,95 @@ Log.d(
             resolvedEpisode = namedEpisodeNumber(session.episode)
         }
 
+        // The show's watched/total aired counts, its finale flags and the
+        // episode the watched state points at, from the resolver the local and
+        // Simkl cards already use. Without it an MDBList card carried no
+        // episode counts, so its hero showed no "X of Y aired episodes
+        // watched" line and it carried no next-episode-to-air either - which is
+        // also what kept these cards out of the Upcoming rail. A viewer whose
+        // tracker is MDBList had thinner cards than a Simkl one for no reason.
+        //
+        // Counts are wired only when THIS device has watched something of the
+        // show. The shared watched state is this profile's own completed rows
+        // plus Simkl's (see preloadWatchedEpisodeStateForShow) - MDBList's
+        // watched history is deliberately not in it - so resolving a show the
+        // device has never played would report "0 of 24 aired episodes
+        // watched" over a viewer who is five episodes in on another TV. No
+        // evidence means no line, which is exactly what these cards showed
+        // before.
+        var episodesWatched: Int? = null
+        var episodesTotal: Int? = null
+        var episodesRemaining: Int? = null
+        var targetIsSeasonFinale = false
+        var targetIsSeriesFinale = false
+
+        val tmdbShowId = detail?.id ?: session.tmdbId ?: 0
+
+        val hasLocalProgress =
+            !session.isMovie &&
+                tmdbShowId > 0 &&
+                runCatchingCancellable {
+                    historyDao
+                        .getCompletedForParents(
+                            localHistoryParentIds(
+                                navigationId,
+                                tmdbShowId
+                            )
+                        )
+                        .isNotEmpty()
+                }.getOrDefault(false)
+
+        val resolvedTarget =
+            if (hasLocalProgress) {
+                preloadWatchedEpisodeStateForShow(
+                    parentId = navigationId,
+                    tmdbShowId = tmdbShowId
+                )
+
+                resolveSeriesTargetFromSharedWatchedState(
+                    parentId = navigationId,
+                    tmdbId = tmdbShowId,
+                    simklSeason = null,
+                    simklEpisode = null
+                )
+            } else {
+                null
+            }
+
+        if (resolvedTarget != null) {
+            episodesWatched = resolvedTarget.episodesWatched
+            episodesTotal = resolvedTarget.episodesTotal
+            episodesRemaining = resolvedTarget.episodesRemaining
+            targetIsSeasonFinale = resolvedTarget.isSeasonFinale
+            targetIsSeriesFinale = resolvedTarget.isSeriesFinale
+            episodeTitle = episodeTitle ?: resolvedTarget.episodeTitle
+        }
+
+        // The finale tags and the arrival chip describe the episode the CARD
+        // shows, so the resolved target only speaks for them when the target IS
+        // that episode - a session behind the watched frontier would otherwise
+        // tag this card with another episode's finale.
+        val targetIsCardEpisode =
+            resolvedTarget != null &&
+                resolvedTarget.season == resolvedSeason &&
+                resolvedTarget.episode == resolvedEpisode
+
+        // One shared rule, so a viewer without Simkl sees the same arrival
+        // chips the Simkl cards have always had (see upNextArrivalBadge). A
+        // film can never be a new season or a new episode.
+        val badge =
+            if (session.isMovie) {
+                UpNextBadge.CONTINUE_WATCHING
+            } else {
+                upNextArrivalBadge(
+                    isResume = isExplicitResume,
+                    airDate =
+                        resolvedTarget?.airDate
+                            ?.takeIf { targetIsCardEpisode },
+                    episode = resolvedEpisode
+                )
+            }
+
         val progressFraction =
             (session.progress / 100.0).coerceIn(0.0, 1.0)
 
@@ -3898,11 +4378,20 @@ Log.d(
         resolvedStartPositionMs =
             (durationMs * progressFraction).toLong()
 
-        val subtitle = if (session.isMovie) {
-            "Resume movie"
-        } else {
-            "Resume - ${formatSeasonEpisode(resolvedSeason, resolvedEpisode)}"
-        }
+        // The action word follows the badge, so the chip and the line under
+        // the title cannot contradict each other ("NEW SEASON" over "Resume -
+        // S2E1" was what a hardcoded prefix produced).
+        val subtitle =
+            if (session.isMovie) {
+                "Resume movie"
+            } else {
+                upNextTrackerSubtitle(
+                    prefix = upNextBadgePrefix(badge),
+                    season = resolvedSeason,
+                    episode = resolvedEpisode,
+                    fallback = null
+                )
+            }
 
         // Never fall back to the navigation id, and never accept one as the
         // name either: "tmdb:12345" is not a title. The tracker's own title
@@ -3920,10 +4409,13 @@ Log.d(
             id = "mdblist:${session.sessionId}",
             title = displayTitle,
             poster = posterUrl,
-            badge = UpNextBadge.CONTINUE_WATCHING,
+            badge = badge,
             showTitle = if (session.isMovie) null
             else showTitle ?: displayTitle,
             episodeTitle = episodeTitle,
+            episodesWatched = episodesWatched,
+            episodesTotal = episodesTotal,
+            episodesRemaining = episodesRemaining,
             tmdbRating = detail?.voteAverage?.takeIf { it > 0.0 },
             runtimeMinutes = runtimeMinutes,
             remainingMinutes = calculateRemainingMinutesFromProgress(
@@ -3943,7 +4435,12 @@ Log.d(
             startPositionMs = resolvedStartPositionMs,
             recencyTimestamp = session.updatedAtMs,
             backdrop = backdropUrl,
-            tmdbId = session.tmdbId,
+            isSeasonFinale = targetIsCardEpisode && targetIsSeasonFinale,
+            isSeriesFinale = targetIsCardEpisode && targetIsSeriesFinale,
+            // The show's next UNAIRED episode, so this card can reach the
+            // Upcoming rail on the same terms as a local or Simkl one.
+            nextEpisodeAir = detail?.nextEpisodeToAir,
+            tmdbId = tmdbShowId.takeIf { it > 0 } ?: session.tmdbId,
             playbackId = null
         )
     }
@@ -4198,50 +4695,18 @@ episodesTotal =
                     targetIsSeriesFinale =
                         resolvedTarget.isSeriesFinale
 
-                    val airedRecently =
-                        resolvedTarget.airDate
-                            ?.let {
-                                isWithinDays(
-                                    it,
-                                    NEW_RELEASE_WINDOW_DAYS
-                                )
-                            }
-                            ?: false
-
+                    // Shared with the local and MDBList builders: a resume
+                    // wins over news, a recently aired episode is the arrival
+                    // it is, and anything older is just what is up next.
                     badge =
-                        when {
-
-                            resolvedTarget.isResume ||
-                                isExplicitResume -> {
-
-                                UpNextBadge.CONTINUE_WATCHING
-                            }
-
-                            airedRecently &&
-                                (
-                                    resolvedEpisode
-                                        ?.let { episode ->
-                                            SeasonRules
-                                                .isSeasonPremiere(
-                                                    episode
-                                                )
-                                        }
-                                        ?: false
-                                    ) -> {
-
-                                UpNextBadge.NEW_SEASON
-                            }
-
-                            airedRecently -> {
-
-                                UpNextBadge.NEW_EPISODE
-                            }
-
-                            else -> {
-
-                                UpNextBadge.NEXT_UP
-                            }
-                        }
+                        upNextArrivalBadge(
+                            isResume =
+                                resolvedTarget.isResume || isExplicitResume,
+                            airDate =
+                                resolvedTarget.airDate,
+                            episode =
+                                resolvedEpisode
+                        )
 
                     // The pair is printed only when it is known; a card
                     // whose resolution came back with nothing keeps the
@@ -4250,20 +4715,7 @@ episodesTotal =
                     subtitle =
                         upNextTrackerSubtitle(
                             prefix =
-                                when (badge) {
-
-                                    UpNextBadge.CONTINUE_WATCHING ->
-                                        "Resume"
-
-                                    UpNextBadge.NEW_SEASON ->
-                                        "New Season"
-
-                                    UpNextBadge.NEW_EPISODE ->
-                                        "New Episode"
-
-                                    else ->
-                                        "Up Next"
-                                },
+                                upNextBadgePrefix(badge),
                             season =
                                 resolvedSeason,
                             episode =
@@ -4473,7 +4925,7 @@ episodesTotal =
                     val alreadyLoaded =
                         watchedEpisodeKeysByShow
                             .containsKey(parentId) &&
-                            simklWatchedEpisodesByShow
+                            trackerWatchedEpisodesByShow
                                 .containsKey(parentId)
 
                     val alreadyLoading =
@@ -4515,15 +4967,21 @@ episodesTotal =
 
         try {
 
+            // The id forms THIS show is stored under (card id + its TMDB and
+            // IMDB twins). Reused to read local rows and to look the show up
+            // in the MDBList snapshot, whose keys carry the same id forms.
+            val showParentIds =
+                localHistoryParentIds(
+                    parentId,
+                    tmdbShowId
+                )
+
             val localCompletedEntries =
                 try {
 
                     historyDao
                         .getCompletedForParents(
-                            localHistoryParentIds(
-                                parentId,
-                                tmdbShowId
-                            )
+                            showParentIds
                         )
 
                 } catch (_: Exception) {
@@ -4555,6 +5013,44 @@ episodesTotal =
                     emptySet()
                 }
 
+            /*
+             * MDBList's watched episodes for this show, so a viewer who runs
+             * MDBList but no Simkl gets the same watched-state treatment
+             * Simkl users already had. Guarded on isConfigured and read from
+             * the same cached snapshot the badges use, so it normally costs a
+             * map lookup; an unset key, an offline fetch or a spent request
+             * budget all come back empty, which the merge below reads as "no
+             * evidence" rather than "nothing watched" (the local rows and
+             * Simkl's set still answer).
+             */
+            val mdbListCompletedEpisodes =
+                if (MdbListClient.isConfigured(getApplication())) {
+
+                    try {
+
+                        MdbListClient
+                            .watchedEpisodesForShow(
+                                context =
+                                    getApplication(),
+
+                                showKeys =
+                                    showParentIds
+                            )
+
+                    } catch (_: Exception) {
+                        emptySet()
+                    }
+
+                } else {
+                    emptySet()
+                }
+
+            // The union of both trackers. Everything downstream - the episode
+            // counts, the next-episode resolution and the caught-up rules -
+            // reads this one set, which is the whole point of tracker parity.
+            val trackerCompletedEpisodes =
+                simklCompletedEpisodes + mdbListCompletedEpisodes
+
             val mergedWatchedKeys =
                 WatchedEpisodeState
                     .buildMergedWatchedKeys(
@@ -4565,15 +5061,15 @@ episodesTotal =
                             localCompletedEntries,
 
                         simklCompletedEpisodes =
-                            simklCompletedEpisodes
+                            trackerCompletedEpisodes
                     )
 
             watchedStateMutex.withLock {
 
-                simklWatchedEpisodesByShow[
+                trackerWatchedEpisodesByShow[
                     parentId
                 ] =
-                    simklCompletedEpisodes
+                    trackerCompletedEpisodes
 
                 watchedEpisodeKeysByShow[
                     parentId
@@ -4605,7 +5101,7 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     ) =
         watchedStateMutex.withLock {
             Pair(
-                simklWatchedEpisodesByShow[parentId].orEmpty(),
+                trackerWatchedEpisodesByShow[parentId].orEmpty(),
                 watchedEpisodeKeysByShow[parentId].orEmpty()
             )
         }
@@ -5479,7 +5975,7 @@ private suspend fun calculateEpisodesRemaining(
         watchedEpisodeKeys
     ) = watchedStateMutex.withLock {
         Pair(
-            simklWatchedEpisodesByShow[parentId].orEmpty(),
+            trackerWatchedEpisodesByShow[parentId].orEmpty(),
             watchedEpisodeKeysByShow[parentId].orEmpty()
         )
     }
@@ -7087,9 +7583,6 @@ private suspend fun calculateEpisodesRemaining(
         // artwork+detail are cached/aggressive enough to absorb the extra
         // in-flight requests.
         private const val HERO_RESOLVE_DWELL_MS = 150L
-
-        private const val NEW_RELEASE_WINDOW_DAYS =
-            7
 
         private const val TMDB_MAX_CONCURRENT_LOOKUPS =
             5

@@ -1546,6 +1546,61 @@ object MdbListClient {
     }
 
     /**
+     * The account's watched episodes for one show, by whichever of [showKeys]
+     * the snapshot knows it - the MDBList counterpart of Simkl's
+     * `getWatchedEpisodesForShowByImdb`, which is what lets a tracker's watched
+     * history count as watched state at all.
+     *
+     * Reads the same cached snapshot the badges use, so this normally costs a
+     * map lookup. Empty when the key is unset, the snapshot cannot be fetched
+     * (offline, or the day's request budget is spent), or the tracker has no
+     * episode of the show on record - all of which the caller must read as "no
+     * evidence" rather than "nothing watched".
+     */
+    suspend fun watchedEpisodesForShow(
+        context: Context,
+        showKeys: List<String>
+    ): Set<Pair<Int, Int>> {
+        if (showKeys.isEmpty()) return emptySet()
+
+        val snapshot = getWatchedSnapshot(context)
+        if (snapshot.isEmpty) return emptySet()
+
+        return watchedEpisodeIndexFor(snapshot).watchedEpisodesFor(showKeys)
+    }
+
+    /**
+     * The snapshot's watched episodes indexed by show key, rebuilt only when
+     * the snapshot OBJECT changes (every producer of a new snapshot replaces
+     * it, and every invalidation nulls it - see [invalidateWatchedSnapshot]),
+     * so this cannot go stale behind the blob it describes.
+     */
+    private fun watchedEpisodeIndexFor(
+        snapshot: MdbListWatchedSnapshot
+    ): Map<String, Set<Pair<Int, Int>>> =
+        synchronized(watchedEpisodeIndexLock) {
+            val indexed = watchedEpisodeIndex
+
+            if (indexed != null && watchedEpisodeIndexSource === snapshot) {
+                indexed
+            } else {
+                mdbListWatchedEpisodesByShow(snapshot.episodeKeys)
+                    .also { built ->
+                        watchedEpisodeIndex = built
+                        watchedEpisodeIndexSource = snapshot
+                    }
+            }
+        }
+
+    private val watchedEpisodeIndexLock = Any()
+
+    private var watchedEpisodeIndex:
+        Map<String, Set<Pair<Int, Int>>>? = null
+
+    private var watchedEpisodeIndexSource:
+        MdbListWatchedSnapshot? = null
+
+    /**
      * Drops the cached watched snapshot AND the cached paused-session list so
      * the next read re-downloads both. Called after every successful
      * scrobble/mark/unmark, keeping badges and Continue Watching honest

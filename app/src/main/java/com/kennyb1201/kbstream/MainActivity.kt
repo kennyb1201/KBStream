@@ -47,6 +47,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
+import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.update.AppUpdater
@@ -2099,6 +2100,13 @@ fun AppRoot() {
                     current.audioUrl?.let { putExtra("audio_url", it) }
                     putExtra("parent_id", current.parentId)
                     putExtra("parent_type", current.parentType)
+                    // The profile this session belongs to, pinned at launch: a
+                    // profile switch during playback (PiP makes that routine)
+                    // must not re-file this session's progress under the new
+                    // profile's Continue Watching. See PlaybackHistoryWriter.
+                    PlaybackHistoryWriter.profileIdForNewSession(context)?.let {
+                        putExtra(PlaybackHistoryWriter.EXTRA_SESSION_PROFILE_ID, it)
+                    }
                     putExtra("season", current.season ?: -1)
                     putExtra("episode", current.episode ?: -1)
                     current.episodeStreamId?.let { putExtra("episode_stream_id", it) }

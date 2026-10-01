@@ -101,6 +101,35 @@ fun computeEpisodeWatched(
     return key in watchedKeys
 }
 
+/**
+ * True when [resume] names an episode that [completedEntries] shows finished.
+ *
+ * A cloud-derived RESUME (a Simkl/MDBList paused session) outlives the local
+ * progress it was standing in for once that episode is finished: the completion
+ * the player wrote is the newer truth, and the paused-session row the tracker
+ * still hands back is what leaves the hero's RESUME bar and the card's progress
+ * bar on an episode that is already ticked. The two sides name the episode
+ * differently depending on where the row came from - the player keys on
+ * episodeStreamId, cloud rows may only carry season/episode - so either match
+ * counts.
+ */
+internal fun resumeMatchesCompletedEpisode(
+    resume: WatchHistoryEntity,
+    completedEntries: List<WatchHistoryEntity>
+): Boolean {
+    val streamId = resume.episodeStreamId?.takeIf { it.isNotBlank() }
+
+    return completedEntries.any { entry ->
+        (streamId != null && entry.episodeStreamId == streamId) ||
+            (
+                entry.season != null &&
+                    entry.episode != null &&
+                    entry.season == resume.season &&
+                    entry.episode == resume.episode
+                )
+    }
+}
+
 class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(app)
@@ -549,6 +578,29 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         }.getOrDefault(emptyList())
         _completedEpisodeIds.value = localCompletedEntries.map { it.id }.toSet()
 
+        /*
+         * Drop a cloud-derived RESUME whose episode the local history now
+         * shows COMPLETED.
+         *
+         * The branch above only clears a resume that was itself read locally,
+         * so when the viewer finished the very episode a Simkl/MDBList paused
+         * session was standing in for, that stale cloud row stayed: the hero's
+         * RESUME bar and the episode card's progress bar (both fall back to
+         * this row) kept pointing at an episode the checkmark already said was
+         * done, until the screen was reopened past the freshness window - a
+         * full load then re-derives the cloud session, which by then is gone
+         * because finishing scrobbles a stop. Matching on the episode keeps a
+         * resume for a DIFFERENT episode intact.
+         */
+        val heldResume = _resumeInfo.value
+        if (
+            heldResume != null &&
+            !resumeFromLocalHistory &&
+            resumeMatchesCompletedEpisode(heldResume, localCompletedEntries)
+        ) {
+            _resumeInfo.value = null
+        }
+
         return localCompletedEntries
     }
 
@@ -875,53 +927,22 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 _simklSeriesWatched.value = simklCompleted.isNotEmpty()
 
                 // MDBList watched episodes for this show, merged alongside
-                // the Simkl set so episode badges reflect both trackers.
+                // the Simkl set so episode badges reflect both trackers. The
+                // lookup goes through the shared snapshot index rather than
+                // re-parsing the keys here: a show can be filed under either
+                // id form (and, when the device only ever pushed one, under
+                // both at once), so the index is asked for every flavor this
+                // title answers to and unions them.
                 val mdbListCompleted = if (
                     normalizedType == "series" &&
                     MdbListClient.isConfigured(getApplication())
                 ) {
-                    val tmdbShowId = tmdbDetailResult.getOrNull()?.id
                     runCatchingCancellable {
-                        MdbListClient.getWatchedSnapshot(getApplication())
-                    }.getOrNull()
-                        ?.episodeKeys
-                        .orEmpty()
-                        .mapNotNull { key ->
-                            // Key shapes from MdbListClient.addKey():
-                            // "tt123:S:E" and "tmdb:456:S:E".
-                            val parts = key.split(":")
-                            if (parts.size < 3) return@mapNotNull null
-
-                            val isImdbKey = key.startsWith("tt")
-                            val isTmdbKey = key.startsWith("tmdb:")
-                            if (!isImdbKey && !isTmdbKey) {
-                                return@mapNotNull null
-                            }
-
-                            val seasonIdx = if (isImdbKey) 1 else 2
-                            val season = parts.getOrNull(seasonIdx)
-                                ?.toIntOrNull() ?: return@mapNotNull null
-                            val episode = parts.getOrNull(seasonIdx + 1)
-                                ?.toIntOrNull() ?: return@mapNotNull null
-
-                            // Only keep entries anchored to THIS show.
-                            if (isImdbKey) {
-                                val showId = parts[0]
-                                if (!showId.equals(id, ignoreCase = true)) {
-                                    return@mapNotNull null
-                                }
-                            } else {
-                                val keyTmdbId = parts.getOrNull(1)
-                                    ?.toIntOrNull()
-                                if (tmdbShowId == null ||
-                                    keyTmdbId != tmdbShowId
-                                ) {
-                                    return@mapNotNull null
-                                }
-                            }
-                            season to episode
-                        }
-                        .toSet()
+                        MdbListClient.watchedEpisodesForShow(
+                            context = getApplication(),
+                            showKeys = localHistoryParentIds(id)
+                        )
+                    }.getOrDefault(emptySet())
                 } else {
                     emptySet()
                 }

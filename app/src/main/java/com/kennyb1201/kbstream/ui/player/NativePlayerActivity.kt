@@ -77,10 +77,10 @@ import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
+import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
-import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -1872,6 +1872,15 @@ class NativePlayerActivity : ComponentActivity() {
     }
     private var parentId = ""
     private var parentType = ""
+
+    /**
+     * The profile this playback session belongs to, pinned at launch and
+     * carried in the launch intent (see [PlaybackHistoryWriter]). Read from
+     * the launch intent rather than the active profile so that switching
+     * profiles during playback - PiP makes that routine - cannot make this
+     * session file its progress into the other profile's Continue Watching.
+     */
+    private var sessionProfileId: String? = null
     private var season: Int? = null
     private var episode: Int? = null
     private var episodeStreamId: String? = null
@@ -2731,6 +2740,7 @@ class NativePlayerActivity : ComponentActivity() {
         currentAudioUrl = intent.getStringExtra("audio_url")
         parentId = intent.getStringExtra("parent_id").orEmpty()
         parentType = intent.getStringExtra("parent_type").orEmpty()
+        sessionProfileId = PlaybackHistoryWriter.sessionProfileId(this, intent)
         isLiveChannel = parentType == "channel"
         season = intent.getIntExtra("season", -1).takeIf { it >= 0 }
         // A launch carrying 0 as its episode is carrying "no episode": see
@@ -8923,33 +8933,29 @@ class NativePlayerActivity : ComponentActivity() {
         // Without it the upsert could be aborted partway through exiting the
         // player, leaving Continue Watching stale until the next save.
         lifecycleScope.launch(Dispatchers.IO + NonCancellable) {
-            runCatchingCancellable {
-                val dao = WatchHistoryDatabase.getInstanceScoped(this@NativePlayerActivity).watchHistoryDao()
-                val existing = dao.getById(historyId)
-                // Same title, same canonical parent id, whichever id flavor
-                // launched this playback (see canonicalHistoryParentId).
-                val entryParentId = canonicalHistoryParentId()
-                val entry = WatchHistoryEntity(
-                    id = historyId, parentId = entryParentId, type = parentType,
+            // Same title, same canonical parent id, whichever id flavor
+            // launched this playback (see canonicalHistoryParentId). The row
+            // goes through PlaybackHistoryWriter, which files it under the
+            // profile this SESSION started on and refuses the write if the
+            // user switched profiles while it was playing.
+            val entry =
+                WatchHistoryEntity(
+                    id = historyId, parentId = canonicalHistoryParentId(), type = parentType,
                     name = itemName, episodeTitle = episodeTitle, overview = overview,
                     clearLogo = clearLogoUrl, totalEpisodesInSeason = totalEpisodesInSeason,
                     poster = itemPoster, streamUrl = currentUrl,
                     season = season, episode = episode, episodeStreamId = episodeStreamId,
                     positionMs = safePos, durationMs = effectiveDur, updatedAt = now,
                     isCompleted = isCompleted,
-                    completedAt = if (isCompleted) existing?.completedAt ?: now else null
+                    // Completed rows keep the stamp of the first completion;
+                    // the writer reads it back from the row it replaces.
+                    completedAt = null
                 )
-                dao.upsert(entry)
-                com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueueHistory(entry)
-                // Mirror the in-app Continue Watching rail to the TV
-                // launcher (Watch Next) so in-progress titles show up on
-                // the home screen. Self-healing full reconcile: finished or
-                // removed titles drop off automatically.
-                TvLauncherPublisher.sync(
-                    this@NativePlayerActivity,
-                    dao.getAll()
-                )
-            }
+            PlaybackHistoryWriter.write(
+                this@NativePlayerActivity,
+                sessionProfileId,
+                entry
+            )
             if (isCompleted) syncCompletedToSimkl()
         }
     }
