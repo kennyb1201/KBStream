@@ -886,3 +886,33 @@ internal object AddonsConfigRules {
         return runs > addonsWithCatalogs
     }
 }
+
+/**
+ * Publish/apply gate for the small opaque "things the user added to Home"
+ * blobs: the imported collections list and the browse chips mirrored to Home.
+ *
+ * Both are FULL REPLACE on apply, so the account copy is whatever the last
+ * writer pushed. That makes an empty local list dangerous — every device runs
+ * the same periodic bulk push, so a TV that never imported a collection (or
+ * mirrored a chip) would otherwise wipe the account's list for every other
+ * device, which is exactly what "it doesn't sync" looks like from the
+ * receiving end. A deliberate removal still propagates: it publishes through
+ * the store's own save path, not through this gate.
+ */
+internal object HomeListBlobRules {
+
+    /** Collections: publish only when this device actually has one imported. */
+    fun shouldPublishCollections(urls: List<String>): Boolean = urls.isNotEmpty()
+
+    /** Browse chips: publish only when this device actually has one mirrored. */
+    fun shouldPublishBrowseShortcuts(shortcutsJson: String): Boolean =
+        shortcutsJson.isNotBlank()
+
+    /**
+     * Whether a pulled blob may replace local state: yes when it carries no
+     * stamp (a build that predates the guard), otherwise only when it is not
+     * older than the last local edit or adoption.
+     */
+    fun shouldApply(remoteUpdated: Long?, localSyncedAt: Long): Boolean =
+        remoteUpdated == null || remoteUpdated >= localSyncedAt
+}

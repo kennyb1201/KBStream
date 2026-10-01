@@ -1467,6 +1467,32 @@ object SupabaseSync {
                     return@forEach
                 }
             }
+            // Collections and Home's browse chips are full-replace blobs, so
+            // the periodic push must not publish an EMPTY list: a device that
+            // never imported a collection (or mirrored a chip) would erase the
+            // account's list for every other device. A deliberate last-item
+            // removal publishes through the store's own save path instead
+            // (see [HomeListBlobRules]).
+            if (key == PrefsPayloadBuilder.KEY_COLLECTIONS) {
+                val urls =
+                    (payload["profile_urls"] as? kotlinx.serialization.json.JsonArray)
+                        ?.mapNotNull {
+                            (it as? kotlinx.serialization.json.JsonPrimitive)?.content
+                        }
+                        .orEmpty()
+                if (!HomeListBlobRules.shouldPublishCollections(urls)) {
+                    return@forEach
+                }
+            }
+            if (key == PrefsPayloadBuilder.KEY_BROWSE_SHORTCUTS) {
+                val blob =
+                    (payload["shortcuts_json"] as? kotlinx.serialization.json.JsonPrimitive)
+                        ?.content
+                        .orEmpty()
+                if (!HomeListBlobRules.shouldPublishBrowseShortcuts(blob)) {
+                    return@forEach
+                }
+            }
             enqueuePrefs(context, key, payload, pid)
         }
         flushOutbox()

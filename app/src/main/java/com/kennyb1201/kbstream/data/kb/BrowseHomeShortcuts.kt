@@ -68,6 +68,23 @@ object BrowseHomeShortcuts {
     private const val PREFS = "kbstream_browse_home_shortcuts"
     private const val KEY_BLOB = "browse_home_shortcuts_json"
 
+    /**
+     * The profile's raw chip blob, verbatim, for the cross-device payload.
+     * The store owns its own encoding (see [save]) and the sync layer hands
+     * the string straight back, so a blob written here and a blob adopted
+     * from the cloud can never disagree about the shape.
+     */
+    internal const val SYNC_STORE = PREFS
+    internal const val SYNC_BLOB_KEY = KEY_BLOB
+
+    /**
+     * Local bookkeeping: when this device last edited OR adopted the blob.
+     * Never published — it is what lets the pull tell "a sibling's copy"
+     * from "my own newer edit", the same job KBHomeOrderPrefs.KEY_SYNCED_AT
+     * does for the rail arrangement.
+     */
+    const val SYNCED_AT_KEY = "browse_shortcuts_synced_at"
+
     /** Chip identity: a browse category plus the chip's name within it. */
     private const val SEPARATOR = "\u0001"
 
@@ -150,12 +167,31 @@ object BrowseHomeShortcuts {
     }
 
     private fun save(context: Context, shortcuts: List<BrowseHomeShortcut>) {
+        // Write the blob AND stamp the local sync marker BEFORE enqueuing, so
+        // the pushed payload carries this edit and the pull's staleness guard
+        // treats it as already synced — an older sibling-device copy can then
+        // never revert a chip the user just added (the same ordering bug that
+        // made every rail reorder look like it had not stuck; see
+        // KBHomeOrderPrefs.save).
         prefs(context).edit()
             .putString(
                 KEY_BLOB,
                 adapter.toJson(BrowseHomeShortcutsBlob(shortcuts)) ?: "{}"
             )
+            .putLong(SYNCED_AT_KEY, System.currentTimeMillis())
             .apply()
+
+        // Mirror to the account so the chips show up on the other TV. A
+        // deliberate last-chip removal still publishes: it goes through this
+        // path, not the bulk push that skips an empty blob.
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_BROWSE_SHORTCUTS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder
+                    .buildBrowseShortcuts(appContext)
+            )
+        }
     }
 
     private fun prefs(context: Context) = context.getSharedPreferences(

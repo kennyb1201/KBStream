@@ -360,6 +360,14 @@ object KBProfilePrefs {
     private const val KEY_URLS = "profile_urls"
     private const val KEY_LAST_REFRESH = "last_refresh_ms"
 
+    /**
+     * Local bookkeeping for the cross-device import list: when this device
+     * last edited OR adopted it. Never published — it is what tells the pull
+     * "a sibling's older copy" from "my own newer import", so an older blob
+     * cannot revert a collection the user just added.
+     */
+    private const val KEY_SYNCED_AT = "collections_synced_at"
+
     fun getProfileUrls(context: Context): List<String> {
         val raw = prefs(context).getString(KEY_URLS, null).orEmpty()
         if (raw.isBlank()) return emptyList()
@@ -374,7 +382,10 @@ object KBProfilePrefs {
         if (!isLocal && !KBRepository.isPlausibleUrl(clean)) return false
         val current = getProfileUrls(context)
         if (current.any { it.equals(clean, ignoreCase = true) }) return false
-        prefs(context).edit().putString(KEY_URLS, (current + clean).joinToString("\n")).apply()
+        prefs(context).edit()
+            .putString(KEY_URLS, (current + clean).joinToString("\n"))
+            .putLong(KEY_SYNCED_AT, System.currentTimeMillis())
+            .apply()
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
                 appContext,
@@ -389,6 +400,7 @@ object KBProfilePrefs {
         val remaining = getProfileUrls(context).filterNot { it.equals(url, ignoreCase = true) }
         prefs(context).edit()
             .putString(KEY_URLS, remaining.joinToString("\n"))
+            .putLong(KEY_SYNCED_AT, System.currentTimeMillis())
             .apply()
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
             com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
