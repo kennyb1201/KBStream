@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -25,10 +26,22 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
-import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+
+/**
+ * The watch markers' brass: the LIGHT end of the app icon's own gradient.
+ *
+ * The badges ran at the brand brass (#E8A33D), a mid-luminance
+ * mid-tone. At 13sp on a poster - and worst of all on an episode card, whose
+ * gradient dims the art behind it - the check read as a faint smudge rather
+ * than a marker. The launcher's play button is painted #F7CE86 -> #CE872A, so
+ * taking its light end keeps the marker unmistakably the icon's amber while
+ * lifting it clear of the artwork it sits on. The ring and glyph share it so
+ * the check and the eye stay one marker family.
+ */
+private val WatchedBadgeAccent = Color(0xFFF7CE86)
 
 @Composable
 fun WatchedCheckBadge(
@@ -36,10 +49,13 @@ fun WatchedCheckBadge(
 ) {
     Box(
         modifier = modifier
-            .size(24.dp)
+            .size(26.dp)
             .clip(CircleShape)
-            .background(KBVoid.copy(alpha = 0.8f))
-            .border(1.dp, KBAccent.copy(alpha = 0.95f), CircleShape)
+            // A more opaque scrim is what buys the glyph its contrast: the
+            // badge must stay legible over a bright poster as well as a dark
+            // one, and the old 0.8 let busy artwork through behind it.
+            .background(KBVoid.copy(alpha = 0.92f))
+            .border(1.5.dp, WatchedBadgeAccent, CircleShape)
             // The badge is the only place this state is stated, so it needs a
             // spoken label: without it a screen reader announces the bare
             // "✓" glyph (or nothing) beside the poster's title.
@@ -48,8 +64,8 @@ fun WatchedCheckBadge(
     ) {
         Text(
             text = "✓",
-            color = KBAccent,
-            fontSize = 13.sp
+            color = WatchedBadgeAccent,
+            fontSize = 15.sp
         )
     }
 }
@@ -67,17 +83,17 @@ fun WatchedEyeBadge(
 ) {
     Box(
         modifier = modifier
-            .size(24.dp)
+            .size(26.dp)
             .clip(CircleShape)
-            .background(KBVoid.copy(alpha = 0.8f))
-            .border(1.dp, KBAccent.copy(alpha = 0.95f), CircleShape),
+            .background(KBVoid.copy(alpha = 0.92f))
+            .border(1.5.dp, WatchedBadgeAccent, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = Icons.Filled.Visibility,
             contentDescription = "Started, not finished",
-            tint = KBAccent,
-            modifier = Modifier.size(13.dp)
+            tint = WatchedBadgeAccent,
+            modifier = Modifier.size(15.dp)
         )
     }
 }
@@ -164,6 +180,13 @@ fun PosterCard(
                 }
             }
 
+            // The caller's overlay (an episode card's readability gradient, a
+            // progress scrim) is painted FIRST so the watch badge is the last
+            // thing on the tile. It used to be the other way round, which is
+            // why the marker looked faintest exactly on the episode cards:
+            // their dark gradient was being drawn over it.
+            overlayContent?.invoke(this)
+
             if (isWatched) {
                 WatchedCheckBadge(
                     modifier = Modifier
@@ -177,7 +200,6 @@ fun PosterCard(
                         .padding(8.dp)
                 )
             }
-                 overlayContent?.invoke(this)
         }
         
     }
