@@ -153,6 +153,11 @@ fun SearchScreen(
     }
 
     LaunchedEffect(Unit) {
+        // Which chips are mirrored to Home can have changed while this screen
+        // was away - the tile's own long-press removes one from Home - and the
+        // browse chip menu decides between "Add to Home" and "Remove from
+        // Home" from that list.
+        viewModel.refreshBrowseHomeShortcuts()
         viewModel.onOpenTagScreen = onOpenTagScreen
         viewModel.onOpenStudioScreen = onOpenStudioScreen
         viewModel.onOpenCollectionScreen = onOpenCollectionScreen

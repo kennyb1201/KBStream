@@ -104,6 +104,27 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * Long-press "Remove from Home" on a tile of a Browse rail.
+     *
+     * The pref blob is the single source of truth and is shared with the Browse
+     * browser's own chip menu, so a removal here and an add there can never
+     * disagree about which chips are on Home: both go through
+     * [BrowseHomeShortcuts]. The row is republished in the same turn, so the
+     * tile goes as the press lands rather than on the next Home resume, and
+     * [browseArtCache] is deliberately left alone - it is keyed by the chip, so
+     * re-adding one later paints its artwork immediately instead of walking
+     * TMDB for it again.
+     */
+    fun removeBrowseShortcut(shortcut: BrowseHomeShortcut) {
+        val remaining = BrowseHomeShortcuts.remove(
+            getApplication(),
+            shortcut.categoryKey,
+            shortcut.name
+        )
+        _state.value = _state.value.copy(browseShortcuts = remaining)
+    }
+
+    /**
      * Resolves the artwork for the Browse row's tiles in the background, one
      * shortcut at a time as each answer lands.
      *

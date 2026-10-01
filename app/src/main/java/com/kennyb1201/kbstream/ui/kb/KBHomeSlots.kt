@@ -21,6 +21,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -551,6 +553,11 @@ fun KBHomeBrowseRail(
     artByKey: Map<String, BrowseShortcutArt> = emptyMap(),
     onOpenShortcut: (BrowseHomeShortcut) -> Unit,
     onShortcutFocused: ((BrowseHomeShortcut) -> Unit)? = null,
+    // Long-press on a tile, with that tile's own FocusRequester. Home raises
+    // its "Remove from Home" menu from here, and the requester is what lets the
+    // menu hand focus back to the tile it came from - the same contract the
+    // catalog rails' cards have (see HomeScreen's lastPosterFocusRequester).
+    onShortcutLongPress: ((BrowseHomeShortcut, FocusRequester) -> Unit)? = null,
     // The rail's own name ("Genres & Tags", "Studios", ...). Defaulted to the
     // old shared row's word so a caller that predates the split still draws
     // something sensible.
@@ -583,13 +590,18 @@ fun KBHomeBrowseRail(
                 items = shortcuts,
                 key = { it.chipKey() }
             ) { shortcut ->
+                val requester = remember { FocusRequester() }
                 BrowseShortcutTile(
                     shortcut = shortcut,
                     art = artByKey[shortcut.chipKey()],
                     onClick = { onOpenShortcut(shortcut) },
+                    onLongClick = onShortcutLongPress?.let { callback ->
+                        { callback(shortcut, requester) }
+                    },
                     onFocus = onShortcutFocused?.let { callback ->
                         { callback(shortcut) }
-                    }
+                    },
+                    modifier = Modifier.focusRequester(requester)
                 )
             }
         }
@@ -628,13 +640,20 @@ fun KBHomeBrowseRail(
  * The shared composable whitens exactly those, and reports the marks that
  * cannot be drawn at all - a featureless plate, art that never arrives - so
  * the chip's name stands in instead of an empty card.
+ *
+ * Holding Select opens the caller's menu ([onLongClick]) instead of the door.
+ * Home's is "Remove from Home": a chip mirrored to Home is otherwise only
+ * removable from the browse chip that added it, which is not where the viewer
+ * is standing when the row gets in the way.
  */
 @Composable
 private fun BrowseShortcutTile(
     shortcut: BrowseHomeShortcut,
     art: BrowseShortcutArt?,
     onClick: () -> Unit,
-    onFocus: (() -> Unit)? = null
+    onLongClick: (() -> Unit)? = null,
+    onFocus: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
     var isFocused by remember { mutableStateOf(false) }
     val focusModifier = Modifier.onFocusChanged {
@@ -664,7 +683,8 @@ private fun BrowseShortcutTile(
 
     KBCard(
         onClick = onClick,
-        modifier = focusModifier
+        onLongClick = onLongClick,
+        modifier = modifier.then(focusModifier)
     ) {
         Box(
             modifier = Modifier

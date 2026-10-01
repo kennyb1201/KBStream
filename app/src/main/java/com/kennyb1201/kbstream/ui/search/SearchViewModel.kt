@@ -1106,7 +1106,17 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _hiddenBrowseChips.value = BrowseChipVisibility.hiddenKeys(app)
     }
 
-    private fun loadBrowseHomeShortcuts() {
+    /**
+     * Re-reads which chips are mirrored to Home.
+     *
+     * The chip menu's "Add to Home" / "Remove from Home" is decided from this
+     * copy, and it is loaded once at construction because this ViewModel is
+     * activity-scoped - so a chip taken off Home by the tile's OWN long-press
+     * (see KBHomeViewModel.removeBrowseShortcut) would otherwise leave the chip
+     * menu on this screen still offering to remove it. Search re-reads on
+     * appearance for the same reason Home reloads on resume.
+     */
+    fun refreshBrowseHomeShortcuts() {
         _browseHomeShortcuts.value = BrowseHomeShortcuts.list(app)
     }
 
@@ -1359,7 +1369,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // merge that follows both filter against the hidden set.
         loadHiddenBrowseChips()
         // Which chips are on Home, so the chip menu offers the right action.
-        loadBrowseHomeShortcuts()
+        refreshBrowseHomeShortcuts()
         publishBrowseCategories(baseBrowseCategories())
         // Restore the last-resolved keyword/collection ids from disk so the
         // browse submenu renders instantly; a background refresh then only

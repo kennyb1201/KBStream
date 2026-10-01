@@ -2537,6 +2537,17 @@ fun HomeScreen(
         lastPosterFocusRequester?.requestFocus()
     }
 
+    // Long-press menu on a tile of a Browse rail - a chip mirrored to Home
+    // from the search browser's Browse strip.
+    var browseShortcutMenu by remember {
+        mutableStateOf<BrowseHomeShortcut?>(null)
+    }
+
+    fun dismissBrowseShortcutMenu() {
+        browseShortcutMenu = null
+        lastPosterFocusRequester?.requestFocus()
+    }
+
     // KB-style focus landing (ported from KBTV's ModernHomeContent /
     // ModernHomeRowsList). No snap scrolls anywhere: the rows LazyColumn is
     // wrapped in a BringIntoViewSpec so that when a catalog rail takes
@@ -3193,6 +3204,16 @@ fun HomeScreen(
                                             artByKey = kbState.browseShortcutArt,
                                             title = e.rail.title,
                                             onOpenShortcut = onOpenBrowseShortcut,
+                                            onShortcutLongPress = { shortcut, requester ->
+                                                // Same contract the catalog
+                                                // cards' long-press has: remember
+                                                // the tile that opened the menu,
+                                                // so dismissing it hands focus
+                                                // back to that exact tile.
+                                                lastPosterFocusRequester =
+                                                    requester
+                                                browseShortcutMenu = shortcut
+                                            },
                                             onShortcutFocused = { shortcut ->
                                                 userAdjustedFocus = true
                                                 focusedFolder = null
@@ -3658,6 +3679,38 @@ fun HomeScreen(
                 ),
                 onDismiss = {
                     dismissPosterMenu()
+                }
+            )
+        }
+
+        // Long-press menu for a tile on a Browse rail: how a chip mirrored to
+        // Home is taken off it again. The other half of this lives on the chip
+        // itself in Search ("Add to Home"), and both go through the same pref
+        // blob, so the two can never disagree about which chips are on Home.
+        browseShortcutMenu?.let { shortcut ->
+            // The rail the chip sits in, so the action says WHERE it leaves
+            // from: chips are grouped by kind (genres and tags together,
+            // services and networks together, ...).
+            val railTitle =
+                com.kennyb1201.kbstream.data.kb.browseShortcutRail(shortcut.categoryKey)
+                    ?.title
+                    ?: "Browse"
+            PosterContextMenu(
+                title = shortcut.name,
+                subtitle = "Browse chip",
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Remove from Home",
+                        description = "Take this chip off the $railTitle rail",
+                        isDestructive = true
+                    ) {
+                        browseShortcutMenu = null
+                        kbViewModel.removeBrowseShortcut(shortcut)
+                        lastPosterFocusRequester?.requestFocus()
+                    }
+                ),
+                onDismiss = {
+                    dismissBrowseShortcutMenu()
                 }
             )
         }
