@@ -505,7 +505,7 @@ dependencies {
     // The manifest carries the matching tools:overrideLibrary, and
     // PlayerEngine refuses to select MPV below API 26 rather than loading the
     // native libraries on a device they were not built for.
-    implementation("dev.jdtech.mpv:libmpv:0.5.1")
+    implementation("dev.jdtech.mpv:libmpv:1.0.0")
     implementation("androidx.recyclerview:recyclerview:1.4.0")
     // Pinned to the COMMIT behind tag v0.26.4 (43f8e6ebeef4…, full hash
     // 43f8e6ebeef469db7c5328714bc5f33c9f06f092), not the tag itself: tags are
