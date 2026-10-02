@@ -1493,6 +1493,20 @@ object SupabaseSync {
                     return@forEach
                 }
             }
+            // The home order is a full-replace blob too: a device that never
+            // arranged a rail must not publish its empty arrangement, or one
+            // untouched TV erases every sibling's rail order (the "the order
+            // doesn't sync" report). A deliberate arrangement publishes through
+            // KBHomeOrderPrefs.save, not through this bulk push.
+            if (key == PrefsPayloadBuilder.KEY_HOME_ORDER) {
+                val blob =
+                    (payload["home_order_json"] as? kotlinx.serialization.json.JsonPrimitive)
+                        ?.content
+                        .orEmpty()
+                if (!HomeListBlobRules.shouldPublishHomeOrder(blob)) {
+                    return@forEach
+                }
+            }
             enqueuePrefs(context, key, payload, pid)
         }
         flushOutbox()

@@ -909,6 +909,35 @@ internal object HomeListBlobRules {
         shortcutsJson.isNotBlank()
 
     /**
+     * Home order: publish only when this device has actually arranged a rail.
+     *
+     * Same reasoning as the other two full-replace blobs - the bulk push runs
+     * on every device, so a TV that never touched its order would otherwise
+     * publish an empty arrangement (stamped with its own push time) and erase
+     * every sibling's rail order, which is what "the order never syncs" looks
+     * like from the receiving end. A deliberate arrangement publishes through
+     * [com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs.save], not through here.
+     */
+    fun shouldPublishHomeOrder(homeOrderJson: String): Boolean =
+        homeOrderJson.isNotBlank()
+
+    /**
+     * The `updatedAt` a full-replace Home blob publishes. The content's OWN
+     * last-change/adoption time wins; only a blob with no stamp at all
+     * (written by a build that predates the stamp) falls back to [now], so it
+     * still publishes once and self-heals on the next pull.
+     *
+     * This is the fix for "the order never syncs": these blobs used to publish
+     * `updatedAt = now` on every bulk push, so any device that merely opened
+     * the app re-stamped its unchanged copy with a fresh time and won the
+     * last-write-wins race against a sibling's real edit. Publishing the
+     * content's own change time means an untouched device republishes the same
+     * old stamp and cannot revert a newer arrangement or chip list.
+     */
+    fun publishStamp(contentChangedAt: Long, now: Long): Long =
+        if (contentChangedAt > 0L) contentChangedAt else now
+
+    /**
      * Whether a pulled blob may replace local state: yes when it carries no
      * stamp (a build that predates the guard), otherwise only when it is not
      * older than the last local edit or adoption.

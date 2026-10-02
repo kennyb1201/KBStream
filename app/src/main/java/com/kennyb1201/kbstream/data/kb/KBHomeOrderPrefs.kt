@@ -296,8 +296,15 @@ object KBHomeOrderPrefs {
      * Last arrangement this device considers already synced (mirrors the key
      * [PrefsPayloadApplier.applyHomeOrder] reads). Written on every local save
      * so our own edit cannot be judged "older than remote" and reverted.
+     *
+     * It is ALSO the timestamp published as the blob's `updatedAt`, which is
+     * why it is internal: an arrangement that has not changed on this device
+     * must republish its old timestamp, not the time of the push. Stamping the
+     * push time let any device that had merely opened the app win the
+     * last-write-wins race and revert a sibling's fresh rail order (the exact
+     * "my order didn't sync" failure - see [KBHomeOrderPrefs.save]).
      */
-    private const val KEY_SYNCED_AT = "home_order_synced_at"
+    internal const val SYNCED_AT_KEY = "home_order_synced_at"
 
     private val adapter = Moshi.Builder()
         .addLast(KotlinJsonAdapterFactory())
@@ -422,12 +429,13 @@ object KBHomeOrderPrefs {
         // judged that stale copy newer than what the user had just set and
         // reverted the edit (every reorder looked like it did not stick).
         //
-        // KEY_SYNCED_AT is stamped too, so the pull's "is the remote older
+        // SYNCED_AT_KEY is stamped too, so the pull's "is the remote older
         // than my last sync?" guard treats this edit as already synced and an
-        // older sibling-device copy can never clobber it.
+        // older sibling-device copy can never clobber it - and so the pushed
+        // blob carries THIS edit's time rather than the push's.
         prefs(context).edit()
             .putString(KEY_BLOB, adapter.toJson(value) ?: "{}")
-            .putLong(KEY_SYNCED_AT, System.currentTimeMillis())
+            .putLong(SYNCED_AT_KEY, System.currentTimeMillis())
             .apply()
 
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->

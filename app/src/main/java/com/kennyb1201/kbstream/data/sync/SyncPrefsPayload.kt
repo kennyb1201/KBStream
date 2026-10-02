@@ -255,7 +255,25 @@ object PrefsPayloadBuilder {
             legacy.edit().clear().apply()
         }
         return buildJsonObject {
-            put("updatedAt", System.currentTimeMillis())
+            // Publish the arrangement's OWN last-change time, not the push's.
+            // buildAll runs on every bulk push, so stamping `now` here let any
+            // device that had merely opened the app win the last-write-wins
+            // race against a sibling's fresh rail arrangement and revert it -
+            // the exact "my home order didn't sync" failure. A device that has
+            // not changed its order republishes its old stamp, and a device
+            // that never arranged one publishes 0, which every arranged
+            // sibling's guard rejects (see KBHomeOrderPrefs.SYNCED_AT_KEY).
+            put(
+                "updatedAt",
+                HomeListBlobRules.publishStamp(
+                    prefs.getLong(
+                        com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                            .SYNCED_AT_KEY,
+                        0L
+                    ),
+                    System.currentTimeMillis()
+                )
+            )
             put(
                 "home_order_json",
                 prefs.getString("home_order_json", null).orEmpty()
@@ -279,7 +297,21 @@ object PrefsPayloadBuilder {
                 com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.SYNC_STORE
             )
         return buildJsonObject {
-            put("updatedAt", System.currentTimeMillis())
+            // Same rule as the home order: publish the chips' own last-change
+            // time, so an unchanged device's bulk push can never beat a
+            // sibling's freshly added or removed chip (see
+            // BrowseHomeShortcuts.SYNCED_AT_KEY).
+            put(
+                "updatedAt",
+                HomeListBlobRules.publishStamp(
+                    prefs.getLong(
+                        com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
+                            .SYNCED_AT_KEY,
+                        0L
+                    ),
+                    System.currentTimeMillis()
+                )
+            )
             put(
                 "shortcuts_json",
                 prefs.getString(
@@ -652,6 +684,10 @@ object PrefsPayloadApplier {
 
     private fun applyHomeOrder(context: Context, payload: JsonObject) {
         val blob = (payload["home_order_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
+        // A blank blob is "this device has no arrangement", never "erase
+        // yours": adopting it would wipe a real rail order for everyone and
+        // read exactly like "it doesn't sync" from the receiving end.
+        if (blob.isBlank()) return
         val prefs = scopedPrefs(context, "kbstream_kb_home_order")
         val remoteUpdated = payloadUpdatedAt(payload)
         if (remoteUpdated != null && remoteUpdated < prefs.getLong("home_order_synced_at", 0L)) return
@@ -675,6 +711,9 @@ object PrefsPayloadApplier {
             (payload["shortcuts_json"] as? kotlinx.serialization.json.JsonPrimitive)
                 ?.content
                 ?: return
+        // A blank blob is "no chips mirrored here", not "remove them from
+        // every device": adopting it would erase the account's rails.
+        if (blob.isBlank()) return
 
         val prefs =
             scopedPrefs(

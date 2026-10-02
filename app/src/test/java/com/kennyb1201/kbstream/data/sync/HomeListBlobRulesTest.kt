@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.sync
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -53,5 +54,34 @@ class HomeListBlobRulesTest {
     @Test
     fun `a blob with no stamp is adopted`() {
         assertTrue(HomeListBlobRules.shouldApply(remoteUpdated = null, localSyncedAt = 2_000L))
+    }
+
+    @Test
+    fun `an empty home order is never published`() {
+        assertFalse(HomeListBlobRules.shouldPublishHomeOrder(""))
+        assertFalse(HomeListBlobRules.shouldPublishHomeOrder("   "))
+    }
+
+    @Test
+    fun `an arranged home order is published`() {
+        assertTrue(
+            HomeListBlobRules.shouldPublishHomeOrder(
+                """{"order":["browse:\u0001rail:genres"],"pinned":[],"hidden":[]}"""
+            )
+        )
+    }
+
+    @Test
+    fun `an arranged blob publishes its own change time, not the push time`() {
+        // The bug: buildAll ran on every bulk push and stamped `now`, so an
+        // untouched device's copy looked newer than a sibling's real edit and
+        // reverted it. The content's own change stamp must win.
+        assertEquals(1_000L, HomeListBlobRules.publishStamp(contentChangedAt = 1_000L, now = 9_999L))
+    }
+
+    @Test
+    fun `a blob with no change stamp falls back to the push time`() {
+        // A blob written before the stamp existed still has to publish once.
+        assertEquals(9_999L, HomeListBlobRules.publishStamp(contentChangedAt = 0L, now = 9_999L))
     }
 }

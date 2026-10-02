@@ -80,7 +80,7 @@ object BrowseHomeShortcuts {
     /**
      * Local bookkeeping: when this device last edited OR adopted the blob.
      * Never published — it is what lets the pull tell "a sibling's copy"
-     * from "my own newer edit", the same job KBHomeOrderPrefs.KEY_SYNCED_AT
+     * from "my own newer edit", the same job KBHomeOrderPrefs.SYNCED_AT_KEY
      * does for the rail arrangement.
      */
     const val SYNCED_AT_KEY = "browse_shortcuts_synced_at"
