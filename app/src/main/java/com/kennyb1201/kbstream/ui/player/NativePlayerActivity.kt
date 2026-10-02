@@ -1009,6 +1009,19 @@ class NativePlayerActivity : ComponentActivity() {
     // rule below.
     private var isBarDragging = false
     private var scrubStepMs = 0L
+    /**
+     * The position the viewer has scrubbed TO.
+     *
+     * Deliberately not the player's own position. A held scrub issues seeks
+     * faster than a heavy stream settles them, so reading `player.currentPosition`
+     * back (what this used to do) accumulated the next step from a position the
+     * player had not actually reached. Owning the target here makes the scrub
+     * advance at the rate the press asked for regardless of how slowly the seek
+     * lands, and gives the release a position to land on exactly.
+     */
+    private var scrubTargetPosMs = 0L
+    /** True once a scrub has moved the target, so an ending knows to land on it. */
+    private var scrubMoved = false
     private val scrubHandler = Handler(Looper.getMainLooper())
     private val clockHandler = Handler(Looper.getMainLooper())
     // Cached clock formatter, keyed by pattern - see clockFormatter().
@@ -1030,10 +1043,24 @@ class NativePlayerActivity : ComponentActivity() {
             if (scrubDirection == 0) return
             val player = exoPlayer ?: return
             val duration = player.duration.takeIf { it > 0 } ?: return
-            val newPos = (player.currentPosition + scrubStepMs * scrubDirection)
+            // Advance the target the viewer is scrubbing to, and move the bar
+            // with it, at the rate the press asked for.
+            scrubTargetPosMs = (scrubTargetPosMs + scrubStepMs * scrubDirection)
                 .coerceIn(0L, duration)
-            player.seekTo(newPos)
-            updateSeekBarPosition(newPos, duration)
+            updateSeekBarPosition(scrubTargetPosMs, duration)
+            // ...but only move the PLAYER when it has caught up with the last
+            // seek. Issuing one every tick regardless is what this box cannot
+            // do: a 4K release flushes its decoder on every seek, so an 80 ms
+            // tick turned a held scrub into a seek storm whose seeks never
+            // settled - the decoder was still refilling when the next one
+            // landed, which is the multi-second stall a held scrub used to
+            // cause (reported as playback.stall, 8.8 s worst). Gating on the
+            // player's own readiness lets the video advance as fast as the
+            // device can actually seek, instead of faster than it can; the bar
+            // still tracks the press, and [landScrub] makes the release exact.
+            if (player.playbackState == Player.STATE_READY && !player.isLoading) {
+                player.seekTo(scrubTargetPosMs)
+            }
             // Accelerate: increase step each tick, cap at 30s
             scrubStepMs = (scrubStepMs + scrubStepMs / 2 + 200L).coerceAtMost(30_000L)
             scrubHandler.postDelayed(this, 80L)
@@ -3596,6 +3623,10 @@ class NativePlayerActivity : ComponentActivity() {
                         KeyEvent.ACTION_DOWN -> {
                             if (event.repeatCount == 0 && scrubDirection == 0) {
                                 scrubDirection = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                                // Seed the owned target at the start of the scrub.
+                                scrubTargetPosMs =
+                                    exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+                                scrubMoved = false
                                 removeAutoHide()
                                 // Immediate step for a quick press/release
                                 stepSeekBy(10_000L * scrubDirection)
@@ -3609,6 +3640,11 @@ class NativePlayerActivity : ComponentActivity() {
                             scrubDirection = 0
                             scrubHandler.removeCallbacks(scrubHoldStarter)
                             scrubHandler.removeCallbacks(scrubRunnable)
+                            // commitSeekFromBar() is this path's exact landing
+                            // (it seeks to the bar, which tracks the owned
+                            // target), so the owned target is retired here
+                            // rather than landed on twice.
+                            scrubMoved = false
                             commitSeekFromBar()
                             endTrickplayScrub()
                             scheduleAutoHide()
@@ -4125,11 +4161,12 @@ class NativePlayerActivity : ComponentActivity() {
     private val scrubHintHandler = Handler(Looper.getMainLooper())
     private val scrubHintHider = Runnable { surfaceScrubHint?.visibility = View.GONE }
 
-    // --- Scrub previews (a decoded frame while the viewer scrubs) ---
+    // --- Scrub previews (a frame copied off the video surface while scrubbing) ---
     //
-    // Null until a scrub asks for its first frame: a session that never scrubs
-    // never builds the second player this costs. See TrickplayFrames for what
-    // that player is, and why it gives up so readily.
+    // Null until a scrub asks for its first frame. Nothing has to be built to
+    // make one: the frame is copied out of the surface the player is already
+    // rendering (see TrickplayFrames), so a session that never scrubs pays
+    // nothing at all.
     private var trickplay: TrickplayFrames? = null
     private var trickplayOverlay: TrickplayOverlay? = null
 
@@ -4249,35 +4286,15 @@ class NativePlayerActivity : ComponentActivity() {
         handler.postDelayed(trickplayCardHider, TRICKPLAY_WAIT_MS)
         trickplayAnchorView = anchorView
         val frames = trickplay ?: TrickplayFrames(
-            activity = this,
-            url = currentUrl,
-            // The same headers the main player sends: the preview asks the same
-            // host for the same file, so a source gated on a Referer or a
-            // Cookie refuses it without them.
-            headers = streamHeaders,
-            // The same container the player itself settled on, so a playlist
-            // whose marker lives only in the query is fetched through the HLS
-            // source instead of the progressive extractors.
-            resolvedMimeType = resolveMimeType(currentUrl),
-            // Where the main player has read to, sampled per call. This is what
-            // keeps the preview cache-only (see TrickplayFrames): bytes up to
-            // here arrived through the shared disk cache, so a frame for them is
-            // a local read and cannot open the second connection a debrid link
-            // will not give. A position the player has not reached is waited for
-            // rather than fetched, which is also why this cannot be a snapshot -
-            // it is read again on every deferred attempt.
-            cacheWindow = {
-                val player = exoPlayer
-                if (player == null) {
-                    null
-                } else {
-                    TrickplayWindow(
-                        playheadMs = player.currentPosition,
-                        bufferedMs = player.bufferedPosition,
-                        durationMs = player.duration.takeIf { it > 0 } ?: 0L
-                    )
-                }
-            },
+            // Sampled per call, not held: a source switch rebuilds the player,
+            // and a preview that kept the dead instance would copy a surface
+            // nothing is rendering into any more.
+            player = { exoPlayer },
+            // The surface the picture is going to RIGHT NOW - PlayerView's own
+            // SurfaceView normally, the P5 GL surface while that ladder is up
+            // (see [videoOutputSurface]). Null under the TextureView fallback,
+            // which has no Surface to read, and before the surface exists.
+            surface = { videoOutputSurface() },
             onUnavailable = { reason -> noticeNoScrubPreviews(reason) }
         ) { _, frame ->
             if (trickplayWanted) {
@@ -4352,9 +4369,9 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
-     * The scrub is over: the decoder behind the card is given back a few seconds
-     * later, so the next press of the same scrub does not pay for a new player
-     * and a new connection (see [TrickplayFrames.idle]).
+     * The scrub is over. Nothing has to be given back - a surface copy holds no
+     * decoder and no connection (see [TrickplayFrames.idle]) - so this only
+     * stands the pipeline down.
      *
      * The card itself is deliberately NOT taken away here. The frame for the
      * position just scrubbed to is usually still being decoded, and hiding on the
@@ -4399,6 +4416,9 @@ class NativePlayerActivity : ComponentActivity() {
             if (!hasDuration) return false
             if (event.repeatCount == 0 && scrubDirection == 0) {
                 scrubDirection = if (keyCode == KeyEvent.KEYCODE_DPAD_RIGHT) 1 else -1
+                // Seed the owned target at the start of the scrub.
+                scrubTargetPosMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+                scrubMoved = false
                 stepSeekBy(10_000L * scrubDirection)
                 showScrubHint()
                 scrubHandler.removeCallbacks(scrubHoldStarter)
@@ -4413,6 +4433,10 @@ class NativePlayerActivity : ComponentActivity() {
         scrubDirection = 0
         scrubHandler.removeCallbacks(scrubHoldStarter)
         scrubHandler.removeCallbacks(scrubRunnable)
+        // This path has no bar to land on, so the owned target is the landing:
+        // a press-and-hold past the first seek would otherwise stop wherever the
+        // decoder last kept up.
+        if (wasScrubbing) landScrub()
         if (wasScrubbing) scheduleScrubHintHide()
         return wasScrubbing
     }
@@ -4420,6 +4444,7 @@ class NativePlayerActivity : ComponentActivity() {
     /** Full stop: cancel scrub timers and hide the hint immediately. */
     private fun stopSurfaceScrub() {
         scrubDirection = 0
+        landScrub()
         scrubHandler.removeCallbacks(scrubHoldStarter)
         scrubHandler.removeCallbacks(scrubRunnable)
         scrubHintHandler.removeCallbacks(scrubHintHider)
@@ -7067,9 +7092,30 @@ class NativePlayerActivity : ComponentActivity() {
     private fun stepSeekBy(deltaMs: Long) {
         val player = exoPlayer ?: return
         val duration = player.duration.takeIf { it > 0 } ?: return
-        val newPos = (player.currentPosition + deltaMs).coerceIn(0L, duration)
+        // Mid-scrub, step from the position we OWN rather than the player's -
+        // see [scrubTargetPosMs]. On the first press of a scrub the target was
+        // just seeded from the player, so this is the player's position anyway.
+        val base = if (scrubMoved) scrubTargetPosMs else player.currentPosition
+        val newPos = (base + deltaMs).coerceIn(0L, duration)
+        scrubTargetPosMs = newPos
+        scrubMoved = true
         player.seekTo(newPos)
         updateSeekBarPosition(newPos, duration)
+    }
+
+    /**
+     * Ends a scrub by landing exactly on the position the viewer scrubbed to.
+     *
+     * The scrub moves the player opportunistically - a tick whose previous seek
+     * had not settled is skipped (see the scrub runnable) - so the last part of
+     * a hold may never have reached the player at all. This is where the release
+     * is made good, once, so the viewer lands where the bar showed rather than
+     * wherever the decoder happened to keep up with.
+     */
+    private fun landScrub() {
+        if (!scrubMoved) return
+        scrubMoved = false
+        exoPlayer?.seekTo(scrubTargetPosMs)
     }
 
     private fun commitSeekFromBar() {
@@ -7427,8 +7473,10 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun hideControls() {
-        // Stop any active scrubbing
+        // Stop any active scrubbing - and land on the target, since the last
+        // ticks of a hold may have been skipped while a seek settled.
         scrubDirection = 0
+        landScrub()
         scrubHandler.removeCallbacks(scrubRunnable)
         scrubHandler.removeCallbacks(scrubHoldStarter)
         scrubHintHandler.removeCallbacks(scrubHintHider)
@@ -9062,9 +9110,7 @@ class NativePlayerActivity : ComponentActivity() {
         val baseIntent = intent ?: return false
         mpvHandoffStarted = true
 
-        val position = runCatching {
-            exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
-        }.getOrDefault(carryPositionMs)
+        val position = carriedPositionMs()
 
         val launch = Intent(baseIntent).apply {
             putExtra("stream_url", currentUrl)
@@ -9132,6 +9178,33 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Where this session continues from when the engine changes.
+     *
+     * A player with nothing loaded reports position 0, and 0 is a perfectly
+     * valid position for a file that just started - so "no playhead" and "the
+     * very beginning" are the same number. The handoffs used to trust it, with
+     * an elvis that only covered a null player, so an engine switch pressed
+     * from the error card - the case the button exists for - handed the other
+     * engine 0 and restarted the title from the beginning.
+     *
+     * [carryPositionMs] is the playhead this session holds for exactly this
+     * purpose (see its declaration and the subtitle/audio rebuilds that use
+     * it), so it answers when the player itself cannot. [startPositionMs] is
+     * the floor: where this session was ASKED to start, which is still the
+     * right resume point for a handoff taken before anything played.
+     */
+    private fun carriedPositionMs(): Long {
+        val own =
+            runCatching {
+                exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+            }.getOrDefault(0L)
+
+        return (if (own > 0L) own else carryPositionMs)
+            .takeIf { it > 0L }
+            ?: startPositionMs.coerceAtLeast(0L)
+    }
+
+    /**
      * The control bar's "play in another app" button: hand this session to an
      * installed external player.
      *
@@ -9159,9 +9232,7 @@ class NativePlayerActivity : ComponentActivity() {
         val baseIntent = intent ?: return false
         externalHandoffStarted = true
 
-        val position = runCatching {
-            exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
-        }.getOrDefault(carryPositionMs)
+        val position = carriedPositionMs()
 
         // Re-play the original launch with the stream extras replaced, so the
         // wrapper inherits the whole session: the episode it is on, the poster

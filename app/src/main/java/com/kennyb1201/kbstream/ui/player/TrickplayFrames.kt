@@ -1,107 +1,75 @@
 package com.kennyb1201.kbstream.ui.player
 
-import android.app.Activity
 import android.graphics.Bitmap
-import android.graphics.ImageFormat
-import android.media.Image
-import android.media.ImageReader
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
+import android.view.PixelCopy
+import android.view.Surface
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.okhttp.OkHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.SeekParameters
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import com.kennyb1201.kbstream.data.player.StreamDiskCache
-import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
-import java.util.concurrent.TimeUnit
-import okhttp3.OkHttpClient
 
 /**
- * Decoded scrub-preview frames: a real frame of the stream the viewer is
- * dragging through, taken on demand.
+ * Scrub-preview frames, copied out of the MAIN player's own video surface.
  *
- * ## Why this is a second player
+ * ## Why this is a surface copy and not a second decoder
  *
- * There is no way to read the frame the main player is showing — it renders
- * into a `SurfaceView` the app cannot sample — so a preview has to be decoded
- * separately. That is the whole cost of the feature and the reason every rule
- * here is about giving the decoder back: a second video decoder plus a second
- * connection to the same source, held for as long as the viewer is scrubbing
- * and [TRICKPLAY_IDLE_RELEASE_MS] after they stop.
+ * The previous build decoded previews with a second `ExoPlayer` and a
+ * `YUV_420_888` `ImageReader`. On this app's boxes that is the wrong trade three
+ * times over: it costs a second video decoder (several of these devices have
+ * barely enough for one stream - see the note in PlayerRebuild), a second
+ * connection to a source that often allows exactly one (debrid links), and a
+ * capture surface whose format and size a hardware decoder has to accept. A
+ * field report is what the last one costs: the preview decoder queued input
+ * (`QIB`) and never released an output buffer (`ROB`), so the player sat in
+ * `STATE_BUFFERING` with `images=0` and every press timed out - and
+ * `nBufferCountActual` was refused at 11, 10 and 9 buffers, i.e. the codec
+ * wanted a queue an `ImageReader` cannot be built with at 4K.
  *
- * Several boxes — Fire TV most of all, which is most of this app's installs —
- * have barely enough decoders to play one stream. So the pipeline is built to
- * lose quietly: a device that cannot spare the decoder is given up on at its
- * first refusal, a source that merely stumbled gets
- * [TRICKPLAY_MAX_TRANSIENT_FAILURES] presses before the session stops asking,
- * and either way it leaves the screen looking exactly as it did before (the
- * time bubble), because the frame is a nicety and playback is not.
+ * A surface copy asks none of that. The player is ALREADY rendering the
+ * scrubbed position (a scrub seeks it - see the hold-to-scrub runnable in
+ * NativePlayerActivity), so the frame the viewer wants is on screen, and
+ * [PixelCopy] reads it. No second decoder, no second connection, no capture
+ * surface, and nothing held between presses: [idle] and [release] have no
+ * decoder to give back any more.
  *
- * ## What it deliberately does not do
+ * ## What it deliberately trades away
  *
- *  - **No addon stack.** The preview reads the main player's `SimpleCache`
- *    first and the network only when that cache cannot serve the read, with the
- *    same request headers the main player sends - and none of the rest of its
- *    stack (the DV re-write, the HDR10+ stripping, the YouTube chunked source).
- *    The cache is a saving, not a requirement: bytes already on disk cost no
- *    connection at all, and [trickplayServableFromCache] admits a bucket the
- *    main player has read past before anything else is tried. What it must not
- *    become is the ONLY way to read - see [buildPreview] for what a
- *    cache-only build cost.
- *  - **No audio.** Audio tracks are disabled in the track selection rather than
- *    muted, so the audio decoder is never instantiated at all.
- *  - **No HD.** Frames are captured at [TRICKPLAY_CAPTURE_WIDTH] and the
- *    decoder scales them down for us, so the capture costs a bitmap copy rather
- *    than a full-size frame at LAN-bitrate cost.
+ * A preview can only show a position the player is actually at. That is exactly
+ * right for a remote scrub, which moves the player to every position it asks
+ * about. A touch drag on the seek bar does not - it seeks once, on release - so
+ * a drag produces no preview (recorded as a decline, never as a fault, so it
+ * cannot spend the failure budget that a real capture fault needs). The
+ * TextureView fallback has no `Surface` to read and is the same case.
  *
- * Call [request] while the viewer scrubs and [idle] when they stop; [release]
- * on the way out of the activity. [onUnavailable] is called once if the pipeline
+ * Call [request] while the viewer scrubs, [idle] when they stop and [release] on
+ * the way out of the activity. [onUnavailable] is called once if the pipeline
  * gives up for good, so the screen can say why rather than leaving the viewer
  * pressing RIGHT at nothing.
  */
 @UnstableApi
 internal class TrickplayFrames(
-    private val activity: Activity,
-    private val url: String,
     /**
-     * The same request headers the main player sends.
-     *
-     * The preview asks the same host for the same file, so a source gated on a
-     * Referer, an Origin or a Cookie is refused here exactly as it would be by
-     * the main player without them.
+     * The player whose surface is read, sampled per call rather than held: the
+     * activity rebuilds its player on a source switch, and a preview that kept
+     * the dead one would copy a surface nothing is rendering into any more.
      */
-    private val headers: Map<String, String> = emptyMap(),
-    private val resolvedMimeType: String? = null,
+    private val player: () -> ExoPlayer?,
     /**
-     * Where the main player has read to, sampled per call.
-     *
-     * A lambda rather than a snapshot because the answer changes underneath a
-     * single scrub: the position the viewer pressed for is read by the main
-     * player over the next second or two, and that arrival is exactly what the
-     * deferred attempt in [deferForCache] is waiting for. Null means the main
-     * player cannot be read at all right now, which is treated as "not yet".
+     * The surface the picture is going to right now, or null when there is none
+     * to read (no surface yet, or the TextureView fallback).
      */
-    private val cacheWindow: () -> TrickplayWindow?,
+    private val surface: () -> Surface?,
     private val onUnavailable: (reason: String) -> Unit = {},
     private val onFrame: (bucketMs: Long, frame: Bitmap) -> Unit
 ) {
 
     private val handler = Handler(Looper.getMainLooper())
     private val cache = TrickplayFrameCache<Bitmap>(TRICKPLAY_CACHE_FRAMES)
-
-    private var reader: ImageReader? = null
-    private var preview: ExoPlayer? = null
 
     /**
      * The bucket being dragged over now. A frame that arrives for anything else
@@ -110,62 +78,50 @@ internal class TrickplayFrames(
      */
     private var wantedBucket: Long? = null
 
-    /** The bucket an extraction is running for, if any. */
+    /** The bucket a capture is running for, if any. */
     private var inFlightBucket: Long? = null
 
-    /** True between asking the player for a position and either frame or failure. */
+    /** True between asking for a position and either a frame or a failure. */
     private var awaitingFrame = false
 
-    /**
-     * The bucket the pipeline is waiting for the cache to cover, if any, and
-     * the deadline for that wait.
-     *
-     * Kept together because they are set and cleared together: a wait that
-     * outlives its bucket would decode a frame for a position the viewer has
-     * already left, and one that never expires would hold the retry timer for
-     * the rest of the film.
-     */
-    private var deferredBucket: Long? = null
-    private var deferUntilMs = 0L
-
-    /** Whether the session has already reported waiting on the cache. */
-    private var deferRecorded = false
-
-    /** Uptime when the extraction now in flight was asked for, for its latency. */
+    /** Uptime when the capture now in flight was asked for, for its latency. */
     private var askedAtMs = 0L
+
+    /** True while a [PixelCopy] is outstanding, so only one is ever in flight. */
+    private var copyInFlight = false
 
     private var failures = 0
     private var disabled = false
     private var released = false
 
     /**
-     * How many capture images the reader has handed back this session.
+     * How many captures have come back this session.
      *
-     * The one number that separates the two halves of "no thumbnail": a capture
-     * that never arrived at all, meaning the surface the decoder was given
-     * rendered nothing, versus a capture that did arrive and was refused by the
-     * gates in [onImageAvailable]. From outside the app those two are the same
-     * sentence, and they want opposite fixes.
+     * The one number that separates the two halves of "no thumbnail": a copy
+     * that never arrived versus one that arrived and was refused by the gates
+     * in [onCopyFinished]. From outside the app those two are the same sentence.
      */
-    private var imagesSeen = 0
+    private var capturesSeen = 0
 
-    /** The last player error this session, for [timeoutReason]. */
+    /** The last error the MAIN player admitted to, for [timeoutReason]. */
     private var lastPlayerError: String? = null
 
+    /** The player the listener below is attached to, so a rebuild re-attaches. */
+    private var listenerPlayer: ExoPlayer? = null
+
     /** False once the session has given up, so callers can stop asking. */
-    val isUsable: Boolean get() = !disabled && !released && url.isNotBlank()
+    val isUsable: Boolean get() = !disabled && !released
 
     /**
-     * Asks for the frame covering [positionMs]. A frame already decoded for that
-     * bucket is delivered immediately and for no decoder cost at all, which is
-     * what makes dragging back over ground already covered free.
+     * Asks for the frame covering [positionMs]. A frame already captured for
+     * that bucket is delivered immediately and for no capture cost at all, which
+     * is what makes dragging back over ground already covered free.
      */
     fun request(positionMs: Long, durationMs: Long) {
         if (disabled || released) return
-        if (url.isBlank() || durationMs <= 0L) return
+        if (durationMs <= 0L) return
         val bucket = trickplayBucket(positionMs).coerceAtMost(durationMs - 1L)
         wantedBucket = bucket
-        cancelIdleRelease()
         cache.get(bucket)?.let { frame ->
             onFrame(bucket, frame)
             return
@@ -174,291 +130,163 @@ internal class TrickplayFrames(
     }
 
     /**
-     * The scrub is over. The pipeline is kept warm for
-     * [TRICKPLAY_IDLE_RELEASE_MS] first: scrubbing is a series of presses with
-     * gaps between them, and rebuilding the player between each one would cost
-     * a connection per press and show nothing.
+     * The scrub is over. Nothing is held open any more - a surface copy owns no
+     * decoder and no connection - so there is nothing to give back and nothing
+     * to keep warm. Kept as a call so the player's scrub lifecycle has one
+     * vocabulary whether or not the implementation had a resource to release.
      */
-    fun idle() {
-        handler.removeCallbacks(idleRelease)
-        handler.postDelayed(idleRelease, TRICKPLAY_IDLE_RELEASE_MS)
-    }
+    fun idle() = Unit
 
     /** Tears the pipeline down for good. Idempotent. */
     fun release() {
         released = true
-        handler.removeCallbacks(idleRelease)
-        handler.removeCallbacks(timeoutRunnable)
-        teardown()
+        handler.removeCallbacksAndMessages(null)
+        listenerPlayer?.removeListener(listener)
+        listenerPlayer = null
     }
 
-    // --- Extraction ---------------------------------------------------------
+    // --- Capture --------------------------------------------------------------
 
     private fun startNext() {
         if (disabled || released || awaitingFrame) return
         val bucket = wantedBucket ?: return
         if (cache.get(bucket) != null) return
-        // Cache-only by construction: decode what the main player has already
-        // read, and nothing else. Those bytes are on disk, so this read cannot
-        // open the second connection the feature exists to avoid - and a bucket
-        // that is not covered yet is waited for rather than fetched.
-        val window = cacheWindow()
-        if (window == null || !trickplayServableFromCache(bucket, window)) {
-            deferForCache(bucket)
-            return
-        }
-        cancelDefer()
+        val active = player() ?: return
+        attachListener(active)
         inFlightBucket = bucket
         awaitingFrame = true
         askedAtMs = SystemClock.uptimeMillis()
-        val player = runCatching { preview ?: buildPreview().also { preview = it } }
-            .getOrElse { error ->
-                fail(bucket, "could not build the preview player: ${error.message}")
-                return
-            }
-        // Frames the reader is still holding are from the position BEFORE this
-        // seek; capturing one would file the old moment under the new bucket.
-        drainReader()
-        if (player.currentMediaItem == null) {
-            player.setMediaItem(mediaItem(), bucket)
-            player.prepare()
-        } else {
-            // Same source: seek, do not re-open. During a drag this is the
-            // difference between a frame per position and a reconnect per
-            // position.
-            player.seekTo(bucket)
-        }
-        player.play()
+        handler.removeCallbacks(settleCheck)
+        handler.post(settleCheck)
         handler.postDelayed(timeoutRunnable, TRICKPLAY_TIMEOUT_MS)
     }
 
-    private fun buildPreview(): ExoPlayer {
-        // Read through the SAME disk cache the main player fills, and reach the
-        // network only when that cache cannot serve the read.
-        //
-        // The cache comes first because it is free: bytes already on disk cost
-        // no connection at all, which is what makes dragging back over ground
-        // the viewer has passed instant. [trickplayServableFromCache] gates on
-        // exactly that, so an ordinary scrub near the playhead never opens
-        // anything.
-        //
-        // It cannot be the ONLY choice, and a build that tried has a field
-        // report of its own. "Servable" there was inferred from the main
-        // player's buffered position, which is a different question from "are
-        // these bytes on disk": the disk cache evicts least-recently-used
-        // spans, so once it fills - it holds ~128 MB of a 6 GB release - the
-        // spans just BEHIND the playhead, precisely the ones a preview asks
-        // for, are the first to go. A cache-only reader was then left failing
-        // every extraction with ERROR_CODE_IO_UNSPECIFIED while the frames it
-        // refused to fetch sat one connection away.
-        //
-        // So the upstream is real, and bounded: short timeouts, so a host that
-        // will not give a second connection fails the extraction in seconds
-        // instead of hanging on one - the failure mode this feature is most
-        // careful about, because the main player is reading the same source.
-        //
-        // The cache key has to match the main player's or the entries are
-        // missed rather than shared. Both wrap the same URL string with the
-        // default, URI-keyed factory, which is why no CacheKeyFactory is set on
-        // either side - see the matching CacheDataSource in
-        // NativePlayerActivity.
-        val okHttpClient = OkHttpClient.Builder()
-            .connectTimeout(10L, TimeUnit.SECONDS)
-            .readTimeout(20L, TimeUnit.SECONDS)
-            .callTimeout(20L, TimeUnit.SECONDS)
-            .build()
-        val upstream = OkHttpDataSource.Factory(okHttpClient)
-            // The same identity the main player asks as, and the source's own
-            // User-Agent when it named one - see StreamUserAgent.
-            .setUserAgent(StreamUserAgent.resolve(headers))
-        StreamUserAgent.withoutUserAgent(headers)
-            .filterValues { it.isNotBlank() }
-            .takeIf { it.isNotEmpty() }
-            ?.let { upstream.setDefaultRequestProperties(it) }
-        val cached = CacheDataSource.Factory()
-            .setCache(StreamDiskCache.get(activity))
-            .setUpstreamDataSourceFactory(upstream)
-
-        // No capture surface yet. It is built in [ensureCaptureSurface] once the
-        // stream's own size is known, because an ImageReader's buffers are
-        // FIXED at creation: a decoder asked to render a 1080p frame into a
-        // 480x270 reader never delivers a frame at all - the field report's
-        // `player=buffering, loading=false, images=0` - and the reader's format
-        // has to be the one a decoder surface is guaranteed to support
-        // (YUV_420_888, not RGBA_8888). See [ensureCaptureSurface].
-        return ExoPlayer.Builder(activity)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(cached))
-            // A preview needs the buffer at ONE position, not a runway: the
-            // defaults would spend megabytes and seconds filling ahead of a
-            // frame nobody is going to watch.
-            .setLoadControl(
-                DefaultLoadControl.Builder()
-                    .setBufferDurationsMs(1_500, 8_000, 500, 1_000)
-                    .setPrioritizeTimeOverSizeThresholds(true)
-                    .build()
-            )
-            .build()
-            .apply {
-                // The nearest keyframe, not the exact millisecond: decoding
-                // a whole GOP to land on a frame the viewer will look at
-                // for as long as they hold the button is work with no
-                // visible result.
-                setSeekParameters(SeekParameters.CLOSEST_SYNC)
-                volume = 0f
-                trackSelectionParameters = trackSelectionParameters
-                    .buildUpon()
-                    // Disabling the track keeps the audio decoder from being
-                    // created at all, which is one fewer codec than muting.
-                    .setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true)
-                    .build()
-                addListener(listener)
+    /**
+     * Waits for the player to be showing the position that was asked for.
+     *
+     * The scrub seeks the player, but a seek does not land instantly - and on a
+     * long-GOP release the nearest keyframe can be seconds from the target - so
+     * the frame is only worth copying once the player has settled there. Polling
+     * rather than a player callback because the condition is three things the
+     * player reports separately (state, loading, position) and none of their
+     * callbacks fires for all three.
+     */
+    private val settleCheck = object : Runnable {
+        override fun run() {
+            if (disabled || released || !awaitingFrame) return
+            if (copyInFlight) {
+                handler.postDelayed(this, SETTLE_POLL_MS)
+                return
             }
+            if (!settledAt(inFlightBucket)) {
+                handler.postDelayed(this, SETTLE_POLL_MS)
+                return
+            }
+            capture()
+        }
+    }
+
+    private fun settledAt(bucket: Long?): Boolean {
+        if (bucket == null) return false
+        val active = player() ?: return false
+        if (active.playbackState != Player.STATE_READY) return false
+        if (active.isLoading) return false
+        return trickplayFrameFits(bucket, active.currentPosition)
     }
 
     /**
-     * Builds the capture surface for the stream's own video size, once.
+     * Copies the surface into a card-sized bitmap.
      *
-     * Two things about an ImageReader decide whether a decoder can render into
-     * it, and both were wrong before this existed:
-     *
-     *  - **The format must be one a decoder surface supports.** Android's own
-     *    decoder-to-ImageReader test uses [ImageFormat.YUV_420_888] and asserts
-     *    the reader's format matches the codec's; RGBA_8888 is not a guaranteed
-     *    decoder output anywhere. A reader in the wrong format is accepted by
-     *    the codec and then never handed a buffer, which is a player stuck in
-     *    `STATE_BUFFERING` with `isLoading == false`, no error, and
-     *    `images=0` - exactly the report. So the reader is YUV_420_888 and
-     *    [bitmapFrom] does the conversion itself.
-     *  - **The size is fixed at creation.** The reader's buffers cannot be
-     *    resized, so a reader smaller than the video gets no frames. It is
-     *    therefore created at the video's decoded size (once media3 reports it)
-     *    and [bitmapFrom] subsamples down to [TRICKPLAY_CAPTURE_WIDTH].
+     * The destination size is the card's, sized from the player's own reported
+     * video size so a scope release is not stretched - [PixelCopy] scales the
+     * whole source into the destination, so the copy is cheap and the app never
+     * allocates a full-resolution frame for a thumbnail.
      */
-    private fun ensureCaptureSurface(width: Int, height: Int) {
-        if (width <= 0 || height <= 0) return
-        val existing = reader
-        if (existing != null && existing.width == width && existing.height == height) {
-            // Already the right size: just make sure the player running now is
-            // rendering into it, since a player rebuilt after an idle teardown
-            // arrives with no surface and would otherwise capture nothing.
-            runCatching { preview?.setVideoSurface(existing.surface) }
+    private fun capture() {
+        val bucket = inFlightBucket ?: return
+        val source = surface()
+        if (source == null || !source.isValid) {
+            fail(bucket, "no video surface to copy")
             return
         }
-        runCatching { reader?.close() }
-        val imageReader = runCatching {
-            ImageReader.newInstance(
-                width,
-                height,
-                ImageFormat.YUV_420_888,
-                TRICKPLAY_CAPTURE_IMAGES
-            )
+        val size = captureSize()
+        val dest = runCatching {
+            Bitmap.createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888)
         }.getOrNull() ?: run {
-            reader = null
+            fail(bucket, "no bitmap for the capture")
             return
         }
-        imageReader.setOnImageAvailableListener({ available -> onImageAvailable(available) }, handler)
-        // The reader owns the surface it hands out; the player renders into it
-        // and closing the reader is what releases the capture buffers.
-        reader = imageReader
-        // Swap it in under the running player, which reconfigures the decoder
-        // onto the new surface; the next decoded frame lands in the reader.
-        runCatching { preview?.setVideoSurface(imageReader.surface) }
-    }
-
-    private val listener = object : Player.Listener {
-        override fun onPlayerError(error: PlaybackException) {
-            lastPlayerError = error.errorCodeName
-            fail(
-                inFlightBucket,
-                "player error ${error.errorCodeName}",
-                permanent = trickplayPermanentError(error.errorCode)
-            )
-        }
-
-        override fun onPlaybackStateChanged(playbackState: Int) {
-            // Nothing to wait for: an end-of-stream while seeking means the
-            // position asked for is not in this stream.
-            if (playbackState == Player.STATE_ENDED) fail(inFlightBucket, "end of stream")
-        }
-
-        override fun onVideoSizeChanged(videoSize: VideoSize) {
-            // The stream's decoded size, known before the first frame, which is
-            // the earliest a correctly sized capture surface can exist - see
-            // [ensureCaptureSurface] for why it cannot be built any sooner.
-            ensureCaptureSurface(videoSize.width, videoSize.height)
-        }
-    }
-
-    /**
-     * The one capture point.
-     *
-     * Every rendered frame arrives here, and the three gates are what make the
-     * image trustworthy: the player has to have reached the bucket
-     * ([trickplayFrameFits]), it has to have finished filling the buffer there
-     * (not `isLoading`), and it has to be ready at all. Without them the first
-     * image after a seek is the frame from *before* it — the position the viewer
-     * just left — and caching that under the new bucket would show the wrong
-     * moment for the rest of the session.
-     */
-    private fun onImageAvailable(source: ImageReader) {
-        val image = runCatching { source.acquireLatestImage() }.getOrNull() ?: return
-        imagesSeen++
+        copyInFlight = true
         try {
-            val bucket = inFlightBucket
-            if (!awaitingFrame || bucket == null || !settledAt(bucket)) return
-            val frame = runCatching { bitmapFrom(image) }.getOrNull() ?: return
-            deliver(bucket, frame)
-        } finally {
-            image.close()
+            PixelCopy.request(source, null, dest, { result ->
+                copyInFlight = false
+                // A copy that lands after the request was abandoned (a newer
+                // press, a timeout, teardown) is dropped rather than delivered
+                // under a bucket it does not belong to.
+                val stillWanted = awaitingFrame &&
+                    inFlightBucket == bucket &&
+                    !released &&
+                    !disabled
+                when {
+                    result == PixelCopy.SUCCESS && stillWanted -> deliver(bucket, dest)
+                    result == PixelCopy.SUCCESS -> dest.recycle()
+                    stillWanted -> {
+                        dest.recycle()
+                        fail(bucket, "pixel copy failed (result=$result)")
+                    }
+                    else -> dest.recycle()
+                }
+            }, handler)
+        } catch (t: Throwable) {
+            copyInFlight = false
+            dest.recycle()
+            fail(bucket, "pixel copy could not start: ${t.message}")
         }
     }
 
-    private fun settledAt(bucket: Long): Boolean {
-        val player = preview ?: return false
-        if (player.playbackState != Player.STATE_READY) return false
-        if (player.isLoading) return false
-        return trickplayFrameFits(bucket, player.currentPosition)
+    private fun captureSize(): android.util.Size {
+        val video = player()?.videoSize
+        if (video == null || video.width <= 0 || video.height <= 0) {
+            return android.util.Size(TRICKPLAY_CAPTURE_WIDTH, TRICKPLAY_CAPTURE_HEIGHT)
+        }
+        val height = TRICKPLAY_CAPTURE_WIDTH * video.height / video.width
+        return android.util.Size(
+            TRICKPLAY_CAPTURE_WIDTH,
+            height.coerceIn(1, TRICKPLAY_CAPTURE_WIDTH)
+        )
     }
 
     private fun deliver(bucket: Long, frame: Bitmap) {
         awaitingFrame = false
         inFlightBucket = null
-        cancelDefer()
+        capturesSeen++
         handler.removeCallbacks(timeoutRunnable)
         // Into the diagnostics trace as well as onto the screen: "I never see a
-        // thumbnail" is answered differently by "none was ever decoded" and
-        // "they were decoded and never shown", and neither is visible from the
+        // thumbnail" is answered differently by "none was ever captured" and
+        // "they were captured and never shown", and neither is visible from the
         // outside of the app.
         PerfTrace.record("trickplay.decode", SystemClock.uptimeMillis() - askedAtMs)
-        // A frame is proof the second decoder exists and works, so whatever
-        // failed earlier was transient and the budget starts over.
+        // A frame is proof the surface reads, so whatever failed earlier was
+        // transient and the budget starts over.
         failures = 0
         cache.put(bucket, frame)
-        // Held, not playing: the decoder keeps this frame, and no more frames
-        // (and so no more bandwidth) are spent until the viewer asks for
-        // another position.
-        preview?.pause()
         if (bucket == wantedBucket) onFrame(bucket, frame)
         startNext()
     }
 
     /**
-     * Records a failed extraction for [bucket]. Nothing is in flight afterwards,
-     * which is what lets the next request (or the retry below) start one.
+     * Records a failed capture for [bucket]. Nothing is in flight afterwards,
+     * which is what lets the next request start one.
      *
      * [permanent] is the difference between "this device will never hand the
-     * preview a decoder" and "this attempt did not work": the first ends the
+     * preview a surface" and "this attempt did not work": the first ends the
      * session's previews there and then, the second is left to the viewer's next
      * press.
      */
     private fun fail(bucket: Long?, reason: String, permanent: Boolean = false) {
-        // Only a failure for something that was actually asked for counts. An
-        // error surfacing while the pipeline is idle — a source that gave up on
-        // its own during the idle window — is not the viewer's scrub failing.
         if (!awaitingFrame) return
         awaitingFrame = false
         inFlightBucket = null
-        cancelDefer()
         handler.removeCallbacks(timeoutRunnable)
         failures++
         PerfTrace.record(
@@ -467,261 +295,105 @@ internal class TrickplayFrames(
             ok = false
         )
         // The reason goes into the report as well as the log: "no thumbnails"
-        // is answered differently by a decoder the box would not hand out, a
-        // source that refused the second connection, and a seek that never
-        // settled, and none of those three is visible from outside the app.
+        // is answered differently by a surface that never gave a frame, a copy
+        // that was refused, and a seek that never settled, and none of those
+        // three is visible from outside the app.
         PerfTrace.record("trickplay.reason:$reason", 0L, ok = false)
         Log.w(TAG, "no preview frame: $reason (failure $failures)")
         if (permanent || trickplayGivesUp(failures)) {
             Log.i(TAG, "scrub previews off for this session: $reason")
             PerfTrace.record("trickplay.off", 0L, ok = false)
             disabled = true
-            teardown()
+            release()
             onUnavailable(
-                if (permanent) NO_DECODER_NOTICE else TRICKPLAY_NO_FRAMES_NOTICE
+                if (permanent) NO_SURFACE_NOTICE else TRICKPLAY_NO_FRAMES_NOTICE
             )
             return
         }
-        // Retried only when the viewer has already dragged somewhere else. A
-        // failure on the bucket still being asked for is left to their next
-        // press, so one slow position cannot spend the whole budget on its own.
         if (wantedBucket != bucket) startNext()
     }
 
-    private val timeoutRunnable = Runnable {
-        if (awaitingFrame) fail(inFlightBucket, timeoutReason())
-    }
-
     /**
-     * The deferred check: the main player may have read past the bucket since the
-     * last one, which is the only thing that can change the answer.
+     * The extraction in flight produced nothing in its budget.
      *
-     * It does not run through [startNext]'s guards by accident - the pipeline
-     * being torn down, released or already busy all end it - and it cannot
-     * outlive [deferUntilMs].
+     * A timeout where the player never reached the requested position is NOT a
+     * capture fault: the preview simply cannot exist yet, because the main
+     * player is not showing that moment (a seek-bar drag only seeks on release,
+     * which is the whole case). That is recorded as a decline - visible in a
+     * report - and must not spend the failure budget, or one drag would turn
+     * previews off for the rest of the session.
      */
-    private val cacheRetry = Runnable { startNext() }
-
-    /**
-     * [bucket] is not decodable yet because the main player has not read it.
-     *
-     * Not a failure and not counted as one: nothing was attempted, nothing was
-     * spent, and the bytes are usually a second away because the main player is
-     * already fetching exactly that region - it seeked there when the viewer
-     * pressed. So instead of failing the press, the pipeline waits, checking on
-     * [TRICKPLAY_RETRY_MS] until [TRICKPLAY_WAIT_MS] has passed: the same
-     * window the card is armed for, so a wait that outlives the viewer's
-     * attention ends with it rather than decoding a frame nobody is waiting for.
-     */
-    private fun deferForCache(bucket: Long) {
-        inFlightBucket = null
-        awaitingFrame = false
-        val now = SystemClock.uptimeMillis()
-        if (deferredBucket != bucket) {
-            deferredBucket = bucket
-            deferUntilMs = now + TRICKPLAY_WAIT_MS
-            // Once a session, not once per bucket and certainly not once per
-            // check: this is re-evaluated several times a second for as long as
-            // the viewer sits on a position the player has not read, and one
-            // line per check would push every other sample out of the trace
-            // ring. How far short the first one fell is the number a report
-            // wants, so it goes in as the measured value - and a session whose
-            // every bucket lands here is the map case for a preview that can
-            // never be served locally.
-            if (!deferRecorded) {
-                deferRecorded = true
-                val buffered = cacheWindow()?.bufferedMs ?: bucket
-                PerfTrace.record(
-                    "trickplay.defer:cold",
-                    (bucket - buffered).coerceAtLeast(0L),
-                    ok = false
-                )
-            }
+    private val timeoutRunnable: Runnable = Runnable {
+        if (!awaitingFrame || copyInFlight) return@Runnable
+        val bucket = inFlightBucket
+        val position = player()?.currentPosition
+        if (bucket != null && (position == null || !trickplayFrameFits(bucket, position))) {
+            awaitingFrame = false
+            inFlightBucket = null
+            handler.removeCallbacks(timeoutRunnable)
+            PerfTrace.record(
+                "trickplay.decline:the player never reached the position",
+                0L,
+                ok = false
+            )
+            if (wantedBucket != bucket) startNext()
+            return@Runnable
         }
-        handler.removeCallbacks(cacheRetry)
-        if (now < deferUntilMs) handler.postDelayed(cacheRetry, TRICKPLAY_RETRY_MS)
-    }
-
-    /** Stops waiting for bytes: something else is happening now. */
-    private fun cancelDefer() {
-        deferredBucket = null
-        deferUntilMs = 0L
-        handler.removeCallbacks(cacheRetry)
+        fail(bucket, timeoutReason())
     }
 
     /**
-     * Why the extraction in flight has not produced a frame, in the shape
+     * Why the capture in flight produced nothing, in the shape
      * [trickplayTimeoutReason] documents.
      *
-     * This string reaches the diagnostics line (as trickplay.reason), and it is
-     * the only place that can tell the three cases apart: a player that never
-     * settled at the position it was asked for, a capture surface that never
-     * rendered anything ([imagesSeen] zero), and a source that never gave the
-     * second player a frame to decode. A bare "timed out" leaves all three
-     * looking identical in a report, which is what every scrub-preview report so
-     * far has looked like.
+     * `images` is this build's capture count rather than an ImageReader's: zero
+     * means nothing was ever copied off the surface, which no source health can
+     * fix, while a count above zero means frames did arrive and were refused by
+     * the gates in [onCopyFinished]'s caller.
      */
     private fun timeoutReason(): String = trickplayTimeoutReason(
         timeoutMs = TRICKPLAY_TIMEOUT_MS,
-        playerState = trickplayPlayerState(preview?.playbackState),
-        loading = preview?.isLoading == true,
-        positionMs = preview?.currentPosition,
+        playerState = trickplayPlayerState(player()?.playbackState),
+        loading = player()?.isLoading == true,
+        positionMs = player()?.currentPosition,
         bucketMs = inFlightBucket,
-        imagesSeen = imagesSeen,
+        imagesSeen = capturesSeen,
         playerError = lastPlayerError
     )
 
     /**
-     * Gives the decoder back once the viewer has stopped scrubbing.
-     *
-     * Only when the pipeline is genuinely idle: the rule itself lives in
-     * [releaseIfIdle], which is the one place that can be read for it.
+     * Aptly named for what it does here: the main player's error is playback's
+     * problem, not the preview's, so an extraction is NOT failed on it - it is
+     * recorded only, so a timeout's reason can name the player's own code.
      */
-    private val idleRelease = Runnable { releaseIfIdle() }
-
-    /**
-     * Gives the decoder back - but never while a frame is still being decoded for
-     * the viewer.
-     *
-     * Re-armed rather than dropped when an extraction is in flight: a release
-     * that lands on one cancels the request and its timeout together, so the
-     * frame is neither delivered nor counted, and the press leaves no card, no
-     * notice and no line in the report anywhere (see [trickplayMayRelease]). The
-     * extraction's own timeout bounds the wait, so this can hold the decoder for
-     * no longer than one decode plus one idle window.
-     */
-    private fun releaseIfIdle() {
-        if (!trickplayMayRelease(awaitingFrame)) {
-            handler.postDelayed(idleRelease, TRICKPLAY_IDLE_RELEASE_MS)
-            return
-        }
-        teardown()
-    }
-
-    private fun cancelIdleRelease() = handler.removeCallbacks(idleRelease)
-
-    private fun teardown() {
-        awaitingFrame = false
-        inFlightBucket = null
-        cancelDefer()
-        handler.removeCallbacks(timeoutRunnable)
-        runCatching { preview?.setVideoSurface(null) }
-        runCatching { preview?.release() }
-        preview = null
-        runCatching { reader?.close() }
-        reader = null
-    }
-
-    /** Drops frames the reader is still holding, so a stale one cannot be used. */
-    private fun drainReader() {
-        val source = reader ?: return
-        while (true) {
-            val stale = runCatching { source.acquireLatestImage() }.getOrNull() ?: return
-            stale.close()
+    private val listener = object : Player.Listener {
+        override fun onPlayerError(error: PlaybackException) {
+            lastPlayerError = error.errorCodeName
         }
     }
 
-    /**
-     * The captured image as a bitmap, subsampled down to the card's size.
-     *
-     * The reader is [ImageFormat.YUV_420_888] (see [ensureCaptureSurface]) - the
-     * only format a decoder surface is guaranteed to accept - so this converts
-     * the three planes itself rather than copying a packed buffer. A capture at
-     * the video's own size is also far larger than a 480px card needs, so the
-     * first pixel of every [sample]-th row and column is taken, the same
-     * power-of-two rule the libmpv path decodes with.
-     *
-     * Each plane has its own strides, and the chroma planes are half resolution,
-     * so the index of a pixel's U and V is derived from its (x/2, y/2) - not
-     * from its index in the luma plane. [IntArray] output rather than a byte
-     * buffer because there is no packed ARGB here to copy from.
-     */
-    private fun bitmapFrom(image: Image): Bitmap {
-        val width = image.width
-        val height = image.height
-        val sample = trickplaySampleSize(width, height)
-        val outWidth = (width / sample).coerceAtLeast(1)
-        val outHeight = (height / sample).coerceAtLeast(1)
-        val planes = image.planes
-        if (planes.size < 3) return fallbackBitmap(image)
-        val y = planes[0]
-        val u = planes[1]
-        val v = planes[2]
-        val yBuffer = y.buffer
-        val uBuffer = u.buffer
-        val vBuffer = v.buffer
-        val yRowStride = y.rowStride
-        val yPixelStride = y.pixelStride
-        val uRowStride = u.rowStride
-        val uPixelStride = u.pixelStride
-        val vRowStride = v.rowStride
-        val vPixelStride = v.pixelStride
-        val pixels = IntArray(outWidth * outHeight)
-        var out = 0
-        for (row in 0 until outHeight) {
-            val sourceY = (row * sample).coerceAtMost(height - 1)
-            val yBase = sourceY * yRowStride
-            val chromaBase = (sourceY / 2)
-            val uRowBase = chromaBase * uRowStride
-            val vRowBase = chromaBase * vRowStride
-            for (column in 0 until outWidth) {
-                val sourceX = (column * sample).coerceAtMost(width - 1)
-                val yValue = yBuffer.get(yBase + sourceX * yPixelStride).toInt() and 0xFF
-                val chromaColumn = sourceX / 2
-                val uValue =
-                    (uBuffer.get(uRowBase + chromaColumn * uPixelStride).toInt() and 0xFF) - 128
-                val vValue =
-                    (vBuffer.get(vRowBase + chromaColumn * vPixelStride).toInt() and 0xFF) - 128
-                val scaledY = 298 * yValue
-                val red = ((scaledY + 409 * vValue + 128) shr 8).coerceIn(0, 255)
-                val green = ((scaledY - 100 * uValue - 208 * vValue + 128) shr 8).coerceIn(0, 255)
-                val blue = ((scaledY + 516 * uValue + 128) shr 8).coerceIn(0, 255)
-                pixels[out++] = (0xFF shl 24) or (red shl 16) or (green shl 8) or blue
-            }
-        }
-        return Bitmap.createBitmap(pixels, outWidth, outHeight, Bitmap.Config.ARGB_8888)
-    }
-
-    /** An image with no readable planes, so a card is never left empty. */
-    private fun fallbackBitmap(image: Image): Bitmap {
-        val sample = trickplaySampleSize(image.width, image.height)
-        val plane = image.planes.firstOrNull()
-        return Bitmap.createBitmap(
-            (image.width / sample).coerceAtLeast(1),
-            (image.height / sample).coerceAtLeast(1),
-            Bitmap.Config.ARGB_8888
-        ).apply {
-            plane?.let { copyPixelsFromBuffer(it.buffer.duplicate()) }
-        }
-    }
-
-    private fun mediaItem(): MediaItem {
-        val builder = MediaItem.Builder().setUri(url)
-        trickplayMimeHint(url, resolvedMimeType)?.let { builder.setMimeType(it) }
-        return builder.build()
+    private fun attachListener(active: ExoPlayer) {
+        if (listenerPlayer === active) return
+        listenerPlayer?.removeListener(listener)
+        active.addListener(listener)
+        listenerPlayer = active
     }
 
     private companion object {
         const val TAG = "PLAYER_TRICKPLAY"
 
-        /**
-         * Said in the app, once, when the previews cannot happen at all.
-         *
-         * A silent feature and a broken one look identical on a TV, and the two
-         * reasons a frame cannot be produced here — no decoder to spare, or a
-         * source that will not serve one — want opposite fixes. So the screen is
-         * told, and not only the log.
-         */
-        const val NO_DECODER_NOTICE =
-            "Scrub previews need a second video decoder and this device has none spare"
+        /** How often the settle gate is re-checked while a frame is owed. */
+        const val SETTLE_POLL_MS = 120L
 
         /**
-         * Two, so a frame that arrives while one is being read is not dropped.
+         * Said in the app, once, when previews can never work this session.
          *
-         * The capture SIZE is not here: it is [TRICKPLAY_CAPTURE_WIDTH] and
-         * [TRICKPLAY_CAPTURE_HEIGHT], shared with the libmpv path because both
-         * produce frames for the same card.
+         * A silent feature and a broken one look identical on a TV, and the two
+         * reasons a frame cannot be produced here - no readable surface, or a
+         * capture that keeps coming back empty - want opposite fixes. So the
+         * screen is told, not only the log.
          */
-        const val TRICKPLAY_CAPTURE_IMAGES = 2
+        const val NO_SURFACE_NOTICE =
+            "Scrub previews need the video surface, and this stream is not rendering into one this app can read"
     }
 }

@@ -3147,6 +3147,30 @@ class MpvPlayerActivity : ComponentActivity() {
      * only libmpv can play therefore just comes back here through the automatic
      * fallback, which is the honest answer to "does ExoPlayer handle this?".
      */
+    /**
+     * Where this session continues from when the engine changes.
+     *
+     * mpv's own playhead is the right answer once it has opened something, and
+     * [startPositionMs] - what THIS session was handed - is the right answer
+     * when it has not. The distinction matters because "nothing loaded" reads as
+     * 0, not as null: a switch pressed after mpv failed to open the file used to
+     * carry that 0, so the title restarted from the beginning even though the
+     * viewer had watched twenty minutes of it in the other engine. The elvis
+     * being replaced only covered a null surface.
+     *
+     * This is the same rule the end-of-episode resume already uses (see the
+     * `if (positionMs > 0L) positionMs else startPositionMs` at the EOF panel),
+     * so a hand switch and a finished episode agree about where playback is.
+     */
+    private fun carriedPositionMs(): Long {
+        val own =
+            runCatching {
+                surface?.positionMs()?.coerceAtLeast(0L) ?: positionMs
+            }.getOrDefault(positionMs)
+
+        return (if (own > 0L) own else startPositionMs).coerceAtLeast(0L)
+    }
+
     private fun switchToExoPlayer() {
         if (playerSwitchStarted) return
         if (isFinishing || isDestroyed) return
@@ -3154,9 +3178,7 @@ class MpvPlayerActivity : ComponentActivity() {
         val baseIntent = intent ?: return
         playerSwitchStarted = true
 
-        val position = runCatching {
-            surface?.positionMs()?.coerceAtLeast(0L) ?: positionMs
-        }.getOrDefault(positionMs)
+        val position = carriedPositionMs()
 
         val launch = Intent(baseIntent).apply {
             // Extras that describe THIS engine, not the session: ExoPlayer has
@@ -3220,9 +3242,7 @@ class MpvPlayerActivity : ComponentActivity() {
         val baseIntent = intent ?: return
         playerSwitchStarted = true
 
-        val position = runCatching {
-            surface?.positionMs()?.coerceAtLeast(0L) ?: positionMs
-        }.getOrDefault(positionMs)
+        val position = carriedPositionMs()
 
         val launch = Intent(baseIntent).apply {
             setClass(this@MpvPlayerActivity, ExternalPlayerActivity::class.java)

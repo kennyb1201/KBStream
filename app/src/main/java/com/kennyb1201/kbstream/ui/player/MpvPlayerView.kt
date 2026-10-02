@@ -140,6 +140,17 @@ class MpvPlayerView @JvmOverloads constructor(
      * notice a viewer sees can name the actual reason instead of guessing.
      */
     private var lastErrorLine: String? = null
+
+    /**
+     * mpv's recent error lines, newest last.
+     *
+     * The line that names why a stream will not open is logged just BEFORE the
+     * generic "Failed to open <url>" that follows it, so keeping only the last
+     * line kept the least informative line in the burst. Bounded, because only
+     * the tail is ever read.
+     */
+    private val recentErrorLines = ArrayDeque<String>()
+
     private var durationSec: Double? = null
     private var pauseState = false
     private var cacheStall = false
@@ -988,6 +999,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // The previous load's mpv errors say nothing about this one, and
         // leaving one behind would name the wrong reason for a later failure.
         lastErrorLine = null
+        recentErrorLines.clear()
         // The playhead is published from mpv itself from here on.
         lastPositionMs = 0L
         lastDurationMs = 0L
@@ -1084,8 +1096,21 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     override fun logMessage(prefix: String, level: Int, text: String) {
         if (level > MPVLib.MPV_LOG_LEVEL_ERROR) return
-        lastErrorLine = (prefix + text).trim().takeIf { it.isNotEmpty() }
-        Log.w(TAG, "mpv: ${lastErrorLine ?: ""}")
+
+        val line = MpvErrorReason.format(prefix, text)
+        if (line.isEmpty()) return
+
+        recentErrorLines.addLast(line)
+        while (recentErrorLines.size > MpvErrorReason.MAX_KEPT) {
+            recentErrorLines.removeFirst()
+        }
+
+        // Resolved across the whole burst, not from this line: FFmpeg logs the
+        // cause first and its generic "Failed to open" second (see
+        // MpvErrorReason), so the last line on its own is the useless one.
+        lastErrorLine = MpvErrorReason.pick(recentErrorLines)
+
+        Log.w(TAG, "mpv: $line")
     }
 
     override fun eventProperty(property: String, value: Long) {
