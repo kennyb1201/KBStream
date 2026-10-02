@@ -57,6 +57,21 @@ class YouTubeChunkingTest {
     }
 
     @Test
+    fun `the first chunk is requested from byte 0`() {
+        assertFalse(youTubeChunkUsesPosition(0L))
+    }
+
+    @Test
+    fun `a later chunk is requested from the current position`() {
+        // Any mid-stream chunk asks for the remainder from where we are, so it
+        // carries no growing from-0 window (the mid-stream 403 that restarted
+        // trailers).
+        assertTrue(youTubeChunkUsesPosition(1L))
+        assertTrue(youTubeChunkUsesPosition(1_048_576L))
+        assertTrue(youTubeChunkUsesPosition(50_000_000L))
+    }
+
+    @Test
     fun `a chunk that consumes the known length ends the stream`() {
         assertTrue(
             youTubeChunkEndsStream(

@@ -25,12 +25,13 @@ import okhttp3.OkHttpClient
  *    allow for every stream (it 403s range requests on some URLs).
  *
  * googlevideo 403s many streams when requested open-ended (no Range header)
- * while honoring bounded range requests, so we ALWAYS attempt a bounded
- * range first — even when the total content length is unknown (we chunk by
- * a fixed size and advance). To stay robust we try, in order: bounded-range +
- * ratebypass, bounded-range without ratebypass, open-ended + ratebypass,
- * then plain open-ended. All requests keep the signed URL otherwise
- * byte-for-byte intact.
+ * at offset 0, while honoring bounded range requests there — so the first
+ * chunk is a bounded from-0 request (even when the total content length is
+ * unknown: we chunk by a fixed size and advance). Bounded ranges at later
+ * offsets 403, and a from-0 window grows with the playhead until it 403s too,
+ * so every later chunk instead asks for the remainder open-ended from the
+ * current position. All requests keep the signed URL otherwise byte-for-byte
+ * intact.
  *
  * Only activates for googlevideo.com URLs; other URLs pass through untouched.
  */
@@ -125,6 +126,16 @@ class YoutubeChunkedDataSourceFactory(
         private var isYouTubeStream = false
         private var useRateByPass = true
         private var chunkedRange = true
+
+        /**
+         * True when the active chunk was opened open-ended from the current
+         * position rather than from byte 0 (see [openNextChunk]). In this
+         * mode nothing is re-downloaded and [bytesToSkip] stays 0.
+         */
+        private var positionMode = false
+
+        /** Set when the server reports the requested range lies past the end. */
+        private var openHitEndOfStream = false
         private var totalContentLength = C.LENGTH_UNSET.toLong()
         private var currentChunkStart = 0L
         private var currentChunkEnd = 0L
@@ -151,30 +162,48 @@ class YoutubeChunkedDataSourceFactory(
             Log.d(TAG, "Opening YT stream: host=$host url=${originalUrlString?.take(160)}")
             currentChunkStart = dataSpec.position
             totalContentLength = dataSpec.length
-            return openNextChunk()
+            positionMode = false
+            val openedLength = openNextChunk()
+            // The server reported the requested position is past the end and
+            // media3 did not already read it as an empty open: hand back an
+            // empty stream rather than reading from a closed connection.
+            if (openHitEndOfStream) return 0L
+            return openedLength
         }
 
-        private fun buildChunkSpec(spec: DataSpec, useRateByPass: Boolean, bounded: Boolean): DataSpec {
+        private fun buildChunkSpec(
+            spec: DataSpec,
+            useRateByPass: Boolean,
+            bounded: Boolean,
+            fromPosition: Boolean = false
+        ): DataSpec {
             val uri = if (useRateByPass && spec.uri.getQueryParameter("ratebypass").isNullOrBlank()) {
                 spec.uri.buildUpon().appendQueryParameter("ratebypass", "yes").build()
             } else {
                 spec.uri
             }
-            // googlevideo only honors Range requests that start at byte 0.
-            // Always request from 0 and skip the prefix we already delivered
-            // in read().
+            // A bounded request carries the whole prefix from byte 0 (see
+            // openNextChunk) and read() skips what was already delivered. A
+            // from-position open-ended request asks for the rest of the stream
+            // starting where we are, so nothing is re-downloaded.
             //
             // The chunk request carries the ACTIVE client User-Agent. DataSpec
             // headers override the OkHttpDataSource factory default, which is
             // what lets us switch UAs at runtime when googlevideo 403s.
             return spec.buildUpon()
                 .setUri(uri)
-                .setPosition(0)
+                .setPosition(if (fromPosition) currentChunkStart else 0L)
                 .setLength(
-                    if (bounded) {
-                        currentChunkEnd + 1   // total bytes from 0 to chunk end
-                    } else {
-                        C.LENGTH_UNSET.toLong()
+                    when {
+                        fromPosition ->
+                            // Open-ended: media3's HTTP source skips to the
+                            // requested position itself when a server ignores
+                            // the Range header (200 instead of 206).
+                            C.LENGTH_UNSET.toLong()
+                        bounded ->
+                            currentChunkEnd + 1   // total bytes from 0 to chunk end
+                        else ->
+                            C.LENGTH_UNSET.toLong()
                     }
                 )
                 .setHttpRequestHeaders(activeRequestHeaders())
@@ -200,7 +229,7 @@ class YoutubeChunkedDataSourceFactory(
             }
 
             bytesReadInChunk = 0
-            bytesToSkip = currentChunkStart   // skip prefix we already sent
+            openHitEndOfStream = false
 
             // Order proven by device bisection (see runDiagnostics): the clean
             // signed URL with a capped <=1MB range serves ONLY at offset 0;
@@ -227,9 +256,56 @@ class YoutubeChunkedDataSourceFactory(
                             "for googlevideo stream"
                     )
                 }
+
+                // Mid-stream, ask for the REST of the stream from where we are
+                // before falling back to a from-0 request. A from-0 request must
+                // carry the whole already-delivered prefix (googlevideo only
+                // serves bounded ranges at offset 0), so its window grows with
+                // the playhead and 403s once it passes ~1 MB — the mid-stream
+                // failure that stopped and restarted trailers halfway through.
+                // An open-ended request from the current position serves the
+                // remainder with no re-download.
+                if (youTubeChunkUsesPosition(currentChunkStart)) {
+                    for (rb in listOf(false, true)) {
+                        try {
+                            upstream.open(
+                                buildChunkSpec(spec, rb, bounded = false, fromPosition = true)
+                            )
+                            useRateByPass = rb
+                            chunkedRange = false
+                            positionMode = true
+                            bytesToSkip = 0L
+                            return C.LENGTH_UNSET.toLong()
+                        } catch (e: HttpDataSource.InvalidResponseCodeException) {
+                            when (e.responseCode) {
+                                403 -> {
+                                    last403 = e
+                                    Log.w(
+                                        TAG,
+                                        "googlevideo 403 (pos-open ratebypass=$rb); " +
+                                            "trying next mode"
+                                    )
+                                }
+                                416 -> {
+                                    // Requested range starts past the end: the
+                                    // stream is already fully delivered.
+                                    Log.w(
+                                        TAG,
+                                        "googlevideo 416 from position; end of stream"
+                                    )
+                                    openHitEndOfStream = true
+                                    return C.LENGTH_UNSET.toLong()
+                                }
+                                else -> throw e
+                            }
+                        }
+                    }
+                }
+
                 // Each new User-Agent candidate sweeps ALL four modes (a fresh
                 // UA has proven nothing yet, so the remembered open-ended
                 // shortcut must not narrow its ladder).
+                bytesToSkip = currentChunkStart   // skip prefix we already sent
                 for ((rb, bounded) in if (uaAttempt == initialUaIndex) {
                     baseAttempts
                 } else {
@@ -244,6 +320,8 @@ class YoutubeChunkedDataSourceFactory(
                         upstream.open(buildChunkSpec(spec, rb, bounded))
                         useRateByPass = rb
                         chunkedRange = bounded
+                        positionMode = false
+                        bytesToSkip = currentChunkStart
                         return if (totalContentLength != C.LENGTH_UNSET.toLong()) {
                             totalContentLength
                         } else {
@@ -330,10 +408,12 @@ class YoutubeChunkedDataSourceFactory(
         }
 
         override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+            if (openHitEndOfStream) return C.RESULT_END_OF_INPUT
             while (true) {
-                // googlevideo only serves Range requests from byte 0, so every
-                // chunk is requested from the start of the stream and the
-                // prefix already delivered to ExoPlayer is discarded here.
+                // A from-0 chunk carries the prefix already delivered to
+                // ExoPlayer, so it is discarded here. A from-position chunk
+                // (the mid-stream default) requests exactly where we are and
+                // needs no skip, so bytesToSkip stays 0.
                 //
                 // This skip MUST also run against a freshly opened chunk: the
                 // old code read the next chunk directly, so the first read
@@ -342,9 +422,9 @@ class YoutubeChunkedDataSourceFactory(
                 // and stopped trailers mid-play.
                 if (!skipChunkPrefix()) return C.RESULT_END_OF_INPUT
 
-                if (!isYouTubeStream || !chunkedRange) {
+                if (!isYouTubeStream || (!chunkedRange && !positionMode)) {
                     // Not a YouTube stream, or googlevideo only let us start an
-                    // open-ended read — just stream it straight through.
+                    // open-ended from-0 read — just stream it straight through.
                     return upstream.read(buffer, offset, length)
                 }
 
@@ -380,6 +460,7 @@ class YoutubeChunkedDataSourceFactory(
                 // before any of its bytes are delivered. A failed mid-stream
                 // open still throws here rather than masquerading as EOF.
                 openNextChunk()
+                if (openHitEndOfStream) return C.RESULT_END_OF_INPUT
             }
         }
 

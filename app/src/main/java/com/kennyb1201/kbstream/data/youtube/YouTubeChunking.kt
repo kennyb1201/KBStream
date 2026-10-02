@@ -21,3 +21,16 @@ fun youTubeChunkEndsStream(
     if (bytesDeliveredInChunk <= 0L) return true
     return lengthKnown && remainingContentLength - bytesDeliveredInChunk <= 0L
 }
+
+/**
+ * Whether a chunk open should ask for the rest of the stream from the current
+ * position instead of from byte 0.
+ *
+ * googlevideo only serves a bounded range starting at offset 0, so a from-0
+ * chunk must carry the whole prefix already delivered — its window grows with
+ * the playhead and 403s once it passes ~1 MB. That was the mid-stream failure
+ * behind "trailers stop and restart halfway through": the connection died, the
+ * player took it as an error and rebuilt, and the trailer began again. Only
+ * the very first chunk (position 0, no prefix to carry) uses a from-0 request.
+ */
+fun youTubeChunkUsesPosition(currentPosition: Long): Boolean = currentPosition > 0L
