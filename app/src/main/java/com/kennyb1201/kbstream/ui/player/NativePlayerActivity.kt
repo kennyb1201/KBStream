@@ -74,6 +74,7 @@ import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
+import com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
@@ -5684,6 +5685,17 @@ class NativePlayerActivity : ComponentActivity() {
                     "Dolby Vision decoder failure (${streamDeclaredDvCodec ?: streamCodec}) — " +
                         "retrying once with Dolby Vision stripped to HDR10"
                 )
+                // A DV verdict is the one decoder failure the app REMEMBERS for
+                // 14 days, so the report has to show it happened and to which
+                // codec: a viewer whose Dolby Vision silently turned off for
+                // every later title has this line to explain it (see
+                // PlaybackEngineTrace).
+                PlaybackEngineTrace.note(
+                    PlaybackEngineTrace.describe(
+                        cause = "Dolby Vision decoder refused the format",
+                        detail = "${declaredDvCodec ?: "unknown"} — stripped to HDR10"
+                    )
+                )
                 reconnectingContainer.visibility = View.VISIBLE
                 hideBufferingSpinner()
                 reconnectingText.text = "This TV can't play Dolby Vision here — switching to HDR10…"
@@ -6174,6 +6186,18 @@ class NativePlayerActivity : ComponentActivity() {
                         "candidate=${cause.codecInfo?.name ?: "none"} " +
                         "decoderExists=$decoderExists"
                 )
+                // Only the "no decoder at all" verdict is worth a report line:
+                // a decoder that exists but failed init is retried by the
+                // ladder below, while a missing one is what sends the session
+                // to the backup engine.
+                if (!decoderExists) {
+                    PlaybackEngineTrace.note(
+                        PlaybackEngineTrace.describe(
+                            cause = "no decoder for this format",
+                            detail = "mime=${mime ?: "unknown"}"
+                        )
+                    )
+                }
                 return !decoderExists
             }
             cause = cause.cause
@@ -6211,6 +6235,18 @@ class NativePlayerActivity : ComponentActivity() {
                     "PLAYER_RETRY",
                     "Decoder resource exhaustion (0x80001000, recoverable=" +
                         "${cause.isRecoverable} transient=${cause.isTransient})"
+                )
+                // The report line for the unresolved "this TV is out of decoder
+                // sources" symptom: without this the diagnostics dump said
+                // nothing about decoders at all, so a capture could not tell
+                // resource exhaustion from a format verdict (see
+                // PlaybackEngineTrace).
+                PlaybackEngineTrace.note(
+                    PlaybackEngineTrace.describe(
+                        cause = "decoder resources exhausted (0x80001000)",
+                        detail = "recoverable=${cause.isRecoverable} " +
+                            "transient=${cause.isTransient}"
+                    )
                 )
                 return true
             }
@@ -9462,6 +9498,19 @@ class NativePlayerActivity : ComponentActivity() {
         Log.w(
             "PLAYER_RETRY",
             "handing playback to the MPV backup engine ($reason) from ${position}ms"
+        )
+        // The handoff is the answer to "did the session change engines, and
+        // why": a capture with this line and no decoder-failure line before it
+        // is a session the viewer switched by hand, which is a different report.
+        PlaybackEngineTrace.note(
+            PlaybackEngineTrace.describe(
+                cause = if (manual) {
+                    "engine switch to MPV by hand"
+                } else {
+                    "engine switch to MPV ($reason)"
+                },
+                detail = "from ${position}ms"
+            )
         )
         errorMessageStr = null
         // The card is what is on screen when this is pressed from there: the

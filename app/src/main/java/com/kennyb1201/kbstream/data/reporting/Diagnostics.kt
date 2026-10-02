@@ -78,6 +78,11 @@ object Diagnostics {
         // the perf summary's ranking below is most likely to crowd out.
         startupLine()?.let { report.appendLine(it) }
         playbackLine()?.let { report.appendLine(it) }
+        // The recovery ladder in between the two lines around it: which decoder
+        // failure happened, and whether the session changed engines. Absent on a
+        // session whose player never had a decoder problem (see
+        // PlaybackEngineTrace), so a clean report stays short.
+        PlaybackEngineTrace.summary()?.let { report.appendLine(it) }
         trickplayLine()?.let { report.appendLine(it) }
         artLine()?.let { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
@@ -148,6 +153,11 @@ object Diagnostics {
         return buildString {
             append("memory: java=$usedMb/${maxMb}MB ($percent%) native=${nativeMb}MB")
             append(" cacheOwners=${caches.size}")
+            // Whether the release paths actually ran. A cap printed beside its
+            // size says a cache is bounded; this says the app gave memory back
+            // when it got tight, which is the other half and the one the
+            // device is the only place to observe (see MemoryPressure).
+            MemoryPressure.releaseStatsLine()?.let { append(" ").append(it) }
             if (caches.isNotEmpty()) {
                 appendLine()
                 append("  caches: ")

@@ -41,6 +41,8 @@ import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
+import com.kennyb1201.kbstream.data.memory.MemoryPressure
+import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -586,6 +588,19 @@ class MpvPlayerActivity : ComponentActivity() {
         // the Home hero's paused trailer player would otherwise still be
         // holding one of the decoders it needs.
         TrailerPlayerPool.releaseForReuse()
+
+        // The other half of that parity: playback is the memory peak of the
+        // app whichever engine runs it, and this one is opened precisely when
+        // the box is already struggling - an automatic handoff after decoder
+        // resource exhaustion, or a profile set to MPV for a title ExoPlayer
+        // cannot decode. libmpv decodes in software on the Java heap, so
+        // freeing the browsing caches before it starts matters here at least as
+        // much as it does on the ExoPlayer path, which has always done it (see
+        // NativePlayerActivity.onCreate).
+        runCatching {
+            releaseImageMemoryCache(this)
+            MemoryPressure.releaseBrowsingCaches()
+        }
 
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContentView(R.layout.activity_mpv_player)

@@ -1064,6 +1064,17 @@ class MpvPlayerView @JvmOverloads constructor(
                     // same sentence on screen and want different fixes.
                     val reason = lastErrorLine?.takeIf { it.isNotBlank() }
                     Log.w(TAG, "MPV could not open the stream: ${reason ?: "no reason reported"}")
+                    // Same report line the ExoPlayer ladder writes to: an MPV
+                    // open that fails on a 403 or a refused connection is a
+                    // playback failure the diagnostics dump has to carry, and
+                    // this is the one place that knows mpv's own reason (see
+                    // PlaybackEngineTrace).
+                    com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+                        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                            cause = "MPV could not open the stream",
+                            detail = reason ?: "no reason reported"
+                        )
+                    )
                     post {
                         onPlaybackError?.invoke(
                             when (reason) {

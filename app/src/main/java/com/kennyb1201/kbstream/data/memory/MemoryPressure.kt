@@ -4,6 +4,7 @@ import android.content.Context
 import coil3.SingletonImageLoader
 import java.lang.ref.WeakReference
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * What the app holds onto while browsing, and how it gives it back.
@@ -60,6 +61,14 @@ object MemoryPressure {
     // released ViewModel's entire cache alive — the opposite of the point.
     private val tracked = CopyOnWriteArrayList<WeakReference<CacheOwner>>()
 
+    // How many times each half of the response has actually run this process.
+    // Counted so a diagnostics dump can prove the hardening fired rather than
+    // assume it: "the app got tight and nothing was given back" and "the app
+    // got tight and 40 MB came back" look identical from the outside, and the
+    // field device is the only place this can be seen (see Diagnostics).
+    private val imageReleases = AtomicInteger(0)
+    private val browsingReleases = AtomicInteger(0)
+
     /** Called by a cache owner as it is constructed. */
     fun register(owner: CacheOwner) {
         tracked.add(WeakReference(owner))
@@ -71,6 +80,7 @@ object MemoryPressure {
      * are all rebuilt on next use rather than assumed to be present.
      */
     fun releaseBrowsingCaches() {
+        browsingReleases.incrementAndGet()
         // Iterating a CopyOnWriteArrayList walks a snapshot, so removing dead
         // references mid-loop is safe.
         tracked.forEach { ref ->
@@ -83,6 +93,23 @@ object MemoryPressure {
                 (owner as? Releasable)?.let { runCatching { it.releaseCaches() } }
             }
         }
+    }
+
+    /** Called by [releaseImageMemoryCache] so the bitmap half is counted too. */
+    internal fun noteImageCacheReleased() {
+        imageReleases.incrementAndGet()
+    }
+
+    /**
+     * One line naming how often each release path has run, or null when neither
+     * has — a report from a session that never came under pressure should stay
+     * as short as it was.
+     */
+    fun releaseStatsLine(): String? {
+        val images = imageReleases.get()
+        val browsing = browsingReleases.get()
+        if (images == 0 && browsing == 0) return null
+        return "releases: images=$images browsing=$browsing"
     }
 
     /**
@@ -121,5 +148,6 @@ object MemoryPressure {
 internal fun releaseImageMemoryCache(context: Context) {
     runCatching {
         SingletonImageLoader.get(context.applicationContext).memoryCache?.clear()
+        MemoryPressure.noteImageCacheReleased()
     }
 }
