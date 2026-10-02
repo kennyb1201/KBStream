@@ -52,9 +52,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.analytics.PlaybackStatsListener
-import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
-import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -160,16 +158,6 @@ private const val RAW_EXTRACTOR_PROBE_ATTEMPT = 3
  * new decoder at all.
  */
 private const val DV_STRIP_REBUILD_DELAY_MS = 3_000L
-
-/**
- * The platform's own "no decoder resources available" code
- * (OMX_ErrorInsufficientResources, 0x80001000). Realtek/TCL boxes surface it
- * as a MediaCodec.CodecException when the video decoder cannot be given its
- * buffers. It is not a bad-bitstream error: once one video decoder on the
- * process has failed this way, the box returns it for EVERY later decoder —
- * Dolby Vision and plain HEVC alike — until the process restarts.
- */
-private val OMX_ERROR_INSUFFICIENT_RESOURCES = 0x80001000.toInt()
 
 /**
  * Grace period before asking for a decoder again after resource exhaustion.
@@ -1223,7 +1211,7 @@ class NativePlayerActivity : ComponentActivity() {
     private var decoderFailureRetried = false
     /**
      * True once a container-parsing failure has had its one raw-extractor
-     * probe (see [isContainerParseFailure]). The second one hands the session
+     * probe (see [PlaybackRecoveryRules.isContainerParseFailure]). The second one hands the session
      * to the backup engine instead of rebuilding the identical extractor.
      */
     private var containerParseRetried = false
@@ -2699,7 +2687,7 @@ class NativePlayerActivity : ComponentActivity() {
         // Home hero's pooled trailer player survives the composition - Home's
         // ON_STOP handler pauses it rather than stopping it - and a paused
         // ExoPlayer keeps its decoder allocated. This box hands out one 4K
-        // decode per process (see OMX_ERROR_INSUFFICIENT_RESOURCES), so leaving
+        // decode per process (see PlaybackRecoveryRules), so leaving
         // that one held is what turned a source switch inside the player into
         // "out of video decoder resources" while starting the same source with
         // the pool already quiet played immediately. Stopping it costs nothing
@@ -5566,8 +5554,8 @@ class NativePlayerActivity : ComponentActivity() {
             // Resource exhaustion is a different animal from "this box can't
             // decode Dolby Vision", and both the recovery and the persisted
             // verdict below depend on telling them apart.
-            val resourceExhausted = isDecoderResourceExhausted(error)
-            val decoderFailure = isDecoderError(error.errorCode)
+            val resourceExhausted = PlaybackRecoveryRules.isDecoderResourceExhausted(error)
+            val decoderFailure = PlaybackRecoveryRules.isDecoderError(error.errorCode)
             val declaredDvCodec = streamDeclaredDvCodec ?: streamCodec
             // A DV passthrough session whose DV decoder refuses the first frame
             // reports the platform's own out-of-resources code (see
@@ -5595,7 +5583,7 @@ class NativePlayerActivity : ComponentActivity() {
             // of trusting a URL extension that may have lied), and a second
             // failure hands the session to the backup engine, whose libmpv
             // carries the full FFmpeg demuxer set.
-            if (isContainerParseFailure(error)) {
+            if (PlaybackRecoveryRules.isContainerParseFailure(error)) {
                 errorMessageStr = msg + "\n\n" +
                     failureDiagnostic("the container could not be read")
                 if (!containerParseRetried) {
@@ -5770,7 +5758,7 @@ class NativePlayerActivity : ComponentActivity() {
             // without libmpv, and an "ExoPlayer only" engine setting; those
             // fall through to the ladder below exactly as before.
             if (
-                isMissingDecoderFailure(error) &&
+                PlaybackRecoveryRules.isMissingDecoderFailure(error) &&
                 handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)
             ) {
                 return
@@ -6001,25 +5989,6 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
-     * True when the failure is the extractor refusing the CONTAINER itself,
-     * rather than any decoder or network problem.
-     *
-     * Media3's progressive support is a fixed list (MP4/FMP4, Matroska/WebM,
-     * MP3, Ogg, WAV, MPEG-TS, MPEG-PS, FLV, ADTS, FLAC, AMR, AVI). WMV/ASF
-     * is the one that is NOT on it, and is why this check exists: it fails
-     * here before a single track is created and no decoder can help. AVI IS
-     * on that list — media3 ships an AviExtractor — so an AVI that reaches
-     * this branch is failing on its codec, not its container.
-     * Manifest (HLS/DASH) parse failures are deliberately NOT part of
-     * this: a playlist the parser refuses already falls through to the backup
-     * engine below, and spending the MIME-hint-dropped probe on a playlist URL
-     * would only hand playlist text to the progressive extractors.
-     */
-    private fun isContainerParseFailure(error: PlaybackException): Boolean =
-        error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED ||
-            error.errorCode == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
-
-    /**
      * The error card's "why did this fail" line.
      *
      * "Playback failed" on its own cannot be told apart from a network drop,
@@ -6149,117 +6118,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * True when this box has NO decoder for the codec that just failed.
-     *
-     * [isDecoderError] above answers "the decoder path failed", which includes
-     * failures a different attempt could fix: a bad bitstream, a decoder still
-     * releasing its OMX component. This answers the narrower question the retry
-     * ladder silently assumes a yes to: is there any decoder on this device for
-     * this codec at all? When there is not, every rebuild asks for the same
-     * component and fails the same way, so the only useful move is the other
-     * engine.
-     *
-     * The codec comes from the failure itself (the DecoderInitializationException's
-     * mimeType) rather than from the add-on's stream metadata: the metadata
-     * names a codec family, while this is the mime Media3 actually asked the
-     * platform for. MediaCodecUtil then answers with the device's own decoder
-     * list - the same list Media3's selector uses - and a query failure counts
-     * as "a decoder exists", because the conservative side is to keep the
-     * pre-existing ladder.
-     */
-    private fun isMissingDecoderFailure(error: Throwable?): Boolean {
-        var cause: Throwable? = error
-        while (cause != null) {
-            if (cause is MediaCodecRenderer.DecoderInitializationException) {
-                val mime = cause.mimeType
-                val decoderExists = if (mime.isNullOrBlank()) {
-                    cause.codecInfo != null
-                } else {
-                    runCatching {
-                        MediaCodecUtil.getDecoderInfos(mime, false, false).isNotEmpty()
-                    }.getOrDefault(true)
-                }
-                Log.w(
-                    "PLAYER_RETRY",
-                    "decoder init failed mime=${mime ?: "unknown"} " +
-                        "candidate=${cause.codecInfo?.name ?: "none"} " +
-                        "decoderExists=$decoderExists"
-                )
-                // Only the "no decoder at all" verdict is worth a report line:
-                // a decoder that exists but failed init is retried by the
-                // ladder below, while a missing one is what sends the session
-                // to the backup engine.
-                if (!decoderExists) {
-                    PlaybackEngineTrace.note(
-                        PlaybackEngineTrace.describe(
-                            cause = "no decoder for this format",
-                            detail = "mime=${mime ?: "unknown"}"
-                        )
-                    )
-                }
-                return !decoderExists
-            }
-            cause = cause.cause
-        }
-        return false
-    }
-
     // --- Black-video watchdog ---
-
-    private fun isDecoderError(errorCode: Int): Boolean =
-        errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
-            errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
-            errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
-            // A box whose DV decoder refuses the profile can report this one.
-            // Missing it here sends a declared-DV stream down the plain retry
-            // ladder, which rebuilds the identical decoder — the loop this set
-            // exists to prevent. Widening is safe: the DV-strip branch still
-            // requires a DV codec AND a DV mode other than None.
-            errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
-
-    /**
-     * True when the decoder failed because the box could not give it
-     * resources, rather than because the bitstream was bad. The distinction
-     * matters: a bad bitstream is worth retrying differently, while
-     * OMX_ErrorInsufficientResources means no decoder on this process will
-     * succeed, so the only useful move is a different (smaller) source.
-     */
-    private fun isDecoderResourceExhausted(error: Throwable?): Boolean {
-        var cause = error
-        while (cause != null) {
-            if (cause is android.media.MediaCodec.CodecException &&
-                cause.errorCode == OMX_ERROR_INSUFFICIENT_RESOURCES
-            ) {
-                Log.w(
-                    "PLAYER_RETRY",
-                    "Decoder resource exhaustion (0x80001000, recoverable=" +
-                        "${cause.isRecoverable} transient=${cause.isTransient})"
-                )
-                // The report line for the unresolved "this TV is out of decoder
-                // sources" symptom: without this the diagnostics dump said
-                // nothing about decoders at all, so a capture could not tell
-                // resource exhaustion from a format verdict (see
-                // PlaybackEngineTrace).
-                PlaybackEngineTrace.note(
-                    PlaybackEngineTrace.describe(
-                        cause = "decoder resources exhausted (0x80001000)",
-                        detail = "recoverable=${cause.isRecoverable} " +
-                            "transient=${cause.isTransient}"
-                    )
-                )
-                return true
-            }
-            // Media3 wraps the platform error and minified builds can bury the
-            // concrete type, so the platform's own code in the message chain
-            // is the reliable fallback.
-            if (cause.message?.contains("0x80001000", ignoreCase = true) == true) {
-                return true
-            }
-            cause = cause.cause
-        }
-        return false
-    }
 
     /**
      * Single source of truth for "video output works". Called from Media3's
@@ -8343,8 +8202,8 @@ class NativePlayerActivity : ComponentActivity() {
         // A source that never opened gets a shorter ladder than one that
         // played and then broke, and when even that is spent the next ranked
         // source is tried rather than a card. See
-        // [MAX_UNOPENABLE_RETRY_ATTEMPTS] and [isUnopenableSource].
-        val unopenable = lastPlaybackError?.let { isUnopenableSource(it) } == true
+        // [MAX_UNOPENABLE_RETRY_ATTEMPTS] and [PlaybackRecoveryRules.isUnopenableSource].
+        val unopenable = lastPlaybackError?.let { PlaybackRecoveryRules.isUnopenableSource(it) } == true
         val attemptLimit = if (unopenable) MAX_UNOPENABLE_RETRY_ATTEMPTS else MAX_RETRY_ATTEMPTS
         if (retryAttempt >= attemptLimit) {
             if (unopenable &&
@@ -10262,22 +10121,6 @@ class NativePlayerActivity : ComponentActivity() {
         private fun hostOf(url: String?): String? = url
             ?.let { runCatching { java.net.URI(it).host }.getOrNull() }
             ?.takeIf { it.isNotBlank() }
-
-        /**
-         * True when the source never opened at all: the connection could not be
-         * established, or the server answered the request for it with a status.
-         *
-         * Deliberately narrower than [isLikelyRetryable]. A mid-playback I/O
-         * break or a player timeout can clear on its own and keeps the full
-         * ladder; these three cannot, for the structural reason given on
-         * [MAX_UNOPENABLE_RETRY_ATTEMPTS].
-         */
-        private fun isUnopenableSource(error: PlaybackException): Boolean = when (error.errorCode) {
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
-            PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
-            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> true
-            else -> false
-        }
 
         private fun friendlyErrorMessage(error: PlaybackException, host: String?): String = when (error.errorCode) {
             PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
