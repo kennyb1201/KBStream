@@ -8,8 +8,8 @@ import org.junit.Test
  *
  * The rail is assembled from local history, a tracker feed and TMDB, but the
  * order a viewer sees is this comparator alone — and the complaint behind it
- * was that a show watched minutes ago, with its next episode ready, was buried
- * under every card whose episode happened to air that week.
+ * was that a new season or a freshly aired episode sank under every title the
+ * viewer merely had a position in, however long ago they had paused it.
  */
 class UpNextRailOrderTest {
 
@@ -26,7 +26,7 @@ class UpNextRailOrderTest {
     )
 
     @Test
-    fun `a show just watched with a next episode leads a rail of fresh episodes`() {
+    fun `a fresh arrival leads the rail however long ago the show was watched`() {
         val result = listOf(
             card("new-episode-1", UpNextBadge.NEW_EPISODE, watchedAt = 5_000),
             card("new-season", UpNextBadge.NEW_SEASON, watchedAt = 4_000),
@@ -36,10 +36,10 @@ class UpNextRailOrderTest {
 
         assertEquals(
             listOf(
-                "watched-minutes-ago",
                 "new-episode-1",
                 "new-season",
-                "new-episode-2"
+                "new-episode-2",
+                "watched-minutes-ago"
             ),
             result.map { it.id }
         )
@@ -59,13 +59,13 @@ class UpNextRailOrderTest {
     }
 
     @Test
-    fun `a show being watched leads the news however old its last watch is`() {
+    fun `a fresh arrival leads the rail over a title being watched`() {
         val result = listOf(
             card("news-today", UpNextBadge.NEW_EPISODE, watchedAt = 9_000),
             card("stale-resume", UpNextBadge.CONTINUE_WATCHING, watchedAt = 1)
         ).sortedWith(upNextRailComparator)
 
-        assertEquals(listOf("stale-resume", "news-today"), result.map { it.id })
+        assertEquals(listOf("news-today", "stale-resume"), result.map { it.id })
     }
 
     @Test
@@ -99,10 +99,10 @@ class UpNextRailOrderTest {
     }
 
     @Test
-    fun `the tiers are the watching pair and the news pair`() {
-        assertEquals(0, upNextRailTier(UpNextBadge.CONTINUE_WATCHING))
-        assertEquals(0, upNextRailTier(UpNextBadge.NEXT_UP))
-        assertEquals(1, upNextRailTier(UpNextBadge.NEW_SEASON))
-        assertEquals(1, upNextRailTier(UpNextBadge.NEW_EPISODE))
+    fun `the tiers are the news pair and the watching pair`() {
+        assertEquals(0, upNextRailTier(UpNextBadge.NEW_SEASON))
+        assertEquals(0, upNextRailTier(UpNextBadge.NEW_EPISODE))
+        assertEquals(1, upNextRailTier(UpNextBadge.CONTINUE_WATCHING))
+        assertEquals(1, upNextRailTier(UpNextBadge.NEXT_UP))
     }
 }

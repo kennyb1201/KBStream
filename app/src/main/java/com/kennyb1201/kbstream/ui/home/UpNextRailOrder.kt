@@ -1,20 +1,21 @@
 package com.kennyb1201.kbstream.ui.home
 
 /**
- * Continue Watching's order: the shows being watched, most recently watched
- * first, and only then the ones that merely have news.
+ * Continue Watching's order: what just arrived leads the rail, and the shows
+ * being watched follow it.
  *
- * This used to be the other way round. A card whose next episode aired inside
- * the 7-day new-release window led the rail — season first, then episode — and
- * the show the viewer was actually in the middle of sat below every one of
- * them. A tracker feeds a few dozen followed shows, so a show watched minutes
- * ago, with its next episode waiting, landed tens of cards deep: in the one
- * rail whose whole job is to put that card first.
+ * The rail's job is twofold - hand back the title the viewer paused, and point
+ * at a season or episode that has just landed - and it used to serve only the
+ * first: every card carrying a "New Season" or "New Episode" chip was pushed
+ * behind every show being watched, however big the arrival and however stale
+ * the resume. A tracker follows a few dozen shows, so a handful of paused
+ * titles was enough to send the news that actually brought the viewer to the
+ * app to the very bottom of the rail.
  *
- * Freshness has not been dropped, only demoted. It is still the chip on the
- * card, and "what aired" is what the Upcoming rail is for
- * (`HomeViewModel.upcomingEpisodes`). What it no longer does is outrank the
- * title the viewer was just watching.
+ * The chips are the whole point of the demoted cards, so they are what leads.
+ * Freshness is not the only thing that matters - the viewer's own most recent
+ * touch still orders the cards within a tier - but a premiere or a new episode
+ * outranks a title the viewer merely has a position in.
  *
  * Extracted from HomeViewModel so the rule can be pinned by a test: the rail
  * itself is built by a private method that needs a database, a tracker session
@@ -22,29 +23,31 @@ package com.kennyb1201.kbstream.ui.home
  */
 
 /**
- * The tier a card sorts into: `0` for the shows being watched (a paused
- * episode, or the next one waiting), `1` for the ones with news (a season or
- * episode that recently aired).
+ * The tier a card sorts into: `0` for the ones with news (a season or episode
+ * that recently aired), `1` for the shows being watched (a paused episode, or
+ * the next one waiting).
  *
- * Both watching badges deliberately share a tier, so which of "resume this"
- * and "the next episode is ready" leads is decided by recency itself rather
- * than by the badge.
+ * Both news badges deliberately share a tier, so which of "a whole season
+ * landed" and "one more episode landed" leads is decided by recency itself
+ * rather than by the badge. The watching pair share a tier for the same
+ * reason: which of "resume this" and "the next episode is ready" leads is
+ * likewise left to recency.
  */
 internal fun upNextRailTier(badge: UpNextBadge): Int =
     when (badge) {
-        UpNextBadge.CONTINUE_WATCHING,
-        UpNextBadge.NEXT_UP -> 0
-
         UpNextBadge.NEW_SEASON,
-        UpNextBadge.NEW_EPISODE -> 1
+        UpNextBadge.NEW_EPISODE -> 0
+
+        UpNextBadge.CONTINUE_WATCHING,
+        UpNextBadge.NEXT_UP -> 1
     }
 
 /**
  * The rail's order: tier, then most recently watched, then title.
  *
  * [UpNextItem.recencyTimestamp] is the viewer's own last touch of that show for
- * every source that builds a card — a watch-history row's update time, or the
- * tracker's own `lastWatchedAt` — which is what lets it order cards from a
+ * every source that builds a card - a watch-history row's update time, or the
+ * tracker's own `lastWatchedAt` - which is what lets it order cards from a
  * local write against cards that came from Simkl. A card carrying no timestamp
  * (0) sorts last inside its tier rather than claiming the top.
  */

@@ -64,9 +64,10 @@ internal fun dedupeAndSortUpNext(
                     )
             )
         }
-        // Watching first, most recently watched first, and the news
-        // behind it - see UpNextRailOrder.kt for why that order is the
-        // rail's whole point, and UpNextRailOrderTest for the rule.
+        // Fresh arrivals first, then the shows being watched, most
+        // recently watched first within each - see UpNextRailOrder.kt
+        // for why that order is the rail's whole point, and
+        // UpNextRailOrderTest for the rule.
         .sortedWith(upNextRailComparator)
 }
 
