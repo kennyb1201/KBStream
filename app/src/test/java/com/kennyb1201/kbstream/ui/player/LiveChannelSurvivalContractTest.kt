@@ -31,6 +31,7 @@ class LiveChannelSurvivalContractTest {
         const val ARM_STARTUP = "private fun armStartupWatchdog() {"
         const val LISTENER = "private fun createPlayerListener() = object : Player.Listener {"
         const val STATE_CHANGED = "override fun onPlaybackStateChanged"
+        const val STATE_ENDED = "Player.STATE_ENDED -> {"
         const val RECREATE = "private fun recreatePlayer(settleMs: Long = 0L) {"
         const val SCHEDULE_RETRY = "private fun scheduleRetry() {"
         const val PLAYBACK_ENDED = "// --- Playback Ended ---"
@@ -117,6 +118,22 @@ class LiveChannelSurvivalContractTest {
             "the keep-alive must read its verdict from liveWatchdogAction() " +
                 "rather than re-deriving the rule in the activity",
             tick.contains("liveWatchdogAction(")
+        )
+    }
+
+    @Test
+    fun `a live channel that reports ENDED is re-tuned, not filed as finished`() {
+        val branch = sliceFrom(source(), STATE_ENDED, length = 2_000)
+        assertTrue(
+            "a live channel's ENDED is a dropped connection, not an ending - it " +
+                "must go to scheduleRetry(), or the session parks on its last frame " +
+                "until a channel change rebuilds the player",
+            branch.contains("scheduleRetry()")
+        )
+        assertTrue(
+            "the ENDED branch must decide on isLiveChannel so VOD still runs the " +
+                "end-of-title path",
+            branch.contains("isLiveChannel")
         )
     }
 

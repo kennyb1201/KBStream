@@ -82,9 +82,16 @@ internal fun liveProgressed(
  *    class of box hands out;
  *  - the viewer paused it — a paused live channel is not a broken one, and it
  *    is re-armed when playback resumes;
- *  - IDLE or ENDED, which belong to the ladder and the end-of-title paths;
  *  - no first frame yet, because a live channel's first bytes can legitimately
  *    take a while and the startup watchdog owns that window.
+ *
+ * IDLE and ENDED are NOT ignored for a live session that has already painted a
+ * frame: a live channel never ends and never idles itself, so a session parked
+ * in either has been dropped by its provider. That is how a plain HTTP
+ * MPEG-TS channel dies — the response closing reads as ENDED, with no error and
+ * no retry — and it is the reported "it stops after a while and nothing brings
+ * it back". Both go straight to the reconnect ladder, which is the only thing
+ * that recovers them.
  *
  * @param quietMs how long it has been since the playhead or the buffer last
  *   moved, as measured by the caller's own baseline.
@@ -104,11 +111,18 @@ internal fun liveWatchdogAction(
 ): LiveWatchdogAction {
     if (!live || finishing) return LiveWatchdogAction.IGNORE
     if (reconnecting) return LiveWatchdogAction.IGNORE
+    if (!firstFrameRendered) return LiveWatchdogAction.IGNORE
+    // A live channel has already been on screen, so IDLE or ENDED is not a
+    // legitimate stop - it is the provider dropping the session (see the class
+    // comment). Send it to the ladder; buffered/playWhenReady logic below does
+    // not apply to a session that is no longer playing anything.
+    if (playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED) {
+        return LiveWatchdogAction.RETUNE
+    }
     if (!playWhenReady) return LiveWatchdogAction.IGNORE
     if (playbackState != Player.STATE_READY && playbackState != Player.STATE_BUFFERING) {
         return LiveWatchdogAction.IGNORE
     }
-    if (!firstFrameRendered) return LiveWatchdogAction.IGNORE
     if (liveProgressed(positionMs, bufferedMs, lastPositionMs, lastBufferedMs)) {
         return LiveWatchdogAction.KEEP_WAITING
     }

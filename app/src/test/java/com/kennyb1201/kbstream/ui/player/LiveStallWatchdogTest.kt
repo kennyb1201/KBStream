@@ -150,14 +150,43 @@ class LiveStallWatchdogTest {
     }
 
     @Test
-    fun `IDLE and ENDED belong to the ladder and the end paths`() {
+    fun `a painted live session that goes ENDED is re-tuned, not ignored`() {
+        // A live channel never ends. A plain HTTP MPEG-TS response closing
+        // reads as ENDED, and a stalled HLS playlist that goes static does the
+        // same - no error, no retry, so the only thing that recovers it is the
+        // reconnect ladder. Ignoring ENDED (the old rule) parked the session on
+        // its last frame forever, which is the report this pins.
+        assertEquals(
+            LiveWatchdogAction.RETUNE,
+            action(playbackState = Player.STATE_ENDED, quietMs = LIVE_STALL_NO_PROGRESS_MS * 5)
+        )
+    }
+
+    @Test
+    fun `a painted live session that goes IDLE is re-tuned`() {
+        assertEquals(
+            LiveWatchdogAction.RETUNE,
+            action(playbackState = Player.STATE_IDLE, quietMs = LIVE_STALL_NO_PROGRESS_MS * 5)
+        )
+    }
+
+    @Test
+    fun `IDLE and ENDED before the first frame are still the startup watchdog's business`() {
         assertEquals(
             LiveWatchdogAction.IGNORE,
-            action(playbackState = Player.STATE_IDLE, quietMs = LIVE_STALL_NO_PROGRESS_MS * 5)
+            action(
+                playbackState = Player.STATE_IDLE,
+                firstFrameRendered = false,
+                quietMs = LIVE_STALL_NO_PROGRESS_MS * 5
+            )
         )
         assertEquals(
             LiveWatchdogAction.IGNORE,
-            action(playbackState = Player.STATE_ENDED, quietMs = LIVE_STALL_NO_PROGRESS_MS * 5)
+            action(
+                playbackState = Player.STATE_ENDED,
+                firstFrameRendered = false,
+                quietMs = LIVE_STALL_NO_PROGRESS_MS * 5
+            )
         )
     }
 

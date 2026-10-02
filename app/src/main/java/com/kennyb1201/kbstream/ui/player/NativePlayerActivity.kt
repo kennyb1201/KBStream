@@ -5404,14 +5404,35 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 }
                 Player.STATE_ENDED -> {
-                    // Marked BEFORE the handoff: onStop() consults this flag so a
-                    // session that reached its own end is recorded as watched
-                    // even when the last save has to happen as the activity
-                    // exits. Both fallback paths in
-                    // detectStallEndedFallback() already set it; this is the
-                    // primary one and it did not.
-                    playbackEndedHandled = true
-                    onPlaybackEnded()
+                    // A live channel never ends, and ENDED is exactly how one
+                    // dies on this class of box: a plain HTTP MPEG-TS response
+                    // that the provider closes (often because the connection
+                    // looks idle) reads as the end of the stream, and a stalled
+                    // HLS playlist that goes static does the same. No error is
+                    // raised, nothing else watches it - the live keep-alive
+                    // treats ENDED as out of scope - so the session parked here
+                    // sits on its last frame until a channel change builds a
+                    // new player. That is the "it stops after a while and only
+                    // zapping brings it back" report. Re-tune through the same
+                    // ladder a stall uses instead of running the end-of-title
+                    // path, which is for VOD only.
+                    if (isLiveChannel) {
+                        if (!isFinishing && !isDestroyed &&
+                            reconnectingContainer.visibility != View.VISIBLE
+                        ) {
+                            Log.w("PLAYER_LIVE", "Live channel reported ENDED \u2014 re-tuning")
+                            scheduleRetry()
+                        }
+                    } else {
+                        // Marked BEFORE the handoff: onStop() consults this flag
+                        // so a session that reached its own end is recorded as
+                        // watched even when the last save has to happen as the
+                        // activity exits. Both fallback paths in
+                        // detectStallEndedFallback() already set it; this is the
+                        // primary one and it did not.
+                        playbackEndedHandled = true
+                        onPlaybackEnded()
+                    }
                 }
             }
         }
