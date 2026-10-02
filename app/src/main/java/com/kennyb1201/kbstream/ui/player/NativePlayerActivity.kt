@@ -303,6 +303,20 @@ private const val ZAP_EPG_ROW_LIMIT = 4
 private const val ZAP_EPG_TTL_MS = 60_000L
 
 /**
+ * How long OK has to be held to open the in-player channel guide. Long enough
+ * that an ordinary press never trips it, short enough that the hold does not
+ * feel like the remote has stopped responding.
+ */
+private const val CHANNEL_GUIDE_LONG_PRESS_MS = 600L
+
+/**
+ * Programs to keep per channel for the guide overlay. Two is exactly the
+ * now/next pair the rows show; the DAO's window already excludes everything
+ * that has finished.
+ */
+private const val CHANNEL_GUIDE_ROWS_PER_CHANNEL = 2
+
+/**
  * Decouples the video and audio extension policies, which stock
  * DefaultRenderersFactory ties to a single extensionRendererMode. Audio gets
  * the FFmpeg audio extension at the position set by the audio decoder
@@ -1355,6 +1369,36 @@ class NativePlayerActivity : ComponentActivity() {
     private var btnChannelUp: TextView? = null
     private var btnChannelDown: TextView? = null
 
+    /** Overlay GUIDE button (live, with a lineup — see [updateControlsInfo]). */
+    private var btnGuide: TextView? = null
+
+    /**
+     * The in-player channel guide: a browsable overlay of the zap lineup with
+     * each channel's now/next. A side panel like the picker, so it shares the
+     * picker's scrim and its focus hand-back on close.
+     */
+    private var channelGuideContainer: LinearLayout? = null
+    private var channelGuideTitle: TextView? = null
+    private var channelGuideList: RecyclerView? = null
+    private var isGuideShowing = false
+    private var channelGuideJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Long-press OK opens the guide, timed here rather than read off KeyEvent
+     * repeats: the first OK press raises the controls overlay and hands focus
+     * to it, so the repeats that make a hold a hold never reach the surface's
+     * key listener. Dispatching at the Activity sees the hold regardless of
+     * which view ends up with focus.
+     */
+    private val channelGuideHandler = Handler(Looper.getMainLooper())
+    private var guideLongPressArmed = false
+    private val guideLongPressRunnable = Runnable {
+        if (guideLongPressArmed) {
+            guideLongPressArmed = false
+            showChannelGuide()
+        }
+    }
+
     /**
      * "LIVE  •  CH 5  •  SPORTS" prefix of the block's status line. Kept
      * beside the program's own air window because the prefix describes the
@@ -1500,6 +1544,7 @@ class NativePlayerActivity : ComponentActivity() {
             !controlsVisible &&
             !showSettingsPanel &&
             !isPickerShowing &&
+            !isGuideShowing &&
             infoPanel.visibility != View.VISIBLE &&
             errorContainer.visibility != View.VISIBLE &&
             btnSkipIntro.visibility != View.VISIBLE &&
@@ -1754,6 +1799,7 @@ class NativePlayerActivity : ComponentActivity() {
             !controlsVisible &&
             !showSettingsPanel &&
             !isPickerShowing &&
+            !isGuideShowing &&
             errorContainer.visibility != View.VISIBLE &&
             btnSkipIntro.visibility != View.VISIBLE &&
             LiveChannelZapRegistry.zapEnabled()
@@ -2542,6 +2588,33 @@ class NativePlayerActivity : ComponentActivity() {
     // rules in the doc above depend on being ahead of it.
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Long-press OK opens the channel guide. Timed with our own Handler
+        // rather than read off KeyEvent repeats, because the first OK press
+        // raises the controls overlay and hands focus to it - so the repeats
+        // that make a hold a hold never reach the surface's key listener.
+        // Resolving it here sees the hold whichever view ends up with focus,
+        // and the short press keeps its usual meaning: the guide is an
+        // addition to OK, not a replacement for it. Cancelled on key up, so a
+        // press that ended - or that lost its meaning because a panel opened
+        // mid-hold - cannot still pop the overlay.
+        if (isConfirmKey(event.keyCode)) {
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> {
+                    if (event.repeatCount == 0 && channelGuideCanOpen()) {
+                        guideLongPressArmed = true
+                        channelGuideHandler.removeCallbacks(guideLongPressRunnable)
+                        channelGuideHandler.postDelayed(
+                            guideLongPressRunnable,
+                            CHANNEL_GUIDE_LONG_PRESS_MS
+                        )
+                    }
+                }
+                KeyEvent.ACTION_UP -> {
+                    channelGuideHandler.removeCallbacks(guideLongPressRunnable)
+                    guideLongPressArmed = false
+                }
+            }
+        }
         // LEFT/RIGHT seek the video directly while nothing but the video (or a
         // skip prompt) is on screen, and raise nothing while doing it. This
         // hangs off the activity rather than the video surface's key listener
@@ -2730,6 +2803,7 @@ class NativePlayerActivity : ComponentActivity() {
                     // A typed number is a pending action, so Back cancels it
                     // before Back means "leave the channel".
                     channelNumberEntry.isNotEmpty() -> { clearChannelNumberEntry(); return }
+                    isGuideShowing -> { dismissChannelGuide(); showControls(); return }
                     isPickerShowing -> { dismissPicker(); showControls(); return }
                     showSettingsPanel -> { dismissSettingsPanel(); showControls(); return }
                     infoPanel.visibility == View.VISIBLE -> { hideInfoPanel(); showControls(); return }
@@ -2752,7 +2826,7 @@ class NativePlayerActivity : ComponentActivity() {
                     // controls). Otherwise let it fall through to
                     // onBackPressed so a Back press always exits the player
                     // instead of being silently swallowed.
-                    if (isPickerShowing || showSettingsPanel || controlsVisible) {
+                    if (isGuideShowing || isPickerShowing || showSettingsPanel || controlsVisible) {
                         dismissAllPanels(); hideControls(); true
                     } else {
                         false
@@ -3226,6 +3300,10 @@ class NativePlayerActivity : ComponentActivity() {
         liveProgramNext = findViewById(R.id.live_program_next)
         btnChannelUp = findViewById(R.id.btn_channel_up)
         btnChannelDown = findViewById(R.id.btn_channel_down)
+        btnGuide = findViewById(R.id.btn_guide)
+        channelGuideContainer = findViewById(R.id.channel_guide_container)
+        channelGuideTitle = findViewById(R.id.channel_guide_title)
+        channelGuideList = findViewById(R.id.channel_guide_list)
         channelNumberHud = findViewById(R.id.channel_number_hud)
         bufferingSpinner = findViewById(R.id.buffering_spinner)
         reconnectingContainer = findViewById(R.id.reconnecting_container)
@@ -3386,6 +3464,30 @@ class NativePlayerActivity : ComponentActivity() {
             } else false
         }
 
+        // Channel guide overlay. Same shape as the picker: rows inflated on
+        // demand, focus handed to the list, Back closes it.
+        channelGuideList?.layoutManager = LinearLayoutManager(this)
+        channelGuideList?.isFocusable = true
+        channelGuideList?.isFocusableInTouchMode = true
+        channelGuideList?.descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
+        channelGuideList?.addOnChildAttachStateChangeListener(
+            object : androidx.recyclerview.widget.RecyclerView.OnChildAttachStateChangeListener {
+                override fun onChildViewAttachedToWindow(view: View) {
+                    if (AppPreferences.getAmoledBlack(this@NativePlayerActivity)) {
+                        refillPlayerChrome(view)
+                    }
+                }
+
+                override fun onChildViewDetachedFromWindow(view: View) = Unit
+            }
+        )
+        channelGuideList?.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                dismissChannelGuide(); showControls(); true
+            } else false
+        }
+
         // Static UI
         liveBadge.visibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnSource.visibility = View.VISIBLE
@@ -3428,7 +3530,8 @@ class NativePlayerActivity : ComponentActivity() {
         // but only while the overlay is hidden — see liveZapKeysFree).
         btnChannelUp?.setOnClickListener { zapByOffset(+1) }
         btnChannelDown?.setOnClickListener { zapByOffset(-1) }
-        listOfNotNull(btnChannelUp, btnChannelDown).forEach { button ->
+        btnGuide?.setOnClickListener { showChannelGuide() }
+        listOfNotNull(btnChannelUp, btnChannelDown, btnGuide).forEach { button ->
             button.setOnFocusChangeListener { _, focused ->
                 if (focused) removeAutoHide() else scheduleAutoHide()
             }
@@ -3901,6 +4004,12 @@ class NativePlayerActivity : ComponentActivity() {
                 event.action != KeyEvent.ACTION_DOWN
             if (event.action != KeyEvent.ACTION_DOWN && !scrubRelease) return@setOnKeyListener false
 
+            // While the channel guide is up it owns the remote: its rows take
+            // the D-pad and Back closes it. A key reaching the surface anyway
+            // (focus not yet on the list) must not zap or raise the overlay
+            // under the panel the viewer is browsing.
+            if (isGuideShowing) return@setOnKeyListener false
+
             // Channel-number entry: digits typed with the overlay hidden tune
             // straight to a channel, and OK confirms a partly typed number
             // instead of opening the overlay.
@@ -4039,7 +4148,11 @@ class NativePlayerActivity : ComponentActivity() {
      * when a panel is up so Back-driven dismiss flows stay intact.
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (isPickerShowing || showSettingsPanel || infoPanel.visibility == View.VISIBLE) {
+        if (isGuideShowing ||
+            isPickerShowing ||
+            showSettingsPanel ||
+            infoPanel.visibility == View.VISIBLE
+        ) {
             return super.onKeyDown(keyCode, event)
         }
         // Channel-number entry, handled here too: external remotes can deliver
@@ -7184,6 +7297,14 @@ class NativePlayerActivity : ComponentActivity() {
         val liveVisibility = if (isLiveChannel) View.VISIBLE else View.GONE
         btnChannelUp?.visibility = liveVisibility
         btnChannelDown?.visibility = liveVisibility
+        // GUIDE only where a press can land: with no lineup there is nothing to
+        // browse, so the button would open onto an empty panel.
+        btnGuide?.visibility =
+            if (isLiveChannel && LiveChannelZapRegistry.zapEnabled()) {
+                View.VISIBLE
+            } else {
+                View.GONE
+            }
         if (isLiveChannel) {
             refreshLiveProgramBlock()
         } else {
@@ -7768,7 +7889,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (!isLiveChannel && exoPlayer?.isPlaying == false) return
         // Don't auto-hide while a panel is open: hiding the overlay mid-
         // navigation tears down the panel's focus and drops the user's spot.
-        if (showSettingsPanel || isPickerShowing) return
+        if (showSettingsPanel || isPickerShowing || isGuideShowing) return
         handler.postDelayed(autoHideRunnable, CONTROLS_HIDE_DELAY_MS)
     }
 
@@ -7968,7 +8089,213 @@ class NativePlayerActivity : ComponentActivity() {
         restoreControlsFocus()
     }
 
+    // --- Channel guide overlay (live only) ---
+
+    /**
+     * The lineup as a snapshot. The registry exposes it by index because the
+     * player otherwise only ever wants "the one playing" and "the one next";
+     * the guide has to show all of it, so it walks the index once per paint.
+     */
+    private fun lineupChannels(): List<LiveChannelZapRegistry.ZapChannel> =
+        (0 until LiveChannelZapRegistry.size()).mapNotNull(LiveChannelZapRegistry::channelAt)
+
+    /** True where a press could actually open the guide. */
+    private fun channelGuideCanOpen(): Boolean =
+        isLiveChannel &&
+            LiveChannelZapRegistry.zapEnabled() &&
+            !isGuideShowing &&
+            !isPickerShowing &&
+            !showSettingsPanel &&
+            infoPanel.visibility != View.VISIBLE &&
+            errorContainer.visibility != View.VISIBLE
+
+    /**
+     * Opens the guide overlay on the channel playing now.
+     *
+     * The rows go up from the lineup alone (numbers and names) and the EPG read
+     * fills in NOW/NEXT a beat later - the same two-step the zap banner uses,
+     * because a guide that waited on the database before painting anything
+     * would open onto an empty panel on a slow box.
+     */
+    private fun showChannelGuide() {
+        if (!channelGuideCanOpen()) return
+        isGuideShowing = true
+        // The picker and the settings sheet are the same "one panel at a time"
+        // slot; opening the guide over one of them would stack two scrims.
+        dismissPicker()
+        dismissSettingsPanel()
+        channelGuideTitle?.text = LiveChannelZapRegistry.browsingGroup()
+            ?.takeIf { it.isNotBlank() }
+            ?.let { "GUIDE  \u2022  ${it.uppercase()}" }
+            ?: "GUIDE"
+        channelGuideContainer?.visibility = View.VISIBLE
+        scrim.visibility = View.VISIBLE
+        removeAutoHide()
+        publishChannelGuideRows(programs = emptyMap(), loading = true)
+        focusChannelGuideCurrent()
+        loadChannelGuidePrograms()
+    }
+
+    /** Closes the guide and gives the D-pad back where it came from. */
+    private fun dismissChannelGuide() {
+        if (!isGuideShowing) return
+        isGuideShowing = false
+        channelGuideJob?.cancel()
+        channelGuideJob = null
+        channelGuideContainer?.visibility = View.GONE
+        if (!isPickerShowing && !showSettingsPanel) scrim.visibility = View.GONE
+        restoreControlsFocus()
+    }
+
+    /**
+     * Tunes to a row and closes the guide. Re-picking the channel already
+     * playing is not a channel change: a "zap" to itself would only rebuild
+     * the player and flash the banner, so that press just returns to the
+     * picture.
+     */
+    private fun tuneToChannelFromGuide(index: Int) {
+        val channel = LiveChannelZapRegistry.channelAt(index) ?: return
+        val alreadyPlaying = channel.channelId == currentZapChannel()?.channelId
+        dismissChannelGuide()
+        if (alreadyPlaying) {
+            showControls()
+            return
+        }
+        // A pick IS a channel change, so the overlay comes down with the guide:
+        // the viewer wants the picture, and the zap banner names what they
+        // landed on.
+        hideControls()
+        tuneToChannel(index, channel)
+    }
+
+    /**
+     * Paints the rows. [loading] is the identity-only first pass: the NOW line
+     * reads "…" rather than "No guide data", which is the difference between
+     * "not read yet" and "this channel has no guide at all".
+     */
+    private fun publishChannelGuideRows(
+        programs: Map<String, ChannelNowNext>,
+        loading: Boolean
+    ) {
+        val list = channelGuideList ?: return
+        val now = System.currentTimeMillis()
+        val currentId = currentZapChannel()?.channelId
+        val rows = lineupChannels().mapIndexed { index, channel ->
+            val entry = channel.epgChannelId
+                ?.takeIf { it.isNotBlank() }
+                ?.let { programs[epgProgramChannelKey(it)] }
+            val nowProgram = entry?.now
+            ChannelGuideRow(
+                channelNumber = channel.chno?.trim()?.takeIf { it.isNotEmpty() },
+                name = channel.name,
+                nowTitle = when {
+                    nowProgram != null -> nowProgram.title
+                    loading -> "…"
+                    else -> null
+                },
+                nowTime = nowProgram?.let {
+                    zapTimeFormat.format(Date(it.startUtcMillis)) +
+                        " – " + zapTimeFormat.format(Date(it.endUtcMillis))
+                },
+                nowProgressPermille = nowProgram?.let { guideProgressPermille(it, now) },
+                nextTitle = entry?.next?.let {
+                    "Next  " + zapTimeFormat.format(Date(it.startUtcMillis)) + "  " + it.title
+                },
+                isCurrent = channel.channelId == currentId,
+                onClick = { tuneToChannelFromGuide(index) }
+            )
+        }
+        val adapter = list.adapter as? ChannelGuideAdapter
+        if (adapter == null) {
+            list.adapter = ChannelGuideAdapter().also { it.submit(rows) }
+        } else {
+            // The EPG pass repaints the rows the viewer is already browsing. A
+            // full rebind can hand the D-pad back to the list, so the row that
+            // had focus takes it back - otherwise the guide would appear to
+            // jump to the top the instant the guide data arrived.
+            val focused = list.getFocusedChild()?.let(list::getChildAdapterPosition)
+            adapter.submit(rows)
+            if (focused != null && focused != RecyclerView.NO_POSITION) {
+                list.post {
+                    if (!isGuideShowing) return@post
+                    list.findViewHolderForAdapterPosition(focused)?.itemView?.requestFocus()
+                }
+            }
+        }
+    }
+
+    /** Elapsed fraction of a program across its own air window, in 0..1000. */
+    private fun guideProgressPermille(program: EpgProgramRow, nowMillis: Long): Int {
+        val span = (program.endUtcMillis - program.startUtcMillis).coerceAtLeast(1L)
+        val elapsed = (nowMillis - program.startUtcMillis).coerceIn(0L, span)
+        return ((elapsed * 1000L) / span).toInt()
+    }
+
+    /**
+     * Reads NOW/NEXT for the whole lineup: one query per source per batch (see
+     * [planGuideQueries]), bucketed by channel (see [nowNextByChannel]). A read
+     * that fails leaves the identity paint standing rather than blanking the
+     * panel.
+     *
+     * The Lite projection on purpose: these rows carry only a title and an air
+     * window, so pulling every synopsis of every channel in the lineup would be
+     * the largest read the app makes for text it never draws.
+     */
+    private fun loadChannelGuidePrograms() {
+        channelGuideJob?.cancel()
+        val queries = planGuideQueries(lineupChannels())
+        if (queries.isEmpty()) return
+        channelGuideJob = scope?.launch {
+            val now = System.currentTimeMillis()
+            val programs = HashMap<String, ChannelNowNext>()
+            for (query in queries) {
+                val rows = runCatching {
+                    withContext(Dispatchers.IO) {
+                        IptvDatabase.getInstance(applicationContext).iptvDao()
+                            .getProgramsForChannelsInWindowLite(
+                                sourceUrl = query.sourceUrl,
+                                channelIds = query.channelIds,
+                                windowStart = now,
+                                windowEnd = now + ZAP_EPG_LOOKAHEAD_MS,
+                                perChannelLimit = CHANNEL_GUIDE_ROWS_PER_CHANNEL
+                            )
+                    }
+                }.getOrElse { t ->
+                    Log.w(TAG, "CHANNEL GUIDE EPG read failed: ${t.message}")
+                    emptyList()
+                }
+                programs.putAll(nowNextByChannel(rows, now))
+            }
+            // A slow read must not repaint a guide the viewer already closed.
+            if (isGuideShowing) publishChannelGuideRows(programs, loading = false)
+        }
+    }
+
+    /**
+     * Parks focus on the channel playing now, scrolled into view, so the guide
+     * opens where the viewer already is instead of at the top of the lineup -
+     * on a long playlist that is the difference between "browse" and "scroll
+     * hunting for your own channel". Falls back to the list itself (which hands
+     * focus to its first row) when that row has not been laid out yet.
+     */
+    private fun focusChannelGuideCurrent() {
+        val list = channelGuideList ?: return
+        val index = lineupChannels().indexOfFirst { it.channelId == currentZapChannel()?.channelId }
+        list.post {
+            if (!isGuideShowing) return@post
+            if (index >= 0) list.scrollToPosition(index)
+            // One more frame: scrollToPosition only lays the target out on the
+            // next pass, so the holder for [index] does not exist yet.
+            list.post {
+                if (!isGuideShowing) return@post
+                val holder = if (index >= 0) list.findViewHolderForAdapterPosition(index) else null
+                (holder?.itemView ?: list).requestFocus()
+            }
+        }
+    }
+
     private fun dismissAllPanels() {
+        dismissChannelGuide()
         dismissPicker()
         dismissSettingsPanel()
         becauseYouWatchedPanel.visibility = View.GONE

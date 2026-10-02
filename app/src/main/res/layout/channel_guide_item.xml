@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One channel in the in-player guide overlay. Left column is the channel
+     identity (number + name), right is what the imported guide says is on NOW
+     (title, air window, elapsed progress) and NEXT. A channel with no guide
+     match shows "No guide data" in the NOW line rather than an empty gap.
+     The root is the focusable target so the D-pad lands on a whole row and OK
+     tunes, exactly like a picker row. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginVertical="4dp"
+    android:background="@drawable/channel_guide_item_bg"
+    android:focusable="true"
+    android:focusableInTouchMode="true"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="12dp"
+    android:paddingVertical="10dp">
+
+    <TextView
+        android:id="@+id/channel_guide_item_number"
+        android:layout_width="56dp"
+        android:layout_height="wrap_content"
+        android:ellipsize="end"
+        android:fontFamily="@font/oswald_semibold"
+        android:maxLines="1"
+        android:textColor="@color/kb_accent"
+        android:textSize="15sp" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_weight="1"
+        android:orientation="vertical">
+
+        <TextView
+            android:id="@+id/channel_guide_item_name"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/channel_guide_item_now"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="3dp"
+            android:ellipsize="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/channel_guide_item_time"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="11sp" />
+
+        <ProgressBar
+            android:id="@+id/channel_guide_item_progress"
+            style="@android:style/Widget.ProgressBar.Horizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="4dp"
+            android:max="1000"
+            android:progressBackgroundTint="#338891A0"
+            android:progressTint="@color/kb_accent" />
+
+        <TextView
+            android:id="@+id/channel_guide_item_next"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:ellipsize="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_lo"
+            android:textSize="11sp" />
+    </LinearLayout>
+</LinearLayout>
