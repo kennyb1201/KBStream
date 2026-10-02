@@ -326,6 +326,14 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
+    // Paging 3, Compose half. The "Open in Grid" full-catalog screen pages a
+    // single addon catalog by item offset, which is exactly what a PagingSource
+    // models: the source owns the offset bookkeeping, de-dupe and end-of-list
+    // detection, and the screen reads one LazyPagingItems instead of a hand-
+    // rolled items/isLoadingMore/hasMore/error state machine. paging-compose
+    // brings paging-common (Pager/PagingConfig/PagingSource); paging-runtime is
+    // the LiveData/RxJava half and is not needed here.
+    implementation("androidx.paging:paging-compose:3.5.1")
 
     implementation("androidx.compose.runtime:runtime")
 

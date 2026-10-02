@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,20 +27,22 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
+import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
-import com.kennyb1201.kbstream.ui.components.shouldPrefetchNextPage
 import com.kennyb1201.kbstream.ui.components.PosterCard
-import com.kennyb1201.kbstream.ui.components.heroSharedElement
+import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
@@ -52,13 +55,17 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 
 /**
  * Full-catalog poster grid ("Open in Grid" on a Home rail's long-press
  * menu): the whole catalog browsable without endless horizontal scrolling.
- * Seeds with the rail's loaded items, then pages the rest in as the user
- * scrolls down — same 100-item batches as the rails.
+ *
+ * Paged by Paging 3. The rail the grid was opened from has already fetched its
+ * first batch, so [HomeViewModel.openCatalogInGrid] seeds that batch as the
+ * grid's first page (instant paint) and the PagingSource resumes from wherever
+ * the rail stopped — this screen only renders what the pager emits and reacts
+ * to its LoadState.
  */
 @Composable
 fun CatalogGridScreen(
@@ -69,27 +76,31 @@ fun CatalogGridScreen(
     onItemClick: (MetaPreview) -> Unit,
     onBack: () -> Unit
 ) {
-    val gridRaw by viewModel.catalogGrid.collectAsStateWithLifecycle()
-    // Hidden titles leave the grid the same way they leave the rails;
-    // the list re-reads whenever the store changes.
+    val header by viewModel.catalogGridHeader.collectAsStateWithLifecycle()
+    val paging by viewModel.catalogGridPaging.collectAsStateWithLifecycle()
+
+    // Hidden titles leave the grid the same way they leave the rails. The
+    // filter rides the paging stream, so hiding a title that is already on
+    // screen removes it without reloading the catalog.
     val hiddenTitleKeys = rememberHiddenTitleKeys()
-    val grid = remember(gridRaw, hiddenTitleKeys) {
-        gridRaw?.let { state ->
-            state.copy(
-                items = state.items.filterNot { meta ->
-                    HiddenTitles.hides(
-                        hiddenTitleKeys,
-                        meta.type,
-                        meta.name,
-                        meta.yearOrNull,
-                        meta.id
-                    )
-                }
-            )
+    val pagedFlow = paging
+    val items = remember(pagedFlow, hiddenTitleKeys) {
+        pagedFlow?.map { pagingData ->
+            pagingData.filter { meta ->
+                !HiddenTitles.hides(
+                    hiddenTitleKeys,
+                    meta.type,
+                    meta.name,
+                    meta.yearOrNull,
+                    meta.id
+                )
+            }
         }
-    }
+    }?.collectAsLazyPagingItems()
+
     val watchedKeys by viewModel.watchedKeys.collectAsStateWithLifecycle()
-    val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
+    val partialWatchedKeys by
+        viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
 
     var menuTarget by remember { mutableStateOf<MetaPreview?>(null) }
 
@@ -110,7 +121,7 @@ fun CatalogGridScreen(
         // retry briefly before concluding the catalog is really gone.
         repeat(50) {
             viewModel.openCatalogInGrid(title, addonName)
-            if (viewModel.catalogGrid.value != null) {
+            if (viewModel.catalogGridHeader.value != null) {
                 return@LaunchedEffect
             }
             delay(100L)
@@ -124,7 +135,10 @@ fun CatalogGridScreen(
         }
     }
 
-    val state = grid ?: run {
+    val openHeader = header
+    val lazyItems = items
+
+    if (openHeader == null || lazyItems == null) {
         // Grid not seeded yet. On a fresh open the effect above seeds it
         // within a frame; this is just that one loading frame (plus a
         // possible cold-restore wait for the rails to load). It NEVER
@@ -150,29 +164,8 @@ fun CatalogGridScreen(
 
     val gridState = rememberLazyGridState()
 
-    // Infinite scroll: the same prefetch distance every other paginated
-    // surface uses, so the next page is asked for well before the grid's last
-    // row is on screen.
-    LaunchedEffect(state.items.size, state.hasMore) {
-        snapshotFlow {
-            val info = gridState.layoutInfo
-            val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisible to info.visibleItemsInfo.size
-        }
-            .distinctUntilChanged()
-            .collect { (lastVisible, viewportItems) ->
-                if (
-                    state.hasMore &&
-                    shouldPrefetchNextPage(
-                        lastVisible,
-                        state.items.size,
-                        viewportItems
-                    )
-                ) {
-                    viewModel.loadMoreGridItems()
-                }
-            }
-    }
+    val refreshState = lazyItems.loadState.refresh
+    val appendState = lazyItems.loadState.append
 
     Column(
         modifier = Modifier
@@ -180,7 +173,7 @@ fun CatalogGridScreen(
             .background(KBVoid)
     ) {
         KBPageTitle(
-            text = state.title,
+            text = openHeader.title,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(
@@ -192,7 +185,7 @@ fun CatalogGridScreen(
         )
 
         Text(
-            text = state.addonName,
+            text = openHeader.addonName,
             style = MaterialTheme.typography.labelMedium,
             color = KBTextLo,
             // One line, like the page title above it: a long catalog name used
@@ -205,26 +198,22 @@ fun CatalogGridScreen(
         )
 
         when {
-            state.isLoading && state.items.isEmpty() -> {
+            refreshState is LoadState.Loading && lazyItems.itemCount == 0 -> {
                 KBStatusMessage(loading = true, message = KB_STATUS_LOADING)
             }
 
             // The shared status card, like the empty branch below it and every
-            // other browse screen (Decade / Tag / Studio / Actor). This branch
-            // dropped a bare left-aligned gray line instead -- one branch under
-            // a branch that already used the card, in the same `when`.
-            state.error != null && state.items.isEmpty() -> {
+            // other browse screen (Decade / Tag / Studio / Actor). Retrying
+            // goes back through the same source, so a first page that failed
+            // recovers in place instead of requiring a trip back to Home.
+            refreshState is LoadState.Error && lazyItems.itemCount == 0 -> {
                 KBStatusMessage(
-                    message = "Error: ${state.error}",
-                    // retryCatalogGrid, not openCatalogInGrid: the latter
-                    // returns early when the grid already holds this same
-                    // catalog, which is exactly what a failed page leaves
-                    // behind (it also clears the hasMore flag the failure set).
-                    onRetry = { viewModel.retryCatalogGrid() }
+                    message = "Error: ${refreshState.error.message}",
+                    onRetry = { lazyItems.retry() }
                 )
             }
 
-            state.items.isEmpty() -> {
+            lazyItems.itemCount == 0 -> {
                 KBStatusMessage(
                     icon = KB_STATUS_ICON_EMPTY,
                     message = "Nothing to show here."
@@ -246,11 +235,17 @@ fun CatalogGridScreen(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(
-                        items = state.items,
-                        key = { "${it.type}:${it.id}" }
-                    ) { meta ->
-                            val posterSize = rememberPosterSize()
-                            Column {
+                        count = lazyItems.itemCount,
+                        key = lazyItems.itemKey { "${it.type}:${it.id}" }
+                    ) { index ->
+                        // Null while a placeholder stands in for a not-yet-
+                        // loaded item; placeholders are off, so this is only
+                        // the differ's brief window between a page arriving
+                        // and its items being indexed.
+                        val meta = lazyItems[index] ?: return@items
+
+                        val posterSize = rememberPosterSize()
+                        Column {
                             PosterCard(
                                 posterUrl = meta.poster,
                                 contentDescription = meta.name,
@@ -270,7 +265,7 @@ fun CatalogGridScreen(
                                     // Opts this tile into the poster ->
                                     // Detail hero flight (shared key is
                                     // type:id, same as the rail posters).
-                                    .heroSharedElement(meta.type, meta.id)
+                                    .heroSourceElement(meta.type, meta.id)
                                     .size(
                                         width = posterSize.width,
                                         height = posterSize.height
@@ -289,7 +284,7 @@ fun CatalogGridScreen(
                         }
                     }
 
-                    if (state.isLoadingMore) {
+                    if (appendState is LoadState.Loading) {
                         item(
                             key = "grid_footer",
                             span = { GridItemSpan(maxLineSpan) }
@@ -304,6 +299,31 @@ fun CatalogGridScreen(
                                     modifier = Modifier.size(22.dp),
                                     color = KBAccent,
                                     strokeWidth = 2.dp
+                                )
+                            }
+                        }
+                    } else if (appendState is LoadState.Error) {
+                        // A failed *append* leaves the loaded rows on screen,
+                        // so the full-page retry card above never applies.
+                        // This footer is the retry: Paging holds the failing
+                        // page until it is asked again.
+                        item(
+                            key = "grid_footer",
+                            span = { GridItemSpan(maxLineSpan) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 14.dp)
+                                    .clickable { lazyItems.retry() },
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    text = "Couldn't load more - press to retry",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = KBTextLo,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }

@@ -6,6 +6,9 @@ import android.content.SharedPreferences
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Meta
@@ -59,6 +62,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -71,6 +75,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -2532,27 +2537,28 @@ Log.d(
 
     // ---- Catalog grid ("Open in Grid" from a rail's long-press menu) ----
 
-    /** Full-catalog grid state: one addon catalog browsed as a poster grid. */
-    data class CatalogGridState(
+    /** Header for the open catalog grid: the page title row. */
+    data class CatalogGridHeader(
         val title: String,
-        val addonName: String,
-        val items: List<MetaPreview> = emptyList(),
-        val isLoading: Boolean = true,
-        val isLoadingMore: Boolean = false,
-        val hasMore: Boolean = true,
-        val error: String? = null
+        val addonName: String
     )
 
-    private val _catalogGrid =
-        MutableStateFlow<CatalogGridState?>(null)
+    private val _catalogGridHeader =
+        MutableStateFlow<CatalogGridHeader?>(null)
 
-    val catalogGrid: StateFlow<CatalogGridState?> =
-        _catalogGrid.asStateFlow()
+    val catalogGridHeader: StateFlow<CatalogGridHeader?> =
+        _catalogGridHeader.asStateFlow()
 
-    // Grid pagination mirrors the rail bookkeeping but is independent: the
-    // grid keeps paging past the rail's current offset.
-    private var gridNextSkip = 0
-    private var gridLoadJob: kotlinx.coroutines.Job? = null
+    // The open grid's pages, or null when no grid is open. Paging 3 owns the
+    // offset bookkeeping, de-dupe and end-of-list detection that this class
+    // used to spell out as items/isLoadingMore/hasMore/error, and the screen
+    // reads one LazyPagingItems whose LoadState IS that loading/error/retry
+    // UI. The flow is dropped on close, which cancels any in-flight page.
+    private val _catalogGridPaging =
+        MutableStateFlow<Flow<PagingData<MetaPreview>>?>(null)
+
+    val catalogGridPaging: StateFlow<Flow<PagingData<MetaPreview>>?> =
+        _catalogGridPaging.asStateFlow()
 
     /**
      * Route-based variant: reopens the grid for a catalog identified by its
@@ -2562,7 +2568,7 @@ Log.d(
     fun openCatalogInGrid(title: String, addonName: String) {
 
         val current =
-            _catalogGrid.value
+            _catalogGridHeader.value
 
         if (
             current != null &&
@@ -2584,230 +2590,109 @@ Log.d(
 
     /**
      * Opens the catalog behind a Home rail as a full-screen poster grid.
-     * Seeds with the rail's already-loaded items (instant paint), then
-     * fetches the next page in the background.
+     *
+     * The rail has already fetched its first batch, so that batch seeds the
+     * grid for an instant first paint and the PagingSource resumes from
+     * wherever the rail stopped — no re-fetch of items the rail already holds.
      */
     fun openCatalogInGrid(rail: Rail) {
 
+        val railKey =
+            railKeyOf(rail)
+
         val info =
-            railInfo[railKeyOf(rail)]
-
-        gridLoadJob?.cancel()
-
-        val seeded =
-            CatalogGridState(
-                title = rail.catalogName,
-                addonName = rail.addonName,
-                items = rail.items
-            )
-
-        _catalogGrid.value =
-            seeded
-
-        if (
-            info == null
-        ) {
-            // Rail came from a code path without pagination info
-            // (e.g. Continue Watching); nothing further to page.
-            _catalogGrid.value =
-                seeded.copy(
-                    isLoading = false,
-                    hasMore = false
-                )
-            return
-        }
+            railInfo[railKey]
 
         // Resume exactly where the rail left off in the source catalog. Falls
         // back to the displayed count only if the offset was never recorded
         // (e.g. a rail restored from cache), which is correct for the common
         // contiguous case.
-        gridNextSkip =
-            railSourceOffset[railKeyOf(rail)] ?: rail.items.size
+        val startOffset =
+            railSourceOffset[railKey] ?: rail.items.size
 
-        // A rail already known to be exhausted has nothing left to page.
-        if (railKeyOf(rail) in exhaustedRails) {
-            _catalogGrid.value =
-                seeded.copy(
-                    isLoading = false,
-                    hasMore = false
-                )
-            return
-        }
+        _catalogGridHeader.value =
+            CatalogGridHeader(
+                title = rail.catalogName,
+                addonName = rail.addonName
+            )
 
-        gridLoadJob =
-            fetchGridPage(info)
-    }
-
-    fun loadMoreGridItems() {
-
-        val state =
-            _catalogGrid.value
-                ?: return
-
-        if (
-            state.isLoading ||
-            state.isLoadingMore ||
-            !state.hasMore
-        ) {
-            return
-        }
-
-        val info =
-            railInfo.values.firstOrNull { info ->
-                formatCatalogName(info.catalogRawName) == state.title &&
-                    info.addonName == state.addonName
+        _catalogGridPaging.value =
+            if (info == null || railKey in exhaustedRails) {
+                // Rail came from a code path without pagination info
+                // (Continue Watching), or the source already reported the end:
+                // show what the rail had and page no further.
+                flowOf(PagingData.from(rail.items))
+            } else {
+                Pager(
+                    config = PagingConfig(
+                        pageSize = CATALOG_GRID_PAGE_SIZE,
+                        initialLoadSize = CATALOG_GRID_PAGE_SIZE,
+                        // Placeholders would make the grid's item count jump as
+                        // pages land, which is exactly what steals D-pad focus
+                        // mid-scroll on TV.
+                        enablePlaceholders = false,
+                        // The same runway the rails use for a grid: two
+                        // screenfuls capped at PREFETCH_MAX_ITEMS.
+                        prefetchDistance = CATALOG_GRID_PREFETCH_DISTANCE
+                    )
+                ) {
+                    CatalogGridPagingSource(
+                        seed = rail.items,
+                        startOffset = startOffset,
+                        maxItems = MAX_RAIL_ITEMS,
+                        loadPage = { skip ->
+                            fetchGridPage(info, skip)
+                        }
+                    )
+                }.flow
             }
-                ?: return
-
-        gridLoadJob =
-            fetchGridPage(info)
     }
 
     fun closeCatalogGrid() {
 
-        gridLoadJob?.cancel()
-        gridLoadJob = null
-        _catalogGrid.value = null
+        _catalogGridPaging.value = null
+        _catalogGridHeader.value = null
     }
 
     /**
-     * Re-fetches the open grid's current page after [CatalogGridState.error].
+     * Fetches one page of the open grid, filtered the same way the rails are:
+     * hidden upcoming titles (when the catalog asks for it) and the kids
+     * profile's allowances.
      *
-     * Neither existing entry point can serve as a retry: [openCatalogInGrid]
-     * returns early when the grid already holds this same catalog, and
-     * [loadMoreGridItems] refuses when the state reports no more pages --
-     * which is exactly what a failure leaves behind, since the catch block
-     * sets `hasMore = false`. So a first page that failed could only be
-     * recovered by backing out to Home and re-opening the rail. This puts the
-     * paging flag back, clears the error, and re-runs the same fetch with
-     * `isLoading` true so the grid shows its spinner while it tries.
+     * [skip] addresses the *source* catalog, so [CatalogGridPage.fetchedCount]
+     * reports the raw page size — a filter that drops entries must not also
+     * move the next offset backwards onto ground it already discarded.
      */
-    fun retryCatalogGrid() {
+    private suspend fun fetchGridPage(
+        info: RailInfo,
+        skip: Int
+    ): CatalogGridPage {
 
-        val state =
-            _catalogGrid.value
-                ?: return
-
-        val info =
-            railInfo.values.firstOrNull { info ->
-                formatCatalogName(info.catalogRawName) == state.title &&
-                    info.addonName == state.addonName
-            }
-                ?: return
-
-        gridLoadJob?.cancel()
-
-        _catalogGrid.value =
-            state.copy(
-                isLoading = true,
-                isLoadingMore = false,
-                hasMore = true,
-                error = null
+        val metas =
+            fetchCatalogThrottled(
+                baseUrl = info.baseUrl,
+                type = info.catalogType,
+                catalogId = info.catalogId,
+                skip = skip
             )
 
-        gridLoadJob =
-            fetchGridPage(info)
-    }
-
-    private fun fetchGridPage(
-        info: RailInfo
-    ): kotlinx.coroutines.Job {
-
-        _catalogGrid.value =
-            _catalogGrid.value?.copy(
-                isLoadingMore = true
-            )
-
-        return viewModelScope.launch {
-
-            try {
-
-                val metas =
-                    fetchCatalogThrottled(
-                        baseUrl = info.baseUrl,
-                        type = info.catalogType,
-                        catalogId = info.catalogId,
-                        skip = gridNextSkip
-                    )
-
-                if (
-                    metas.isEmpty()
-                ) {
-                    _catalogGrid.value =
-                        _catalogGrid.value?.copy(
-                            hasMore = false,
-                            isLoadingMore = false
-                        )
-                    return@launch
-                }
-
-                val filtered =
-                    if (
-                        info.hideUpcoming
-                    ) {
-                        tmdbRepository.kidsFilterMetas(
-                            applyDigitalAvailabilityFilter(
-                                filterUpcoming(metas)
-                            )
-                        )
-                    } else {
-                        tmdbRepository.kidsFilterMetas(metas)
-                    }
-
-                val existing =
-                    _catalogGrid.value?.items
-                        .orEmpty()
-                        .mapTo(mutableSetOf()) { it.id }
-
-                val deduped =
-                    filtered.filter { it.id !in existing }
-
-                if (
-                    deduped.isEmpty()
-                ) {
-                    _catalogGrid.value =
-                        _catalogGrid.value?.copy(
-                            hasMore = false,
-                            isLoadingMore = false
-                        )
-                    return@launch
-                }
-
-                val newGridCount =
-                    (_catalogGrid.value?.items?.size ?: 0) + deduped.size
-
-                _catalogGrid.value =
-                    _catalogGrid.value?.copy(
-                        items = _catalogGrid.value?.items
-                            .orEmpty() + deduped,
-                        isLoading = false,
-                        isLoadingMore = false,
-                        // Same runaway ceiling as the rails.
-                        hasMore = newGridCount < MAX_RAIL_ITEMS
-                    )
-
-                gridNextSkip += metas.size
-            } catch (
-                e: kotlinx.coroutines.CancellationException
+        val filtered =
+            if (
+                info.hideUpcoming
             ) {
-                throw e
-            } catch (e: Exception) {
-
-                Log.e(
-                    "HOME_GRID",
-                    "grid page load failed: ${e.message}",
-                    e
-                )
-
-                _catalogGrid.value =
-                    _catalogGrid.value?.copy(
-                        isLoading = false,
-                        isLoadingMore = false,
-                        hasMore = false,
-                        error = e.message
+                tmdbRepository.kidsFilterMetas(
+                    applyDigitalAvailabilityFilter(
+                        filterUpcoming(metas)
                     )
+                )
+            } else {
+                tmdbRepository.kidsFilterMetas(metas)
             }
-        }
+
+        return CatalogGridPage(
+            items = filtered,
+            fetchedCount = metas.size
+        )
     }
 
     /**
@@ -7716,6 +7601,20 @@ private suspend fun calculateEpisodesRemaining(
         // its second page, long before this.
         private const val MAX_RAIL_ITEMS =
             4000
+
+        // Paging 3's bookkeeping for the catalog grid. Batch addons serve
+        // their own page size anyway (the source forwards the raw count, not
+        // this), so this only has to be a sane non-zero page for Paging's
+        // initial-load arithmetic.
+        private const val CATALOG_GRID_PAGE_SIZE =
+            100
+
+        // How far from the end the grid asks for its next page. The rails
+        // size their runway in items from the viewport, capped at
+        // PREFETCH_MAX_ITEMS because a wall-to-wall grid lays out far more
+        // cells per screen than a rail lays out cards.
+        private const val CATALOG_GRID_PREFETCH_DISTANCE =
+            16
 
         private const val UP_NEXT_DEBOUNCE_MS =
             100L
