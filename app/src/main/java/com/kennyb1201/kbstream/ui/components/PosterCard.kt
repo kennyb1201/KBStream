@@ -14,7 +14,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -26,22 +25,27 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
- * The watch markers' brass: the LIGHT end of the app icon's own gradient.
+ * The watch markers' gold: the app's own accent, not a literal of its own.
  *
- * The badges ran at the brand brass (#E8A33D), a mid-luminance
- * mid-tone. At 13sp on a poster - and worst of all on an episode card, whose
- * gradient dims the art behind it - the check read as a faint smudge rather
- * than a marker. The launcher's play button is painted #F7CE86 -> #CE872A, so
- * taking its light end keeps the marker unmistakably the icon's amber while
- * lifting it clear of the artwork it sits on. The ring and glyph share it so
- * the check and the eye stay one marker family.
+ * These badges were painted the LIGHT end of the launcher play-button gradient
+ * (#F7CE86) so that a 15sp glyph stayed legible over bright artwork. That made
+ * the marker a second, paler gold matching nothing else on screen: beside the
+ * ring around the focused card, and the progress bar under the Detail play
+ * control - both [KBAccent] - it read as a different colour rather than one
+ * family. The markers now use the accent itself, so a watched card, the ring
+ * around the focused one and that progress bar are the same brass.
+ *
+ * Legibility moved to the scrim, which is why it stays at 0.92: a
+ * mid-luminance gold on a near-black disc carries the contrast, rather than a
+ * pale gold sitting on the artwork itself.
  */
-private val WatchedBadgeAccent = Color(0xFFF7CE86)
+private val WatchedBadgeAccent = KBAccent
 
 @Composable
 fun WatchedCheckBadge(
