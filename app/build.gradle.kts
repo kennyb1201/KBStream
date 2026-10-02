@@ -355,6 +355,12 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-moshi:3.0.0")
     implementation("com.squareup.okhttp3:okhttp:5.5.0")
     implementation("com.squareup.okhttp3:logging-interceptor:5.5.0")
+    // Transparent Brotli (Content-Encoding: br) decoding, installed on the
+    // shared base client (see BaseHttpClient). Addon catalogs, TMDB and the
+    // tracker APIs are all JSON over HTTP, and Brotli shrinks those payloads
+    // ~20% against gzip - on a 1.7 GB TV box the win is mostly in the JSON
+    // parse and the time-to-first-rail, not just bytes.
+    implementation("com.squareup.okhttp3:okhttp-brotli:5.5.0")
     // Moshi, the code-generation half. Every model in this app is annotated
     // @JsonClass(generateAdapter = true), and without this processor those
     // 129 annotations do nothing at all: Moshi falls back to kotlin-reflect

@@ -51,6 +51,7 @@ import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.analytics.PlaybackStatsListener
 import androidx.media3.exoplayer.mediacodec.MediaCodecRenderer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.mediacodec.MediaCodecUtil
@@ -5002,6 +5003,9 @@ class NativePlayerActivity : ComponentActivity() {
             }
             player.addListener(createPlayerListener())
             player.addAnalyticsListener(createAnalyticsListener())
+            // Aggregate quality accumulator: observes only, never affects
+            // playback. Built per player, like the analytics listener above.
+            player.addAnalyticsListener(createPlaybackStatsListener())
             // Subtitles render through SubtitleCueHandler (below) so the
             // size / background / offset controls actually work; empty and
             // hide Media3's built-in SubtitleView, which cannot be styled.
@@ -5690,6 +5694,45 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
 }
+
+    /**
+     * Session-level playback-quality stats, retained for the diagnostics export.
+     *
+     * The player already reports INDIVIDUAL events - dropped frames, decoder
+     * init failures, rebuffer transitions - but nothing ever summarised a
+     * viewing SESSION, and that summary is the question a "it keeps stuttering"
+     * report actually asks: "rebuffered 14 times over 6 minutes at 2 Mbps"
+     * points at the source, while any single event does not. This is media3's
+     * own accumulator; it is a pure observer and changes no playback decision.
+     */
+    private fun createPlaybackStatsListener() =
+        PlaybackStatsListener(
+            /* keepHistory = */ false
+        ) { _, stats ->
+            val summary =
+                buildString {
+                    append("played ")
+                    append(stats.totalPlayTimeMs / 1000)
+                    append("s, rebuffers ")
+                    append(stats.totalRebufferCount)
+                    append(" (")
+                    append(stats.totalRebufferTimeMs / 1000)
+                    append("s), dropped ")
+                    append(stats.totalDroppedFrames)
+                    val bitrate = stats.meanVideoFormatBitrate
+                    if (bitrate > 0) {
+                        append(", avg ")
+                        append(bitrate / 1000)
+                        append(" kbps")
+                    }
+                }
+            Log.i("PLAYER_PERF", "playback stats: $summary")
+            // Retained locally (never sent): the diagnostics export on a TV has
+            // no console to read, so this is the only place the numbers survive
+            // a report of "it was fine then it wasn't".
+            com.kennyb1201.kbstream.data.reporting.CrashReporter
+                .recordEvent("player.stats", summary)
+        }
 
     private fun createAnalyticsListener() = object : AnalyticsListener {
         override fun onDroppedVideoFrames(

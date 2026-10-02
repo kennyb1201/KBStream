@@ -63,6 +63,7 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
     init {
         load()
         observeProfileSwitches()
+        observePulledPrefs()
     }
 
     /**
@@ -194,6 +195,29 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Reloads when a pulled blob actually changed something.
+     *
+     * A blob pushed from a sibling device - a browse rail added on the phone, a
+     * collection removed in the browser - used to wait for the next Home entry
+     * to appear. [PrefsPayloadApplier.revision] only ticks on a real change, so
+     * this refreshes the open Home instead of repainting it on every periodic
+     * or realtime pull that carried nothing new (see [load], which re-reads the
+     * arrangement, the browse chips and the collections in one pass).
+     */
+    private fun observePulledPrefs() {
+        viewModelScope.launch {
+            var seen =
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier.revision.value
+            com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier.revision
+                .collect { revision ->
+                    if (revision == seen) return@collect
+                    seen = revision
+                    load()
+                }
         }
     }
 

@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.data.sync
 
 import android.content.Context
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -513,10 +516,54 @@ object PrefsPayloadApplier {
 
     private const val TAG = "SUPABASE_SYNC"
 
+    /**
+     * The last payload applied for each "<profileScope>|<prefKey>".
+     *
+     * Per-profile, because the same key carries a different blob for each
+     * profile: keying by prefKey alone would read a profile switch as a change
+     * of every blob on the device. Bounded by the handful of pref keys the
+     * cloud stores, and process-lifetime only - a restart simply re-fingerprints
+     * on the first pull.
+     */
+    private val appliedFingerprints = mutableMapOf<String, String>()
+
+    private val _revision = MutableStateFlow(0L)
+
+    /**
+     * Increments when a pulled blob actually DIFFERS from the last one applied
+     * for the active profile.
+     *
+     * Why this exists: a blob pulled from a sibling device (a browse rail added
+     * on the phone, a collection removed in the browser) only reached the
+     * screen on the next Home entry. Reloading an open screen on every pull is
+     * not the answer - [com.kennyb1201.kbstream.data.sync.SupabaseSync.lastPullAtMs]
+     * ticks even when nothing changed, and a periodic/realtime pull would then
+     * repaint Home for no reason. This fires only on a real difference.
+     *
+     * Deliberately a COUNTER, not a set of changed keys: a screen that renders
+     * the arrangement, its browse chips and its collections together cannot do
+     * anything useful with "which blob", only with "something landed".
+     */
+    val revision: StateFlow<Long> = _revision.asStateFlow()
+
     // Suspend: the addon applier serializes through AddonManager's apply
     // mutex (shared with auto-update), which can suspend. Every caller is
     // already inside SupabaseSync's coroutine scope.
     suspend fun apply(context: Context, prefKey: String, payload: JsonObject) {
+        // Fingerprint BEFORE the apply, but never to SKIP the apply: sync is
+        // last-write-wins, so a local edit that diverged from an unchanged
+        // server blob still has to be overwritten by the next pull. The apply
+        // therefore runs exactly as it did; the fingerprint only answers "did
+        // this pull change anything", which is what the revision above reports.
+        val scope = ProfileStorage.activeProfileId(context) ?: "global"
+        val fingerprintKey = "$scope|$prefKey"
+        val encoded = payload.toString()
+        val changed = synchronized(appliedFingerprints) {
+            val previous = appliedFingerprints[fingerprintKey]
+            appliedFingerprints[fingerprintKey] = encoded
+            previous != encoded
+        }
+
         when (prefKey) {
             PrefsPayloadBuilder.KEY_DISPLAY_PREFS -> applyDisplayPrefs(context, payload)
             PrefsPayloadBuilder.KEY_ADDONS -> applyAddons(context, payload)
@@ -534,6 +581,10 @@ object PrefsPayloadApplier {
                     context, payload
                 )
         }
+
+        // After the apply, so anything observing the revision reads the
+        // already-updated local stores.
+        if (changed) _revision.value += 1
     }
 
     private fun applyBadgePack(context: Context, payload: JsonObject) {

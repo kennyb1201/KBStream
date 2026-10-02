@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.data.network
 
+import java.util.concurrent.TimeUnit
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
+import okhttp3.brotli.BrotliInterceptor
 
 /**
  * One process-wide base OkHttp client. Feature clients derive from it via
@@ -34,7 +37,27 @@ object BaseHttpClient {
 
     fun get(): OkHttpClient =
         base ?: synchronized(this) {
-            base ?: OkHttpClient.Builder().build().also { base = it }
+            base ?: OkHttpClient.Builder()
+                // Brotli first: it only rewrites the response body (and the
+                // Accept-Encoding it asks with), so everything derived from
+                // this client - every feature interceptor included - sees an
+                // already-decompressed body exactly as it would with gzip.
+                // A server that ignores br falls back to identity/gzip with no
+                // change in behavior; there is no request-side risk.
+                .addInterceptor(BrotliInterceptor)
+                // A wider idle pool than OkHttp's default of five. Every feature
+                // client in the app derives from this one and shares its pool
+                // (see the class docs), while the app itself talks to a whole
+                // set of hosts - TMDB, MDBList, IntroDB, the IPTV/EPG stack,
+                // the subtitle mirrors, the addons. Five idle sockets is fewer
+                // than that set, so a burst on one host could evict the warm
+                // connection another host was about to reuse and pay a fresh
+                // TCP+TLS handshake for it on the next call. Twelve covers the
+                // working set; the five-minute keep-alive is OkHttp's default
+                // and is right for a box that idles minutes between syncs.
+                .connectionPool(ConnectionPool(12, 5, TimeUnit.MINUTES))
+                .build()
+                .also { base = it }
         }
 
     /** Derive a client with per-feature configuration, sharing the base pool. */

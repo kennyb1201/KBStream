@@ -98,6 +98,14 @@ internal object PerfTrace {
             samples.addLast(sample)
             while (samples.size > MAX_SAMPLES) samples.removeFirst()
         }
+        // The ring above is only readable on this device. The slow outliers
+        // also leave as a Sentry distribution (a no-op without a DSN or in a
+        // test), which is what makes "this rail is slow only on this model of
+        // TV" answerable from the dashboard - the tracing MainApplication
+        // enables has no other source of these app-specific labels. Only
+        // samples at or above SLOW_MS are forwarded, so ordinary traffic costs
+        // nothing.
+        if (ms >= SLOW_MS) SentryPerf.slowSample(label, ms)
     }
 
     /** Times [block] under [label], recording even when it throws. */

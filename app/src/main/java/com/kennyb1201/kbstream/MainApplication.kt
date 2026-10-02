@@ -237,6 +237,19 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             options.release = "kbstream@${BuildConfig.VERSION_NAME}"
             options.dist = BuildConfig.VERSION_CODE.toString()
             options.setTag("git_sha", BuildConfig.GIT_SHA.take(10))
+
+            // Performance tracing, at a deliberately low rate. Until now only
+            // CRASHES left the device, so a slow rail, a stuttering player or a
+            // sync that quietly takes 40 s had no signal at all - the app-side
+            // PerfTrace ring buffer only exists in this process. Tracing turns
+            // those into spans keyed by the same release/dist above, which is
+            // what makes "only slow on this one TV" answerable.
+            //
+            // 10%: these are 1.7 GB TV boxes, and full sampling would put a
+            // measurable SDK cost on the exact devices being diagnosed. 10% of
+            // many thousands of sessions is plenty to read a percentile from,
+            // and it keeps the transaction quota bounded.
+            options.tracesSampleRate = 0.1
             // Scrub the TEXT of everything that leaves the device. supabase-kt
             // request exceptions embed the full request URL and headers --
             // bearer token included -- in the exception message (see the note

@@ -1357,6 +1357,18 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     /** True when the disk cache was applied AND is younger than the TTL. */
     private var browseCacheFresh = false
 
+    /**
+     * The profile whose per-profile state (recent searches) is currently
+     * loaded. Held so the active-profile collector reacts to a SWITCH rather
+     * than to every re-emission, and seeded from the profile already active at
+     * construction: the init block loads the recents for it, so the collector's
+     * first emission must not reload or reset anything (and, because of that,
+     * it cannot call [resetSearchState] before the properties it touches are
+     * initialized).
+     */
+    private var appliedProfileId: String? =
+        com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.value?.id
+
     // NOTE: this init block MUST sit below every property declaration in
     // this class. Kotlin initializes properties top-down, and a
     // Main.immediate-dispatched collector launched from init can execute
@@ -1381,7 +1393,28 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         // content still on screen is dropped, so a profile change can never
         // leave a child staring at the previous profile's results.
         com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
-            .onEach { refreshKidsMode() }
+            .onEach { profile ->
+                // Rebind the PROFILE-SCOPED state on an actual switch. This is
+                // the half refreshKidsMode() cannot cover: it returns early
+                // when the kids flag does not change, so moving between two
+                // adult profiles left the outgoing profile's recent searches
+                // in memory - and the next commitSearch() would then persist
+                // them, joined with the new query, into THIS profile's history.
+                // That is the cross-profile search-history leak: the scoped
+                // prefs name was always right, but the in-memory list that gets
+                // written to it was not. Reload synchronously (a plain prefs
+                // read), so there is no window in which a commit can still see
+                // the previous profile's list. Results and the query go too,
+                // for the same reason the kids path drops them: one profile's
+                // results must not stay on screen for another.
+                val id = profile?.id
+                if (id != appliedProfileId) {
+                    appliedProfileId = id
+                    loadRecentSearches()
+                    resetSearchState()
+                }
+                refreshKidsMode()
+            }
             .launchIn(viewModelScope)
 
         WatchStateBus.updates

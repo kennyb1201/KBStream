@@ -589,7 +589,13 @@ internal fun CatalogManagerDialog(
                         onMove = { slot, delta -> moveRow(row, slot, delta) },
                         onRename = {
                             if (!row.isCollection) row.config?.let { onRename(it) }
-                        }
+                        },
+                        // A move re-orders this item inside the LazyColumn; the
+                        // row animates to its new slot instead of teleporting,
+                        // which matters here because a move also restores focus
+                        // onto the row - a jump cut made it look like the press
+                        // had done nothing.
+                        modifier = Modifier.animateItem()
                     )
                 }
 
@@ -619,7 +625,11 @@ internal fun CatalogManagerDialog(
                             onToggle = { showRowKeepFocus(row) },
                             onPin = {},
                             onMove = { _, _ -> },
-                            onRename = {}
+                            onRename = {},
+                            // A SHOW/HIDE press moves the row between the two
+                            // lists; animating both ends makes the rail
+                            // visibly leave one and arrive in the other.
+                            modifier = Modifier.animateItem()
                         )
                     }
                 }
@@ -693,10 +703,11 @@ private fun UnifiedManagerRow(
     onToggle: () -> Unit,
     onPin: () -> Unit,
     onMove: (CatalogRowFocus.Slot, Int) -> Unit,
-    onRename: () -> Unit
+    onRename: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(KBShapeCard)
             .background(KBSurface)
