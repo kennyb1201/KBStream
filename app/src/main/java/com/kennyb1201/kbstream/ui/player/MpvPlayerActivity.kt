@@ -2962,6 +2962,15 @@ class MpvPlayerActivity : ComponentActivity() {
      */
     private fun onPlaybackEnded() {
         if (endedHandled) return
+        // Nothing was watched, so nothing is completed and no end-of-episode
+        // card is raised: a source that never came up can still reach here as
+        // "end of file". Filing that as finished is how a run of failed
+        // sources marked itself watched and auto-advanced with the error card
+        // still up (see PlayerCompletionRules.shouldRecordCompletion).
+        if (!sessionHasPlayed()) {
+            Log.w(TAG, "ignoring end-of-playback: this session never played")
+            return
+        }
         endedHandled = true
         runOnUiThread {
             bufferingView?.visibility = View.GONE
@@ -2988,6 +2997,14 @@ class MpvPlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Whether this session ever actually played something: a playhead past the
+     * start. A source that never came up leaves it at zero, and must not be
+     * treated as a finished episode.
+     */
+    private fun sessionHasPlayed(): Boolean =
+        runCatching { surface?.positionMs() ?: 0L }.getOrDefault(0L) > 0L
+
+    /**
      * Records the episode this session is handing off FROM, before the next
      * one opens - the same row and the same scrobble the exit path writes, at
      * the moment the end-of-episode card hands playback over. Mirrors
@@ -3004,7 +3021,8 @@ class MpvPlayerActivity : ComponentActivity() {
             playbackEnded = endedHandled,
             endPanelsShown = endPanelsShown,
             positionMs = pos,
-            durationMs = dur
+            durationMs = dur,
+            played = sessionHasPlayed()
         )
         saveProgress(reason = "handoff", forceCompleted = completed)
         scrobble("stop", progressOverride = if (completed) 100.0 else null)
@@ -3869,7 +3887,8 @@ class MpvPlayerActivity : ComponentActivity() {
             playbackEnded = endedHandled,
             endPanelsShown = endPanelsShown,
             positionMs = pos,
-            durationMs = dur
+            durationMs = dur,
+            played = sessionHasPlayed()
         )
         saveProgress(reason = "exit", forceCompleted = completedOnExit)
         scrobble("stop")

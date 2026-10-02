@@ -8256,7 +8256,32 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Playback Ended ---
+
+    /**
+     * Whether this session ever actually played something: a painted frame, or
+     * a playhead past the start.
+     *
+     * The first-frame latch is cleared on every source load, so the position
+     * carries a session that switched sources mid-file; either signal means a
+     * viewer could have watched what was on screen. A source that never came
+     * up has neither, and must not be treated as a finished episode.
+     */
+    private fun sessionHasPlayed(): Boolean =
+        firstFrameRendered ||
+            runCatching { exoPlayer?.currentPosition ?: 0L }.getOrDefault(0L) > 0L
+
     private fun onPlaybackEnded() {
+        // Nothing was watched, so nothing is completed and no end-of-episode
+        // card is raised. A source that never produced a frame (or moved the
+        // playhead) can still report ENDED - an empty timeline, a container
+        // the extractor reads as zero length, or the stall fallback reading a
+        // frozen-at-zero position as a tail. Filing that as a finished episode
+        // is how a run of failed add-on sources marked itself watched and
+        // auto-advanced while the error card was still on screen.
+        if (!sessionHasPlayed()) {
+            Log.w(TAG, "ignoring end-of-playback: this session never played")
+            return
+        }
         scrobbleSimkl("stop", progressOverride = 100.0)
         // Saved SYNCHRONOUSLY rather than from `scope`. saveProgress reads the
         // position while the player is still alive and then does its own
@@ -8955,7 +8980,8 @@ class NativePlayerActivity : ComponentActivity() {
             playbackEnded = playbackEndedHandled,
             endPanelsShown = endPanelsShown,
             positionMs = pos,
-            durationMs = dur
+            durationMs = dur,
+            played = sessionHasPlayed()
         )
         saveProgress(reason = "handoff", forceCompleted = completed)
         scrobbleSimkl("stop", progressOverride = if (completed) 100.0 else null)
@@ -9163,7 +9189,12 @@ class NativePlayerActivity : ComponentActivity() {
             posStallTicks = 0
         }
 
-        if (reachedDuration || posStallTicks >= 2) {
+        // A frozen playhead only means "the file ended" once the session has
+        // actually played: before that it is a source that never came up, and
+        // latching it ended here (plus pausing it) would strand the session as
+        // finished instead of leaving it to the retry/error path. The real
+        // ENDED branch above is unaffected; onPlaybackEnded guards itself too.
+        if (sessionHasPlayed() && (reachedDuration || posStallTicks >= 2)) {
             playbackEndedHandled = true
             // Freeze the clock: without this the counter keeps climbing on a
             // black frame while ENDED never arrives.
@@ -9919,7 +9950,8 @@ class NativePlayerActivity : ComponentActivity() {
                 positionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs,
                 durationMs = exoPlayer?.duration
                     ?.takeIf { it > 0L && it != C.TIME_UNSET }
-                    ?: 0L
+                    ?: 0L,
+                played = sessionHasPlayed()
             )
             saveProgress(reason = "stop", forceCompleted = completedOnExit)
             scrobbleSimkl("stop")

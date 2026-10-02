@@ -9,6 +9,11 @@ import org.junit.Test
  * progress bar was still there": a session the player declared over, or one
  * left from the end-of-episode card in the closing minutes, is recorded as
  * watched.
+ *
+ * It also pins the opposite complaint: four failed add-on sources in a row
+ * that never played a frame were each filed as watched and auto-advanced while
+ * the error card was up. A session that never played is never a completion,
+ * however it ended.
  */
 class PlayerCompletionRulesTest {
 
@@ -21,7 +26,8 @@ class PlayerCompletionRulesTest {
                 playbackEnded = true,
                 endPanelsShown = false,
                 positionMs = 0L,
-                durationMs = duration
+                durationMs = duration,
+                played = true
             )
         )
     }
@@ -35,7 +41,8 @@ class PlayerCompletionRulesTest {
                 playbackEnded = false,
                 endPanelsShown = true,
                 positionMs = (duration * 0.98).toLong(),
-                durationMs = duration
+                durationMs = duration,
+                played = true
             )
         )
         assertTrue(
@@ -43,7 +50,8 @@ class PlayerCompletionRulesTest {
                 playbackEnded = false,
                 endPanelsShown = true,
                 positionMs = (duration * 0.95).toLong(),
-                durationMs = duration
+                durationMs = duration,
+                played = true
             )
         )
         assertTrue(
@@ -51,7 +59,8 @@ class PlayerCompletionRulesTest {
                 playbackEnded = false,
                 endPanelsShown = true,
                 positionMs = (duration * 0.90).toLong(),
-                durationMs = duration
+                durationMs = duration,
+                played = true
             )
         )
     }
@@ -65,7 +74,8 @@ class PlayerCompletionRulesTest {
                 playbackEnded = false,
                 endPanelsShown = true,
                 positionMs = (duration * 0.80).toLong(),
-                durationMs = duration
+                durationMs = duration,
+                played = true
             )
         )
         assertFalse(
@@ -73,7 +83,8 @@ class PlayerCompletionRulesTest {
                 playbackEnded = false,
                 endPanelsShown = true,
                 positionMs = (duration * 0.50).toLong(),
-                durationMs = duration
+                durationMs = duration,
+                played = true
             )
         )
     }
@@ -85,7 +96,8 @@ class PlayerCompletionRulesTest {
                 playbackEnded = false,
                 endPanelsShown = false,
                 positionMs = (duration * 0.99).toLong(),
-                durationMs = duration
+                durationMs = duration,
+                played = true
             )
         )
     }
@@ -97,7 +109,8 @@ class PlayerCompletionRulesTest {
                 playbackEnded = true,
                 endPanelsShown = true,
                 positionMs = 0L,
-                durationMs = 0L
+                durationMs = 0L,
+                played = true
             )
         )
         assertFalse(
@@ -105,7 +118,43 @@ class PlayerCompletionRulesTest {
                 playbackEnded = false,
                 endPanelsShown = true,
                 positionMs = 0L,
-                durationMs = 0L
+                durationMs = 0L,
+                played = true
+            )
+        )
+    }
+
+    @Test
+    fun `a session that never played is never completed`() {
+        // The player's own ended verdict with no frame and no playhead: an
+        // empty/errored source, or the stall fallback firing at position 0.
+        assertFalse(
+            shouldRecordCompletion(
+                playbackEnded = true,
+                endPanelsShown = false,
+                positionMs = 0L,
+                durationMs = duration,
+                played = false
+            )
+        )
+        assertFalse(
+            shouldRecordCompletion(
+                playbackEnded = true,
+                endPanelsShown = true,
+                positionMs = 0L,
+                durationMs = 0L,
+                played = false
+            )
+        )
+        // Nor can the card fallback finish a session that never played, however
+        // far its (bogus) position reads.
+        assertFalse(
+            shouldRecordCompletion(
+                playbackEnded = false,
+                endPanelsShown = true,
+                positionMs = duration,
+                durationMs = duration,
+                played = false
             )
         )
     }
