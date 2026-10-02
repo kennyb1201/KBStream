@@ -10,10 +10,9 @@ import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.kennyb1201.kbstream.data.BackgroundWork
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -88,7 +87,7 @@ class TmdbHeroArtworkRepository(
      * the change can never be worse, only usually much better.
      */
     private fun warmUpReflectionStack() {
-        CoroutineScope(Dispatchers.IO).launch {
+        BackgroundWork.launch {
             runCatching {
                 // Passing each lazy to listOf() is what forces it; the result
                 // is discarded, which is why it is not assigned to anything.
@@ -185,8 +184,9 @@ class TmdbHeroArtworkRepository(
                 return@withLock
             }
 
-            fetchDeferred = CompletableDeferred()
-            inFlight[key] = fetchDeferred!!
+            val deferredToRegister = CompletableDeferred<HeroArtwork?>()
+            fetchDeferred = deferredToRegister
+            inFlight[key] = deferredToRegister
         }
 
         inFlightResult?.let { pending -> return pending.await() }

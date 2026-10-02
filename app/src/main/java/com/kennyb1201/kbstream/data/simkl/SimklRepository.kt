@@ -16,9 +16,7 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import com.kennyb1201.kbstream.data.BackgroundWork
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
@@ -172,7 +170,7 @@ class SimklRepository(
         // composition. Resolving it here would force the lazy on the calling
         // thread. The warm-up below covers it, so the sweep only needs to stay
         // out of the constructor's way.
-        CoroutineScope(Dispatchers.IO).launch {
+        BackgroundWork.launch {
             runCatchingCancellable {
                 tmdbJsonCacheDao?.deleteByKeys(
                     listOf(
@@ -202,7 +200,7 @@ class SimklRepository(
      * the change can never be worse, only usually much better.
      */
     private fun warmUpReflectionStack() {
-        CoroutineScope(Dispatchers.IO).launch {
+        BackgroundWork.launch {
             runCatching {
                 // Passing each lazy to listOf() is what forces it; the result
                 // is discarded, which is why it is not assigned to anything.
@@ -494,9 +492,7 @@ class SimklRepository(
                 )
             }
 
-        CoroutineScope(
-            Dispatchers.IO
-        ).launch {
+        BackgroundWork.launch {
             runCatchingCancellable {
                 tmdbJsonCacheDao?.deleteByKeys(
                     diskKeysToDrop
@@ -881,9 +877,7 @@ class SimklRepository(
                 CONTINUE_WATCHING_DISK_KEY_BASE
             )
 
-        CoroutineScope(
-            Dispatchers.IO
-        ).launch {
+        BackgroundWork.launch {
             runCatchingCancellable {
                 tmdbJsonCacheDao?.deleteByKeys(
                     keys

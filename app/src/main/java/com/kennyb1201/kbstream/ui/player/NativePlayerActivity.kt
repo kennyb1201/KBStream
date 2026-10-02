@@ -8165,7 +8165,7 @@ class NativePlayerActivity : ComponentActivity() {
             val now = System.currentTimeMillis()
             val programs = HashMap<String, ChannelNowNext>()
             for (query in queries) {
-                val rows = runCatching {
+                val rows = runCatchingCancellable {
                     withContext(Dispatchers.IO) {
                         IptvDatabase.getInstance(applicationContext).iptvDao()
                             .getProgramsForChannelsInWindowLite(

@@ -138,11 +138,15 @@ internal object FrameRateMatch {
             val diff = abs(mode.refreshRate - ideal)
             if (diff / ideal > TOLERANCE) return@forEach
 
+            // Captured so the non-null branch below reads a smart-cast value:
+            // `best` is a captured var and the compiler does not narrow it
+            // across the branches.
+            val currentBest = best
             val better = when {
-                best == null -> true
+                currentBest == null -> true
                 multiple != bestMultiple -> multiple < bestMultiple
                 else -> diff < bestDiff - 1e-9 ||
-                    (diff <= bestDiff + 1e-9 && mode.id < best!!.id)
+                    (diff <= bestDiff + 1e-9 && mode.id < currentBest.id)
             }
             if (better) {
                 best = mode

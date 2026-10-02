@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.tmdb
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.BackgroundWork
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import com.kennyb1201.kbstream.BuildConfig
@@ -18,12 +19,9 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
@@ -516,7 +514,7 @@ class TmdbRepository private constructor(context: Context) :
      * coroutines above already force them, on this same dispatcher.
      */
     private fun warmUpReflectionStack() {
-        CoroutineScope(Dispatchers.IO).launch {
+        BackgroundWork.launch {
             runCatching {
                 // Passing each lazy to listOf() is what forces it; the result is
                 // discarded, which is why it is not assigned to anything.
@@ -602,7 +600,7 @@ class TmdbRepository private constructor(context: Context) :
     private fun pruneImdbCacheOnce() {
         if (cachePruned.compareAndSet(false, true)) {
             val cutoff = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(90)
-            CoroutineScope(Dispatchers.IO).launch {
+            BackgroundWork.launch {
                 runCatchingCancellable {
                     imdbResolutionDao.deleteOlderThan(cutoff)
                 }
@@ -623,7 +621,7 @@ class TmdbRepository private constructor(context: Context) :
      */
     private fun pruneJsonCacheOnce() {
         if (jsonCachePruned.compareAndSet(false, true)) {
-            CoroutineScope(Dispatchers.IO).launch {
+            BackgroundWork.launch {
                 runCatchingCancellable { TmdbJsonCacheMaintenance.trim(tmdbJsonCacheDao) }
             }
         }
@@ -654,7 +652,7 @@ class TmdbRepository private constructor(context: Context) :
         }
         if (jsonCacheWrites.incrementAndGet() >= JSON_CACHE_TRIM_EVERY_WRITES) {
             jsonCacheWrites.set(0)
-            CoroutineScope(Dispatchers.IO).launch {
+            BackgroundWork.launch {
                 runCatchingCancellable { TmdbJsonCacheMaintenance.trim(tmdbJsonCacheDao) }
             }
         }
@@ -2801,7 +2799,7 @@ class TmdbRepository private constructor(context: Context) :
         // whitens into an anonymous circle, so when the top-ranked mark is one
         // and the entity offers a letterform too, the letterform goes first
         // and the badge is kept as the last resort.
-        val ordered = if (isSolidBadge(ranked.first().filePath!!)) {
+        val ordered = if (ranked.first().filePath?.let { isSolidBadge(it) } == true) {
             ranked.drop(1) + ranked.first()
         } else {
             ranked
@@ -2879,7 +2877,7 @@ class TmdbRepository private constructor(context: Context) :
      * thumbnail (a few KB) for the path it is asked about; any failure returns
      * false (keep the pick).
      */
-    private suspend fun isSolidBadge(filePath: String): Boolean = runCatching {
+    private suspend fun isSolidBadge(filePath: String): Boolean = runCatchingCancellable {
         // Network + decode must stay off the caller's (Main) dispatcher.
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             val request = okhttp3.Request.Builder()

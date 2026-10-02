@@ -591,7 +591,9 @@ object AppUpdater {
     /**
      * versionCode + versionName from the release's metadata.json asset, with a
      * filename fallback (...-buildN.apk) if that asset is missing or broken.
-     * The optional sha256 is the APK's own hash, verified after download.
+     * sha256 is the APK's own hash, verified after download; a null here (the
+     * filename fallback, i.e. no metadata.json at all) is refused at install
+     * time rather than installed unverified — see [download].
      */
     private fun fetchMetadata(release: JSONObject): ReleaseMeta? {
         val metaAsset = assets(release)
@@ -625,9 +627,11 @@ object AppUpdater {
 
     /**
      * Streams [url] to [target], hashing as it goes, then checks the result
-     * against [expectedSha256] (when the release published one). A mismatch
-     * deletes the file and throws, so a tampered or truncated download can
-     * never reach the installer.
+     * against [expectedSha256]. Both a mismatch and a MISSING hash delete the
+     * file and throw, so an unverified APK never reaches the installer: the CI
+     * release always publishes the hash in metadata.json, so a feed without one
+     * is a tampered or broken release rather than an ordinary case, and
+     * refusing the update is the safer failure.
      */
     private fun download(
         url: String,
@@ -690,7 +694,14 @@ object AppUpdater {
             }
             Log.i(TAG, "update APK verified (sha256=$actual)")
         } else {
-            Log.w(TAG, "update APK has no published sha256; installing unverified")
+            // Fail closed. See the note above: the publish workflow always
+            // writes sha256 into metadata.json, so its absence means the feed
+            // was tampered with or is broken — not a reason to install a build
+            // we cannot verify.
+            target.delete()
+            throw IOException(
+                "Update refused: the release published no SHA-256 to verify against"
+            )
         }
     }
 

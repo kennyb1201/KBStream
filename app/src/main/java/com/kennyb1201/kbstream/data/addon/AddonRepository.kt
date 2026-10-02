@@ -313,7 +313,7 @@ class AddonRepository private constructor() {
                     CompletableDeferred()
 
                 pendingCatalogRequests[cacheKey] =
-                    requestToPerform!!
+                    requireNotNull(requestToPerform)
             }
         }
 
@@ -498,7 +498,7 @@ class AddonRepository private constructor() {
                     CompletableDeferred()
 
                 pendingMetaRequests[cacheKey] =
-                    requestToPerform!!
+                    requireNotNull(requestToPerform)
             }
         }
 
@@ -611,7 +611,7 @@ class AddonRepository private constructor() {
                     CompletableDeferred()
 
                 pendingStreamsRequests[cacheKey] =
-                    requestToPerform!!
+                    requireNotNull(requestToPerform)
             }
         }
 
