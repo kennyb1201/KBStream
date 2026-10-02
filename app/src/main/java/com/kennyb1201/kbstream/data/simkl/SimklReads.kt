@@ -712,4 +712,33 @@ internal object SimklCacheKeys {
      */
     fun scoped(profileScopedBase: String, accessToken: String): String =
         profileScopedBase + '#' + discriminator(accessToken)
+
+    /**
+     * Whether a Continue Watching fetch that STARTED under the given identity
+     * may still publish its result.
+     *
+     * A fetch reads the feed, awaits the network, and only then writes it into
+     * the shared memory slot and the disk blob. In between, the feed can be
+     * invalidated - the player's completion push does exactly that on every
+     * finished episode. Writing then would stamp the PRE-completion list with a
+     * fresh timestamp and serve it for the whole Continue Watching TTL, which is
+     * what kept a finished show on the rail for three minutes after the viewer
+     * went home: the resume refresh issued before the push landed re-cached the
+     * list the push had just invalidated, and the next read (the one the
+     * completion itself asked for) hit that fresh copy and skipped the network.
+     *
+     * The fetch may publish only when neither identity it started under has
+     * moved. The owner is the active profile - publishing under the wrong one
+     * leaks another profile's rail. The
+     * epoch is bumped by every clear of the feed, so a fetch whose result was
+     * made stale by an invalidation is refused however fast it returns.
+     */
+    fun mayPublishContinueWatchingFetch(
+        fetchedOwner: String,
+        currentOwner: String,
+        fetchedEpoch: Long,
+        currentEpoch: Long
+    ): Boolean =
+        fetchedOwner == currentOwner &&
+            fetchedEpoch == currentEpoch
 }

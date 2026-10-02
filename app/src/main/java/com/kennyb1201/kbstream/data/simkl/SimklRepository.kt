@@ -458,6 +458,10 @@ class SimklRepository(
         cachedContinueWatchingFetchedAt =
             0L
 
+        // A fetch from the signed-out account must not repopulate the feed
+        // after this clear (see continueWatchingEpoch).
+        bumpContinueWatchingEpoch()
+
         cachedAllShowItems =
             null
 
@@ -849,6 +853,7 @@ class SimklRepository(
     internal suspend fun clearContinueWatchingCache() {
         cachedContinueWatching = null
         cachedContinueWatchingFetchedAt = 0L
+        bumpContinueWatchingEpoch()
         runCatchingCancellable {
             tmdbJsonCacheDao?.deleteByKeys(
                 simklDiskKeys(
@@ -2088,9 +2093,14 @@ class SimklRepository(
     ): List<SimklContinueWatchingItem> {
 
         // Captured up front: everything published below has to still belong
-        // to this profile when it lands (see [cachedContinueWatchingOwner]).
+        // to this profile, and to the same generation of the feed, when it
+        // lands (see [cachedContinueWatchingOwner] and
+        // [SimklCacheKeys.mayPublishContinueWatchingFetch]).
         val ownerAtStart =
             activeOwner()
+
+        val epochAtStart =
+            continueWatchingEpoch
 
         if (
             !forceRefresh &&
@@ -2129,7 +2139,15 @@ class SimklRepository(
                     }
                         .getOrNull()
 
-                if (parsed != null) {
+                if (
+                    parsed != null &&
+                    SimklCacheKeys.mayPublishContinueWatchingFetch(
+                        fetchedOwner = ownerAtStart,
+                        currentOwner = activeOwner(),
+                        fetchedEpoch = epochAtStart,
+                        currentEpoch = continueWatchingEpoch
+                    )
+                ) {
                     cachedContinueWatching =
                         parsed
 
@@ -2704,9 +2722,18 @@ class SimklRepository(
 
             // A switch mid-fetch cleared the cache above; publishing now
             // would stamp THIS profile's feed under the NEW profile's memory
-            // slot and disk key. Return the result to the (already stale)
-            // caller without caching it.
-            if (activeOwner() != ownerAtStart) {
+            // slot and disk key. And an invalidation mid-fetch (the player's
+            // completion push) would re-stamp the pre-completion list with a
+            // fresh timestamp, serving it for the whole TTL. Return the result
+            // to the (already stale) caller without caching it.
+            if (
+                !SimklCacheKeys.mayPublishContinueWatchingFetch(
+                    fetchedOwner = ownerAtStart,
+                    currentOwner = activeOwner(),
+                    fetchedEpoch = epochAtStart,
+                    currentEpoch = continueWatchingEpoch
+                )
+            ) {
                 return result
             }
 
@@ -3297,6 +3324,24 @@ class SimklRepository(
             0L
 
         /**
+         * Bumped by every invalidation of [cachedContinueWatching].
+         *
+         * A fetch captures this before it starts and refuses to Publish if it
+         * has moved, so a read that was already in flight when a completion
+         * invalidated the feed cannot re-stamp the pre-completion list with a
+         * fresh timestamp and serve it for the whole TTL (see
+         * [SimklCacheKeys.mayPublishContinueWatchingFetch]).
+         */
+        @Volatile
+        private var continueWatchingEpoch: Long =
+            0L
+
+        /** Invalidate the feed's memory copy, disk blob and in-flight fetches. */
+        private fun bumpContinueWatchingEpoch() {
+            continueWatchingEpoch += 1
+        }
+
+        /**
          * Profile-switch isolation: drops every in-memory watched-state
          * snapshot. Simkl auth is per-profile (scoped simkl_auth prefs), so
          * after a switch these caches can belong to a DIFFERENT Simkl
@@ -3308,6 +3353,7 @@ class SimklRepository(
         fun clearTransientCaches() {
             cachedContinueWatching = null
             cachedContinueWatchingFetchedAt = 0L
+            bumpContinueWatchingEpoch()
             INSTANCE?.let { instance ->
                 instance.clearWatchedCachesForProfileSwitch()
             }

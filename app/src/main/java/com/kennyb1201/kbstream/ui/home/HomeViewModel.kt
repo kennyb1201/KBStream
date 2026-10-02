@@ -7438,6 +7438,17 @@ private suspend fun calculateEpisodesRemaining(
         // actually landed - otherwise the card lingers until the next resume.
         viewModelScope.launch {
             ContinueWatchingRefreshBus.requests.collect {
+
+                // The completion invalidated Simkl's feed, but Home's own
+                // resume refresh may already have re-cached it (see
+                // SimklCacheKeys.mayPublishContinueWatchingFetch): drop the
+                // feed here as well, so this merge cannot read the
+                // pre-completion list from its TTL cache and leave the
+                // finished show on the rail for the rest of the window.
+                runCatchingCancellable {
+                    simklRepository.clearContinueWatchingCache()
+                }
+
                 refreshUpNext()
             }
         }

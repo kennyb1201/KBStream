@@ -89,4 +89,65 @@ class SimklCacheKeysTest {
         assertTrue(key.startsWith("simkl:continue_watching#"))
         assertFalse(key.contains("null"))
     }
+
+    /*
+     * The Continue Watching fetch's publish guard.
+     *
+     * Reported bug: a finished show stayed on the rail for about three minutes
+     * - exactly the feed's TTL - after the viewer went home. The completion
+     * push invalidates the feed, but the resume refresh Home had already
+     * issued was still in flight and re-cached the pre-completion list with a
+     * fresh timestamp; the read the completion then asked for hit that fresh
+     * copy and skipped the network, so nothing re-resolved until the TTL
+     * expired. The publish guard refuses that write.
+     */
+
+    @Test
+    fun `a fetch may publish when nothing moved while it ran`() {
+        assertTrue(
+            SimklCacheKeys.mayPublishContinueWatchingFetch(
+                fetchedOwner = "profile-1",
+                currentOwner = "profile-1",
+                fetchedEpoch = 3L,
+                currentEpoch = 3L
+            )
+        )
+    }
+
+    @Test
+    fun `a fetch refuses to publish once the feed was invalidated`() {
+        // The completion push bumps the epoch while the fetch is in flight.
+        assertFalse(
+            SimklCacheKeys.mayPublishContinueWatchingFetch(
+                fetchedOwner = "profile-1",
+                currentOwner = "profile-1",
+                fetchedEpoch = 3L,
+                currentEpoch = 4L
+            )
+        )
+    }
+
+    @Test
+    fun `a fetch refuses to publish once the profile changed`() {
+        assertFalse(
+            SimklCacheKeys.mayPublishContinueWatchingFetch(
+                fetchedOwner = "profile-1",
+                currentOwner = "profile-2",
+                fetchedEpoch = 3L,
+                currentEpoch = 3L
+            )
+        )
+    }
+
+    @Test
+    fun `a fetch refuses to publish when both moved`() {
+        assertFalse(
+            SimklCacheKeys.mayPublishContinueWatchingFetch(
+                fetchedOwner = "profile-1",
+                currentOwner = "profile-2",
+                fetchedEpoch = 3L,
+                currentEpoch = 9L
+            )
+        )
+    }
 }
