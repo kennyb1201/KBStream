@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.core.content.IntentCompat
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -352,6 +353,9 @@ object AppUpdater {
                     sha256 = meta.sha256
                 )
             } catch (t: Throwable) {
+                // A canceled check is not a failed one: let the cancellation
+                // through instead of parking a Failed state the UI would show.
+                if (t is CancellationException) throw t
                 state.value = UpdateState.Failed(t.message ?: "Network error")
             }
         }
@@ -387,6 +391,7 @@ object AppUpdater {
                 )
                 installApk(context, apk)
             } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 state.value = UpdateState.Failed(t.message ?: "Download failed")
             }
         }

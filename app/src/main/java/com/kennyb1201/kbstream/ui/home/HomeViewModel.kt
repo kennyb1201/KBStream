@@ -2517,17 +2517,6 @@ Log.d(
     // for "end of catalog" (which left Home rails stuck at the first 20).
     private val railSourceOffset = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
-    private data class RailInfo(
-        val addonName: String,
-        val catalogId: String,
-        val catalogType: String,
-        val catalogRawName: String,
-        val baseUrl: String,
-        val hideUpcoming: Boolean,
-        val landscapeCards: Boolean,
-        val pinned: Boolean
-    )
-
     fun refreshWatchedStatusForCurrentRails() {
 
         refreshWatchedStatus(
@@ -6110,16 +6099,6 @@ private suspend fun calculateEpisodesRemaining(
             )
         }
     }
-
-    private data class PendingCatalogLoad(
-        val addonName: String,
-        val baseUrl: String,
-        val catalogId: String,
-        val catalogType: String,
-        val catalogRawName: String
-    )
-
-
 
     /**
      * Landscape artwork (backdrop + clearlogo) for a rail's items, through the

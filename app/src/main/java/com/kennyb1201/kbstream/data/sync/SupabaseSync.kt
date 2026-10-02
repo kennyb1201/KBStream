@@ -14,6 +14,7 @@ import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -359,11 +360,16 @@ object SupabaseSync {
                     _authState.value = AuthState.SignedOut
                 }
             } catch (e: Exception) {
+                // A canceled restore is not a restore that failed: propagate
+                // so the caller's cancellation is honored instead of reported
+                // as a token problem.
+                if (e is CancellationException) throw e
                 // Any unexpected error path: keep the saved token — the
                 // next launch can still restore from it.
                 Log.e(TAG, "restoreSession failed (token kept)", e)
                 _authState.value = AuthState.SignedOut
             } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 // Errors (LinkageError etc., e.g. an R8/codec mismatch on a
                 // release build) are NOT Exceptions — letting one escape this
                 // launch kills the process at every cold start on signed-in
@@ -420,6 +426,7 @@ object SupabaseSync {
                 // so a redundant run only costs one read query.
                 ensureBackgroundPull(context)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Log.e(TAG, "signIn failed", e)
                 _authState.value = AuthState.Error(e.message ?: "Sign-in failed")
             }
@@ -458,6 +465,7 @@ object SupabaseSync {
                 // Fresh account: push local state up as the initial seed.
                 pushAll(context)
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Log.e(TAG, "signUp failed", e)
                 _authState.value = AuthState.Error(e.message ?: "Sign-up failed")
             }
@@ -819,9 +827,11 @@ object SupabaseSync {
                         filter { isIn("item_id", chunk) }
                     }
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     Log.w(TAG, "deleteHistoryRows failed: ${e.message}")
                     recordSyncError("Delete", e)
                 } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
                     CrashReporter.recordNonFatal(
                         t,
                         mapOf("source" to "delete_history_rows")
@@ -1040,10 +1050,12 @@ object SupabaseSync {
                     chunk.forEach { row -> outbox.remove(row) }
                     clearSyncError()
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     Log.w(TAG, "flush $table chunk of ${chunk.size} failed: ${e.message}")
                     recordSyncError("Upload", e)
                     // Keep in outbox; retried by the periodic sync loop.
                 } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
                     CrashReporter.recordNonFatal(
                         t,
                         mapOf("source" to "flush_outbox", "table" to table)
@@ -1255,9 +1267,11 @@ object SupabaseSync {
                 )
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.w(TAG, "pullHistory failed: ${e.message}")
             recordSyncError("History sync", e)
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_history"))
             Log.e(TAG, "pullHistory crashed: ${t.message}")
         }
@@ -1314,9 +1328,11 @@ object SupabaseSync {
                 WatchedStatusRepository.invalidateAllCaches()
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.w(TAG, "pullWatched failed: ${e.message}")
             recordSyncError("Watched sync", e)
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_watched"))
             Log.e(TAG, "pullWatched crashed: ${t.message}")
         }
@@ -1351,9 +1367,11 @@ object SupabaseSync {
                 PrefsPayloadApplier.apply(context, unscopedKey(storedKey), row.payload)
             }
         } catch (e: Exception) {
+            if (e is CancellationException) throw e
             Log.w(TAG, "pullPrefs failed: ${e.message}")
             recordSyncError("Settings sync", e)
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_prefs"))
             Log.e(TAG, "pullPrefs crashed: ${t.message}")
         }
@@ -1552,6 +1570,7 @@ object SupabaseSync {
             pushAllNow(context)
             Log.i(TAG, "force full resync complete")
         } catch (t: Throwable) {
+            if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "force_full_resync"))
             Log.w(TAG, "force full resync failed: ${t.message}")
         } finally {
@@ -1637,8 +1656,10 @@ object SupabaseSync {
                     _realtimeChannelCount.value = realtimeSubscriptions.size
                     watchRealtimeHealth()
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     Log.w(TAG, "realtime setup failed: ${e.message}")
                 } catch (t: Throwable) {
+                    if (t is CancellationException) throw t
                     CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_setup"))
                     Log.e(TAG, "realtime setup crashed: ${t.message}")
                 }
@@ -1751,8 +1772,10 @@ object SupabaseSync {
                             _realtimeChannelCount.value = realtimeSubscriptions.size
                             repaired = true
                         } catch (e: Exception) {
+                            if (e is CancellationException) throw e
                             Log.w(TAG, "rebuild ${sub.table} failed: ${e.message}")
                         } catch (t: Throwable) {
+                            if (t is CancellationException) throw t
                             CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_resubscribe"))
                         }
                     } else {
@@ -1803,8 +1826,10 @@ object SupabaseSync {
                 }
                 _lastSyncAtMs.value = System.currentTimeMillis()
             } catch (e: Exception) {
+                if (e is CancellationException) throw e
                 Log.w(TAG, "onRemoteChange failed: ${e.message}")
             } catch (t: Throwable) {
+                if (t is CancellationException) throw t
                 CrashReporter.recordNonFatal(t, mapOf("source" to "remote_change"))
                 Log.e(TAG, "onRemoteChange crashed: ${t.message}")
             }
