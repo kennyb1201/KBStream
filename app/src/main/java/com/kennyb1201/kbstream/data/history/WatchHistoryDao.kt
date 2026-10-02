@@ -169,6 +169,28 @@ interface WatchHistoryDao {
     )
     suspend fun getCompletedForParents(parentIds: List<String>): List<WatchHistoryEntity>
 
+    /**
+     * Reactive form of [getCompletedForParents]: the same rows, re-emitted
+     * whenever the table changes.
+     *
+     * The episode checkmarks had exactly the defect the progress bars did (see
+     * [observeInProgressForParents]) and are fixed the same way. Completed rows
+     * were read ONCE per load, so an episode the player finished as the viewer
+     * left it did not tick its card until the page was reopened - while the
+     * progress bar on that same card cleared immediately, because that path
+     * already followed the table. Collecting these makes the markers follow it
+     * too.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND isCompleted = 1
+        ORDER BY season ASC, episode ASC, updatedAt DESC
+        """
+    )
+    fun observeCompletedForParents(parentIds: List<String>): Flow<List<WatchHistoryEntity>>
+
     @Query(
         """
         SELECT * FROM watch_history

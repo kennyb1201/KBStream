@@ -583,7 +583,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         val localCompletedEntries = runCatchingCancellable {
             historyDao.getCompletedForParents(historyParentIds)
         }.getOrDefault(emptyList())
-        _completedEpisodeIds.value = localCompletedEntries.map { it.id }.toSet()
+
+        // First frame of the checkmarks; the collector started at the end of
+        // this function keeps them following the table from here on.
+        publishLocalWatchedMarkers(parentId, localCompletedEntries)
 
         /*
          * Drop a cloud-derived RESUME whose episode the local history now
@@ -647,13 +650,25 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Collects this title's in-progress rows for as long as the title is
-     * loaded, so the hero's RESUME bar and every episode card's progress bar
-     * track the watch-history table instead of a snapshot taken at load time.
+     * Watches this title's rows in the watch-history table for as long as the
+     * title is loaded, so the screen follows the database instead of a snapshot
+     * taken at load time.
+     *
+     * Both halves of the table are followed, because both were wrong while only
+     * the first was:
+     *
+     *  - IN-PROGRESS rows drive the hero's RESUME bar and every episode card's
+     *    progress bar. Without this the bar outlived the episode it belonged to,
+     *    because the player writes the completion after the load's one-shot read
+     *    has already run.
+     *  - COMPLETED rows drive the episode checkmarks and [completedEpisodeIds].
+     *    They had the same defect and were missed by that fix: finishing an
+     *    episode as the viewer left it left its card unticked until the page was
+     *    reopened, even though the progress bar beside it had already cleared.
      *
      * Restarted per load because the ViewModel outlives the composable and is
      * shared across titles: without the cancel, a previous title's rows would
-     * keep being published into the new page's bars.
+     * keep being published into the new page.
      */
     private fun startWatchProgressObserver(
         parentId: String,
@@ -662,11 +677,41 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         watchProgressJob?.cancel()
 
         watchProgressJob = viewModelScope.launch {
-            historyDao.observeInProgressForParents(historyParentIds)
-                .collect { rows ->
-                    publishLocalProgress(parentId, rows)
-                }
+            launch {
+                historyDao.observeInProgressForParents(historyParentIds)
+                    .collect { rows ->
+                        publishLocalProgress(parentId, rows)
+                    }
+            }
+
+            launch {
+                historyDao.observeCompletedForParents(historyParentIds)
+                    .collect { rows ->
+                        publishLocalWatchedMarkers(parentId, rows)
+                    }
+            }
         }
+    }
+
+    /**
+     * Publishes the local watched markers for [parentId]: the completed-episode
+     * id set the episode cards stream-match on, and the merged watched-episode
+     * keys they tick from.
+     *
+     * Shared by the one-shot read in [refreshLocalWatchState] and the reactive
+     * collector above, so the first frame and every frame after it agree.
+     * Merging reads the CURRENT Simkl/MDBList sets, so a later emission - a
+     * write from the player, by then past the cloud lists' arrival - publishes
+     * the fuller set rather than a stale local-only one.
+     */
+    private fun publishLocalWatchedMarkers(
+        parentId: String,
+        completedEntries: List<WatchHistoryEntity>
+    ) {
+        _completedEpisodeIds.value =
+            completedEntries.map { it.id }.toSet()
+
+        publishWatchedEpisodeKeys(parentId, completedEntries)
     }
 
     /**
