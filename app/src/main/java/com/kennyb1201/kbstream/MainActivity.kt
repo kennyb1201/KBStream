@@ -113,6 +113,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -627,6 +628,36 @@ class MainActivity : ComponentActivity() {
     }
 
 @OptIn(ExperimentalSharedTransitionApi::class)
+/**
+ * Mounts the shared-element registry only while the hero flight can run.
+ *
+ * `SharedTransitionLayout` installs a lookahead scope, which costs an extra
+ * measure pass over everything inside it — here the whole app shell, because
+ * the layout has to enclose the screen switch for a rail poster and the Detail
+ * hero to share one registry. Under reduced motion the flight is already inert
+ * (the composition local below is null, so every hero modifier is a no-op), and
+ * paying for a lookahead scope while nothing can fly is pure cost on these
+ * low-memory boxes. So that path skips the layout outright and hands its
+ * content a null scope.
+ *
+ * A wrapper rather than an inline `if` in AppRoot: the content it wraps is the
+ * entire screen switch, and taking the scope as a parameter keeps that block
+ * where it was instead of re-indenting it.
+ */
+@Composable
+private fun HeroTransitionHost(
+    enabled: Boolean,
+    content: @Composable (SharedTransitionScope?) -> Unit
+) {
+    if (enabled) {
+        SharedTransitionLayout {
+            content(this)
+        }
+    } else {
+        content(null)
+    }
+}
+
 @Composable
 fun AppRoot() {
 
@@ -1033,11 +1064,15 @@ fun AppRoot() {
     // Keying on the screen KIND rather than its value means navigating between
     // two Detail pages, or re-targeting one, does not replay a full-screen
     // transition; only an actual screen change does.
-    // SharedTransitionLayout owns the shared-element registry the poster ->
-    // Detail hero flight is built on; the AnimatedContent below supplies the
+    // HeroTransitionHost owns the shared-element registry the poster -> Detail
+    // hero flight is built on; the AnimatedContent below supplies the
     // per-screen visibility scope. Both are needed, which is why the hero
-    // transition can only be constructed inside the content lambda.
-    SharedTransitionLayout {
+    // transition can only be constructed inside the content lambda. The host
+    // skips the registry entirely under reduced motion — the flight is inert
+    // there, and a lookahead scope is not free on these boxes.
+    HeroTransitionHost(
+        enabled = transitionMs != 0
+    ) { heroScope ->
     AnimatedContent(
         targetState = screen,
         contentKey = { it.typeName() },
@@ -1072,17 +1107,16 @@ fun AppRoot() {
     // See KBHeroTransition: this lambda is the only place where the shared
     // registry and the animated-visibility scope are both in hand — and it is
     // also the per-screen boundary, so the scope is published here as an
-    // ambient value. Every poster that can open a Detail page opts in with a
-    // single Modifier.heroSharedElement(type, id); no screen has to grow a
-    // parameter to join the flight.
+    // ambient value. A card that can open a Detail page opts in with a single
+    // Modifier.heroSourceElement(type, id), the Detail hero with
+    // Modifier.heroSharedElement(type, id); no screen has to grow a parameter
+    // to join the flight.
     CompositionLocalProvider(
-        LocalKBHeroTransition provides if (transitionMs == 0) {
-            // Reduced motion: the screen change is already a hard cut, so a
-            // poster that flew across it would be the one thing still moving.
-            null
-        } else {
+        // Null under reduced motion: HeroTransitionHost skipped the registry
+        // above, so there is nothing for a call site to join.
+        LocalKBHeroTransition provides heroScope?.let { scope ->
             KBHeroTransition(
-                sharedScope = this@SharedTransitionLayout,
+                sharedScope = scope,
                 visibilityScope = this,
                 durationMs = transitionMs
             )
@@ -2231,7 +2265,7 @@ fun AppRoot() {
     }
     }
     } // closes AnimatedContent( targetState = screen ) { current -> ... }
-    } // closes SharedTransitionLayout
+    } // closes HeroTransitionHost
 }
 
 @Composable

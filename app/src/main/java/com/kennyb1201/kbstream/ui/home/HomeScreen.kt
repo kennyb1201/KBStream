@@ -115,7 +115,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
-import com.kennyb1201.kbstream.ui.components.heroSharedElement
+import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
@@ -3352,7 +3352,7 @@ fun HomeScreen(
                                                     // shared bounds are
                                                     // what the flight
                                                     // animates.
-                                                    .heroSharedElement(
+                                                    .heroSourceElement(
                                                         meta.type,
                                                         meta.id
                                                     )

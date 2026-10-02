@@ -57,7 +57,7 @@ import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
-import com.kennyb1201.kbstream.ui.components.heroSharedElement
+import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -760,7 +760,7 @@ private fun LibraryPosterCard(
                 // flies into the hero instead of the grid hard-cutting.
                 // navigationId is null for rows with no TMDB id, and those
                 // cannot navigate at all, so the empty key is never a match.
-                .heroSharedElement(item.mediaType, item.navigationId.orEmpty())
+                .heroSourceElement(item.mediaType, item.navigationId.orEmpty())
                 .width(posterSize.width)
                 .height(posterSize.height)
         ) {

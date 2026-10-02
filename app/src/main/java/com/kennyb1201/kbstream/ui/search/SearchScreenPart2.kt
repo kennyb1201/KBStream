@@ -54,7 +54,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
-import com.kennyb1201.kbstream.ui.components.heroSharedElement
+import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
@@ -529,7 +529,7 @@ internal fun TitlePosterTile(
             modifier = modifier
                 // Key comes from meta, not the result: meta is what the
                 // click actually navigates with.
-                .heroSharedElement(result.meta.type, result.meta.id)
+                .heroSourceElement(result.meta.type, result.meta.id)
                 .width(posterSize.width)
                 .height(posterSize.height)
         )

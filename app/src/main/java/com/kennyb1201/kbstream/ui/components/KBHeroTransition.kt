@@ -7,7 +7,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 
 /**
  * The two scopes a shared-element transition needs, bundled so that the
@@ -103,6 +107,11 @@ val LocalKBHeroTransition = compositionLocalOf<KBHeroTransition?> { null }
  * when there is no enclosing transition, so call sites never need a null check
  * and a poster grid keeps working unchanged outside the app shell.
  *
+ * This is the **destination** end, and also the right choice for any endpoint
+ * that is always in play — the Detail hero, which is not focusable and so has
+ * no focus to be gated on. A card that can *start* a flight should use
+ * [heroSourceElement] instead.
+ *
  * Only worth adding to a node that can open a **Detail** page. Two Detail pages
  * share one `AnimatedContent` content key and therefore do not animate at all,
  * so the rails inside Detail (More Like This, collections) deliberately do not
@@ -114,3 +123,62 @@ fun Modifier.heroSharedElement(type: String, id: String): Modifier =
         LocalKBHeroTransition.current
             .modifierOrEmpty(KBHeroTransition.keyOf(type, id))
     )
+
+/**
+ * The one title whose card is the current source of a hero flight.
+ *
+ * A single value for the whole app, because a single screen is on top at a
+ * time and exactly one card in it holds D-pad focus, so there is never more
+ * than one flight source to describe.
+ *
+ * Deliberately sticky: it records the last card FOCUSED, not the focused card.
+ * Both directions of the flight depend on that.
+ *
+ *  - Forward, pressing a card moves focus off the rail before the transition
+ *    paints its first frame, so an "is this card focused right now" test would
+ *    detach the source at exactly the moment the flight needs it.
+ *  - Back, the flight into the rail has to find the same card again once focus
+ *    returns to it, and by then the card may have been disposed and recomposed
+ *    while Detail was on top — a flag kept on the card itself would have gone
+ *    with it.
+ */
+private val heroSourceKey = mutableStateOf<String?>(null)
+
+/**
+ * [heroSharedElement] for a card that can START a flight.
+ *
+ * Only the card the viewer is about to open can be that end, so only it joins
+ * the registry. Putting the shared-element modifier on every poster in every
+ * rail and grid instead registered a lookahead-tracked node on hundreds of
+ * cards at once, and the cost of that read as jank across the app while
+ * scrolling. The Detail hero keeps [heroSharedElement]: a destination is always
+ * in play, not just when it is the last thing focused.
+ *
+ * The per-card [derivedStateOf] is what keeps this cheap. A card recomposes
+ * only when it personally gains or loses the role, so moving focus from one
+ * card to the next re-runs exactly two of them — not every card that happens to
+ * be composed, which is what a plain read of [heroSourceKey] would do.
+ */
+@Composable
+fun Modifier.heroSourceElement(type: String, id: String): Modifier {
+
+    val transition =
+        LocalKBHeroTransition.current
+            ?: return Modifier
+
+    val key =
+        KBHeroTransition.keyOf(type, id)
+
+    val isSource =
+        remember(key) {
+            derivedStateOf { heroSourceKey.value == key }
+        }
+
+    return this
+        .onFocusChanged { focusState ->
+            if (focusState.hasFocus) heroSourceKey.value = key
+        }
+        .then(
+            if (isSource.value) transition.modifierFor(key) else Modifier
+        )
+}
