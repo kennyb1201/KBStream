@@ -265,7 +265,7 @@ object SupabaseSync {
             try {
                 // supabase-kt keeps sessions in memory; we persist the
                 // refresh token ourselves so sign-in survives app restarts.
-                val prefs = context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
+                val prefs = syncPrefs(context)
                 val refresh = prefs.getString(KEY_REFRESH_TOKEN, null)
                 val savedEmail = prefs.getString(KEY_EMAIL, null)
 
@@ -351,7 +351,7 @@ object SupabaseSync {
                             }
                         } else {
                             Log.w(TAG, "session restore failed: ${e.message}")
-                            context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
+                            syncPrefs(context)
                                 .edit().remove(KEY_REFRESH_TOKEN).apply()
                             _authState.value = AuthState.SignedOut
                         }
@@ -487,8 +487,7 @@ object SupabaseSync {
         backgroundPullStarted = false
         scope.launch {
             runCatching { c.auth.signOut() }
-            context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
-                .edit().clear().apply()
+            syncPrefs(context).edit().clear().apply()
             stopRealtime()
             _authState.value = AuthState.SignedOut
             _syncEnabled.value = false
@@ -498,7 +497,7 @@ object SupabaseSync {
     private suspend fun persistSession(context: Context, email: String) {
         val c = client ?: return
         val refresh = c.auth.currentSessionOrNull()?.refreshToken
-        context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
+        syncPrefs(context)
             .edit()
             .putString(KEY_REFRESH_TOKEN, refresh)
             .putString(KEY_EMAIL, email)
@@ -513,7 +512,7 @@ object SupabaseSync {
         val c = client ?: return
         val refresh = c.auth.currentSessionOrNull()?.refreshToken ?: return
         if (refresh.isBlank()) return
-        val prefs = context.getSharedPreferences(SYNC_PREFS, Context.MODE_PRIVATE)
+        val prefs = syncPrefs(context)
         prefs.edit()
             .putString(KEY_REFRESH_TOKEN, refresh)
             .putString(KEY_EMAIL, prefs.getString(KEY_EMAIL, null).orEmpty())
@@ -1380,23 +1379,27 @@ object SupabaseSync {
     // ── Push (initial seed / manual sync-now) ───────────────────────
 
     private suspend fun pushHistory(context: Context) {
+        // Capture the scope FIRST: the DAO read below resolves the ACTIVE
+        // profile, so a profile switch between the read and this capture used
+        // to stamp the OLD profile's rows with the NEW profile's cloud scope
+        // — poisoned rows that synced back down as phantom watched markers.
+        // Pin the profile, read, then verify it is still active before
+        // publishing (see [PushScopeRules]).
+        val pid = currentProfileId()
         val db = WatchHistoryDatabase.getInstanceScoped(context)
         val all = db.watchHistoryDao().getAll()
-        // Scope EVERY row with the profile that was active when the push
-        // STARTED. Re-resolving per row (the old behavior) meant a profile
-        // switch mid-loop stamped the OLD profile's rows with the NEW
-        // profile's cloud scope — those poisoned rows then synced back down
-        // onto the new profile as phantom watched markers.
-        val pid = currentProfileId()
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
         all.forEach { enqueueHistory(it, pid) }
         flushOutbox()
     }
 
     private suspend fun pushWatched(context: Context) {
+        // Same captured-scope rule as pushHistory: pin the profile before the
+        // DAO read and the (suspending) cloud-timestamp read, so a switch
+        // during either cannot file these markers under the wrong profile.
+        val pid = currentProfileId()
         val db = WatchHistoryDatabase.getInstanceScoped(context)
         val all = db.watchedStatusDao().getAll()
-        // Same captured-scope rule as pushHistory above.
-        val pid = currentProfileId()
         // Only markers, never this device's derived "nothing watched here"
         // rows: every preloaded rail item gets one, and publishing them makes
         // a sibling device's correct badge lose the last-write-wins race to a
@@ -1406,14 +1409,16 @@ object SupabaseSync {
         // have pulled the sibling's newer answer yet (see
         // [WatchedMarkerRules.shouldPush]).
         val cloudTimestamps = cloudMarkerTimestamps()
-        all.filter { WatchedMarkerRules.shouldPublish(it.isWatched, it.isPartiallyWatched) }
-            .filter { entity ->
-                WatchedMarkerRules.shouldPush(
-                    localUpdatedAt = entity.updatedAt,
-                    cloudUpdatedAt = cloudTimestamps[scopedKey(entity.key, pid)]
-                )
-            }
-            .forEach { enqueueWatched(it, pid) }
+        val toPublish =
+            all.filter { WatchedMarkerRules.shouldPublish(it.isWatched, it.isPartiallyWatched) }
+                .filter { entity ->
+                    WatchedMarkerRules.shouldPush(
+                        localUpdatedAt = entity.updatedAt,
+                        cloudUpdatedAt = cloudTimestamps[scopedKey(entity.key, pid)]
+                    )
+                }
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        toPublish.forEach { enqueueWatched(it, pid) }
         flushOutbox()
     }
 
@@ -1442,10 +1447,17 @@ object SupabaseSync {
     }
 
     private suspend fun pushPrefsBlobs(context: Context) {
-        // Captured once so every blob in this pass carries the SAME scope
-        // even if the profile switches mid-loop (same rule as pushHistory).
+        // Captured once so every blob in this pass carries the SAME scope,
+        // and verified after the build: the builders read the ACTIVE profile's
+        // scoped stores, so a switch between the capture and the build used to
+        // file one profile's blobs — its Simkl session and MDBList key among
+        // them — under the other profile's cloud scope (the "my tracker login
+        // followed me onto another profile" leak). Publish only while the
+        // captured profile is still active (see [PushScopeRules]).
         val pid = currentProfileId()
-        PrefsPayloadBuilder.buildAll(context).forEach { (key, payload) ->
+        val blobs = PrefsPayloadBuilder.buildAll(context)
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        blobs.forEach { (key, payload) ->
             // Belt-and-braces guard: an empty local profiles list must never
             // reach the cloud. A fresh device pushing before its first pull
             // would otherwise erase the account's profiles for every other
@@ -1929,6 +1941,20 @@ object SupabaseSync {
     private const val SYNC_PREFS = "kbstream_sync"
     private const val KEY_REFRESH_TOKEN = "supabase_refresh_token"
     private const val KEY_EMAIL = "supabase_email"
+
+    /**
+     * The Supabase session store: the refresh token is a bearer credential,
+     * so it lives behind [SecureTokenStore] (encrypted at rest) instead of in
+     * a plain prefs file. The email is kept in the same store — it is not a
+     * secret, but splitting one logical store across two files would only
+     * make the clear-on-sign-out path easy to get wrong.
+     */
+    private fun syncPrefs(context: Context) =
+        com.kennyb1201.kbstream.data.security.SecureTokenStore.prefs(
+            context,
+            SYNC_PREFS,
+            legacyPlaintext = true
+        )
 
     // Outbox retry cadence. One minute: short enough that an offline burst
     // lands promptly after reconnect, rare enough to be invisible.

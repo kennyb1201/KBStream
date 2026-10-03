@@ -122,7 +122,10 @@ internal object PlaybackHistoryWriter {
                     }
                 dao.upsert(row)
                 SupabaseSync.enqueueHistory(row, sessionProfileId)
-                TvLauncherPublisher.sync(context, dao.getAll())
+                // Only the rows the launcher can actually publish, not the
+                // whole table: a save happens on every position tick, and
+                // getAll() dragged every completed row back with it.
+                TvLauncherPublisher.sync(context, dao.getResumeRowsForLauncher())
             }
         }.onFailure { e ->
             Log.w(TAG, "could not write watch history for ${entry.id}", e)

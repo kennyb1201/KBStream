@@ -5,6 +5,7 @@ import java.io.BufferedInputStream
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -115,6 +116,12 @@ object IptvHttpClient {
             try {
                 return block()
             } catch (t: Throwable) {
+                // Cancellation is not a failure to retry: the caller (or the
+                // worker's own timeout) has already given up on this import,
+                // and retrying would both swallow the cancellation and hold
+                // the coroutine for another backoff window. Rethrow it so the
+                // cancel propagates like any other suspend call.
+                if (t is CancellationException) throw t
                 lastError = t
                 val isLastAttempt = attempt == maxAttempts - 1
                 if (isLastAttempt) throw t

@@ -201,6 +201,27 @@ interface WatchHistoryDao {
     suspend fun getAll(): List<WatchHistoryEntity>
 
     /**
+     * The rows the TV launcher's Continue watching rail can publish: in-progress
+     * (not completed) with a saved position, newest first.
+     *
+     * Narrower than [getAll] on purpose. Every history save rebuilt the launcher
+     * rail, and it did so from [getAll] - which drags back every COMPLETED row
+     * too, the part of the table that grows without bound on a long-lived
+     * install. Those rows can never become a launcher card (the publisher drops
+     * completed rows), so reading them on each save was pure waste on the main
+     * write path.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE positionMs > 0
+          AND isCompleted = 0
+        ORDER BY updatedAt DESC
+        """
+    )
+    suspend fun getResumeRowsForLauncher(): List<WatchHistoryEntity>
+
+    /**
      * Series rows that carry at least one COMPLETED episode, newest completion
      * first. Backs Home's local "next up" cards: a show whose episodes were
      * marked watched has no in-progress row left, and Continue Watching - built

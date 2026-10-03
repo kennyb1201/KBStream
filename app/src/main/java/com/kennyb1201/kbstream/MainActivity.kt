@@ -24,7 +24,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -2322,10 +2322,10 @@ fun AppRoot() {
 @Composable
 private fun KidsTimeLockOverlay() {
     val guard = com.kennyb1201.kbstream.data.sync.KidsTimeGuard
-    val lockState by guard.state.collectAsState()
+    val lockState by guard.state.collectAsStateWithLifecycle()
 
     val profile = com.kennyb1201.kbstream.data.sync.ProfileManager.profiles
-        .collectAsState().value
+        .collectAsStateWithLifecycle().value
         .firstOrNull { it.id == lockState.profileId }
 
     var pin by remember(lockState.profileId) { mutableStateOf("") }
@@ -2420,7 +2420,7 @@ private fun KidsTimeLockOverlay() {
 @Composable
 private fun UpdateAvailablePopup(isPlaying: Boolean) {
     val context = LocalContext.current
-    val updateState by AppUpdater.state.collectAsState()
+    val updateState by AppUpdater.state.collectAsStateWithLifecycle()
 
     // Never interrupt playback (movies, series, IPTV catch-up all run through
     // the fullscreen player activity). While something plays the popup stays

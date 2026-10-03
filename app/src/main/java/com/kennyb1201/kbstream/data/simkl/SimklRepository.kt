@@ -56,11 +56,17 @@ class SimklRepository(
 
     private val prefs
         get() = context?.applicationContext?.let { appContext ->
-            appContext.getSharedPreferences(
+            // Through SecureTokenStore: this store holds the Simkl access
+            // token, so it is encrypted at rest. The logical name is the
+            // profile-scoped one as before, which keeps the cloud blob and
+            // every reader (Diagnostics, SyncPrefsPayload) pointed at the
+            // same store.
+            com.kennyb1201.kbstream.data.security.SecureTokenStore.prefs(
+                appContext,
                 com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
                     appContext, PREFS_NAME
                 ),
-                Context.MODE_PRIVATE
+                legacyPlaintext = true
             )
         }
 

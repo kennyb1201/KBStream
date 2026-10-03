@@ -8,6 +8,8 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -19,6 +21,12 @@ import org.json.JSONObject
  *
  * Export/import operate on SAF URIs (storage-access-framework pickers) so
  * the user chooses where the file lives — USB drive, cloud, downloads.
+ *
+ * Both entry points hop to [Dispatchers.IO]: they read whole Room tables,
+ * serialize them, and touch a SAF stream, none of which may run on the
+ * caller's thread. The Settings screen launches them from its composition
+ * scope, whose dispatcher is Main, so without the hop a large library
+ * dropped frames and could ANR.
  */
 object BackupManager {
 
@@ -42,7 +50,10 @@ object BackupManager {
         )
 
     /** Serializes current state and writes it to [uri]. Returns a summary. */
-    suspend fun export(context: Context, uri: Uri): String {
+    suspend fun export(context: Context, uri: Uri): String =
+        withContext(Dispatchers.IO) { exportBlocking(context, uri) }
+
+    private suspend fun exportBlocking(context: Context, uri: Uri): String {
         val db = WatchHistoryDatabase.getInstanceScoped(context)
         val history = db.watchHistoryDao().getAll()
         val watched = db.watchedStatusDao().getAll()
@@ -86,7 +97,10 @@ object BackupManager {
     }
 
     /** Reads [uri], validates it, and replaces local state with its contents. */
-    suspend fun import(context: Context, uri: Uri): String {
+    suspend fun import(context: Context, uri: Uri): String =
+        withContext(Dispatchers.IO) { importBlocking(context, uri) }
+
+    private suspend fun importBlocking(context: Context, uri: Uri): String {
         val stream = context.contentResolver.openInputStream(uri)
             ?: error("Could not open the chosen file")
         val text = stream.bufferedReader().use { it.readText() }

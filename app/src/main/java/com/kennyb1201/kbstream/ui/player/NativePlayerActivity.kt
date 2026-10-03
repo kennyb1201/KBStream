@@ -7134,7 +7134,16 @@ class NativePlayerActivity : ComponentActivity() {
                                 vs.width.toFloat() / vs.height.toFloat()
                             else 0f
                         )
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        // Reflective unpin of the frame's private ratio field.
+                        // A failure here (a renamed field on a newer media3, an
+                        // R8-stripped member) leaves the last forced ratio
+                        // pinned, so the picture keeps a ratio the user just
+                        // turned off - a real, visible bug worth reporting
+                        // rather than swallowing.
+                        com.kennyb1201.kbstream.data.reporting.CrashReporter
+                            .recordNonFatal(e, mapOf("source" to "player.aspect.unpin"))
+                    }
                 }
             } else {
                 forceAspectOnFrame = null
@@ -7155,11 +7164,22 @@ class NativePlayerActivity : ComponentActivity() {
                         applyForcedAspect()
                         playerView.requestLayout()
                         playerView.invalidate()
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        // The delayed re-assert is the step that makes a forced
+                        // ratio survive a late layout/player transaction; a
+                        // throw here is why the picture snapped back.
+                        com.kennyb1201.kbstream.data.reporting.CrashReporter
+                            .recordNonFatal(e, mapOf("source" to "player.aspect.reassert"))
+                    }
                 },
                 120L
             )
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            // Top-level guard on the whole aspect pass: a throw here aborted
+            // the relayout, so the mode change silently did nothing.
+            com.kennyb1201.kbstream.data.reporting.CrashReporter
+                .recordNonFatal(e, mapOf("source" to "player.aspect.apply"))
+        }
     }
 
     /** Content frame currently pinned to a forced ratio (null = none). */

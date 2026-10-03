@@ -154,9 +154,63 @@ object TvLauncherPublisher {
             .sortedByDescending { it.updatedAt }
             .distinctBy { it.parentId }
 
-        // 1. Drop every row we previously created.
+        // 1. Upsert the current set FIRST, then prune what is no longer wanted.
+        //
+        // The order is deliberate. Deleting every row before inserting any (the
+        // previous order) meant a process death - or a kill while backgrounded -
+        // between the two steps left the launcher's Continue watching rail
+        // EMPTY until the next sync. Writing the wanted rows first makes the
+        // worst case a stale row that survives one sync, never an empty rail.
         val old = parseRows(prefs.getString(KEY_ROWS, null))
-        old.values.forEach { rowId ->
+        val next = JSONObject()
+        val wantedIds = candidates.mapTo(mutableSetOf()) { it.id }
+        candidates.forEach { entry ->
+            val existingRowId = old[entry.id]
+            if (existingRowId != null) {
+                // Refresh in place: keeping the row id keeps the launcher card
+                // itself (its position, and the deep link baked into it) stable
+                // across the many position updates one episode produces.
+                next.put(entry.id, existingRowId)
+                runCatching {
+                    resolver.update(
+                        Uri.withAppendedPath(
+                            TvContract.WatchNextPrograms.CONTENT_URI,
+                            existingRowId
+                        ),
+                        entry.toWatchNextValues(appContext),
+                        null,
+                        null
+                    )
+                }.onFailure { e ->
+                    if (isWriteDenial(e)) {
+                        noteWriteDenied(e)
+                    } else {
+                        Log.e(TAG, "Watch Next update failed for ${entry.id}: ${e.message}")
+                    }
+                }
+            } else {
+                runCatching {
+                    val uri = resolver.insert(
+                        TvContract.WatchNextPrograms.CONTENT_URI,
+                        entry.toWatchNextValues(appContext)
+                    )
+                    if (uri != null) {
+                        next.put(entry.id, uri.lastPathSegment)
+                    }
+                }.onFailure { e ->
+                    if (isWriteDenial(e)) {
+                        noteWriteDenied(e)
+                    } else {
+                        Log.e(TAG, "Watch Next insert failed for ${entry.id}: ${e.message}")
+                    }
+                }
+            }
+        }
+
+        // 2. Prune only the rows whose history row is gone (a finished or
+        // removed title), leaving every wanted row in place.
+        old.forEach { (historyId, rowId) ->
+            if (historyId in wantedIds) return@forEach
             runCatching {
                 resolver.delete(
                     Uri.withAppendedPath(
@@ -166,26 +220,6 @@ object TvLauncherPublisher {
                     null,
                     null
                 )
-            }
-        }
-
-        // 2. Re-insert the current set and remember the new row ids.
-        val next = JSONObject()
-        candidates.forEach { entry ->
-            runCatching {
-                val uri = resolver.insert(
-                    TvContract.WatchNextPrograms.CONTENT_URI,
-                    entry.toWatchNextValues(appContext)
-                )
-                if (uri != null) {
-                    next.put(entry.id, uri.lastPathSegment)
-                }
-            }.onFailure { e ->
-                if (isWriteDenial(e)) {
-                    noteWriteDenied(e)
-                } else {
-                    Log.e(TAG, "Watch Next insert failed for ${entry.id}: ${e.message}")
-                }
             }
         }
 

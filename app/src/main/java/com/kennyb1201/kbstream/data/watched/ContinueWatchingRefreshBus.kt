@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.watched
 
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
@@ -32,9 +33,20 @@ object ContinueWatchingRefreshBus {
      * while Home is alive (its ViewModel survives behind the player), and a
      * copy delivered much later would just trigger a spurious refetch. When
      * Home is not alive the ON_RESUME refresh covers it anyway.
+     *
+     * DROP_OLDEST, not the default SUSPEND policy: the signal is a level
+     * ("re-read the feeds"), so when a burst arrives while a collector is
+     * still draining the first one, keeping the NEWEST request is what matters
+     * - the earlier request is already being served. Under the default policy
+     * tryEmit returns false for that second request and the emit is silently
+     * lost, so the read that a later completion needs could be the one
+     * dropped.
      */
     private val _requests =
-        MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+        MutableSharedFlow<Unit>(
+            extraBufferCapacity = 1,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST
+        )
 
     val requests = _requests.asSharedFlow()
 

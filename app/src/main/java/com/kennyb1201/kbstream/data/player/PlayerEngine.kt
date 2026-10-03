@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.SystemClock
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Which engine plays a title, and whether the backup engine may take over.
@@ -162,8 +163,7 @@ object PlayerEngine {
      * through a path that publishes nothing at all (a live channel, a
      * because-you-watched card, a chained next episode) and open it in MPV.
      */
-    @Volatile
-    private var launchAnime: LaunchAnime? = null
+    private val launchAnimeRef = AtomicReference<LaunchAnime?>(null)
 
     /**
      * Records whether the play request being resolved right now is anime.
@@ -181,7 +181,7 @@ object PlayerEngine {
             return
         }
 
-        launchAnime =
+        launchAnimeRef.set(
             LaunchAnime(
                 isAnime =
                     AnimeDetect.isAnimeForLaunch(
@@ -191,6 +191,7 @@ object PlayerEngine {
                     ),
                 at = SystemClock.elapsedRealtime()
             )
+        )
     }
 
     /**
@@ -200,13 +201,21 @@ object PlayerEngine {
      * choice no matter what the anime rule said about the title.
      */
     fun clearLaunchAnime() {
-        launchAnime = null
+        launchAnimeRef.set(null)
     }
 
-    /** The published verdict, consumed: stale or already-read reads as false. */
+    /**
+     * The published verdict, consumed: stale or already-read reads as false.
+     *
+     * Read-and-clear in one atomic step, and not a plain `launchAnime = null`
+     * after a separate read: the launch site and the resolving ViewModel are
+     * not the same thread, so a plain read-then-write could be interleaved by a
+     * fresh [publishLaunchAnime] and clear a verdict that had just been
+     * published for the NEXT launch. getAndSet leaves whichever value the
+     * winner published intact.
+     */
     private fun consumeLaunchAnime(): Boolean {
-        val published = launchAnime ?: return false
-        launchAnime = null
+        val published = launchAnimeRef.getAndSet(null) ?: return false
         return published.isAnime &&
             SystemClock.elapsedRealtime() - published.at <= LAUNCH_ANIME_TTL_MS
     }

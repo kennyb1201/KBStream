@@ -55,7 +55,26 @@ class EpgRefreshWorker(
         // did import are stored, and retrying would re-download every one of
         // them (a multi-minute import) to re-attempt the broken one, which the
         // next periodic run covers anyway.
-        if (imported == 0) return Result.retry()
+        if (imported == 0) {
+            // A source list that is entirely dead (an expired playlist host, a
+            // box that lost the network) used to retry forever: every attempt
+            // re-downloads the whole guide only to fail again, and WorkManager
+            // backs off but never stops, so the box kept waking to burn battery
+            // for a guide that was never coming back. Stop after a bounded run
+            // of consecutive empty imports; the periodic schedule still fires,
+            // and a source that recovers simply imports again and resets this.
+            val consecutive = prefs.getInt(KEY_EPG_EMPTY_RUNS, 0) + 1
+            prefs.edit().putInt(KEY_EPG_EMPTY_RUNS, consecutive).apply()
+            if (consecutive >= MAX_EMPTY_RUNS) {
+                Log.w(
+                    TAG,
+                    "GUIDE REFRESH GIVING UP after $consecutive empty runs; " +
+                        "waiting for the next scheduled run"
+                )
+                return Result.failure()
+            }
+            return Result.retry()
+        }
 
         // Same key the guide screen's own staleness check reads, and written
         // only on success: a run that imported nothing must leave the guide
@@ -63,6 +82,7 @@ class EpgRefreshWorker(
         prefs.edit()
             .putLong(KEY_EPG_UPDATED_AT, System.currentTimeMillis())
             .putString(KEY_EPG_DB_NAME, activeGuideName())
+            .putInt(KEY_EPG_EMPTY_RUNS, 0)
             .apply()
 
         return Result.success()
@@ -113,5 +133,9 @@ class EpgRefreshWorker(
         const val KEY_EXTRA_EPG_URLS = "extra_epg_urls"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
         const val KEY_EPG_DB_NAME = "epg_db_name"
+
+        /** Consecutive all-sources-failed runs before this worker stops retrying. */
+        const val KEY_EPG_EMPTY_RUNS = "epg_empty_runs"
+        const val MAX_EMPTY_RUNS = 5
     }
 }

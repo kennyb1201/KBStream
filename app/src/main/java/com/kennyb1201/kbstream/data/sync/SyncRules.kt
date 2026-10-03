@@ -80,6 +80,29 @@ internal fun remoteWins(remoteUpdated: Long, localUpdated: Long): Boolean =
     remoteUpdated > localUpdated
 
 /**
+ * Scope rule for the bulk push passes (history, watched markers, prefs).
+ *
+ * Every pass captures the ACTIVE profile id first and then reads rows or
+ * builds blobs — both of which resolve the active profile AGAIN. A profile
+ * switch in between made the DATA one profile's and the SCOPE another's. Two
+ * reports came out of that: phantom watched markers on the profile you
+ * switched to, and "my Simkl session / MDBList key followed me onto another
+ * profile" — the tracker credentials of the profile you left, filed under the
+ * profile you switched to, which then pushed its plays into the wrong
+ * account.
+ *
+ * A pass may therefore only publish while the profile it captured is still
+ * the active one. A switched-away pass is simply dropped: the incoming
+ * profile's own push is triggered by the switch, and rows already enqueued
+ * live carry their scope from enqueue time.
+ */
+internal object PushScopeRules {
+
+    fun scopeStillActive(capturedProfileId: String?, activeProfileId: String?): Boolean =
+        capturedProfileId == activeProfileId
+}
+
+/**
  * Publish/apply rules for the Simkl session blob.
  *
  * The blob is account-wide state written as a FULL REPLACE, and the applier

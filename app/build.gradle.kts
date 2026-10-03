@@ -323,6 +323,11 @@ baselineProfile {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.19.1")
+    // EncryptedSharedPreferences backs the auth-token stores (Supabase session,
+    // Simkl token, MDBList key). The key is held in the AndroidKeyStore and
+    // never leaves the device, so a rooted box or a pulled prefs file yields
+    // ciphertext instead of a live session that can be replayed off-device.
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")

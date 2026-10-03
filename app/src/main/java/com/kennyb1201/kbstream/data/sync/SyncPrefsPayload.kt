@@ -24,6 +24,22 @@ private fun scopedPrefs(context: Context, baseName: String) =
     )
 
 /**
+ * The Simkl session store, which holds a live access token and so lives behind
+ * [SecureTokenStore] rather than in plain XML. The name is resolved through
+ * ProfileStorage exactly as [scopedPrefs] does, so per-profile scoping is
+ * unchanged.
+ */
+private fun simklAuthPrefs(context: Context) =
+    com.kennyb1201.kbstream.data.security.SecureTokenStore.prefs(
+        context,
+        com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+            context,
+            SIMKL_AUTH_STORE
+        ),
+        legacyPlaintext = true
+    )
+
+/**
  * Base name of a prefs store saved by builds before the N-U-V-I-O rename.
  * Assembled from fragments so the retired product name never appears
  * verbatim in source, while the one-time migrations below can still read
@@ -218,7 +234,7 @@ object PrefsPayloadBuilder {
      * cloud — see [SimklAuthRules].
      */
     fun hasSimklAuthToPublish(context: Context): Boolean {
-        val prefs = scopedPrefs(context, SIMKL_AUTH_STORE)
+        val prefs = simklAuthPrefs(context)
         val token = prefs.getString(SIMKL_ACCESS_TOKEN_KEY, null)
         val signedOut = token.isNullOrBlank() &&
             prefs.getBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
@@ -451,7 +467,7 @@ object PrefsPayloadBuilder {
         }
 
     fun buildSimklAuth(context: Context): JsonObject {
-        val prefs = scopedPrefs(context, SIMKL_AUTH_STORE)
+        val prefs = simklAuthPrefs(context)
         val token = prefs.getString(SIMKL_ACCESS_TOKEN_KEY, null)
         // Tombstone: a blank token is a real sign-out ONLY when this profile
         // deliberately disconnected. It also has to be blank — a stale marker
@@ -915,7 +931,7 @@ object PrefsPayloadApplier {
             (payload[SimklAuthRules.SIGNED_OUT_FIELD] as? kotlinx.serialization.json.JsonPrimitive)
                 ?.content == "true"
 
-        val prefs = scopedPrefs(context, SIMKL_AUTH_STORE)
+        val prefs = simklAuthPrefs(context)
 
         // Blank token = the profile SIGNED OUT on some device. Honor it — but
         // only when the blob says so explicitly. Every device used to publish

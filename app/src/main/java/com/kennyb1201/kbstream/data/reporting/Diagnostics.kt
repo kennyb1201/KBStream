@@ -640,9 +640,13 @@ object Diagnostics {
      * so "Simkl is connected" on one profile says nothing about the next one.
      */
     private fun simklConnected(context: Context, profileId: String): Boolean = runCatching {
-        context.getSharedPreferences(
+        // Through SecureTokenStore, matching Simkl's own store name so the
+        // "Simkl is connected" line reports what Simkl thinks, now that store
+        // is encrypted.
+        com.kennyb1201.kbstream.data.security.SecureTokenStore.prefs(
+            context,
             ProfileStorage.prefsName(profileId, "simkl_auth"),
-            Context.MODE_PRIVATE
+            legacyPlaintext = true
         ).getString("access_token", null)?.isNotBlank() == true
     }.getOrDefault(false)
 

@@ -43,7 +43,6 @@ import android.os.Looper
 import androidx.compose.runtime.DisposableEffect
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
@@ -147,8 +146,8 @@ fun GuideScreen(
     onPlayChannel: ((IptvChannelWithEpg) -> Unit)? = null,
     onPlayCatchup: ((IptvChannelWithEpg, CatchupProgram) -> Unit)? = null
 ) {
-    val playlist by viewModel.playlist.collectAsState()
-    val visibleChannels by viewModel.visibleChannels.collectAsState()
+    val playlist by viewModel.playlist.collectAsStateWithLifecycle()
+    val visibleChannels by viewModel.visibleChannels.collectAsStateWithLifecycle()
     // Channels whose guide row has actually been queried. Used to keep a
     // channel that is merely still loading from being labeled "No program
     // data" (see resolvedGuideChannelIds in the ViewModel).
@@ -159,7 +158,7 @@ fun GuideScreen(
     val error by viewModel.error.collectAsStateWithLifecycle()
     val guideError by viewModel.guideError.collectAsStateWithLifecycle()
     val playlistUrl by viewModel.playlistUrl.collectAsStateWithLifecycle()
-    val epgUrl by viewModel.epgUrl.collectAsState()
+    val epgUrl by viewModel.epgUrl.collectAsStateWithLifecycle()
     val playlistName by viewModel.playlistName.collectAsStateWithLifecycle()
     val extraPlaylistUrls by viewModel.extraPlaylistUrls.collectAsStateWithLifecycle()
     val extraEpgUrls by viewModel.extraEpgUrls.collectAsStateWithLifecycle()
@@ -175,7 +174,7 @@ fun GuideScreen(
     // so channel IDs are not interchangeable). Also re-keyed on the active
     // profile so a switch reloads the incoming profile's sets.
     val activeProfileId by com.kennyb1201.kbstream.data.sync.ProfileManager
-        .activeProfile.collectAsState()
+        .activeProfile.collectAsStateWithLifecycle()
     val guidePreferences = remember(appContext, activeProfileId) {
         appContext.getSharedPreferences(
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(

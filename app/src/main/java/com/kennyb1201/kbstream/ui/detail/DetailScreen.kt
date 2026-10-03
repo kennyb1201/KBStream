@@ -38,7 +38,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -604,10 +603,10 @@ fun DetailScreen(
     val seasonSwapFocusSink = remember { FocusRequester() }
     var seasonSwapSinkArmed by remember { mutableStateOf(false) }
 
-    val meta by viewModel.meta.collectAsState()
+    val meta by viewModel.meta.collectAsStateWithLifecycle()
     val mdbListRatings by viewModel.mdbListRatings.collectAsStateWithLifecycle()
     val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
-    val tmdbDetail by viewModel.tmdbDetail.collectAsState()
+    val tmdbDetail by viewModel.tmdbDetail.collectAsStateWithLifecycle()
     // The trailer the button offers IS the trailer the button plays: one pick,
     // one rule. Movies almost always carry a video typed exactly "Trailer", so
     // this matters for series, which TMDB frequently files as a "Teaser".
@@ -622,15 +621,15 @@ fun DetailScreen(
     LaunchedEffect(clearLogoUrl) {
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let(onClearLogoResolved)
     }
-    val isLoading by viewModel.isLoading.collectAsState()
-    val episodes by viewModel.episodes.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val episodes by viewModel.episodes.collectAsStateWithLifecycle()
     // Air dates from a second metadata source (see AirDateCorrection). TMDB's
     // own dates are volunteer-edited and lag a currently-airing season, which
     // is what dimmed a live season's chip and badged its episodes UNAVAILABLE.
-    val airDateCorrections by viewModel.airDateCorrections.collectAsState()
-    val episodesLoading by viewModel.episodesLoading.collectAsState()
+    val airDateCorrections by viewModel.airDateCorrections.collectAsStateWithLifecycle()
+    val episodesLoading by viewModel.episodesLoading.collectAsStateWithLifecycle()
     val episodeError by viewModel.episodeError.collectAsStateWithLifecycle()
-    val resumeInfo by viewModel.resumeInfo.collectAsState()
+    val resumeInfo by viewModel.resumeInfo.collectAsStateWithLifecycle()
     // All in-progress rows for this title, keyed by episodeStreamId: lets
     // EVERY in-progress episode card show its own progress bar / time left,
     // not just the single most recent one in resumeInfo.
@@ -646,8 +645,8 @@ fun DetailScreen(
     val simklWatchedEpisodes by viewModel.simklWatchedEpisodes.collectAsStateWithLifecycle()
     val simklSeriesWatched by viewModel.simklSeriesWatched.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
-    val vmTargetEpisode by viewModel.targetEpisode.collectAsState()
-    val vmLoadedSeason by viewModel.loadedSeason.collectAsState()
+    val vmTargetEpisode by viewModel.targetEpisode.collectAsStateWithLifecycle()
+    val vmLoadedSeason by viewModel.loadedSeason.collectAsStateWithLifecycle()
     val vmPlayButtonText by viewModel.playButtonText.collectAsStateWithLifecycle()
 
     fun clearEpisodeTransitionState() {
@@ -746,6 +745,58 @@ fun DetailScreen(
 
     fun seasonUnavailable(season: Int): Boolean =
         seasonPremiereDates[season]?.isAfter(today) == true
+
+    // The people rail's items: writer, director, then the billed cast,
+    // de-duplicated and capped. Memoized because the detail list builder below
+    // runs on EVERY recomposition of a screen that recomposes constantly
+    // (position ticks, badge updates, focus moves), while this list depends
+    // only on tmdbDetail - so building it inline re-deduplicated and
+    // re-allocated the whole rail for a value that had not changed.
+    val peopleItems = remember(tmdbDetail) {
+        val tmdbCast = tmdbDetail?.credits?.cast.orEmpty()
+        val tmdbDirector = tmdbDetail?.credits?.director()
+        val mainWriter = tmdbDetail?.credits?.writers().orEmpty().distinctBy { it.id }.firstOrNull()
+
+        buildList<PeopleRowItem> {
+            mainWriter?.let { writer ->
+                add(
+                    PeopleRowItem.Person(
+                        TmdbCastMember(writer.id, writer.name, "Writer", writer.profilePath)
+                    )
+                )
+            }
+
+            tmdbDirector?.let { director ->
+                if (director.id != mainWriter?.id) {
+                    add(
+                        PeopleRowItem.Person(
+                            TmdbCastMember(
+                                director.id,
+                                director.name,
+                                "Director",
+                                director.profilePath
+                            )
+                        )
+                    )
+                }
+            }
+
+            val castItems = tmdbCast.distinctBy { it.id }.take(25).map { PeopleRowItem.Person(it) }
+            if (castItems.isNotEmpty() && isNotEmpty()) {
+                add(PeopleRowItem.Separator)
+            }
+            addAll(castItems)
+        }
+    }
+
+    // Same reasoning: a filter over the collection's parts, recomputed on every
+    // recomposition of the list builder for a value that only changes when the
+    // collection or the detail payload does.
+    val collectionParts = remember(collection, tmdbDetail?.id) {
+        collection?.parts
+            .orEmpty()
+            .filter { it.id != tmdbDetail?.id }
+    }
 
     val premiereDateFormatter = remember {
         DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.getDefault())
@@ -2960,73 +3011,6 @@ fun DetailScreen(
                             }
                         }
 
-                        val peopleItems =
-                            buildList<PeopleRowItem> {
-                                val tmdbCast =
-                                    tmdbDetail?.credits?.cast
-                                        .orEmpty()
-
-                                val tmdbDirector =
-                                    tmdbDetail?.credits?.director()
-
-                                val tmdbWriters =
-                                    tmdbDetail?.credits?.writers()
-                                        .orEmpty()
-                                        .distinctBy { it.id }
-
-                                val mainWriter =
-                                    tmdbWriters.firstOrNull()
-
-                                mainWriter?.let { writer ->
-                                    add(
-                                        PeopleRowItem.Person(
-                                            TmdbCastMember(
-                                                writer.id,
-                                                writer.name,
-                                                "Writer",
-                                                writer.profilePath
-                                            )
-                                        )
-                                    )
-                                }
-
-                                tmdbDirector?.let { director ->
-                                    if (
-                                        director.id !=
-                                            mainWriter?.id
-                                    ) {
-                                        add(
-                                            PeopleRowItem.Person(
-                                                TmdbCastMember(
-                                                    director.id,
-                                                    director.name,
-                                                    "Director",
-                                                    director.profilePath
-                                                )
-                                            )
-                                        )
-                                    }
-                                }
-
-                                val castItems =
-                                    tmdbCast
-                                        .distinctBy { it.id }
-                                        .take(25)
-                                        .map {
-                                            PeopleRowItem.Person(it)
-                                        }
-
-                                if (
-                                    castItems.isNotEmpty() &&
-                                    isNotEmpty()
-                                ) {
-                                    add(
-                                        PeopleRowItem.Separator
-                                    )
-                                }
-
-                                addAll(castItems)
-                            }
 
                         if (peopleItems.isNotEmpty()) {
                             item(key = "peopleheader") {
@@ -3416,12 +3400,6 @@ fun DetailScreen(
                             }
                         }
 
-                        val collectionParts =
-                            collection?.parts
-                                .orEmpty()
-                                .filter {
-                                    it.id != tmdbDetail?.id
-                                }
 
                         if (collectionParts.isNotEmpty()) {
                             item(key = "collectionheader") {

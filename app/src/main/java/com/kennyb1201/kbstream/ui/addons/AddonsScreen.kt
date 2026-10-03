@@ -33,7 +33,6 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -87,7 +86,7 @@ fun AddonsScreen(
     val status by viewModel.status.collectAsStateWithLifecycle()
     val health by viewModel.health.collectAsStateWithLifecycle()
     val checkingHealth by viewModel.checkingHealth.collectAsStateWithLifecycle()
-    val catalogConfigurations by viewModel.catalogConfigurations.collectAsState()
+    val catalogConfigurations by viewModel.catalogConfigurations.collectAsStateWithLifecycle()
 
     var urlInput by remember { mutableStateOf("") }
     var selectedId by remember { mutableStateOf<String?>(null) }
@@ -400,8 +399,8 @@ fun AddonsScreen(
         )
     }
 
-    val collectionsState by viewModel.collections.collectAsState()
-    val homeOrderVersion by viewModel.homeOrderVersion.collectAsState()
+    val collectionsState by viewModel.collections.collectAsStateWithLifecycle()
+    val homeOrderVersion by viewModel.homeOrderVersion.collectAsStateWithLifecycle()
     var collectionUrlInput by remember { mutableStateOf("") }
     // Collections profile file import. TV ROMs (Fire TV, some Google TVs)
     // ship without the system DocumentsUI picker, so SAF can throw
