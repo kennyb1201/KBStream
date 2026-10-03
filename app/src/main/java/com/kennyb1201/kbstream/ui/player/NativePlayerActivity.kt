@@ -7578,7 +7578,12 @@ class NativePlayerActivity : ComponentActivity() {
                     ?.bufferedReader(Charsets.UTF_8)
                     ?.use { it.readText() }
             }.getOrNull()?.let { SubtitleFileParser.parse(it) } ?: emptyList()
-            launch(Dispatchers.Main) {
+            // withContext, not a nested launch(Dispatchers.Main): the IO
+            // coroutine is already scoped to lifecycleScope, so handing the
+            // result back on Main is the same hop - but this one the IO body
+            // actually waits for, and a failure in the Main block is thrown
+            // here instead of into a sibling launch nobody joins.
+            withContext(Dispatchers.Main) {
                 externalSubtitleCues = parsed
                 if (!parsed.isEmpty()) {
                     Log.i(TAG, "External subtitles parsed: ${parsed.size} cues")

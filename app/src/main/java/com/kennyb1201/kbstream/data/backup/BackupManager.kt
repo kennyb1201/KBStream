@@ -137,7 +137,12 @@ object BackupManager {
         db.withTransaction {
             db.watchHistoryDao().clearAll()
             db.watchedStatusDao().clearAll()
-            history.forEach { db.watchHistoryDao().upsert(it) }
+            // upsertAllRaw, not upsertAll: the merge form reads each stored row
+            // first so a partial caller cannot blank metadata, but the table
+            // was just cleared above - every one of those reads would miss.
+            // This keeps the whole restore in one transaction without a
+            // per-row lookup on a large history.
+            db.watchHistoryDao().upsertAllRaw(history)
             watched.chunked(150).forEach { chunk ->
                 db.watchedStatusDao().upsertAll(chunk)
             }

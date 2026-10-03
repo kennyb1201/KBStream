@@ -123,6 +123,26 @@ class OrderedRailPublisherTest {
     }
 
     @Test
+    fun `a publish callback may report another rail`() = runBlocking {
+        val order = mutableListOf<Int>()
+        lateinit var publisher: OrderedRailPublisher<String>
+
+        // The publish callback hands rows to the screen; a screen that reacts
+        // by asking for one more rail ("the page has its first row, fetch the
+        // rest") reports from inside it. Under the old publish-inside-the-lock
+        // shape this re-entered a non-reentrant Mutex and deadlocked.
+        publisher = OrderedRailPublisher(2) { index, _ ->
+            order += index
+            if (index == 0) publisher.report(1, "b")
+        }
+
+        publisher.report(0, "a")
+
+        assertEquals(listOf(0, 1), order)
+        assertEquals(listOf("a", "b"), publisher.finished())
+    }
+
+    @Test
     fun `rails reporting at once still reach the screen in declaration order`() = runBlocking {
         val order = mutableListOf<Int>()
         val publisher = OrderedRailPublisher<Int>(6) { index, _ -> order += index }

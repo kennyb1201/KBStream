@@ -22,11 +22,20 @@ import kotlinx.coroutines.sync.withLock
  * instead. A rail that has already been published does grow in place, which is
  * what a second, wider pass over a rail the viewer can already see is.
  *
- * Every report and every [publish] runs under one lock, so two rails reporting
- * at once can never interleave their callbacks and hand the caller a list in
- * an order the screen has not agreed to. Callbacks must therefore be cheap:
- * they decide what the screen shows, and the load work that produced the rail
- * has already finished by the time one runs.
+ * Deciding what to publish runs under one lock, so two rails reporting at once
+ * can never interleave and hand the caller a list in an order the screen has
+ * not agreed to. The [publish] CALLBACK, though, runs after the lock is
+ * released: a report that is ready to publish collects its callbacks under the
+ * lock, then emits them outside it. Publishing while holding the lock made a
+ * slow callback - and these hand rows to the screen - stall every other rail's
+ * report behind it, and a callback that re-entered [report] (or awaited
+ * anything that did) deadlocked outright.
+ *
+ * The cost is that two callbacks may now run concurrently if two reports are
+ * processed at once. The caller's [publish] is a callback onto the UI stream
+ * and is expected to be safe to call from more than one coroutine; the ORDER
+ * within a single report is still exactly the declaration order the class
+ * promises.
  */
 internal class OrderedRailPublisher<T>(
     private val count: Int,
@@ -57,7 +66,10 @@ internal class OrderedRailPublisher<T>(
      * publish whatever that makes publishable.
      */
     suspend fun report(index: Int, item: T?) {
-        mutex.withLock {
+        // Collected under the lock, emitted after it (see the class comment).
+        val ready = mutex.withLock {
+            val pending = mutableListOf<Pair<Int, T>>()
+
             if (item != null) rows[index] = item
 
             if (!reported[index]) {
@@ -67,17 +79,21 @@ internal class OrderedRailPublisher<T>(
                 // A later pass over a rail the page already has. It grows in
                 // place, so the rails around it - and therefore the focus and
                 // scroll position - are untouched.
-                publish(index, item)
-                return@withLock
+                pending += index to item
+                return@withLock pending
             }
 
             while (published < count && reported[published]) {
                 if (hasRows[published]) {
-                    rows[published]?.let { ready -> publish(published, ready) }
+                    rows[published]?.let { item2 -> pending += published to item2 }
                 }
                 published++
             }
+
+            pending
         }
+
+        ready.forEach { (rail, railItem) -> publish(rail, railItem) }
     }
 
     /** The rails that reported rows, in declaration order. */

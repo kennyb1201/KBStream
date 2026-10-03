@@ -47,6 +47,24 @@ interface WatchHistoryDao {
         }
     }
 
+    /**
+     * Bulk form of [upsertRaw] in ONE transaction, for writers that have no
+     * existing rows to merge with.
+     *
+     * [upsertAll] is the merge form: it reads the stored row for each entry
+     * before writing, so a partial caller cannot blank metadata it did not
+     * carry. A backup RESTORE has just cleared the table, so every one of those
+     * reads is guaranteed to miss - on a large history that is a database
+     * round-trip per row for a result already known. This writes them directly,
+     * still in a single transaction.
+     */
+    @androidx.room.Transaction
+    suspend fun upsertAllRaw(entries: List<WatchHistoryEntity>) {
+        entries.forEach { entry ->
+            upsertRaw(entry)
+        }
+    }
+
     @Query("SELECT * FROM watch_history WHERE id = :id LIMIT 1")
     suspend fun getById(id: String): WatchHistoryEntity?
 

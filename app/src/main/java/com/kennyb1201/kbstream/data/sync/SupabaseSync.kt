@@ -23,6 +23,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -1099,13 +1101,31 @@ object SupabaseSync {
         if (BuildConfig.SUPABASE_URL.isBlank() || BuildConfig.SUPABASE_ANON_KEY.isBlank()) {
             return false
         }
+        // Wait on the STATE, not a 250 ms poll.
+        //
+        // This used to be two `while (...) delay(250)` busy-waits: up to 80
+        // wake-ups to watch two values that already have flows, and each wake
+        // answered a question this object can answer directly. `client` is a
+        // @Volatile field with no flow of its own, so it keeps a (much longer)
+        // poll; the signed-in half - the one that actually has to wait on a
+        // cold start, since session restore is a network round-trip - now
+        // suspends on [_authState] until it leaves SignedOut/SigningIn.
         val deadline = System.currentTimeMillis() + timeoutMs
         while (client == null && System.currentTimeMillis() < deadline) {
             delay(250L)
         }
         if (client == null) return false
-        while (!isSignedIn() && System.currentTimeMillis() < deadline) {
-            delay(250L)
+        val remaining = deadline - System.currentTimeMillis()
+        if (remaining > 0L) {
+            // A hard rejection or a transient failure ends as SignedOut too, so
+            // this does not wait out the full budget for a session that is not
+            // coming back - only a SigningIn that is still in flight keeps it
+            // suspended, and the timeout bounds even that.
+            withTimeoutOrNull(remaining) {
+                _authState.first {
+                    it !is AuthState.SignedOut && it !is AuthState.SigningIn
+                }
+            }
         }
         if (!isSignedIn()) return false
         // A stranded write from a dead process is only in the table until the

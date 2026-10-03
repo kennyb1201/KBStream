@@ -805,6 +805,34 @@ fun DetailScreen(
             .filter { it.id != tmdbDetail?.id }
     }
 
+    /**
+     * The More Like This rail, minus hidden titles.
+     *
+     * Recomputed on every recomposition of the content when it is inlined into
+     * the list builder. The three inputs below are the only things it reads, so
+     * it is remembered on them the way [collectionParts] is.
+     *
+     * A hidden title stays out of this rail as well - otherwise the one rail
+     * that is all about the title you just hid is the first place it comes
+     * back.
+     */
+    val recommendations = remember(tmdbDetail, hiddenTitleKeys, normalizedType) {
+        tmdbDetail?.recommendations
+            ?.results
+            .orEmpty()
+            .filterNot { rec ->
+                HiddenTitles.hides(
+                    hiddenTitleKeys,
+                    normalizedType,
+                    rec.title ?: rec.name,
+                    rec.releaseDate?.take(4)?.toIntOrNull()
+                        ?: rec.firstAirDate
+                            ?.take(4)?.toIntOrNull(),
+                    "tmdb:${rec.id}"
+                )
+            }
+    }
+
     val premiereDateFormatter = remember {
         DateFormats.longDate()
     }
@@ -3596,25 +3624,7 @@ fun DetailScreen(
                             }
                         }
 
-                        val recs =
-                            tmdbDetail?.recommendations
-                                ?.results
-                                .orEmpty()
-                                // A hidden title stays out of More Like
-                                // This as well - otherwise the one rail
-                                // that is all about the title you just
-                                // hid is the first place it comes back.
-                                .filterNot { rec ->
-                                    HiddenTitles.hides(
-                                        hiddenTitleKeys,
-                                        normalizedType,
-                                        rec.title ?: rec.name,
-                                        rec.releaseDate?.take(4)?.toIntOrNull()
-                                            ?: rec.firstAirDate
-                                                ?.take(4)?.toIntOrNull(),
-                                        "tmdb:${rec.id}"
-                                    )
-                                }
+                        val recs = recommendations
 
                         if (recs.isNotEmpty()) {
                             item(key = "recsheader") {
