@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Typography
@@ -68,7 +69,7 @@ val KBRust = Color(0xFFA8542E)   // burned sienna — season finale
 val KBSteel = Color(0xFF3E5C76)  // desaturated navy — next up
 val KBPlum = Color(0xFF6E4E7E)   // muted aubergine — new season
 
-val CardShape = RoundedCornerShape(12.dp())
+val CardShape = RoundedCornerShape(12.dp)
 
 // The corner scale. Radii had drifted to fourteen distinct literals
 // (2/3/4/5/6/8/10/12/13/14/16/18/20/999) with no rule behind which surface
@@ -78,11 +79,11 @@ val CardShape = RoundedCornerShape(12.dp())
 // unpredictable. Everything now comes from this scale. The only literals left
 // are the 2–5dp hairline radii on progress bars and dividers, where the shape
 // of a few-dp-tall bar genuinely does depend on the exact value.
-val KBShapePanel = RoundedCornerShape(18.dp()) // dialogs, panels, hero cards
+val KBShapePanel = RoundedCornerShape(18.dp) // dialogs, panels, hero cards
 val KBShapeCard = CardShape // cards, tiles, inner rows, list rows
-val KBShapeChip = RoundedCornerShape(10.dp()) // rating / badge chips
-val KBShapeSmall = RoundedCornerShape(8.dp()) // small pills, poster fans
-val KBShapePill = RoundedCornerShape(999.dp()) // avatars, fully-round pills
+val KBShapeChip = RoundedCornerShape(10.dp) // rating / badge chips
+val KBShapeSmall = RoundedCornerShape(8.dp) // small pills, poster fans
+val KBShapePill = RoundedCornerShape(999.dp) // avatars, fully-round pills
 
 // The focus scale. D-pad focus is the app's most-touched feedback — a viewer
 // crosses a rail in twenty focus steps — and like the corner radii it had
@@ -115,8 +116,8 @@ const val KBFocusTile = 1.08f
 const val KBFocusPressed = 0.97f
 
 // Focus glow radius: the shared card, and the smaller controls that host it.
-val KBFocusGlow = 12.dp()
-val KBFocusGlowSmall = 8.dp()
+val KBFocusGlow = 12.dp
+val KBFocusGlowSmall = 8.dp
 
 // Side room a horizontal CHIP row must leave inside its own scroll bounds.
 //
@@ -137,9 +138,7 @@ val KBFocusGlowSmall = 8.dp()
 //
 // 12dp covers the widest chip at this scale (growth is 3% of a chip's own
 // width per side, so only a 400dp chip would outgrow it) plus the 8dp glow.
-val KBFocusChipInset = 12.dp()
-
-private fun Int.dp() = androidx.compose.ui.unit.Dp(this.toFloat())
+val KBFocusChipInset = 12.dp
 
 val OswaldFamily = FontFamily(
     Font(R.font.oswald_medium, FontWeight.Medium),

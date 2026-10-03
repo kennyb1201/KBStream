@@ -1,3 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  KBStream is a single-language app by decision, not by neglect: the whole UI is
+  written in English and `stringResource()` is not used anywhere in the tree.
+  The reasoning is that the user-visible surface is dense and TV-specific
+  ("CATCH-UP TV", "HIDE GROUP", "Press OK to retry.") and the app has no
+  translation workflow behind it, so moving strings into resources would add a
+  layer nothing currently reads while every new string would still be written
+  once, in English.
+
+  If localization is ever picked up, this file is the place it starts: user-
+  visible strings move here and the screens switch to `stringResource()`.
+  Until then, keep new copy consistent with the existing voice rather than
+  inventing a parallel convention.
+-->
 <resources>
     <string name="app_name">KBStream</string>
 </resources>

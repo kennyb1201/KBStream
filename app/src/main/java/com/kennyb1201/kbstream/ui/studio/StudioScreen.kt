@@ -30,6 +30,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.StudioItem
@@ -73,7 +74,7 @@ fun StudioScreen(
     networkIsCompany: Boolean = false,
     originalsCompanyId: Int? = null,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
-    viewModel: StudioViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    viewModel: StudioViewModel = viewModel()
 ) {
     val sectionsRaw by viewModel.sections.collectAsStateWithLifecycle()
     val browseGenres by viewModel.browseGenres.collectAsStateWithLifecycle()

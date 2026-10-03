@@ -12,7 +12,51 @@
 #
 # The android ruleset is disabled too: the ktlint plugin enables it for
 # Android projects, and its rules are not the one this check is for.
+# Conventions the checker does not enforce, stated here so they are written
+# down rather than folklore:
+#
+#   indent_style = space, indent_size = 4
+#       Four spaces is what the tree uses. Two files drifted to two spaces
+#       before this was recorded; if ktlint's indent rule is ever enabled, this
+#       is the setting it should be driven by.
+#
+#   max_line_length = off (deliberate)
+#       The tree is KDoc-heavy and the long lines are almost all prose that
+#       reads worse wrapped. There is no mechanical cap; keep new code under
+#       ~120 columns where it does not hurt readability.
+#
+#   imports: ASCII-sorted, one symbol per line, no wildcards
+#       `ktlint_standard` is disabled, so nothing checks this today.
+#
+#   one symbol per FQN: import it, do not spell it out in a code body
+#       A fully-qualified name inline (com.kennyb1201.kbstream.…) is reserved
+#       for a genuine name clash, with a comment saying why.
+#
+#   TAG per class: `private const val TAG = "<MODULE>"`
+#       No inline string literals in Log calls, and TAG is private unless a
+#       second file really does reuse it.
+#
+#   error handling: pick the construct by what the failure MEANS
+#       - runCatchingCancellable  cancellable coroutine work (rethrows
+#                                 CancellationException; plain runCatching
+#                                 swallows it and breaks structured concurrency)
+#       - runCatching             a non-cancellable failure you intend to absorb
+#       - try/catch               multi-catch, a finally, or a rethrow
+#       Do not mix runCatching and try in the same file without a reason.
+#
+#   failure reporting: Log.w for expected/user-recoverable, CrashReporter for
+#       unexpected/programmer error. A defensive catch that swallows a bug
+#       (an empty `catch (_: Exception) {}`) is the case CrashReporter exists
+#       for - it is invisible on a TV otherwise. CrashReporter.recordEvent is
+#       for expected churn (a dead stream) that should be named in the
+#       diagnostics export but NOT sent to Sentry.
+#
+#   JSON: Moshi for network/API models, kotlinx.serialization for sync
+#       payloads and schema-shaped data. Do not add the other to a file
+#       without a comment saying why.
 [*.{kt,kts}]
+indent_style = space
+indent_size = 4
 ktlint_standard = disabled
 ktlint_android = disabled
 ktlint_standard_no-unused-imports = enabled

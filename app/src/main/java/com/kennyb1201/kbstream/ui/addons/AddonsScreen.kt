@@ -49,6 +49,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.SurfaceDefaults
@@ -76,7 +77,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 @Composable
 fun AddonsScreen(
     onBack: () -> Unit,
-    viewModel: AddonsViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    viewModel: AddonsViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val addons by viewModel.addons.collectAsStateWithLifecycle()

@@ -48,6 +48,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
@@ -89,7 +90,7 @@ fun LibraryScreen(
     onItemClick: (mediaType: String, id: String) -> Unit,
     onBack: () -> Unit = {},
     viewModel: LibraryViewModel =
-        androidx.lifecycle.viewmodel.compose.viewModel()
+        viewModel()
 ) {
     val context = LocalContext.current
     val stateRaw by viewModel.uiState.collectAsStateWithLifecycle()

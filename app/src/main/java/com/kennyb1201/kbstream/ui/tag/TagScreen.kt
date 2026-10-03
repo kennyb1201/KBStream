@@ -40,6 +40,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -77,7 +78,7 @@ fun TagScreen(
     isKeyword: Boolean,
     type: String,
     onNavigateDetail: (String, String) -> Unit = { _, _ -> },
-    viewModel: TagViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    viewModel: TagViewModel = viewModel()
 ) {
     val sectionsRaw by viewModel.sections.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()

@@ -75,6 +75,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -2322,14 +2323,14 @@ fun HomeScreen(
     onOpenBrowseShortcut: (com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut) -> Unit = {},
     onOpenCatalogGrid: (Rail) -> Unit = {},
     viewModel: HomeViewModel =
-        androidx.lifecycle.viewmodel.compose.viewModel()
+        viewModel()
 ) {
     val context = LocalContext.current
 
     // KB collections (imported from a profile URL) interleaved with the
     // addon rails below; arrangement (pin/reorder/hide) from the manager.
     val kbViewModel: com.kennyb1201.kbstream.ui.kb.KBHomeViewModel =
-        androidx.lifecycle.viewmodel.compose.viewModel()
+        viewModel()
 
     // Keyed on the active profile: these are profile-scoped prefs and
     // remember{} would otherwise keep the previous profile's display

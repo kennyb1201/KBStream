@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
@@ -70,7 +71,7 @@ fun StreamsScreen(
     clearLogoUrl: String?,
     suppressAutoSelect: Boolean = false,
     onStreamSelected: (selected: Stream, allSources: List<Stream>) -> Unit,
-    viewModel: StreamsViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    viewModel: StreamsViewModel = viewModel()
 ) {
     val streams by viewModel.streams.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()

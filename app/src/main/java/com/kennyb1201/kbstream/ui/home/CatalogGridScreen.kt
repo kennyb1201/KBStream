@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.compose.itemKey
@@ -72,7 +73,7 @@ fun CatalogGridScreen(
     title: String,
     addonName: String,
     viewModel: HomeViewModel =
-        androidx.lifecycle.viewmodel.compose.viewModel(),
+        viewModel(),
     onItemClick: (MetaPreview) -> Unit,
     onBack: () -> Unit
 ) {
