@@ -586,12 +586,30 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // made add-on rails feel slower than the TMDB ones — then fill
             // the gaps from TMDB (disk+memory cached, keyed by the IMDB id
             // these results already carry) and republish when done.
-            _addonResultGroups.value = groups
+            // The app-wide digital-release filter hides add-on hits whose movie
+            // has no home release yet, matching the TMDB search rails (which
+            // filter in searchMovies) and Home, so the two halves of a search
+            // agree. A group the filter empties is dropped rather than left as a
+            // titleless rail.
+            val visibleGroups =
+                groups
+                    .map { group ->
+                        group.copy(
+                            results = tmdbRepository.filterByHomeAvailabilityById(
+                                items = group.results,
+                                id = { result -> result.meta.id },
+                                type = { result -> result.type }
+                            )
+                        )
+                    }
+                    .filter { group -> group.results.isNotEmpty() }
+
+            _addonResultGroups.value = visibleGroups
 
             // Add-on results already carry IMDB ids: preload their watched /
             // eye-badge state so those rails read like every other screen.
             preloadWatchedKeysFor(
-                groups
+                visibleGroups
                     .flatMap { it.results }
                     .mapNotNull { r ->
                         val type = normalizedType(r.type) ?: return@mapNotNull null
@@ -603,8 +621,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             )
 
             try {
-                val enriched = enrichAddonGroups(groups)
-                if (enriched != groups) {
+                val enriched = enrichAddonGroups(visibleGroups)
+                if (enriched != visibleGroups) {
                     _addonResultGroups.value = enriched
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {

@@ -76,6 +76,20 @@ class HomeRulesTest {
     }
 
     @Test
+    fun `a name the viewer set is shown exactly as they typed it`() {
+        // The reported bug: a catalog renamed to "AI" came back as "Ai",
+        // because the rail ran the viewer's own name through the title-caser.
+        assertEquals("AI Picks", catalogDisplayName("AI Picks", userNamed = true))
+        assertEquals("ai picks", catalogDisplayName("ai picks", userNamed = true))
+        assertEquals("All4One", catalogDisplayName("All4One", userNamed = true))
+        assertEquals("AI_Picks", catalogDisplayName("AI_Picks", userNamed = true))
+
+        // A manifest name is still prettified.
+        assertEquals("Top Movies", catalogDisplayName("top_movies", userNamed = false))
+        assertEquals("Trending Now", catalogDisplayName("trending_now", userNamed = false))
+    }
+
+    @Test
     fun `only the two media types the rest of the app knows survive`() {
         assertEquals("movie", normalizeMediaType("Movie"))
         assertEquals("series", normalizeMediaType("series"))

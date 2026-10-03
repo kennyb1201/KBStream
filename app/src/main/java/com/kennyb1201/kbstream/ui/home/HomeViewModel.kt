@@ -44,7 +44,6 @@ import com.kennyb1201.kbstream.ui.components.landscapeArtUrls
 import com.kennyb1201.kbstream.ui.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
-import com.kennyb1201.kbstream.data.tmdb.isAvailableAtHome
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.displayCountry
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
@@ -188,23 +187,6 @@ class HomeViewModel(
         Semaphore(
             MAX_CONCURRENT_CATALOG_REQUESTS
         )
-
-    /**
-     * Caps parallel TMDB release-date lookups for the digital filter.
-     *
-     * This one gates first paint rather than background work: the filter walks
-     * a rail's items one lookup at a time, and every catalog rail waits for the
-     * pinned batch's filter before it publishes, so its width lands in
-     * home.pinned. A field report measured home.pinned at 3.6s for just two
-     * catalogs - the same figure the 23-catalog fan-out took - which is what
-     * named this semaphore as the cost the two share. A Top Today rail is
-     * ~20-50 items, so four at a time was several seconds of pure queueing.
-     *
-     * Deliberately below the TMDB client's own per-host budget
-     * (TmdbHttpClient.MAX_REQUESTS_PER_HOST is 12), so a filtering rail cannot
-     * occupy the whole host and leave a hero or Detail lookup behind it.
-     */
-    private val tmdbFilterSemaphore = Semaphore(permits = 8)
 
     // Caps parallel TMDB artwork lookups for landscape cards.
     private val landscapeArtSemaphore = Semaphore(permits = 6)
@@ -6196,41 +6178,16 @@ private suspend fun calculateEpisodesRemaining(
      */
     private suspend fun applyDigitalAvailabilityFilter(
         metas: List<MetaPreview>
-    ): List<MetaPreview> {
-
-        return coroutineScope {
-
-            metas.map { meta ->
-
-                async {
-
-                    if (
-                        !meta.type.equals("movie", ignoreCase = true)
-                    ) {
-                        return@async meta
-                    }
-
-                    val detail =
-                        tmdbFilterSemaphore.withPermit {
-
-                            tmdbRepository.fetchEnrichedMetaCached(
-                                imdbId = meta.id,
-                                type = "movie"
-                            )
-                        }
-
-                    when (detail?.isAvailableAtHome()) {
-
-                        // Positively not at home yet -> filtered out.
-                        false -> null
-
-                        // Available, or unknown -> keep.
-                        else -> meta
-                    }
-                }
-            }.awaitAll().filterNotNull()
-        }
-    }
+    ): List<MetaPreview> =
+        // One implementation with the KB folders and add-on search
+        // (TmdbRepository.filterByHomeAvailabilityById), so an un-released movie
+        // is hidden the same way on every surface. The semaphore that used to
+        // live here moved with it.
+        tmdbRepository.filterByHomeAvailabilityById(
+            items = metas,
+            id = { meta -> meta.id },
+            type = { meta -> meta.type }
+        )
 
     /**
      * Remaining auto-retries for an all-failed cold-start rail build (see the
@@ -6497,7 +6454,10 @@ private suspend fun calculateEpisodesRemaining(
                                 baseUrl = baseUrl,
                                 catalogId = configuration.catalog.id,
                                 catalogType = configuration.catalog.type,
-                                catalogRawName = configuration.catalog.displayName
+                                catalogRawName = configuration.catalog.displayName,
+                                // A name the viewer set is shown verbatim, not
+                                // title-cased: "AI" must not become "Ai".
+                                catalogUserNamed = configuration.catalog.customName?.isNotBlank() == true
                             )
                         }
                         .toList()
@@ -6531,6 +6491,7 @@ private suspend fun calculateEpisodesRemaining(
                                 // them.
                                 loadPinnedKidsRails(
                                     rails,
+                                    hideUpcoming,
                                     landscapeCards
                                 )
                             } else {
@@ -6924,8 +6885,9 @@ private suspend fun calculateEpisodesRemaining(
         val rail =
             Rail(
                 addonName = pending.addonName,
-                catalogName = formatCatalogName(
-                    pending.catalogRawName
+                catalogName = catalogDisplayName(
+                    pending.catalogRawName,
+                    pending.catalogUserNamed
                 ),
                 type = pending.catalogType,
                 items = filtered,
@@ -7014,6 +6976,7 @@ private suspend fun calculateEpisodesRemaining(
      */
     private suspend fun loadPinnedKidsRails(
         result: MutableList<Rail>,
+        hideUpcoming: Boolean,
         landscapeCards: Boolean
     ) {
         val isTv = listOf(false, true)
@@ -7054,9 +7017,24 @@ private suspend fun calculateEpisodesRemaining(
                             )
                         }
 
-                        // Belt-and-braces ceiling re-check (discoverKB already
-                        // filters when kids mode is on).
-                        val filtered = tmdbRepository.kidsFilterMetas(metas)
+                        // The app-wide digital-release filter applies to the
+                        // kids rails too. It did not: these rails were the one
+                        // path that opted out, so a not-yet-at-home title - an
+                        // upcoming family movie whose only copies are
+                        // theatrical rips - showed here while every add-on rail
+                        // hid it. Then the belt-and-braces ceiling re-check
+                        // (discoverKB already filters when kids mode is on).
+                        val filtered =
+                            if (hideUpcoming) {
+                                tmdbRepository.kidsFilterMetas(
+                                    applyDigitalAvailabilityFilter(
+                                        filterUpcoming(metas)
+                                    )
+                                )
+                            } else {
+                                tmdbRepository.kidsFilterMetas(metas)
+                            }
+
                         if (filtered.isEmpty()) return@async null
 
                         val rail = Rail(
@@ -7083,7 +7061,7 @@ private suspend fun calculateEpisodesRemaining(
                             catalogType = rail.type,
                             catalogRawName = rail.catalogName,
                             baseUrl = "",
-                            hideUpcoming = false,
+                            hideUpcoming = hideUpcoming,
                             landscapeCards = landscapeCards,
                             pinned = true
                         )

@@ -30,6 +30,20 @@ internal fun formatCatalogName(
         }
 }
 
+/**
+ * The name a rail shows for a catalog.
+ *
+ * A name the viewer set is shown EXACTLY as they typed it - a catalog renamed
+ * to "AI" must not come back as "Ai" - while a manifest-provided name is
+ * prettified by [formatCatalogName], because manifests ship snake_case and
+ * their own inconsistent casing.
+ */
+internal fun catalogDisplayName(
+    rawName: String,
+    userNamed: Boolean
+): String =
+    if (userNamed) rawName.trim() else formatCatalogName(rawName)
+
 internal fun normalizeMediaType(
     type: String?
 ): String? =

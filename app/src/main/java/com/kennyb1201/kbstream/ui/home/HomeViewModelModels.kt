@@ -25,5 +25,11 @@ internal data class PendingCatalogLoad(
     val baseUrl: String,
     val catalogId: String,
     val catalogType: String,
-    val catalogRawName: String
+    val catalogRawName: String,
+    /**
+     * True when the viewer set this catalog's name in the add-on screen, so it
+     * is shown EXACTLY as typed ("AI" must not come back as "Ai") instead of
+     * being prettified by [formatCatalogName].
+     */
+    val catalogUserNamed: Boolean = false
 )

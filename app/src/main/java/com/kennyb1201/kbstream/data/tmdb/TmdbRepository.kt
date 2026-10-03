@@ -1172,10 +1172,22 @@ class TmdbRepository private constructor(context: Context) :
                 // Kids Mode: this is the raw loader behind every KB
                 // folder rail, so the ceiling check runs here once and
                 // covers all folder screens (movies + series mixed).
-                if (kidsMaxAge() == null) items
-                else kidsFilterItems(
-                    items.map { StudioItem(it, if (isTv) "series" else "movie") }
-                ).map { it.item }
+                val ceilingFiltered =
+                    if (kidsMaxAge() == null) items
+                    else kidsFilterItems(
+                        items.map { StudioItem(it, if (isTv) "series" else "movie") }
+                    ).map { it.item }
+
+                // The app-wide digital-release filter runs here too: this is
+                // the raw loader behind the kids Home rails and every KB
+                // folder's TMDB discover source, so one check covers them all.
+                if (!isDigitalFilterEnabled()) {
+                    ceilingFiltered
+                } else {
+                    filterByHomeAvailability(ceilingFiltered) {
+                        it.id to (if (isTv) "series" else "movie")
+                    }
+                }
             }
     }
 
@@ -1723,6 +1735,60 @@ class TmdbRepository private constructor(context: Context) :
                                 imdbId = "tmdb:$tmdbId",
                                 type = "movie"
                             )?.isAvailableAtHome()
+
+                        }.getOrNull()
+                    }
+
+                    when (verdict) {
+                        false -> null
+                        else -> item
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * [filterByHomeAvailability] for rows that carry their own RAW id rather
+     * than a TMDB id: an add-on catalog page, a KB folder row, an add-on search
+     * hit. The id may be "tmdb:<n>", an IMDb "tt..." id, a bare TMDB id or
+     * anything else [fetchEnrichedMeta] resolves; a row whose id cannot be
+     * resolved is kept.
+     *
+     * This is the single implementation the non-discover surfaces share, so an
+     * un-released movie is hidden the same way on the KB folder, in add-on
+     * search and on a Home rail. Gated on the Settings switch here (unlike
+     * [filterByHomeAvailability], whose callers check it) because these callers
+     * are spread across the app.
+     */
+    suspend fun <T> filterByHomeAvailabilityById(
+        items: List<T>,
+        id: (T) -> String,
+        type: (T) -> String
+    ): List<T> {
+
+        if (items.isEmpty() || !isDigitalFilterEnabled()) return items
+
+        val today = LocalDate.now()
+
+        return coroutineScope {
+
+            items.map { item ->
+
+                async {
+
+                    if (!type(item).equals("movie", ignoreCase = true)) {
+                        return@async item
+                    }
+
+                    val verdict = availabilitySemaphore.withPermit {
+
+                        runCatchingCancellable {
+
+                            fetchEnrichedMetaCached(
+                                imdbId = id(item),
+                                type = "movie"
+                            )?.isAvailableAtHome(today)
 
                         }.getOrNull()
                     }

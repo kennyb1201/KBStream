@@ -74,7 +74,7 @@ class KBContentLoader(context: android.content.Context) {
 
                 sources.mapIndexed { index, source ->
                     async {
-                        val items = loadSource(source)
+                        val items = filterByHomeAvailability(loadSource(source))
                         if (items.isEmpty()) {
                             publisher?.report(index, null)
                         } else {
@@ -190,6 +190,22 @@ class KBContentLoader(context: android.content.Context) {
         }
         return merged
     }
+
+    /**
+     * The app-wide digital-release filter, applied to one rail's rows. Add-on
+     * catalog pages carry IMDb/detail ids and TMDB discover rows carry a bare
+     * TMDB id; [TmdbRepository.filterByHomeAvailabilityById] resolves either, so
+     * a not-yet-at-home movie is hidden in a KB folder exactly as it is on a
+     * Home rail. No-ops when the Settings switch is off.
+     */
+    private suspend fun filterByHomeAvailability(
+        items: List<KBContentItem>
+    ): List<KBContentItem> =
+        tmdbRepository.filterByHomeAvailabilityById(
+            items = items,
+            id = { item -> item.id },
+            type = { item -> item.type }
+        )
 
     private suspend fun loadSource(source: KBSource): List<KBContentItem> =
         runCatching {
