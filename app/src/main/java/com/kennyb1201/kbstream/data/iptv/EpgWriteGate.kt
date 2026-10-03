@@ -93,12 +93,21 @@ object EpgWriteGate {
      * while the other is still playing.
      */
     private fun refresh() {
-        synchronized(lock) {
+        // Decide under the lock, EMIT outside it.
+        //
+        // Assigning idle.value inside the monitor resumes idle's collectors
+        // while `lock` is held, so anything a collector does on the way out
+        // runs beneath a lock whose only job is to serialize two booleans.
+        // (synchronized is reentrant, so a same-thread re-entry would not
+        // deadlock - it would just keep running collector work under the lock.)
+        // The lock still makes the read-modify-write below atomic.
+        val nowIdle = synchronized(lock) {
             val active = fullscreenActive.get() || inlineActive.get()
             if (active == !idle.value) return
             if (active) heldMs.set(0L)
-            idle.value = !active
+            !active
         }
+        idle.value = nowIdle
     }
 
     /**

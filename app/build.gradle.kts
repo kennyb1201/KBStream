@@ -176,6 +176,21 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
+            // Release ships to ARM televisions. The merged native set carries
+            // FOUR ABIs - libmpv's FFmpeg stack and sentry-native each bring
+            // their own - of which two are real targets: arm64-v8a on newer
+            // boxes, armeabi-v7a on the older/Fire TV sticks this is built
+            // for. The other two, x86 and x86_64, are emulator-only and are
+            // pure dead weight in an APK no emulator will install.
+            //
+            // AGP applies abiFilters at PACKAGING, not at merge or strip (both
+            // intermediates still list every ABI); confirmed by building a
+            // debug APK with a filter and finding only that ABI's lib/ dir in
+            // it. Debug is deliberately left unfiltered so an x86_64 emulator
+            // can still run the app.
+            ndk {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            }
         }
     }
 

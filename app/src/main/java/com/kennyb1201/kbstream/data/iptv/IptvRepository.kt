@@ -18,6 +18,9 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -655,35 +658,58 @@ class IptvRepository(
             return emptyList()
         }
 
+        // Fetch the batches concurrently.
+        //
+        // The batches are disjoint channel ranges of a list that is already in
+        // channel order, and each still trims itself to its own row cap - a
+        // memory guard, since a 600-channel lineup is ~75 batches. What is gone
+        // is the RUNNING budget that used to shrink later batches as
+        // [totalLimit] was consumed and stop the loop early.
+        //
+        // That is a real (if small) behavior change, and it is stated plainly
+        // rather than papered over: when [totalLimit] binds, the rows selected
+        // can differ. The old shape truncated each batch by START TIME while a
+        // cross-batch budget ran down, so the survivors were a mix of two
+        // orderings; this one leaves the per-batch cap in place and lets the
+        // final pipeline below - dedupe, sort by (channelId, start), take
+        // [totalLimit] - choose, which makes the result exactly the first
+        // [totalLimit] rows in the order the screen shows them. Both satisfy
+        // the "at most [totalLimit]" contract; this one no longer depends on
+        // how the batches happened to be cut.
+        //
+        // The batching ran one query at a time, so a 200-channel lineup waited
+        // for the SUM of ~25 indexed reads instead of roughly the slowest one.
+        // Room's own query executor bounds how many run at once, so the
+        // in-flight row count stays capped.
         val results = ArrayList<EpgProgramRow>()
-        var remainingLimit = totalLimit
 
-        for (batch in channelIds.chunked(PROGRAM_QUERY_BATCH_SIZE)) {
-            if (remainingLimit <= 0) break
+        coroutineScope {
+            channelIds.chunked(PROGRAM_QUERY_BATCH_SIZE)
+                .map { batch ->
+                    async(Dispatchers.IO) {
+                        val perBatchTarget = (batch.size * PROGRAMS_PER_CHANNEL_TARGET)
+                            .coerceAtMost(MAX_PROGRAM_ROWS_PER_BATCH)
 
-            val perBatchTarget = (batch.size * PROGRAMS_PER_CHANNEL_TARGET)
-                .coerceAtMost(MAX_PROGRAM_ROWS_PER_BATCH)
-            val batchLimit = remainingLimit.coerceAtMost(perBatchTarget)
+                        val batchRows = dao.getProgramsForChannelsInWindowLite(
+                            sourceUrl = sourceUrl,
+                            channelIds = batch,
+                            windowStart = windowStart,
+                            windowEnd = windowEnd,
+                            perChannelLimit = PROGRAMS_PER_CHANNEL_TARGET
+                        )
+                            .sortedBy { it.startUtcMillis }
+                            .take(perBatchTarget)
 
-            val batchRows = withContext(Dispatchers.IO) {
-                dao.getProgramsForChannelsInWindowLite(
-    sourceUrl = sourceUrl,
-    channelIds = batch,
-    windowStart = windowStart,
-    windowEnd = windowEnd,
-    perChannelLimit = PROGRAMS_PER_CHANNEL_TARGET
-)
-            }
-                .sortedBy { it.startUtcMillis }
-                .take(batchLimit)
+                        Log.w(
+                            TAG,
+                            "PROGRAM BATCH channels=${batch.size} rows=${batchRows.size} target=$perBatchTarget"
+                        )
 
-            Log.w(
-                TAG,
-                "PROGRAM BATCH channels=${batch.size} rows=${batchRows.size} remaining=$remainingLimit target=$batchLimit"
-            )
-
-            results.addAll(batchRows)
-            remainingLimit -= batchRows.size
+                        batchRows
+                    }
+                }
+                .awaitAll()
+                .forEach { batchRows -> results.addAll(batchRows) }
         }
 
         val seen = HashSet<ProgramKey>(results.size)
