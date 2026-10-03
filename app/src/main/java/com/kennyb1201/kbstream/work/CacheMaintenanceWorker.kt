@@ -56,6 +56,10 @@ class CacheMaintenanceWorker(
             // imports that were picked and then abandoned.
             val subtitles = DiskSweep.sweepSubtitleCache(applicationContext)
             val avatars = DiskSweep.sweepPendingAvatars(applicationContext)
+            // The add-on catalog snapshots: one file per catalog page, kept so
+            // a cold Home can paint a slow add-on's rails without waiting on
+            // its server.
+            val catalogSnapshots = DiskSweep.sweepAddonCatalogSnapshots(applicationContext)
             // The player's read-ahead cache, when an earlier budget left it
             // larger than the one its free space allows now. Its LRU evictor
             // only evicts while a stream is being written into it, so without
@@ -74,6 +78,7 @@ class CacheMaintenanceWorker(
                 "maintenance done: agedOut=${trim.agedOut} evicted=${trim.evicted} " +
                     "left=${trim.rows} row(s) / ${trim.bytes / 1_048_576} MB, " +
                     "reclaimed=$reclaimed subtitles=$subtitles avatars=$avatars " +
+                    "catalogSnapshots=$catalogSnapshots " +
                     "streamCache=${streamCache / 1_048_576}MB stagedApk=$stagedApk"
             )
             Log.i(

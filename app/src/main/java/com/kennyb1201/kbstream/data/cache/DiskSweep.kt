@@ -33,6 +33,25 @@ internal object DiskSweep {
     const val SUBTITLE_DIR = "kbstream_subs"
 
     /**
+     * Add-on catalog snapshots
+     * ([com.kennyb1201.kbstream.data.addon.AddonCatalogSnapshotStore]). One file
+     * per catalog page, so the directory grows by COUNT on a large install —
+     * hence the caps below rather than a byte budget.
+     */
+    const val ADDON_CATALOG_DIR = "addon_catalog_snapshots"
+
+    /**
+     * How long a catalog snapshot may be painted before the network has to
+     * answer. Longer than the in-memory catalog TTL by design: a snapshot
+     * exists for the cold start it is read on, and a day covers "the app was
+     * last used yesterday" without showing last week's rails.
+     */
+    const val ADDON_CATALOG_MAX_AGE_MS = 24L * 60L * 60L * 1000L
+
+    /** Count cap: the age cap alone leaves a first day of browsing unbounded. */
+    private const val ADDON_CATALOG_MAX_FILES = 800
+
+    /**
      * Extensions a subtitle file may carry. Anything else — a query string
      * that ends in a number, an addon that serves `.php` — is stored as `.srt`,
      * which is what the players already assume.
@@ -130,6 +149,21 @@ internal object DiskSweep {
             maxFiles = Int.MAX_VALUE
         )
         if (removed > 0) Log.i(TAG, "pending avatars: removed $removed file(s)")
+        removed
+    }
+
+    /**
+     * Bounds the add-on catalog snapshots. Written one file per catalog page,
+     * so both caps matter: age drops a launch that never came back, count caps
+     * a fresh one that browsed a lot. Returns how many files went.
+     */
+    suspend fun sweepAddonCatalogSnapshots(context: Context): Int = withContext(Dispatchers.IO) {
+        val removed = sweepDirectory(
+            dir = File(context.cacheDir, ADDON_CATALOG_DIR),
+            maxAgeMs = ADDON_CATALOG_MAX_AGE_MS,
+            maxFiles = ADDON_CATALOG_MAX_FILES
+        )
+        if (removed > 0) Log.i(TAG, "addon catalog snapshots: removed $removed file(s)")
         removed
     }
 

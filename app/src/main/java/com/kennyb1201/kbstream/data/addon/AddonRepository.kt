@@ -1,12 +1,15 @@
 package com.kennyb1201.kbstream.data.addon
 
 import com.kennyb1201.kbstream.BuildConfig
+import com.kennyb1201.kbstream.data.BackgroundWork
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
@@ -16,6 +19,7 @@ import retrofit2.HttpException
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
 
@@ -157,6 +161,35 @@ class AddonRepository private constructor() {
             .build()
             .create(StremioApiService::class.java)
 
+    // Catalog pages get their own, more generous timeouts than the shared
+    // client's 25s callTimeout. A catalog backed by a resolver or an indexer
+    // can take tens of seconds on a cold path; a field report had one add-on's
+    // first page at ~22s, sitting right against that ceiling, and a request
+    // that crossed it was dropped - rail and all. Progressive publication means
+    // only this add-on's own rail is late, never the others', so waiting longer
+    // for a slow-but-working add-on costs nothing else on Home.
+    private val catalogClient =
+        client.newBuilder()
+            .readTimeout(
+                40,
+                TimeUnit.SECONDS
+            )
+            .callTimeout(
+                45,
+                TimeUnit.SECONDS
+            )
+            .build()
+
+    private val catalogApi: StremioApiService =
+        Retrofit.Builder()
+            .baseUrl("https://example.com/")
+            .client(catalogClient)
+            .addConverterFactory(
+                MoshiConverterFactory.create(moshi)
+            )
+            .build()
+            .create(StremioApiService::class.java)
+
     // Stream-resolving addons routinely take longer than a plain catalog or
     // meta lookup, so this call gets its own, more generous timeouts rather
     // than loosening them for every other request too.
@@ -277,6 +310,11 @@ class AddonRepository private constructor() {
         val cacheKey =
             "$base|$type|$catalogId|skip=$normalizedSkip"
 
+        // A cold process has nothing in memory; paint from the previous
+        // launch's snapshot rather than waiting on the add-on. Best effort - an
+        // absent or unreadable store is a miss, not an error.
+        seedCatalogCacheFromDisk(cacheKey)
+
         val now =
             System.currentTimeMillis()
 
@@ -285,6 +323,9 @@ class AddonRepository private constructor() {
 
         var requestToPerform:
             CompletableDeferred<List<MetaPreview>>? = null
+
+        var staleToReturn:
+            List<MetaPreview>? = null
 
         catalogMutex.withLock {
             cleanupExpiredCatalogCacheLocked(
@@ -305,15 +346,44 @@ class AddonRepository private constructor() {
             val pending =
                 pendingCatalogRequests[cacheKey]
 
-            if (pending != null) {
-                requestToAwait =
-                    pending
-            } else {
-                requestToPerform =
-                    CompletableDeferred()
+            when {
+                // A refresh is already in flight: hand back the stale page
+                // rather than queue this caller behind the network.
+                pending != null -> {
+                    if (cached != null) {
+                        staleToReturn = cached.metas
+                    } else {
+                        requestToAwait =
+                            pending
+                    }
+                }
 
-                pendingCatalogRequests[cacheKey] =
-                    requireNotNull(requestToPerform)
+                // Stale, and nothing in flight: return what we have and
+                // refresh in the background.
+                cached != null -> {
+                    staleToReturn = cached.metas
+
+                    val refresh =
+                        CompletableDeferred<List<MetaPreview>>()
+
+                    pendingCatalogRequests[cacheKey] =
+                        refresh
+
+                    requestToPerform =
+                        refresh
+                }
+
+                // Nothing cached at all: fetch and wait, as before.
+                else -> {
+                    val request =
+                        CompletableDeferred<List<MetaPreview>>()
+
+                    pendingCatalogRequests[cacheKey] =
+                        request
+
+                    requestToPerform =
+                        request
+                }
             }
         }
 
@@ -321,31 +391,124 @@ class AddonRepository private constructor() {
             return pending.await()
         }
 
+        staleToReturn?.let { stale ->
+            val refresh =
+                requestToPerform
+
+            if (refresh != null) {
+                val refreshBase = base
+                val refreshType = type
+                val refreshCatalogId = catalogId
+                val refreshSkip = normalizedSkip
+                val refreshKey = cacheKey
+
+                BackgroundWork.launch {
+                    runCatchingCancellable {
+                        performCatalogRequest(
+                            cacheKey = refreshKey,
+                            base = refreshBase,
+                            type = refreshType,
+                            catalogId = refreshCatalogId,
+                            skip = refreshSkip,
+                            request = refresh
+                        )
+                    }
+                }
+            }
+
+            return stale
+        }
+
         val request =
             requireNotNull(
                 requestToPerform
             )
 
+        return performCatalogRequest(
+            cacheKey = cacheKey,
+            base = base,
+            type = type,
+            catalogId = catalogId,
+            skip = normalizedSkip,
+            request = request
+        )
+    }
+
+    /**
+     * Seeds [catalogCache] from the on-disk snapshot for [cacheKey] when this
+     * process has not seen the page yet.
+     *
+     * The disk read happens OUTSIDE [catalogMutex] so a slow file never stalls a
+     * concurrent catalog call, and the insert re-checks under the lock so a
+     * fetch that landed while the file was being read is never clobbered by
+     * older bytes.
+     */
+    private suspend fun seedCatalogCacheFromDisk(
+        cacheKey: String
+    ) {
+        val alreadyKnown =
+            catalogMutex.withLock {
+                catalogCache.containsKey(cacheKey)
+            }
+
+        if (alreadyKnown) {
+            return
+        }
+
+        val snapshot =
+            withContext(Dispatchers.IO) {
+                AddonCatalogSnapshotStore.load(cacheKey)
+            } ?: return
+
+        catalogMutex.withLock {
+            if (!catalogCache.containsKey(cacheKey)) {
+                catalogCache[cacheKey] =
+                    CachedCatalog(
+                        metas = snapshot.metas,
+                        cachedAtMs = snapshot.cachedAtMs
+                    )
+            }
+        }
+    }
+
+    /**
+     * Performs one catalog GET and publishes the result to the in-memory cache,
+     * the on-disk snapshot and [request].
+     *
+     * Shared by both paths through a stale-while-revalidate hit: the background
+     * path runs it unawaited (a failure is still recorded on [request], which
+     * nothing is waiting on), the cold path awaits it.
+     */
+    private suspend fun performCatalogRequest(
+        cacheKey: String,
+        base: String,
+        type: String,
+        catalogId: String,
+        skip: Int,
+        request: CompletableDeferred<List<MetaPreview>>
+    ): List<MetaPreview> {
         try {
             val url =
                 buildCatalogUrl(
                     base = base,
                     type = type,
                     catalogId = catalogId,
-                    skip = normalizedSkip
+                    skip = skip
                 )
 
             val metas =
-                api.getCatalog(
+                catalogApi.getCatalog(
                     url
                 ).metas
+
+            val stampedAt =
+                System.currentTimeMillis()
 
             catalogMutex.withLock {
                 catalogCache[cacheKey] =
                     CachedCatalog(
                         metas = metas,
-                        cachedAtMs =
-                            System.currentTimeMillis()
+                        cachedAtMs = stampedAt
                     )
 
                 pendingCatalogRequests.remove(
@@ -353,13 +516,21 @@ class AddonRepository private constructor() {
                 )
 
                 cleanupExpiredCatalogCacheLocked(
-                    System.currentTimeMillis()
+                    stampedAt
                 )
             }
 
             request.complete(
                 metas
             )
+
+            withContext(Dispatchers.IO) {
+                AddonCatalogSnapshotStore.save(
+                    cacheKey = cacheKey,
+                    metas = metas,
+                    cachedAtMs = stampedAt
+                )
+            }
 
             return metas
         } catch (throwable: Throwable) {
