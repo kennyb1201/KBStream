@@ -274,6 +274,11 @@ class HomeViewModel(
 
     private var periodicRefreshJob: Job? = null
 
+    // The bounded re-merge window a completion starts. Held so a second
+    // completion supersedes the first window instead of stacking a second
+    // one; cancelled with the ViewModel like every other Home job.
+    private var completionRefreshRetryJob: Job? = null
+
     // Title-level removals from the Continue Watching rail: dedupe key ->
     // wall-clock ms of the dismissal. The local delete plus the Simkl calls
     // in removeFromContinueWatching normally remove the title everywhere,
@@ -7407,6 +7412,31 @@ private suspend fun calculateEpisodesRemaining(
                 }
 
                 refreshUpNext()
+
+                // A lagging Simkl feed: the re-merge above may have read the
+                // pre-completion list (the push had resolved on OUR side, but
+                // Simkl's feed had not caught up yet) and re-cached it. Drop
+                // the feed and re-merge a few more times over the next couple
+                // of minutes so the finished title leaves without the viewer
+                // bouncing out of Home and back. A second completion restarts
+                // the window rather than stacking one.
+                completionRefreshRetryJob?.cancel()
+                completionRefreshRetryJob =
+                    launch {
+                        // The schedule holds ABSOLUTE offsets from this moment,
+                        // so the waits are the gaps between them - delaying by
+                        // each entry directly would make every retry wait for
+                        // the sum of all the entries before it.
+                        var retriedAtMs = 0L
+                        for (retryAtMs in COMPLETION_REFRESH_RETRY_MS) {
+                            delay(retryAtMs - retriedAtMs)
+                            retriedAtMs = retryAtMs
+                            runCatchingCancellable {
+                                simklRepository.clearContinueWatchingCache()
+                            }
+                            refreshUpNext()
+                        }
+                    }
             }
         }
 
@@ -7607,6 +7637,29 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val PERIODIC_SIMKL_REFRESH_MS =
             15 * 60 * 1000L
+
+        /**
+         * How long after a completion Home keeps re-merging Continue Watching.
+         *
+         * Simkl's Continue Watching feed can lag the watched-push we send on
+         * completion by a minute or more server-side. The completion asks for
+         * one immediate re-merge, but if that read lands before the feed has
+         * caught up it re-caches the pre-completion list - and the next read
+         * is served from that copy for the feed's whole 3-minute TTL, which is
+         * exactly how a finished episode "stays" on the rail for a couple of
+         * minutes. These are the delays of a few follow-up re-merges, each of
+         * which drops the cached feed first, so a lagging feed is picked up on
+         * its own. Bounded (the periodic refresh and the TTL cover anything
+         * after this) and monotonic.
+         */
+        private val COMPLETION_REFRESH_RETRY_MS =
+            longArrayOf(
+                15_000L,
+                40_000L,
+                75_000L,
+                120_000L,
+                180_000L
+            )
 
         /** Watch-write burst settle time before dynamic catalog rails refetch. */
         private const val DYNAMIC_CATALOG_REFRESH_DELAY_MS = 3_000L
