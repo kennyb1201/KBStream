@@ -20,9 +20,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import com.kennyb1201.kbstream.data.format.DateFormats
 import java.util.concurrent.TimeUnit
 
 /**
@@ -265,7 +263,7 @@ object KidsTimeGuard {
     // ── internals ───────────────────────────────────────────────────────
 
     private fun dayKeyNow(): String =
-        SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+        DateFormats.now(DateFormats.COMPACT_DAY)
 
     private fun nowMinutesOfDay(): Int {
         val cal = java.util.Calendar.getInstance()

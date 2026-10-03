@@ -86,7 +86,7 @@ import com.kennyb1201.kbstream.ui.player.ExternalPlayerActivity
 import com.kennyb1201.kbstream.ui.player.MpvPlayerActivity
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.player.NextEpisodeResult
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.player.PlayerCastMember
 import android.content.Context
 import android.content.Intent
@@ -529,8 +529,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             // Sync the AMOLED toggle into the theme's live state BEFORE the
             // first composition so launch already paints the right palette.
-            AppPreferences.getAmoledBlack(this)
-            AppPreferences.getPureBlackSurface(this)
+            com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors(this)
             KBStreamTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize()
@@ -690,8 +689,7 @@ fun AppRoot() {
     val themeMirrorContext = LocalContext.current
     LaunchedEffect(Unit) {
         com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile.collect {
-            AppPreferences.getAmoledBlack(themeMirrorContext)
-            AppPreferences.getPureBlackSurface(themeMirrorContext)
+            com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors(themeMirrorContext)
         }
     }
 

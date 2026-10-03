@@ -1,8 +1,7 @@
-package com.kennyb1201.kbstream.ui.settings
+package com.kennyb1201.kbstream.data.settings
 
 import android.content.Context
 import android.content.SharedPreferences
-import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import kotlin.math.abs
 
 /**
@@ -653,36 +652,36 @@ object AppPreferences {
     //             own ± steppers (levels 1 and 2 are the old "Low" and "High")
     //   volume: overall gain in dB, 0-15, applied with the limiter
     fun getAudioDownmix(context: Context): Int =
-        prefs(context).getInt(KEY_AUDIO_DOWNMIX, PlayerAudioTuning.DOWNMIX_AUTO)
+        prefs(context).getInt(KEY_AUDIO_DOWNMIX, AudioDefaults.DOWNMIX_AUTO)
 
     fun setAudioDownmix(context: Context, target: Int) {
         prefs(context).edit()
             .putInt(
                 KEY_AUDIO_DOWNMIX,
                 when (target) {
-                    PlayerAudioTuning.DOWNMIX_STEREO -> PlayerAudioTuning.DOWNMIX_STEREO
-                    PlayerAudioTuning.DOWNMIX_SURROUND -> PlayerAudioTuning.DOWNMIX_SURROUND
-                    else -> PlayerAudioTuning.DOWNMIX_AUTO
+                    AudioDefaults.DOWNMIX_STEREO -> AudioDefaults.DOWNMIX_STEREO
+                    AudioDefaults.DOWNMIX_SURROUND -> AudioDefaults.DOWNMIX_SURROUND
+                    else -> AudioDefaults.DOWNMIX_AUTO
                 }
             )
             .apply()
     }
 
     /**
-     * The top of the scale comes from [PlayerAudioTuning.DIALOGUE_MAX], not a
+     * The top of the scale comes from [AudioDefaults.DIALOGUE_MAX], not a
      * literal: levels 1 and 2 are the "Low" and "High" this used to offer, so a
      * stored value keeps the exact meaning it had, and a value written by a
      * newer build is clamped by the same ceiling the UI steps to.
      */
     fun getAudioDialogueBoost(context: Context): Int =
         prefs(context).getInt(KEY_AUDIO_DIALOGUE_BOOST, 0)
-            .coerceIn(0, PlayerAudioTuning.DIALOGUE_MAX)
+            .coerceIn(0, AudioDefaults.DIALOGUE_MAX)
 
     fun setAudioDialogueBoost(context: Context, level: Int) {
         prefs(context).edit()
             .putInt(
                 KEY_AUDIO_DIALOGUE_BOOST,
-                level.coerceIn(0, PlayerAudioTuning.DIALOGUE_MAX)
+                level.coerceIn(0, AudioDefaults.DIALOGUE_MAX)
             )
             .apply()
     }
@@ -695,16 +694,17 @@ object AppPreferences {
     }
 
     /**
-     * Decode-vs-passthrough (see [PlayerAudioTuning.requiresDecode]). Auto by
-     * default, so an untouched install behaves exactly as it did: bitstream to
-     * a capable receiver unless the app's own audio tuning is switched on, at
-     * which point the sink must carry PCM for that tuning to be audible.
+     * Decode-vs-passthrough (see [com.kennyb1201.kbstream.ui.player.PlayerAudioTuning.requiresDecode]).
+     * Auto by default, so an untouched install behaves exactly as it did:
+     * bitstream to a capable receiver unless the app's own audio tuning is
+     * switched on, at which point the sink must carry PCM for that tuning to be
+     * audible.
      */
     fun getAudioOutput(context: Context): Int =
-        prefs(context).getInt(KEY_AUDIO_OUTPUT, PlayerAudioTuning.AUDIO_OUTPUT_AUTO)
+        prefs(context).getInt(KEY_AUDIO_OUTPUT, AudioDefaults.AUDIO_OUTPUT_AUTO)
             .coerceIn(
-                PlayerAudioTuning.AUDIO_OUTPUT_AUTO,
-                PlayerAudioTuning.AUDIO_OUTPUT_DECODE
+                AudioDefaults.AUDIO_OUTPUT_AUTO,
+                AudioDefaults.AUDIO_OUTPUT_DECODE
             )
 
     fun setAudioOutput(context: Context, mode: Int) {
@@ -712,8 +712,8 @@ object AppPreferences {
             .putInt(
                 KEY_AUDIO_OUTPUT,
                 mode.coerceIn(
-                    PlayerAudioTuning.AUDIO_OUTPUT_AUTO,
-                    PlayerAudioTuning.AUDIO_OUTPUT_DECODE
+                    AudioDefaults.AUDIO_OUTPUT_AUTO,
+                    AudioDefaults.AUDIO_OUTPUT_DECODE
                 )
             )
             .apply()
@@ -880,7 +880,7 @@ object AppPreferences {
      */
     fun isP5ConversionRequired(context: Context): Boolean =
         getDvCompatMode(context) == DV_COMPAT_AUTO &&
-            !com.kennyb1201.kbstream.ui.player.DolbyVisionCompat.supportsNativeDolbyVision()
+            !com.kennyb1201.kbstream.data.player.DolbyVisionCapability.supportsNativeDolbyVision
 
     fun setConvertP5To81(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_CONVERT_P5_TO_81, enabled).apply()
@@ -1036,17 +1036,17 @@ object AppPreferences {
     }
 
     // ── AMOLED black theme ─────────────────────────────────────
+    // The read/write is plain prefs. Mirroring the value into the theme's live
+    // state is the theme's job, not this store's: see
+    // `ui.theme.refreshThemeMirrors`, which every reader calls. Keeping the
+    // mirror there is what lets this file live in the data layer with no UI
+    // import at all.
     private const val KEY_AMOLED_BLACK = "amoled_black"
 
-    /** Reads the pref AND mirrors it into the theme's live state. */
-    fun getAmoledBlack(context: Context): Boolean {
-        val value = prefs(context).getBoolean(KEY_AMOLED_BLACK, false)
-        com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = value
-        return value
-    }
+    fun getAmoledBlack(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AMOLED_BLACK, false)
 
     fun setAmoledBlack(context: Context, enabled: Boolean) {
-        com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = enabled
         prefs(context).edit().putBoolean(KEY_AMOLED_BLACK, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
@@ -1054,15 +1054,10 @@ object AppPreferences {
     // ── Pure black surface (cards/panels/containers join the background) ──
     private const val KEY_PURE_BLACK_SURFACE = "pure_black_surface"
 
-    /** Reads the pref AND mirrors it into the theme's live state. */
-    fun getPureBlackSurface(context: Context): Boolean {
-        val value = prefs(context).getBoolean(KEY_PURE_BLACK_SURFACE, false)
-        com.kennyb1201.kbstream.ui.theme.kbPureBlackSurfaceState.value = value
-        return value
-    }
+    fun getPureBlackSurface(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_PURE_BLACK_SURFACE, false)
 
     fun setPureBlackSurface(context: Context, enabled: Boolean) {
-        com.kennyb1201.kbstream.ui.theme.kbPureBlackSurfaceState.value = enabled
         prefs(context).edit().putBoolean(KEY_PURE_BLACK_SURFACE, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
@@ -1242,11 +1237,19 @@ object AppPreferences {
     // strength someone likes is a viewing preference, not a device capability.
     // Stored as an Int ordinal (see PosterBorder), read through the tolerant
     // dual-type helper because the sync applier writes numbers back as Long.
+    //
+    // The default is 1 (PosterBorder.SUBTLE), spelled as a plain Int because a
+    // data-layer store must not reach into the UI enum that draws the border.
+    // PosterBorderDefaultTest pins the two together.
+    internal const val DEFAULT_POSTER_BORDER_STRENGTH = 1
+
     fun getPosterBorderStrength(context: Context): Int =
         readIntPref(
             context,
             KEY_POSTER_BORDER_STRENGTH,
-            com.kennyb1201.kbstream.ui.components.PosterBorder.DEFAULT.ordinal
+            // Kept in lock-step with PosterBorder.DEFAULT (SUBTLE) by a unit
+            // test; the data layer cannot reference the UI enum that draws it.
+            DEFAULT_POSTER_BORDER_STRENGTH
         )
 
     fun setPosterBorderStrength(context: Context, strength: Int) {

@@ -35,13 +35,14 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.watched.LocalSeriesProgress
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
 import com.kennyb1201.kbstream.ui.components.landscapeArtFor
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.landscapeArtUrls
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.director
@@ -82,7 +83,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import org.json.JSONObject
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -3085,7 +3085,7 @@ Log.d(
 
             val airLabel = formatAirDateLabel(airDateText)
             val airFull = AirDateCorrection.parse(airDateText)
-                ?.format(DateTimeFormatter.ofPattern("EEE, MMM d"))
+                ?.format(DateFormats.AIR_DATE)
                 ?: ""
 
             rows.add(

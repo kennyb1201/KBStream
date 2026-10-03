@@ -1,6 +1,8 @@
 package com.kennyb1201.kbstream.ui.detail
 
 import android.content.Context
+import android.content.Intent
+import android.util.Log
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -110,6 +112,8 @@ import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.data.tmdb.writers
+import com.kennyb1201.kbstream.data.youtube.PlayableSource
+import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
@@ -117,6 +121,7 @@ import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.formatRuntimeLabel
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
+import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
@@ -145,12 +150,12 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.ui.components.StudioChip
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
 import java.util.Locale
 
 data class StreamsTarget(
@@ -196,6 +201,8 @@ private fun personRowKey(member: TmdbCastMember): String =
  * rail's own identity - never the position it happened to have - is what the
  * reveal looks for.
  */
+private const val TAG = "DETAIL"
+
 private const val GENRE_ROW_KEY = "genrerow"
 private const val KEYWORDS_ROW_KEY = "keywordsrow"
 private const val PEOPLE_ROW_KEY = "peoplerow"
@@ -799,7 +806,7 @@ fun DetailScreen(
     }
 
     val premiereDateFormatter = remember {
-        DateTimeFormatter.ofPattern("MMMM d, yyyy", Locale.getDefault())
+        DateFormats.longDate()
     }
 
     val movieDetailsFocusRequester = remember { FocusRequester() }
@@ -1291,14 +1298,67 @@ fun DetailScreen(
         clearEpisodeTransitionState()
     }
 
+    /**
+     * Opens a title's trailer in the fullscreen player.
+     *
+     * The resolve (InnerTube → NewPipe → Piped, with its caches) stays in
+     * `data.youtube.TrailerPlayerLauncher`; the INTENT that starts the player
+     * lives here, in the UI layer that owns it. Building it used to happen
+     * inside the data object, which is what made `data/` import
+     * `ui.player.NativePlayerActivity` - a data-layer type reaching into an
+     * Activity it cannot launch without a Context anyway.
+     */
+    /**
+     * The player launch for a resolved trailer source.
+     *
+     * `stream_headers` carries the User-Agent of the YouTube client the
+     * googlevideo URL was signed for: that host only serves a signed URL to
+     * that UA, and the fullscreen player applies the header over its own
+     * default. Null for NewPipe/Piped sources.
+     */
+    fun trailerPlayerIntent(
+        context: Context,
+        source: PlayableSource
+    ): Intent =
+        Intent(context, NativePlayerActivity::class.java).apply {
+            val userAgent = when (source) {
+                is PlayableSource.Muxed -> {
+                    putExtra("stream_url", source.url)
+                    source.userAgent
+                }
+
+                is PlayableSource.Adaptive -> {
+                    putExtra("stream_url", source.videoUrl)
+                    putExtra("audio_url", source.audioUrl)
+                    source.userAgent
+                }
+            }
+
+            userAgent?.let { ua ->
+                putExtra("stream_headers", "User-Agent: $ua")
+            }
+
+            putExtra("parent_type", "movie")
+            putExtra("item_name", "Trailer")
+        }
+
     fun playTrailer(context: Context) {
         val key = trailerVideo?.key?.takeIf { it.isNotBlank() } ?: return
 
         scope.launch {
-            com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher.playTrailer(
-                context,
-                "https://www.youtube.com/watch?v=$key"
-            )
+            val source =
+                TrailerPlayerLauncher.resolvePlayableUrl(
+                    "https://www.youtube.com/watch?v=$key"
+                ).getOrElse { error ->
+                    Log.e(
+                        TAG,
+                        "Failed to resolve playable trailer URL",
+                        error
+                    )
+                    return@launch
+                }
+
+            context.startActivity(trailerPlayerIntent(context, source))
         }
     }
 
@@ -5439,11 +5499,7 @@ private fun formatDisplayDate(
 
     return runCatching {
         LocalDate.parse(trimmed)
-            .format(
-                DateTimeFormatter.ofPattern(
-                    "MM/dd/yyyy"
-                )
-            )
+            .format(DateFormats.DISPLAY_DATE)
     }.getOrDefault(trimmed)
 }
 

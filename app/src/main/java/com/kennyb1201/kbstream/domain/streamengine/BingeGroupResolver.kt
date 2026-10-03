@@ -1,7 +1,7 @@
 package com.kennyb1201.kbstream.domain.streamengine
 
 import com.kennyb1201.kbstream.data.addon.Stream
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 /**
  * Applies the binge-group playback preferences to a freshly resolved source

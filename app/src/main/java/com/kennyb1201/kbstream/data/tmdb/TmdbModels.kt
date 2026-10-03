@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.tmdb
 
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
 import java.time.LocalDate
@@ -1089,12 +1090,12 @@ private fun String.parsedLocalDate(): java.time.LocalDate? =
 
 fun TmdbPersonDetail.formattedBirthday(): String? =
     birthday?.parsedLocalDate()
-        ?.format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy"))
+        ?.format(DateFormats.MONTH_DAY_YEAR)
         ?: birthday?.takeIf { it.isNotBlank() }
 
 fun TmdbPersonDetail.formattedDeathday(): String? =
     deathday?.parsedLocalDate()
-        ?.format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy"))
+        ?.format(DateFormats.MONTH_DAY_YEAR)
         ?: deathday?.takeIf { it.isNotBlank() }
 
 fun TmdbPersonDetail.age(): Int? {

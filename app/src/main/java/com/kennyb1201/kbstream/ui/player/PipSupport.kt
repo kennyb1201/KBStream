@@ -4,7 +4,7 @@ import android.app.Activity
 import android.os.Build
 import android.util.Log
 import android.util.Rational
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 /**
  * Picture-in-picture, the way both player engines enter it.

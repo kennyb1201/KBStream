@@ -15,12 +15,10 @@ import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
@@ -48,15 +46,14 @@ object Diagnostics {
     private const val MAX_CACHE_ENTRIES = 8
     private const val MAX_DB_ENTRIES = 6
 
-    private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
-    private val dateTimeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+
 
     suspend fun build(context: Context): String {
         val app = context.applicationContext
         val report = StringBuilder()
 
         report.appendLine("KBStream diagnostics")
-        report.appendLine("generated: ${dateTimeFormat.format(Date())}")
+        report.appendLine("generated: ${DateFormats.now(DateFormats.DATE_TIME_SECONDS)}")
         report.appendLine("build: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) " +
             "sha ${BuildConfig.GIT_SHA.take(7)}")
 
@@ -664,10 +661,10 @@ object Diagnostics {
         }
         report.appendLine("recent errors (${errors.size}):")
         for (error in errors) {
-            report.appendLine("  ${timeFormat.format(Date(error.atMs))} [${error.source}] ${error.summary}")
+            report.appendLine("  ${DateFormats.time(error.atMs, DateFormats.TIME_SECONDS)} [${error.source}] ${error.summary}")
         }
     }
 
     private fun absoluteOrNever(ms: Long): String =
-        if (ms <= 0L) "never" else dateTimeFormat.format(Date(ms))
+        if (ms <= 0L) "never" else DateFormats.time(ms, DateFormats.DATE_TIME_SECONDS)
 }

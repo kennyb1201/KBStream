@@ -4,7 +4,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 /**
  * Track and A/V controls for the player's settings panel.

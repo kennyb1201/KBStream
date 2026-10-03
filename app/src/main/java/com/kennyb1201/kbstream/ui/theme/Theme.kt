@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.theme
 
+import android.content.Context
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
@@ -13,6 +14,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Typography
 import androidx.tv.material3.darkColorScheme
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 // Base palette -- a private screening room, not another dark-mode SaaS panel.
 // The public KBVoid / KBSurface / KBSurfaceRaised tokens below are state-backed
@@ -38,6 +40,22 @@ val kbAmoledBlackState = mutableStateOf(false)
  * synced blob that flips AMOLED off also lifts pure black.
  */
 val kbPureBlackSurfaceState = mutableStateOf(false)
+
+/**
+ * Re-reads the AMOLED / pure-black prefs into the live theme state.
+ *
+ * The stored prefs are the source of truth and the state below is a Compose
+ * snapshot value; this is the single place the two are tied together, so the
+ * settings store itself can stay a plain data-layer object with no UI import.
+ *
+ * Call it wherever the stored value may have moved behind the theme's back:
+ * before the first composition at launch, on every active-profile switch (the
+ * toggles are profile-scoped), and right after a remote sync blob is applied.
+ */
+fun refreshThemeMirrors(context: Context) {
+    kbAmoledBlackState.value = AppPreferences.getAmoledBlack(context)
+    kbPureBlackSurfaceState.value = AppPreferences.getPureBlackSurface(context)
+}
 
 private val pureBlackActive: Boolean
     get() = kbAmoledBlackState.value && kbPureBlackSurfaceState.value

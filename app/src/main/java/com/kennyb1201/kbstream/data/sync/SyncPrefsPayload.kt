@@ -868,20 +868,13 @@ object PrefsPayloadApplier {
         editor.putLong(DISPLAY_SYNCED_AT_KEY, remoteUpdated ?: System.currentTimeMillis())
         editor.apply()
 
-        // The AMOLED toggle backs onto a live theme state, not just the prefs
-        // file - a remote blob applied here must mirror into it so a synced
-        // device repaints immediately (setContent only seeds it at launch).
-        // Only when this key was actually ADOPTED — a newer local edit keeps
-        // its value and must keep its matching live state too.
-        applied["amoled_black"]?.let { raw ->
-            com.kennyb1201.kbstream.ui.theme.kbAmoledBlackState.value = raw == "true"
-        }
-
-        // Pure black surface: same live-mirror treatment — a synced device
-        // repaints immediately instead of waiting for the next relaunch.
-        applied["pure_black_surface"]?.let { raw ->
-            com.kennyb1201.kbstream.ui.theme.kbPureBlackSurfaceState.value = raw == "true"
-        }
+        // The AMOLED / pure-black toggles back onto live theme state, not just
+        // the prefs file - a remote blob applied here must mirror into it so a
+        // synced device repaints immediately (setContent only seeds it at
+        // launch). Re-reading through the theme's own mirror keeps the data
+        // layer out of the UI state entirely: whichever values were actually
+        // adopted above are now in prefs, and the rest read back unchanged.
+        com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors(context)
     }
 
     private suspend fun applyAddons(context: Context, payload: JsonObject) {

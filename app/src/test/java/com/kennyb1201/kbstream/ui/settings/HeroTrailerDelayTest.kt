@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.settings
 
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test

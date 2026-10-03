@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.addon.MetaPreview
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult

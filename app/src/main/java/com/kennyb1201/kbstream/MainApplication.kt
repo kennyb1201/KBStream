@@ -19,7 +19,7 @@ import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.reporting.Redaction
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.work.AddonManifestRefreshWorker
 import com.kennyb1201.kbstream.work.CacheMaintenanceWorker
 import com.kennyb1201.kbstream.work.NewEpisodeWorker

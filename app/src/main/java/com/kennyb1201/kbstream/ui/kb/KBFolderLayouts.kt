@@ -54,7 +54,7 @@ import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.home.HomeHeroArtwork
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface

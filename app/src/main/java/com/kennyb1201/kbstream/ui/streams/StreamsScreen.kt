@@ -54,7 +54,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard

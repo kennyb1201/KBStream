@@ -3,7 +3,7 @@ package com.kennyb1201.kbstream.data.notifications
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.iptv.IptvReminderStore
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 /**
  * Delivers live-TV program reminders as system notifications.

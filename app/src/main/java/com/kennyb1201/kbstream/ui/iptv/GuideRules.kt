@@ -1,9 +1,8 @@
 package com.kennyb1201.kbstream.ui.iptv
 
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
-import java.text.SimpleDateFormat
 import java.util.Calendar
-import java.util.Date
 import java.util.Locale
 
 /**
@@ -21,12 +20,6 @@ import java.util.Locale
  * directly — the same split the home rail's rules use (`LocalNextUpRules.kt`),
  * and the reason this file has no Compose import: nothing here needs one.
  */
-
-// Reused rather than allocated per call: formatTimeRange runs once per program
-// card, and a guide row is up to two dozen of them. SimpleDateFormat is mutable
-// and not thread-safe, so this is safe only because every caller is either
-// composition (the main thread) or a single-threaded unit test.
-private val programTimeFormatter = SimpleDateFormat("h:mm a", Locale.US)
 
 private const val DAY_MS = 86_400_000L
 
@@ -70,7 +63,8 @@ internal fun formatStartsInLabel(msUntilStart: Long): String =
 
 /** `9:05 AM - 10:00 AM`, in the device's own zone. */
 internal fun formatTimeRange(startMillis: Long, endMillis: Long): String {
-    return "${programTimeFormatter.format(Date(startMillis))} - ${programTimeFormatter.format(Date(endMillis))}"
+    return "${DateFormats.time(startMillis, DateFormats.CLOCK_12H)} - " +
+        DateFormats.time(endMillis, DateFormats.CLOCK_12H)
 }
 
 /**
@@ -126,7 +120,7 @@ internal fun formatCatchupWindow(
         // past was handled properly.
         startUtcMillis >= today && startUtcMillis < today + DAY_MS -> "Today"
         startUtcMillis >= today - DAY_MS && startUtcMillis < today -> "Yesterday"
-        else -> SimpleDateFormat("EEE", Locale.US).format(Date(startUtcMillis))
+        else -> DateFormats.time(startUtcMillis, DateFormats.WEEKDAY)
     }
     return "$dayLabel \u00b7 ${fmt(startUtcMillis)}\u2013${fmt(endUtcMillis)}"
 }

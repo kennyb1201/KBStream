@@ -37,6 +37,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -58,6 +59,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
@@ -77,9 +79,6 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
@@ -814,7 +813,7 @@ fun SettingsScreen(
                     label = "Export Backup",
                     description = "Save settings, add-ons & watched state to a file",
                     onClick = {
-                        val stamp = SimpleDateFormat("yyyy-MM-dd_HHmmss", Locale.US).format(Date())
+                        val stamp = DateFormats.now(DateFormats.FILE_STAMP)
                         exportLauncher.launch("kbstream-backup-$stamp.json")
                     }
                 )

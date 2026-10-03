@@ -26,7 +26,7 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable

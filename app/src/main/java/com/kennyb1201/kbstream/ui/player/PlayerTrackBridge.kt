@@ -12,7 +12,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 /**
  * Bridge between the Compose playback panel and [NativePlayerActivity].

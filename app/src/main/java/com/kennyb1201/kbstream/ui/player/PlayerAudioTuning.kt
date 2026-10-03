@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import com.kennyb1201.kbstream.data.settings.AudioDefaults
 import kotlin.math.pow
 
 /**
@@ -21,10 +22,15 @@ import kotlin.math.pow
  */
 internal object PlayerAudioTuning {
 
+    // The stored encodings live in the data layer (data.settings.AudioDefaults)
+    // so the settings store can read them without importing this UI package.
+    // Aliased here rather than redeclared: one definition, and every call site
+    // on both sides of the app keeps reading `PlayerAudioTuning.X`.
+
     /** 0 = leave the layout alone, 2 = stereo, 6 = 5.1. */
-    const val DOWNMIX_AUTO = 0
-    const val DOWNMIX_STEREO = 2
-    const val DOWNMIX_SURROUND = 6
+    const val DOWNMIX_AUTO = AudioDefaults.DOWNMIX_AUTO
+    const val DOWNMIX_STEREO = AudioDefaults.DOWNMIX_STEREO
+    const val DOWNMIX_SURROUND = AudioDefaults.DOWNMIX_SURROUND
 
     /**
      * Every option list the UI shows lives here, so the settings screen and the
@@ -52,13 +58,13 @@ internal object PlayerAudioTuning {
      * [dialogueBoost] and [volumeBoostDb] are silently ignored for that track.
      * This preference decides which of the two the viewer wants.
      */
-    const val AUDIO_OUTPUT_AUTO = 0
+    const val AUDIO_OUTPUT_AUTO = AudioDefaults.AUDIO_OUTPUT_AUTO
 
     /** Always bitstream the original format; the receiver decodes it. */
-    const val AUDIO_OUTPUT_PASSTHROUGH = 1
+    const val AUDIO_OUTPUT_PASSTHROUGH = AudioDefaults.AUDIO_OUTPUT_PASSTHROUGH
 
     /** Always decode to PCM, so the app's processing always applies. */
-    const val AUDIO_OUTPUT_DECODE = 2
+    const val AUDIO_OUTPUT_DECODE = AudioDefaults.AUDIO_OUTPUT_DECODE
 
     /** Every option the UI shows, in one place so screens cannot drift. */
     val AUDIO_OUTPUT_OPTIONS: List<Pair<String, Int>> =
@@ -93,7 +99,7 @@ internal object PlayerAudioTuning {
      * [AudioDownmixProcessor] trims the surrounds by 0.2 per level to pay for
      * it, which would reach zero (surrounds gone rather than lowered) at 5.
      */
-    const val DIALOGUE_MAX = 4
+    const val DIALOGUE_MAX = AudioDefaults.DIALOGUE_MAX
 
     /**
      * What a dialogue-boost level reads as, everywhere it is shown: the global

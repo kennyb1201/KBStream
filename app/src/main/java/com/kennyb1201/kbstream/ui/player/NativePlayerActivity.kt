@@ -85,7 +85,8 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import coil3.load
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -95,9 +96,6 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import okhttp3.OkHttpClient
 import org.json.JSONArray
 import java.util.concurrent.TimeUnit
@@ -302,31 +300,25 @@ private const val CHANNEL_GUIDE_ROWS_PER_CHANNEL = 2
 class NativePlayerActivity : ComponentActivity() {
 
     /**
-     * Points the engine handoff at the BACKUP engine.
+     * The MPV handoff's launch intent: this session replayed at the BACKUP
+     * engine.
      *
-     * [handOffToMpv] builds its handoff out of THIS activity's own intent - it
+     * [handOffToMpv] builds the handoff out of THIS activity's own intent - it
      * replays the whole session (source list, cast, badges, return-to) with the
-     * stream extras replaced - so the intent it gives [mpvFallbackLauncher]
-     * still names NativePlayerActivity as its component. Launched unchanged
-     * that opened a second ExoPlayer session instead of MPV: the SWITCH press
-     * looked like it did nothing, and the INFO panel came back still chipped
-     * EXOPLAYER. Every ActivityResultLauncher launch goes through here, so the
-     * component is corrected at that one choke point.
+     * stream extras replaced - so the base still names NativePlayerActivity as
+     * its component. This is the one place that component is corrected;
+     * launched unchanged it opened a second ExoPlayer session instead of MPV,
+     * so the SWITCH press looked like it did nothing and the INFO panel came
+     * back still chipped EXOPLAYER.
      *
-     * The handoff extra is the trigger. Only a handoff carries it: nothing else
-     * in this activity launches itself through here (the subtitle pickers open
-     * the system's document UI, next-episode hands its result back to
-     * MainActivity, and the now-playing intent goes out as a PendingIntent).
+     * The rewrite used to happen in a `startActivityForResult` override, keyed
+     * off the handoff extra the intent happens to carry. Doing it here makes it
+     * explicit at the one call site, and clears the deprecated override. The
+     * extra stays on the intent: MPV reads it to know it is the backup engine.
      */
-    // The override-and-rewrite IS the point here: this is the one choke point
-    // every component switch passes through, and the Activity Result API has no
-    // equivalent interposition. Suppressed rather than migrated.
-    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
-        if (intent.component?.className == NativePlayerActivity::class.java.name &&
-            intent.getBooleanExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK, false)
-        ) {
-            intent.setClass(this, MpvPlayerActivity::class.java)
+    internal fun mpvHandoffIntent(base: Intent): Intent =
+        Intent(base).apply {
+            setClass(this@NativePlayerActivity, MpvPlayerActivity::class.java)
             // Disarm this session's own Up Next countdown as playback leaves for
             // the backup engine: it is a Handler tick, so it fires whether or
             // not this surface is the one on screen. An ExoPlayer session left
@@ -337,8 +329,6 @@ class NativePlayerActivity : ComponentActivity() {
             nextUpHandoffArmed = false
             nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
         }
-        super.startActivityForResult(intent, requestCode, options)
-    }
 
     /**
      * Answers the two SWITCH buttons when a press cannot land.
@@ -855,9 +845,12 @@ class NativePlayerActivity : ComponentActivity() {
     private var scrubMoved = false
     private val scrubHandler = Handler(Looper.getMainLooper())
     private val clockHandler = Handler(Looper.getMainLooper())
-    // Cached clock formatter, keyed by pattern - see clockFormatter().
-    private var clockFormat: java.text.SimpleDateFormat? = null
-    private var clockFormatPattern: String? = null
+    // The overlay clock's two formatters. DateTimeFormatter is immutable and
+    // thread-safe (unlike the SimpleDateFormat pair this replaced, which needed
+    // a main-thread-only cache keyed by pattern), so these are built once per
+    // process and reused. The 24-hour toggle picks between them per tick.
+    private val clock12Format by lazy { DateFormats.clock12h() }
+    private val clock24Format by lazy { DateFormats.clock24h() }
     private val clockRunnable = object : Runnable {
         override fun run() {
             if (controlsVisible) {
@@ -1264,9 +1257,11 @@ class NativePlayerActivity : ComponentActivity() {
     private val zapEpgCache = HashMap<String, ZapEpgInfo>()
     private var zapEpgCacheLimit = 64
 
-    private val zapTimeFormat by lazy {
-        SimpleDateFormat("h:mm a", Locale.getDefault())
-    }
+    private val zapTimeFormat by lazy { DateFormats.clock12h() }
+
+    /** A zap banner time in the device's own 12-hour clock. */
+    private fun zapTime(millis: Long): String =
+        DateFormats.time(millis, zapTimeFormat)
 
     /**
      * The lineup entry playing right now, or null when the guide never
@@ -1575,9 +1570,9 @@ class NativePlayerActivity : ComponentActivity() {
 
         zapNowTitle?.text = now.title
         zapNowMeta?.text = buildString {
-            append(zapTimeFormat.format(Date(now.startUtcMillis)))
+            append(zapTime(now.startUtcMillis))
             append(" – ")
-            append(zapTimeFormat.format(Date(now.endUtcMillis)))
+            append(zapTime(now.endUtcMillis))
             now.category?.takeIf { it.isNotBlank() }?.let { append("  •  ").append(it) }
         }
 
@@ -1593,7 +1588,7 @@ class NativePlayerActivity : ComponentActivity() {
         zapNowProgress?.progress = ((elapsed * 1000L) / span).toInt()
 
         zapNextTitle?.text = info?.next?.let { next ->
-            "Next  " + zapTimeFormat.format(Date(next.startUtcMillis)) + "  " + next.title
+            "Next  " + zapTime(next.startUtcMillis) + "  " + next.title
         } ?: ""
     }
 
@@ -1712,9 +1707,9 @@ class NativePlayerActivity : ComponentActivity() {
             add(liveProgramScope)
             streamResolutionLabel()?.let(::add)
             add(
-                zapTimeFormat.format(Date(now.startUtcMillis)) +
+                zapTime(now.startUtcMillis) +
                     " \u2013 " +
-                    zapTimeFormat.format(Date(now.endUtcMillis))
+                    zapTime(now.endUtcMillis)
             )
             now.category?.takeIf { it.isNotBlank() }?.let(::add)
         }.joinToString("  \u2022  ")
@@ -1731,7 +1726,7 @@ class NativePlayerActivity : ComponentActivity() {
         liveProgramDesc?.visibility = if (synopsis.isEmpty()) View.GONE else View.VISIBLE
 
         liveProgramNext?.text = info.next?.let { next ->
-            "Up next  " + zapTimeFormat.format(Date(next.startUtcMillis)) + "  " + next.title
+            "Up next  " + zapTime(next.startUtcMillis) + "  " + next.title
         } ?: if (fresh) "No guide data for what follows" else ""
     }
 
@@ -6983,44 +6978,16 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * The clock formatter for [pattern], built once per pattern.
-     *
-     * updateClock() runs on every tick of the visible-controls clock - once a
-     * second for as long as the controls are up - and it used to construct two
-     * fresh `SimpleDateFormat`s each time. Constructing one parses the pattern,
-     * loads locale data and allocates the calendar/number-format graph, so that
-     * was a second-by-second allocation storm (and a GC-pause risk) on exactly
-     * the low-end TV boxes this player targets. The pattern is the cache key, so
-     * the Settings > Interface 24-hour toggle still takes effect on the next
-     * tick instead of needing a player restart.
-     *
-     * Only ever touched from the main thread (the clock handler and
-     * showControls()), which is also what makes one shared instance safe -
-     * SimpleDateFormat is not thread-safe.
-     */
-    private fun clockFormatter(pattern: String): java.text.SimpleDateFormat {
-        clockFormat?.let { if (clockFormatPattern == pattern) return it }
-        return java.text.SimpleDateFormat(pattern, java.util.Locale.getDefault())
-            .also {
-                clockFormat = it
-                clockFormatPattern = pattern
-            }
-    }
-
     private fun updateClock() {
         // Honor the Settings > Interface 24-hour toggle; falls back to the
         // locale default when unchecked.
-        val clockPattern = if (
-            com.kennyb1201.kbstream.ui.settings.AppPreferences.getUse24HourClock(this)
-        ) "HH:mm" else "h:mm a"
-        val formatter = clockFormatter(clockPattern)
-        playerClock.text = formatter.format(java.util.Date())
+        val formatter =
+            if (AppPreferences.getUse24HourClock(this)) clock24Format else clock12Format
+        playerClock.text = DateFormats.now(formatter)
         val durationMs = exoPlayer?.duration ?: 0L
         val positionMs = exoPlayer?.currentPosition ?: 0L
         val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
-        val endsAt = formatter
-            .format(java.util.Date(System.currentTimeMillis() + remainingMs))
+        val endsAt = DateFormats.time(System.currentTimeMillis() + remainingMs, formatter)
         endsAtClock.text = "Ends at $endsAt"
     }
 
@@ -7958,12 +7925,12 @@ class NativePlayerActivity : ComponentActivity() {
                     else -> null
                 },
                 nowTime = nowProgram?.let {
-                    zapTimeFormat.format(Date(it.startUtcMillis)) +
-                        " – " + zapTimeFormat.format(Date(it.endUtcMillis))
+                    zapTime(it.startUtcMillis) +
+                        " – " + zapTime(it.endUtcMillis)
                 },
                 nowProgressPermille = nowProgram?.let { guideProgressPermille(it, now) },
                 nextTitle = entry?.next?.let {
-                    "Next  " + zapTimeFormat.format(Date(it.startUtcMillis)) + "  " + it.title
+                    "Next  " + zapTime(it.startUtcMillis) + "  " + it.title
                 },
                 isCurrent = channel.channelId == currentId,
                 onClick = { tuneToChannelFromGuide(index) }
@@ -9293,7 +9260,7 @@ class NativePlayerActivity : ComponentActivity() {
         // without resetting the player or the position, and onStop writes no
         // history for a handoff (mpvHandoffStarted), so nothing reads it after.
         runCatching { exoPlayer?.stop() }
-        mpvFallbackLauncher.launch(launch)
+        mpvFallbackLauncher.launch(mpvHandoffIntent(launch))
         return true
     }
 

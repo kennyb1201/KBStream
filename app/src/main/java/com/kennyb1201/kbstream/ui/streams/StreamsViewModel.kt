@@ -10,7 +10,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.async

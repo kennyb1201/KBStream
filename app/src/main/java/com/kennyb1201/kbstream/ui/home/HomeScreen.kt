@@ -124,7 +124,7 @@ import com.kennyb1201.kbstream.ui.components.landscapeRank
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu

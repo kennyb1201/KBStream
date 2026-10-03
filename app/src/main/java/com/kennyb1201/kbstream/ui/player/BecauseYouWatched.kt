@@ -32,7 +32,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
 import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
 import com.kennyb1201.kbstream.data.tmdb.list
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async

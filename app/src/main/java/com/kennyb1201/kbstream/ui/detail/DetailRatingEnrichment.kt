@@ -21,7 +21,7 @@ internal object DetailRatingEnrichment {
     /** Prefers the user's key from Settings, falling back to the build field. */
     private fun mdbListApiKey(vm: DetailViewModel): String {
         val fromPrefs = runCatching {
-            com.kennyb1201.kbstream.ui.settings.AppPreferences
+            com.kennyb1201.kbstream.data.settings.AppPreferences
                 .getMdbListApiKey(vm.getApplication())
         }.getOrDefault("")
         if (fromPrefs.isNotBlank()) return fromPrefs

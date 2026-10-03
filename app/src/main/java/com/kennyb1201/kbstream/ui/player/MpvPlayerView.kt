@@ -7,7 +7,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import dev.jdtech.mpv.MPVLib
 import java.util.Locale
 import kotlin.math.pow

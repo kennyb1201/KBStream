@@ -1,9 +1,9 @@
 package com.kennyb1201.kbstream.ui.home
 
+import com.kennyb1201.kbstream.data.format.DateFormats
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
-import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoUnit
 
@@ -115,9 +115,7 @@ internal fun formatAirDateLabel(raw: String?): String {
             days == 0L -> "Today"
             days == 1L -> "Tomorrow"
             days in 2..6 -> "In $days days"
-            else -> date.format(
-                DateTimeFormatter.ofPattern("EEE, MMM d")
-            )
+            else -> date.format(DateFormats.AIR_DATE)
         }
     } catch (_: Exception) {
         "Date TBA"

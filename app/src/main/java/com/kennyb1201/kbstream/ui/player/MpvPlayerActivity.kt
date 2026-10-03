@@ -50,7 +50,7 @@ import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -106,25 +106,22 @@ private val AVATAR_PLACEHOLDER_FILL: Int = 0xFF1D2530.toInt()
 class MpvPlayerActivity : ComponentActivity() {
 
     /**
-     * Points the switch back at the MAIN engine.
+     * The switch-back's launch intent: this session replayed at the MAIN engine.
      *
-     * [switchToExoPlayer] builds its launch out of THIS activity's own intent,
-     * so what it gives [exoSwitchLauncher] still names MpvPlayerActivity as its
-     * component. Launched unchanged it opened a second MPV session instead of
-     * ExoPlayer, which made the control bar's SWITCH look dead from this side
-     * too. Every ActivityResultLauncher launch goes through here, so the
-     * component is corrected at that one choke point.
+     * [switchToExoPlayer] builds the switch-back out of THIS activity's own
+     * intent, so the base still names MpvPlayerActivity as its component. This
+     * is the one place that component is corrected; launched unchanged it
+     * opened a second MPV session instead of ExoPlayer, which made the control
+     * bar's SWITCH look dead from this side too.
      *
-     * Only a switch-back launches this activity from here: the subtitle picker
-     * opens the system's document UI, next-episode hands its result back to
-     * MainActivity, and the now-playing intent goes out as a PendingIntent.
+     * The rewrite used to happen in a `startActivityForResult` override. Doing
+     * it here makes it explicit at the one call site, and clears the deprecated
+     * override. The external-player handoff shares [exoSwitchLauncher] but sets
+     * its own component, so it is deliberately not routed through here.
      */
-    // Same interposition as NativePlayerActivity's: the switch-back to
-    // ExoPlayer is rewritten here, which the Activity Result API cannot express.
-    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
-        if (intent.component?.className == MpvPlayerActivity::class.java.name) {
-            intent.setClass(this, NativePlayerActivity::class.java)
+    internal fun exoSwitchIntent(base: Intent): Intent =
+        Intent(base).apply {
+            setClass(this@MpvPlayerActivity, NativePlayerActivity::class.java)
             // Disarm this session's own Up Next countdown as playback leaves: it
             // is a Handler tick, so it fires whether or not this surface is the
             // one on screen. Left armed behind ExoPlayer it would chain an
@@ -132,8 +129,6 @@ class MpvPlayerActivity : ComponentActivity() {
             // own, which reads exactly like the switch did nothing.
             cancelNextUpAutoAdvance()
         }
-        super.startActivityForResult(intent, requestCode, options)
-    }
 
     /**
      * Answers this engine's two SWITCH buttons when a press cannot land.
@@ -3237,7 +3232,7 @@ class MpvPlayerActivity : ComponentActivity() {
 
         Log.i(TAG, "switching playback to the ExoPlayer engine from ${position}ms")
         showToast("Switching to the ExoPlayer engine\u2026")
-        exoSwitchLauncher.launch(launch)
+        exoSwitchLauncher.launch(exoSwitchIntent(launch))
     }
 
     /**

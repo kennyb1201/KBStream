@@ -12,7 +12,7 @@ import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.badges.StreamBadge
-import com.kennyb1201.kbstream.ui.settings.AppPreferences
+import com.kennyb1201.kbstream.data.settings.AppPreferences
 
 data class PickerItem(
     val label: String,

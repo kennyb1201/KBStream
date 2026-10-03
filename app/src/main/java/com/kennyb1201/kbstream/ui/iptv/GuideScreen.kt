@@ -81,6 +81,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.CatchupProgram
 import com.kennyb1201.kbstream.data.iptv.EpgMatchType
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
@@ -109,9 +110,6 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
@@ -121,12 +119,6 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
 private const val GUIDE_PREFETCH_AFTER_COUNT = 36
 private const val MAX_GUIDE_CHANNEL_REQUEST_SIZE = 48
-
-// Reused rather than allocated per-composition: only ever touched from the
-// main thread (composition, and the clock's own LaunchedEffect), so a shared
-// mutable SimpleDateFormat is safe here. The program-clock formatter went to
-// GuideRules.kt with the label helpers that use it.
-private val clockLabelFormatter = SimpleDateFormat("EEE, h:mm a", Locale.US)
 
 @Composable
 // debounce() (the channel-prefetch window below) is still a @FlowPreview API.
@@ -2477,12 +2469,12 @@ private fun rememberNowMillis(): Long {
 @Composable
 private fun rememberCurrentTimeLabel(): String {
     var timeLabel by remember {
-        mutableStateOf(clockLabelFormatter.format(Date()))
+        mutableStateOf(DateFormats.now(DateFormats.WEEKDAY_CLOCK_12H))
     }
 
     LaunchedEffect(Unit) {
         while (true) {
-            timeLabel = clockLabelFormatter.format(Date())
+            timeLabel = DateFormats.now(DateFormats.WEEKDAY_CLOCK_12H)
             delay(30_000)
         }
     }

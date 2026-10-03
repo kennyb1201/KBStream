@@ -1,12 +1,9 @@
 package com.kennyb1201.kbstream.data.youtube
 
-import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.util.Log
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.evictOldest
-import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -232,7 +229,7 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
             }
     }
 
-    private fun logResolved(resolver: String, source: PlayableSource) {
+    internal fun logResolved(resolver: String, source: PlayableSource) {
         when (source) {
             is PlayableSource.Muxed -> {
                 Log.w(
@@ -265,85 +262,6 @@ object TrailerPlayerLauncher : MemoryPressure.CacheOwner {
         runCatching {
             android.net.Uri.parse(url).host
         }.getOrNull() ?: "?"
-
-    suspend fun playTrailer(
-        context: Context,
-        trailerUrlOrId: String
-    ) {
-        Log.d(
-            TAG,
-            "playTrailer called: $trailerUrlOrId"
-        )
-
-        val source =
-            resolvePlayableUrl(trailerUrlOrId)
-                .getOrElse { error ->
-                    Log.e(
-                        TAG,
-                        "Failed to resolve playable trailer URL",
-                        error
-                    )
-                    return
-                }
-
-        // Signing client's User-Agent (null for NewPipe/Piped sources).
-        val sourceUserAgent = when (source) {
-            is PlayableSource.Muxed -> source.userAgent
-            is PlayableSource.Adaptive -> source.userAgent
-        }
-
-        val intent =
-            Intent(
-                context,
-                NativePlayerActivity::class.java
-            ).apply {
-
-                when (source) {
-                    is PlayableSource.Muxed -> {
-                        putExtra(
-                            "stream_url",
-                            source.url
-                        )
-                    }
-
-                    is PlayableSource.Adaptive -> {
-                        putExtra(
-                            "stream_url",
-                            source.videoUrl
-                        )
-
-                        putExtra(
-                            "audio_url",
-                            source.audioUrl
-                        )
-                    }
-                }
-
-                // googlevideo only serves a signed URL to the UA of the
-                // client it was signed for. The fullscreen player applies
-                // "stream_headers" over its own default UA.
-                sourceUserAgent?.let { ua ->
-                    putExtra("stream_headers", "User-Agent: $ua")
-                }
-
-                putExtra(
-                    "parent_type",
-                    "movie"
-                )
-
-                putExtra(
-                    "item_name",
-                    "Trailer"
-                )
-            }
-
-        Log.w(
-            TAG,
-            "Launching PlayerActivity for trailer"
-        )
-
-        context.startActivity(intent)
-    }
 
     private fun extractVideoId(
         value: String
