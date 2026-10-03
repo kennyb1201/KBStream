@@ -441,6 +441,12 @@ fun DetailScreen(
     initialBackdrop: String? = null,
     initialClearLogo: String? = null,
     initialOverview: String? = null,
+    // Reports the clearlogo this screen has resolved for the title, so a caller
+    // covering the screen with the pre-playback splash can show that art the
+    // moment it lands. See MainActivity's cover splash: it is painted before
+    // Detail has its artwork, and without this it fell back to the plain name
+    // while the NEXT splash showed the pulsing clearlogo.
+    onClearLogoResolved: (String) -> Unit = {},
     // Keyed per (type, id): DetailScreen is the only consumer of a shared
     // DetailViewModel, and an unscoped (Activity-wide) instance carries the
     // previous title's meta/episodes/resume state into the next one — the
@@ -612,6 +618,10 @@ fun DetailScreen(
     // fallback when TMDB has nothing for this title.
     val clearLogoUrl = tmdbImageOriginal(tmdbDetail?.bestLogoPath())
         ?: meta?.logo?.takeIf { it.isNotBlank() }
+    // Hand the resolved logo up as soon as it exists.
+    LaunchedEffect(clearLogoUrl) {
+        clearLogoUrl?.takeIf { it.isNotBlank() }?.let(onClearLogoResolved)
+    }
     val isLoading by viewModel.isLoading.collectAsState()
     val episodes by viewModel.episodes.collectAsState()
     // Air dates from a second metadata source (see AirDateCorrection). TMDB's

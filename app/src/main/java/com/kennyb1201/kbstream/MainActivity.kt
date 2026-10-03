@@ -23,6 +23,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,8 +52,11 @@ import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.update.AppUpdater
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
+import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
@@ -125,7 +129,6 @@ import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.screenTransitionMs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 sealed class Screen {
 
@@ -743,6 +746,16 @@ fun AppRoot() {
     var pendingAutoPlay by remember {
         mutableStateOf<PendingPlay?>(null)
     }
+
+    // Clearlogos DetailScreen has resolved, keyed by "type:id".
+    //
+    // The pre-playback cover splash is painted BEFORE Detail has its art (a
+    // Continue Watching / Up Next deep link carries only the history row's meta,
+    // whose logo is usually absent), so it fell back to the plain title while the
+    // NEXT splash - fed the logo Detail had resolved - showed the pulsing
+    // clearlogo. This lets the cover splash show the same art the moment it
+    // lands, so the first splash is never the logoless one.
+    val resolvedDetailClearLogos = remember { mutableStateMapOf<String, String>() }
 
     LaunchedEffect(pendingAutoPlay) {
         val pending = pendingAutoPlay ?: return@LaunchedEffect
@@ -1567,6 +1580,10 @@ fun AppRoot() {
                 initialClearLogo = current.itemClearLogo,
                 initialOverview = current.itemOverview,
 
+                onClearLogoResolved = { logo ->
+                    resolvedDetailClearLogos["${current.type}:${current.id}"] = logo
+                },
+
                 onNavigateDetail = {
                         type,
                         id ->                        screen = Screen.Detail(
@@ -1789,7 +1806,10 @@ fun AppRoot() {
                 episode = current.target.episode,
                 runtimeMinutes = current.target.runtimeMinutes,
                 backdropUrl = current.backdropUrl,
-                clearLogoUrl = current.clearLogoUrl,
+                // The clearlogo resolved for this title, so the picker header
+                // shows the art even when the Continue Watching row had none.
+                clearLogoUrl = resolvedDetailClearLogos["${current.parentType}:${current.parentId}"]
+                    ?: current.clearLogoUrl,
                 suppressAutoSelect =
                     streamKey in autoPlayedStreamKeys,
 
@@ -2222,6 +2242,33 @@ fun AppRoot() {
     }
     } // closes CompositionLocalProvider( LocalKBHeroTransition provides … )
 
+    // Resolve a clearlogo for the title on screen when the navigation meta
+    // carried none. DetailScreen reports its own resolved art (onClearLogoResolved
+    // above); this covers the route that never opens Detail - the Continue
+    // Watching picker (autoplay OFF / "Play Manually") - whose history row
+    // usually has no logo, so its header showed the plain name while every other
+    // surface had the art. Stored in the same map the cover splash reads.
+    LaunchedEffect(current) {
+        val streamsScreen = current as? Screen.Streams ?: return@LaunchedEffect
+        val key = "${streamsScreen.parentType}:${streamsScreen.parentId}"
+        if (streamsScreen.parentId.isBlank() || resolvedDetailClearLogos.containsKey(key)) {
+            return@LaunchedEffect
+        }
+        val logo =
+            runCatchingCancellable {
+                TmdbRepository.getInstance(context)
+                    .fetchEnrichedMetaCached(
+                        imdbId = streamsScreen.parentId,
+                        type = streamsScreen.parentType.ifBlank { "movie" }
+                    )
+                    ?.bestLogoPath()
+                    ?.let(::tmdbImageOriginal)
+            }.getOrNull()
+        if (logo != null) {
+            resolvedDetailClearLogos[key] = logo
+        }
+    }
+
     // Loading splash while a pre-playback hand-off is in flight.
     //
     // Two shapes, ONE screen:
@@ -2248,7 +2295,11 @@ fun AppRoot() {
     if (detailAutoPlay != null) {
         AutoPlayLoadSplash(
             backdropUrl = detailAutoPlay.itemBackdrop,
-            clearLogoUrl = detailAutoPlay.itemClearLogo,
+            // The logo Detail has resolved for this title, so the cover splash
+            // shows the pulsing clearlogo too - not just the plain name it had
+            // when the deep link carried no logo of its own.
+            clearLogoUrl = resolvedDetailClearLogos["${detailAutoPlay.type}:${detailAutoPlay.id}"]
+                ?: detailAutoPlay.itemClearLogo,
             title = detailAutoPlay.pendingTarget?.displayName.orEmpty()
                 .ifBlank { detailAutoPlay.id },
             subtitle = "Finding sources…"
