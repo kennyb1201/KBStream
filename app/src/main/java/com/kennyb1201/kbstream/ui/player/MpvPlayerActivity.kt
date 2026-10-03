@@ -960,9 +960,8 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun applyPlayerChromeTheme() {
         // Without AMOLED the XML fills are already exactly right.
         if (!AppPreferences.getAmoledBlack(this)) return
-        // getColor()/getCornerRadius() on a drawable are API 24+; older devices
-        // simply keep the (dark, not pure-black) XML fills.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
+        // getColor()/getCornerRadius() on a drawable are API 24+, below the
+        // app's 26 floor, so the theme walk always runs.
         // The end-of-episode popups carry their own fills on top of the chrome
         // walk below.
         applyPlayerPanelTheme()

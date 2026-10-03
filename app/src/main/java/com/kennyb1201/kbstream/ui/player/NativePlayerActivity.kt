@@ -8358,9 +8358,8 @@ class NativePlayerActivity : ComponentActivity() {
     private fun applyPlayerChromeTheme() {
         // Without AMOLED the XML fills are already exactly right.
         if (!AppPreferences.getAmoledBlack(this)) return
-        // getColor()/getCornerRadius() on a drawable are API 24+; older
-        // devices simply keep the (dark, not pure-black) XML fills.
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
+        // getColor()/getCornerRadius() on a drawable are API 24+, below the
+        // app's 26 floor, so the theme walk always runs.
         refillPlayerChrome(findViewById(android.R.id.content))
     }
 

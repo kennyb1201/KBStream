@@ -515,9 +515,8 @@ object AppPreferences {
      *
      * Off by default. Deliberately NOT part of syncDisplayPrefsBlob, for the
      * same reason the engine itself is not: what a box can decode is a
-     * property of that box (and MPV is not even installed on an API 25
-     * device), so turning this on for the living-room Shield must not flip a
-     * Fire TV Stick onto MPV.
+     * property of that box, so turning this on for the living-room Shield must
+     * not flip a Fire TV Stick onto MPV.
      */
     fun getMpvForAnime(context: Context): Boolean =
         prefs(context).getBoolean(KEY_MPV_FOR_ANIME, false)

@@ -40,11 +40,12 @@ import java.util.concurrent.atomic.AtomicReference
 object PlayerEngine {
 
     /**
-     * libmpv's own floor. The bundled artifact declares minSdk 26 and the app
-     * declares 23, so the manifest overrides the library's floor for the
-     * merger; this constant is what actually keeps the native libraries off a
-     * device they were not built for. Nothing may call into MPV without
-     * checking this first.
+     * libmpv's own floor, and now the app's too: both declare minSdk 26, so
+     * the manifest's tools:overrideLibrary is gone and this check is
+     * unconditionally true on every device the app can install on. It is kept
+     * as the single explicit gate MPV is selected through, and so the floor
+     * cannot drift back below the native library without someone noticing
+     * this line.
      */
     const val MIN_SDK = Build.VERSION_CODES.O
 
@@ -52,10 +53,12 @@ object PlayerEngine {
     fun isMpvAvailable(): Boolean = Build.VERSION.SDK_INT >= MIN_SDK
 
     /**
-     * The stored choice, coerced to something this device can actually run: a
-     * Fire OS 6 box (API 25) has no libmpv, so a stored "MPV" reads back as
-     * ExoPlayer there instead of being honored at playback time and dying on
-     * a missing native library.
+     * The stored choice, coerced to something this device can actually run.
+     * The app's floor and libmpv's now coincide (both 26), so [isMpvAvailable]
+     * is unconditionally true and the API-25 case this used to guard against
+     * is gone; the coercion stays as the single place a stored choice meets
+     * the runtime capability, which still covers native libraries that fail to
+     * load for a reason other than the API level.
      */
     fun selected(context: Context): Int {
         val chosen = AppPreferences.getPlayerEngine(context)

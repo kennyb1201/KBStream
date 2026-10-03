@@ -5,7 +5,7 @@ and the logo lockup.
 Why this exists instead of a hand-made PNG in res/: this container has no image
 library and no SVG renderer, and the launcher assets have to be bitmaps --
 a TV launcher rasters the banner itself, and `mipmap-anydpi-v26` alone leaves
-every API 23-25 box (Fire OS 5/6, older Google TV sticks) with no icon asset at
+any launcher that ignores the adaptive-icon form with no icon asset at
 all. So the artwork is defined ONCE here, as polygons plus gradients, in design
 units, and then:
 

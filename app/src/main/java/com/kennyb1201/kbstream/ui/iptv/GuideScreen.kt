@@ -2656,6 +2656,32 @@ private fun ChannelSearchDialog(
     onPlay: (IptvChannelWithEpg) -> Unit,
     onDismiss: () -> Unit
 ) {
+    // Enter/Done on the query field must not close the overlay: the results
+    // live BELOW the field, so dismissing on Done dropped the user back on the
+    // guide having never seen them (Back, which only closes the IME, was the
+    // one press that revealed them). Instead Done keeps the dialog up and hands
+    // the D-pad to the first hit; with no hits it lands on CLOSE so the press
+    // is not a dead end.
+    val firstResultFocusRequester = remember { FocusRequester() }
+    val closeFocusRequester = remember { FocusRequester() }
+    val resultTargetFocusRequester =
+        if (results.isNotEmpty() || programHits.isNotEmpty()) firstResultFocusRequester
+        else closeFocusRequester
+    var submitTick by remember { mutableStateOf(0) }
+    LaunchedEffect(submitTick) {
+        if (submitTick == 0) return@LaunchedEffect
+        // Retried across frames: the hit rows may not have attached on the
+        // frame the query's last keystroke produced them.
+        var focused = false
+        var attempts = 0
+        while (!focused && attempts < 8) {
+            awaitFrame()
+            focused = runCatching { resultTargetFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
+
     Dialog(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
@@ -2676,7 +2702,15 @@ private fun ChannelSearchDialog(
                 onValueChange = onQueryChanged,
                 placeholder = "Channel, number or program…",
                 modifier = Modifier.fillMaxWidth(),
-                onDone = onDismiss
+                onDone = { submitTick++ },
+                // The hits sit below this field in the same focus group, so the
+                // field must stop asking for the IME once focus leaves it.
+                // An editable field re-opens the keyboard every time it takes
+                // focus, and on Fire TV that keyboard is a full-screen window:
+                // scrolling the results walked the D-pad back over the field
+                // and put the keyboard up again, which made the list reachable
+                // only by pressing Back.
+                closeKeyboardOnBlur = true
             )
             if (results.isEmpty() && programHits.isEmpty()) {
                 Text(
@@ -2699,9 +2733,20 @@ private fun ChannelSearchDialog(
                     itemsIndexed(
                         items = results,
                         key = { _, item -> channelKey(item) }
-                    ) { _, item ->
+                    ) { index, item ->
                         val logoUrl = item.channel.logoUrl ?: item.epgChannel?.iconUrl
-                        KBCard(onClick = { onPlay(item) }, modifier = Modifier.fillMaxWidth()) {
+                        KBCard(
+                            onClick = { onPlay(item) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .let { base ->
+                                    if (index == 0) {
+                                        base.focusRequester(firstResultFocusRequester)
+                                    } else {
+                                        base
+                                    }
+                                }
+                        ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier
@@ -2800,10 +2845,20 @@ private fun ChannelSearchDialog(
                         key = { _, hit ->
                             "program|${hit.item.channel.id}|${hit.program.startUtcMillis}"
                         }
-                    ) { _, hit ->
+                    ) { index, hit ->
                         KBCard(
                             onClick = { onPlay(hit.item) },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .let { base ->
+                                    // Only the first hit overall carries the
+                                    // requester Done lands on.
+                                    if (index == 0 && results.isEmpty()) {
+                                        base.focusRequester(firstResultFocusRequester)
+                                    } else {
+                                        base
+                                    }
+                                }
                         ) {
                             Column(
                                 modifier = Modifier
@@ -2833,7 +2888,12 @@ private fun ChannelSearchDialog(
                     }
                 }
             }
-            KBCard(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+            KBCard(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(closeFocusRequester)
+            ) {
                 Text(
                     text = "CLOSE",
                     color = KBTextLo,

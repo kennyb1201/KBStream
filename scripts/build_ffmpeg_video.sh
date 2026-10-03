@@ -60,7 +60,7 @@
 #   FFMPEG_TAG=release/6.0  FFmpeg branch media3's build_ffmpeg.sh expects
 #   ANDROID_NDK=/path       NDK root (default: $ANDROID_HOME/ndk/28.2.13676358)
 #   ANDROID_API=23          native API level (must be <= the app's minSdk).
-#                           Held at 23 on purpose while the app sits at 24:
+#                           Held at 23 on purpose while the app sits at 26:
 #                           a LOWER floor is the permissive direction (the .so
 #                           only claims symbols that exist on 23), so this is
 #                           not a thing to bump with minSdk - raising it would

@@ -186,7 +186,7 @@ object AppUpdater {
             when (status) {
                 PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                     // IntentCompat, not Intent.getParcelableExtra(String, Class):
-                    // the two-arg form is API 33, and this app ships minSdk 23.
+                    // the two-arg form is API 33, and this app's floor is 26.
                     val confirm = IntentCompat.getParcelableExtra(
                         intent,
                         Intent.EXTRA_INTENT,

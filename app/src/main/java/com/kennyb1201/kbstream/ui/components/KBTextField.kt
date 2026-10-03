@@ -114,7 +114,26 @@ fun KBTextField(
      * takes focus silently, OK starts editing, and Done ends editing without
      * pushing focus somewhere else.
      */
-    openKeyboardOnFocus: Boolean = true
+    openKeyboardOnFocus: Boolean = true,
+    /**
+     * Whether leaving the field ends its editing session.
+     *
+     * Only for a field that shares one focus group with a list of OTHER
+     * focusable controls — the guide's search overlay, where up to 40 result
+     * cards sit below the query box. An editable [BasicTextField] asks for the
+     * IME every time it takes focus, so a field that stays editable for the
+     * whole life of the overlay re-opens the keyboard (a full-screen window on
+     * Fire TV) every time the D-pad walks back over it while the user is
+     * scrolling the hits — the results could only be reached by pressing Back,
+     * and any move that crossed the field put the keyboard back up.
+     *
+     * With this on, the field is editable for its FIRST focus (so the keyboard
+     * still comes up by itself when the overlay opens), and read-only from the
+     * moment focus or Done leaves it. The keyboard then only returns when OK is
+     * pressed on the field again, which is what keeps the rest of the screen
+     * reachable while the list is being browsed.
+     */
+    closeKeyboardOnBlur: Boolean = false
 ) {
     var focused by remember { mutableStateOf(false) }
     // Manual mode starts inert: the field only becomes editable (and only then
@@ -123,15 +142,20 @@ fun KBTextField(
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
 
+    // What [editing] goes back to once this field stops being the focused one.
+    // True for the usual field: focus (re)opens the IME. False for manual mode
+    // and for closeKeyboardOnBlur, where only an explicit OK starts a session.
+    val editingWhenLeft = openKeyboardOnFocus && !closeKeyboardOnBlur
+
     fun finishEditing() {
         keyboardController?.hide()
-        if (openKeyboardOnFocus) {
-            if (!keepFocusOnDone) focusManager.clearFocus()
-        } else {
-            // Manual mode: end editing but KEEP focus, so the D-pad carries on
-            // down the form from here instead of jumping back to whatever held
-            // focus before the field.
+        if (!editingWhenLeft) {
+            // Manual mode / list-sharing field: end the session but KEEP focus,
+            // so the D-pad carries on from here instead of jumping back to
+            // whatever held focus before the field.
             editing = false
+        } else if (!keepFocusOnDone) {
+            focusManager.clearFocus()
         }
         onDone?.invoke()
     }
@@ -197,9 +221,11 @@ fun KBTextField(
             )
             .onFocusChanged {
                 focused = it.isFocused
-                // Blurring a manual-mode field ends its editing state, so it is
-                // inert again the next time the D-pad lands on it.
-                if (!it.isFocused && !openKeyboardOnFocus) editing = false
+                // Blurring a manual-mode (or closeKeyboardOnBlur) field ends its
+                // editing state, so it is inert again the next time the D-pad
+                // lands on it instead of pulling the IME back up over whatever
+                // the user navigated to.
+                if (!it.isFocused && !editingWhenLeft) editing = false
                 onFocusChanged?.invoke(it.isFocused)
             }
             .onPreviewKeyEvent { event ->
@@ -211,7 +237,7 @@ fun KBTextField(
                             val moved = focusManager.moveFocus(FocusDirection.Down)
                             if (moved) {
                                 keyboardController?.hide()
-                                editing = openKeyboardOnFocus
+                                editing = editingWhenLeft
                             }
                             moved
                         }
@@ -219,7 +245,7 @@ fun KBTextField(
                             val moved = focusManager.moveFocus(FocusDirection.Up)
                             if (moved) {
                                 keyboardController?.hide()
-                                editing = openKeyboardOnFocus
+                                editing = editingWhenLeft
                             }
                             moved
                         }

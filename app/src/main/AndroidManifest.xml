@@ -1,13 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- libmpv (the backup playback engine) declares minSdk 26, this app ships
-         minSdk 24. Overriding the library's floor is safe because nothing
-         loads it below API 26: PlayerEngine reports the engine as unavailable
-         there, the Settings entry says so, and the ExoPlayer error path will
-         not hand a stream to it — so a Fire OS 6 box (API 25) never touches
-         the native libraries, which is the only thing that could fail. -->
-    <uses-sdk tools:overrideLibrary="dev.jdtech.mpv" />
+    <!-- minSdk is 26, matching libmpv's own floor, so no tools:overrideLibrary
+         is needed here. -->
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.PICTURE_IN_PICTURE" />

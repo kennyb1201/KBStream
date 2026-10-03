@@ -113,8 +113,8 @@ private const val MAX_SLUG_LENGTH = 24
  * use TLS, and a name is what lets a device reuse and resume a connection. It
  * is also what made such a host unidentifiable in the perf summary.
  *
- * Hand-rolled rather than `InetAddresses.isNumericAddress` (API 29, and this app
- * ships API 23) or `Patterns.IP_ADDRESS`, so the rule lives in one place that a
+ * Hand-rolled rather than `InetAddresses.isNumericAddress` (API 29, above this
+ * app's 26 floor) or `Patterns.IP_ADDRESS`, so the rule lives in one place that a
  * unit test can pin and does not change with the API level.
  */
 internal fun isIpLiteralHost(host: String): Boolean {

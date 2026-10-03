@@ -1,18 +1,18 @@
 import java.util.Properties
 
 plugins {
-    id("com.android.application")
+    alias(libs.plugins.android.application)
     // Consumes the baseline profile the :baselineprofile generator writes:
     // `./gradlew :app:generateBaselineProfile` on a connected device.
-    id("androidx.baselineprofile")
+    alias(libs.plugins.baseline.profile)
     // No org.jetbrains.kotlin.android: AGP 9's built-in Kotlin compiles this
     // module's Kotlin sources, and the old plugin is incompatible with AGP 9's
     // new DSL. See the note in the root build file.
-    id("com.google.devtools.ksp")
-    id("org.jetbrains.kotlin.plugin.compose")
-    id("org.jetbrains.kotlin.plugin.serialization")
-    id("io.sentry.android.gradle")
-    id("org.jlleitschuh.gradle.ktlint")
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.sentry.android.gradle)
+    alias(libs.plugins.ktlint)
 }
 
 // Dead-import check. The rule set is one rule wide (see .editorconfig), so
@@ -132,13 +132,14 @@ android {
 
     defaultConfig {
         applicationId = "com.kennyb1201.kbstream"
-        // 24, not 23: work-runtime 2.12 declares minSdk 24 and is the last piece
-        // of the 2026 androidx line this app could not take (the manifest merger
-        // refuses it outright below 24). The floor costs Android 6.0 only, and
-        // buys little there anyway - libmpv declares minSdk 26 and PlayerEngine
-        // refuses the MPV engine below it, so an API 23-25 box already had no
-        // backup engine and no software video.
-        minSdk = 24
+        // 26, not 24: libmpv (the backup playback engine) declares minSdk 26
+        // itself, so matching it retires the manifest's tools:overrideLibrary
+        // hack and stops desugaring for a range of devices that never had a
+        // working MPV engine anyway - PlayerEngine refuses MPV below 26, and
+        // without the FFmpeg extension ExoPlayer has no software video, so an
+        // API 24-25 box was already ExoPlayer-on-MediaCodec only. work-runtime
+        // 2.12 (minSdk 24) is satisfied by 26 as well.
+        minSdk = 26
         targetSdk = 35
         versionCode = ciVersionCode
         versionName = ciVersionName
@@ -347,15 +348,15 @@ baselineProfile {
 
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.19.1")
+    implementation(libs.androidx.core.ktx)
     // EncryptedSharedPreferences backs the auth-token stores (Supabase session,
     // Simkl token, MDBList key). The key is held in the AndroidKeyStore and
     // never leaves the device, so a rooted box or a pulled prefs file yields
     // ciphertext instead of a live session that can be replayed off-device.
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    implementation("androidx.activity:activity-compose:1.13.0")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.11.0")
+    implementation(libs.androidx.security.crypto)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     // Paging 3, Compose half. The "Open in Grid" full-catalog screen pages a
     // single addon catalog by item offset, which is exactly what a PagingSource
     // models: the source owns the offset bookkeeping, de-dupe and end-of-list
@@ -363,16 +364,16 @@ dependencies {
     // rolled items/isLoadingMore/hasMore/error state machine. paging-compose
     // brings paging-common (Pager/PagingConfig/PagingSource); paging-runtime is
     // the LiveData/RxJava half and is not needed here.
-    implementation("androidx.paging:paging-compose:3.5.1")
+    implementation(libs.androidx.paging.compose)
 
-    implementation("androidx.compose.runtime:runtime")
+    implementation(libs.androidx.compose.runtime)
 
-    implementation("androidx.tv:tv-material:1.1.0")
+    implementation(libs.androidx.tv.material)
     // Still declared even though nothing imports androidx.tv.foundation: no
     // 1.1.0 exists to bump it to, and tv-material 1.1.0's POM dropped its
     // transitive dependence on it, so removing this line would take the
     // artifact off the classpath entirely.
-    implementation("androidx.tv:tv-foundation:1.0.0")
+    implementation(libs.androidx.tv.foundation)
     // Compose 1.12.1 / material3 1.4.0. This BOM sat at 2024.09.03 (Compose
     // 1.7) for as long as it did because nothing newer fit under AGP 8.6.0 +
     // compileSdk 35 - see the ceiling note in .github/dependabot.yml - and
@@ -380,25 +381,25 @@ dependencies {
     // compiler ships WITH the Kotlin version (2.4.20 here), so a BOM bump is a
     // version bump and not a compiler migration. tv-material 1.1.0 needs at
     // least 1.10.3, which is what pins the floor of this line.
-    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui.base)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.extended)
     // Retrofit 3 is the line that pairs with OkHttp 5 (Retrofit 2.11 pins
     // OkHttp 4), and both stay in the retrofit2/okhttp3 packages, so this is
     // a version bump rather than an import rewrite. They move together:
     // bumping OkHttp alone would leave Retrofit compiled against OkHttp 4.
-    implementation("com.squareup.retrofit2:retrofit:3.0.0")
-    implementation("com.squareup.retrofit2:converter-moshi:3.0.0")
-    implementation("com.squareup.okhttp3:okhttp:5.5.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:5.5.0")
+    implementation(libs.retrofit.core)
+    implementation(libs.retrofit.converter.moshi)
+    implementation(libs.okhttp.core)
+    implementation(libs.okhttp.logging.interceptor)
     // Transparent Brotli (Content-Encoding: br) decoding, installed on the
     // shared base client (see BaseHttpClient). Addon catalogs, TMDB and the
     // tracker APIs are all JSON over HTTP, and Brotli shrinks those payloads
     // ~20% against gzip - on a 1.7 GB TV box the win is mostly in the JSON
     // parse and the time-to-first-rail, not just bytes.
-    implementation("com.squareup.okhttp3:okhttp-brotli:5.5.0")
+    implementation(libs.okhttp.brotli)
     // Moshi, the code-generation half. Every model in this app is annotated
     // @JsonClass(generateAdapter = true), and without this processor those
     // 129 annotations do nothing at all: Moshi falls back to kotlin-reflect
@@ -411,14 +412,14 @@ dependencies {
     // the adapter by name). Keep this version in lockstep with moshi-kotlin
     // below — the generated adapters and the runtime are the same artifact's
     // two halves.
-    ksp("com.squareup.moshi:moshi-kotlin-codegen:1.15.2")
+    ksp(libs.moshi.codegen)
     // The reflective half, kept as the FALLBACK for a type with no annotation.
     // Every Moshi.Builder below adds it with addLast() rather than add():
     // Moshi consults factories in order, so adding it first would let
     // reflection claim every model before the generated adapter is ever
     // looked up, and this dependency would be dead weight.
-    implementation("com.squareup.moshi:moshi-kotlin:1.15.2")
-    implementation("com.google.zxing:core:3.5.4")
+    implementation(libs.moshi.kotlin)
+    implementation(libs.zxing.core)
 
     // Baseline profiles, runtime half. The profile itself (a list of the
     // classes/methods startup touches) is captured by :baselineprofile on a
@@ -429,7 +430,7 @@ dependencies {
     // installed by Play, so on the API 23-30 boxes it also runs on, nothing
     // would apply the profile without this. Small, and it does nothing when no
     // profile is present.
-    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    implementation(libs.androidx.profileinstaller)
 
     // Crash reporting (Sentry)
     // Sentry Android 8.x. The Gradle plugin stays at 6.23.0: it is versioned
@@ -437,7 +438,7 @@ dependencies {
     // major is the only thing that moves. 8.x rejects nothing the reporter
     // uses (SentryAndroid.init, dsn/release/dist/setTag, beforeSend,
     // beforeBreadcrumb, Sentry.captureException), so this is a version bump.
-    implementation("io.sentry:sentry-android:8.59.0")
+    implementation(libs.sentry.android)
 
     // Supabase (cross-device sync): auth + Postgres REST + realtime channels.
     //
@@ -446,10 +447,10 @@ dependencies {
     // io.github.jan.supabase.auth (SessionStatus moved again, to
     // ...auth.status). 3.x also requires Ktor 3, so the engine below moved
     // with it.
-    implementation(platform("io.github.jan-tennert.supabase:bom:3.8.0"))
-    implementation("io.github.jan-tennert.supabase:auth-kt")
-    implementation("io.github.jan-tennert.supabase:postgrest-kt")
-    implementation("io.github.jan-tennert.supabase:realtime-kt")
+    implementation(platform(libs.supabase.bom))
+    implementation(libs.supabase.auth)
+    implementation(libs.supabase.postgrest)
+    implementation(libs.supabase.realtime)
     // MUST be the OkHttp engine, not ktor-client-android. Realtime needs a
     // WebSocket-capable Ktor engine; the Android engine is HttpURLConnection
     // based and exposes NO WebSocketCapability, so every channel join dies
@@ -458,29 +459,29 @@ dependencies {
     // watcher rebuild three dead channels + run a full pullAll on every
     // cycle, i.e. permanent background network/DB churn during playback.
     // OkHttp is already a dependency here (REST datasource, Coil).
-    implementation("io.ktor:ktor-client-okhttp:3.6.0")
+    implementation(libs.ktor.client.okhttp)
     // 1.11.0, the current stable. It started as the floor Ktor 3 / supabase-kt
     // 3 set when they moved to Kotlin 2.x (leaving 1.7.3 here forced a
     // downgrade of the runtime they are built against) and it matches the
     // Kotlin 2.4.20 serialization plugin compiling against it: the sync
     // payload, outbox queue, profile and hidden-title models all serialize
     // through this runtime.
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation(libs.kotlinx.serialization.json)
 
-    implementation("androidx.media3:media3-exoplayer:1.11.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.11.1")
-    implementation("androidx.media3:media3-exoplayer-dash:1.11.1")
-    implementation("androidx.media3:media3-exoplayer-rtsp:1.11.1")
+    implementation(libs.media3.exoplayer.core)
+    implementation(libs.media3.exoplayer.hls)
+    implementation(libs.media3.exoplayer.dash)
+    implementation(libs.media3.exoplayer.rtsp)
     // Microsoft Smooth Streaming (MSS), the Silverlight-era adaptive format:
     // ".../stream.ism/Manifest", still served by IIS Media Services and some
     // CDNs. Small module, and Media3's DefaultMediaSourceFactory picks it up by
     // class name (SsMediaSource$Factory) once it is on the classpath - see
     // resolveMimeType in NativePlayerActivity, which is what puts the mime on
     // the MediaItem for a URL that has no extension to key off.
-    implementation("androidx.media3:media3-exoplayer-smoothstreaming:1.11.1")
-    implementation("androidx.media3:media3-ui:1.11.1")
-    implementation("androidx.media3:media3-session:1.11.1")
-    implementation("androidx.media3:media3-datasource-okhttp:1.11.1")
+    implementation(libs.media3.exoplayer.smoothstreaming)
+    implementation(libs.media3.ui)
+    implementation(libs.media3.session)
+    implementation(libs.media3.datasource.okhttp)
     // FFmpeg decoder extension.
     //
     // There is no published build of media3's decoder_ffmpeg we can use: the
@@ -538,64 +539,64 @@ dependencies {
     // native libraries for all four ABIs, so it needs no other dependency and
     // no app-side extraction.
     //
-    // Pinned to 0.5.1 deliberately: that release is a plain Java artifact and
-    // carries the static MPVLib API the reference mpv-android player uses,
-    // which is what MpvPlayerView drives. (The other reason the pin used to
-    // carry - 1.0.0 is Kotlin-compiled and the old 2.0.21 toolchain could not
-    // read its metadata - no longer applies now that the project builds on
-    // Kotlin 2.4.20; bumping mpv is still a separate, deliberate change.)
+    // Pinned to 1.0.0: it carries the same `dev.jdtech.mpv.MPVLib` static API
+    // the reference mpv-android player uses and MpvPlayerView drives (checked
+    // against the artifact's classes), for all four ABIs including the
+    // armeabi-v7a the TCL box runs, with a newer bundled mpv/FFmpeg than 0.5.1.
+    // Its 64-bit .so files are 16 KB page aligned (verified with readelf), so
+    // nothing here needs the FFmpeg script's page-size work.
     //
-    // NOTE: the artifact declares minSdk 26 while this app ships minSdk 23.
-    // The manifest carries the matching tools:overrideLibrary, and
-    // PlayerEngine refuses to select MPV below API 26 rather than loading the
-    // native libraries on a device they were not built for.
-    implementation("dev.jdtech.mpv:libmpv:0.5.1")
-    implementation("androidx.recyclerview:recyclerview:1.4.0")
+    // It declares minSdk 26, which now matches the app's own floor, so unlike
+    // the old 0.5.1 pin the manifest needs no tools:overrideLibrary. (The pin
+    // used to be held back because 1.0.0 is Kotlin-compiled and an older
+    // toolchain could not read its metadata; that ended with Kotlin 2.4.20.)
+    implementation(libs.libmpv)
+    implementation(libs.androidx.recyclerview)
     // Pinned to the COMMIT behind tag v0.26.4 (43f8e6ebeef4…, full hash
     // 43f8e6ebeef469db7c5328714bc5f33c9f06f092), not the tag itself: tags are
     // mutable, so "v0.26.4" can silently resolve to different code than the
     // build that was reviewed and shipped. JitPack resolves the commit prefix;
     // NewPipeExtractor is GPLv3, see THIRD_PARTY_NOTICES.md.
-    implementation("com.github.TeamNewPipe:NewPipeExtractor:43f8e6ebeef4")
+    implementation(libs.newpipe.extractor)
 
 
-    implementation("androidx.room:room-runtime:2.8.5")
-    ksp("androidx.room:room-compiler:2.8.5")
-    implementation("androidx.room:room-ktx:2.8.5")
+    implementation(libs.androidx.room.runtime)
+    ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.room.ktx)
 
-    // 2.12.0 is why the app's floor moved to minSdk 24: it declares 24 itself,
-    // and below that the manifest merger rejects the whole build ("uses-sdk:
-    // minSdkVersion 23 cannot be smaller than version 24 declared in library
+    // 2.12.0 declares minSdk 24, which the app's floor (26) clears; below 24
+    // the manifest merger rejects the whole build ("uses-sdk: minSdkVersion 23
+    // cannot be smaller than version 24 declared in library
     // [androidx.work:work-runtime-ktx:2.12.0]").
-    implementation("androidx.work:work-runtime-ktx:2.12.0")
+    implementation(libs.androidx.work.runtime.ktx)
 
-    implementation("io.coil-kt.coil3:coil-compose:3.6.3")
-    implementation("io.coil-kt.coil3:coil:3.6.3")
-    implementation("io.coil-kt.coil3:coil-network-okhttp:3.6.3")
+    implementation(libs.coil.compose)
+    implementation(libs.coil.core)
+    implementation(libs.coil.network.okhttp)
     // SVG badge art: several popular KB-compatible badge packs serve chips
     // as .svg, which base Coil cannot decode — without this those badges
     // render blank.
-    implementation("io.coil-kt.coil3:coil-svg:3.6.3")
+    implementation(libs.coil.svg)
     // Animated focus GIFs on KB collection folder tiles (manifest
     // focusGifUrl / focusGifEnabled); base Coil shows only the first frame.
-    implementation("io.coil-kt.coil3:coil-gif:3.6.3")
+    implementation(libs.coil.gif)
 
-    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs_nio:2.1.5")
+    coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
 
     // JVM unit tests (KidsMode rating matrix, catalog invariants).
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
     // The real org.json, not android.jar's stub. isReturnDefaultValues makes the
     // stub return nulls, so the OpenSubtitles tests would assert the failure
     // path of every response instead of the parse they are there for. Test
     // scope only: the app itself still uses the platform's org.json.
-    testImplementation("org.json:json:20260814")
+    testImplementation(libs.json)
 
     // Room migration tests (see data/history): MigrationTestHelper drives a
     // real SQLite database through a Migration and validates the result
     // against the exported schema - the one class of test the JVM-only suite
     // could not reach, and the gap that let the watch-history schema sit one
     // version bump away from being dropped unnoticed.
-    testImplementation("androidx.room:room-testing:2.8.5")
+    testImplementation(libs.androidx.room.testing)
     // ...and Robolectric is what supplies the Android runtime room-testing and
     // MigrationTestHelper's instrumentation need, so it stays a UNIT test: no
     // device, no emulator, no androidTest variant, run by the same
@@ -603,9 +604,17 @@ dependencies {
     // Robolectric picks the SDK it emulates from the app's target SDK (35), not
     // from compileSdk (37), so it needs a release that ships an android-all jar
     // for 35 - 4.14 was the floor for that, and 4.17 is the current line.
-    testImplementation("org.robolectric:robolectric:4.17")
-    testImplementation("androidx.test.ext:junit:1.3.0")
-    testImplementation("androidx.test:core-ktx:1.7.0")
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.ext.junit)
+    testImplementation(libs.androidx.test.core.ktx)
 
-    debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation(libs.androidx.compose.ui.tooling.debug)
+
+    // LeakCanary, debug builds only. The two player activities are 3k-10k lines
+    // with hand-rolled coroutine scopes and engine handoffs - the exact shape
+    // that leaks - and it catches what a JVM unit-test suite structurally
+    // cannot (a retained Activity/Context once the screen is gone). It
+    // auto-installs from its own provider, so no app code changes, and being
+    // debugImplementation means nothing ships in release.
+    debugImplementation(libs.leakcanary.android)
 }

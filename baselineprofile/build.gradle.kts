@@ -13,10 +13,15 @@
 // run it, and the profileinstaller dependency in app/build.gradle.kts for the
 // half that installs the result on devices.
 plugins {
+    // No version and no catalog alias: com.android.test comes from the AGP
+    // already on the classpath (declared in the root build), and requesting it
+    // through an alias makes Gradle try to resolve it a second time with a
+    // version, which fails with "already on the classpath with an unknown
+    // version".
     id("com.android.test")
     // AGP 9's built-in Kotlin replaces org.jetbrains.kotlin.android here too;
     // see the root build file.
-    id("androidx.baselineprofile")
+    alias(libs.plugins.baseline.profile)
 }
 
 android {
@@ -26,7 +31,7 @@ android {
     defaultConfig {
         // The generator runs on the device the profile is captured from - a TV
         // box or an emulator, both far above this. It does NOT constrain the
-        // app's own minSdk (24).
+        // app's own minSdk (26).
         minSdk = 28
         targetSdk = 35
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -55,7 +60,7 @@ baselineProfile {
 }
 
 dependencies {
-    implementation("androidx.test.ext:junit:1.3.0")
-    implementation("androidx.test.uiautomator:uiautomator:2.4.0")
-    implementation("androidx.benchmark:benchmark-macro-junit4:1.5.0")
+    implementation(libs.androidx.test.ext.junit)
+    implementation(libs.uiautomator)
+    implementation(libs.benchmark.macro.junit4)
 }

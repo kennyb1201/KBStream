@@ -218,10 +218,10 @@ internal class TrickplayFrames(
         }
         copyInFlight = true
         try {
-            // The 4-arg Surface overload: the null-Rect 5-arg variant that
-            // copies a sub-rect only exists from API 26, and this app's minSdk
-            // is 24. Passing the whole surface is what this capture wants
-            // anyway, so dropping the null rect both compiles and is correct.
+            // The 4-arg Surface overload. The null-Rect 5-arg variant also
+            // exists from API 26 (the app's floor), but passing the whole
+            // surface is what this capture wants anyway, so the narrower form
+            // is both correct and the call this code intends.
             PixelCopy.request(source, dest, { result ->
                 copyInFlight = false
                 // A copy that lands after the request was abandoned (a newer
