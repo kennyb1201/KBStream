@@ -156,6 +156,16 @@ android {
         buildConfig = true
     }
 
+    // English only. The app's own strings are English (see the strings.xml),
+    // but its AndroidX / Material / Play dependencies ship dozens of
+    // translations no user of this build will ever see. Dropping the
+    // values-<locale> folders is a straight APK-size win, and the default
+    // (unqualified) resources are always kept. This is AGP 9's replacement
+    // for the removed `resConfigs`/`resourceConfigurations` DSL.
+    androidResources {
+        localeFilters += "en"
+    }
+
     signingConfigs {
         create("release") {
             if (releaseSigningConfigured) {

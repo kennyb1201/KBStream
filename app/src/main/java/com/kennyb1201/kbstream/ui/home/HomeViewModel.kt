@@ -44,7 +44,7 @@ import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.landscapeArtUrls
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.tmdb.alternatePosterPath
-import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
+import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.displayCountry
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
@@ -684,7 +684,7 @@ Log.d(
                             // rail card shows.
                             ?: resolvedTmdbDetail?.alternatePosterPath()
                                 ?.takeIf { it.isNotBlank() }
-                                ?.let { tmdbImageOriginal(it) }
+                                ?.let { tmdbImage(it, "w780") }
                             ?: resolvedAddonMeta?.poster?.takeIf { it.isNotBlank() }
                             ?: item.poster?.takeIf { it.isNotBlank() }
 

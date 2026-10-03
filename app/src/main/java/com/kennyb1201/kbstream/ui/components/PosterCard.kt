@@ -28,6 +28,7 @@ import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -156,7 +157,16 @@ fun PosterCard(
         ) {
             if (!posterUrl.isNullOrBlank() && !hasError) {
                 AsyncImage(
-                    model = ImageRequest.Builder(context).data(posterUrl).build(),
+                    // Rail tiles never crossfade. A rail paints many posters
+                    // at once, and the global ImageLoader default was making
+                    // every one of them fade in during a scroll - a per-frame
+                    // cost on a 1.7 GB box for a tile the user is about to
+                    // scroll past. The hero (and the few full-screen art
+                    // surfaces) opt back into crossfade on their own request.
+                    model = ImageRequest.Builder(context)
+                        .data(posterUrl)
+                        .crossfade(false)
+                        .build(),
                     contentDescription = contentDescription,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),

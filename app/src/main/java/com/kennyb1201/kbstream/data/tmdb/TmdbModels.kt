@@ -926,9 +926,21 @@ fun TmdbDetail.alternatePosterPath(): String? {
         ?: primary
 }
 
-fun tmdbImageOriginal(path: String?): String? =
+/**
+ * A TMDB image at an explicit ladder rung ([size] such as `w185`, `w342`,
+ * `w500`, `w780`).
+ *
+ * The rungs are fixed by TMDB, so a caller that knows its render size should
+ * name it instead of taking `original`: decoding a multi-megapixel poster into
+ * an 88dp avatar is pure waste on a 1.7 GB TV box, and Coil holds the decoded
+ * bitmap in the memory cache alongside every other tile on screen.
+ */
+fun tmdbImage(path: String?, size: String): String? =
     path?.takeIf { it.isNotBlank() }
-        ?.let { "https://image.tmdb.org/t/p/original$it" }
+        ?.let { "https://image.tmdb.org/t/p/$size$it" }
+
+/** The full-size original; use [tmdbImage] whenever the render size is known. */
+fun tmdbImageOriginal(path: String?): String? = tmdbImage(path, "original")
 
 fun TmdbDetail.displayRuntimeMinutes(): Int? =
     runtime?.takeIf { it > 0 }

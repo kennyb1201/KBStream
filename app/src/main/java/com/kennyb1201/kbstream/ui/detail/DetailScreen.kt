@@ -51,7 +51,6 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -59,6 +58,7 @@ import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -110,7 +110,7 @@ import com.kennyb1201.kbstream.data.tmdb.displaySeasonName
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.library.HiddenTitles
-import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
+import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
@@ -622,7 +622,7 @@ fun DetailScreen(
     }
     // TMDB clearlogo first (more reliable); add-on logo (fanart.tv etc.) as
     // fallback when TMDB has nothing for this title.
-    val clearLogoUrl = tmdbImageOriginal(tmdbDetail?.bestLogoPath())
+    val clearLogoUrl = tmdbImage(tmdbDetail?.bestLogoPath(), "w500")
         ?: meta?.logo?.takeIf { it.isNotBlank() }
     // Hand the resolved logo up as soon as it exists.
     LaunchedEffect(clearLogoUrl) {
@@ -4640,7 +4640,15 @@ private fun CastCard(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
                         .fillMaxSize()
-                        .scale(imageScale)
+                        // graphicsLayer, not Modifier.scale: the focus
+                        // animation reads imageScale INSIDE the layer block,
+                        // so it invalidates the layer per frame instead of
+                        // recomposing this card (and re-resolving its image)
+                        // on every focus transition.
+                        .graphicsLayer {
+                            scaleX = imageScale
+                            scaleY = imageScale
+                        }
                 )
             } else {
                 Box(

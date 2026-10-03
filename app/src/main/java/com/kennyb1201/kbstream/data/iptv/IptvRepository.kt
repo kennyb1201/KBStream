@@ -266,6 +266,11 @@ class IptvRepository(
                 dbName = IptvDatabase.activeFileName(appContext),
                 playlistMatchKeys = playlistGuideMatchKeys()
             )
+            // Whether this call actually parsed a body. A `304 Not Modified`
+            // leaves the rows exactly as they were, so it must not bump the
+            // revision or drop the snapshot cache - doing so would tell every
+            // live instance to re-read rows that never changed.
+            var importedFresh = false
             // Plain runCatching, deliberately: `waiter.complete(result)` on the
             // next line is what releases every other caller that joined this
             // import (see the activeGuideImports handshake above), so the block
@@ -273,19 +278,73 @@ class IptvRepository(
             // a rethrow here would leave those joiners awaiting a deferred
             // nobody completes. The cancellation still propagates:
             // result.getOrThrow() rethrows it just below.
-            val result = runCatching {
-                IptvHttpClient.streamXmltvWithRetry(client, normalizedUrl) { stream ->
+            val result: Result<Unit> = runCatching {
+                // The validators stored by the last successful import of this
+                // URL, if any. They make the fetch conditional, which is the
+                // whole point: a 10-100 MB guide that has not changed must not
+                // be re-downloaded and re-parsed every refresh.
+                val validators = GuideCacheHeaders.get(appContext, normalizedUrl)
+                val fetch = IptvHttpClient.streamXmltvWithRetry(
+                    client,
+                    normalizedUrl,
+                    validators
+                ) { stream ->
                     importer.import(normalizedUrl, stream)
+                }
+
+                when (fetch) {
+                    is IptvHttpClient.XmltvFetch.Streamed -> {
+                        GuideCacheHeaders.put(
+                            appContext,
+                            normalizedUrl,
+                            fetch.etag,
+                            fetch.lastModified
+                        )
+                        importedFresh = true
+                    }
+
+                    IptvHttpClient.XmltvFetch.NotModified -> {
+                        if (dao.hasChannelsForSource(normalizedUrl)) {
+                            Log.d(
+                                TAG,
+                                "GUIDE NOT MODIFIED source=${Redaction.url(normalizedUrl)}"
+                            )
+                        } else {
+                            // A 304 the database cannot satisfy: the rows this
+                            // validator was minted against are gone (a recreated
+                            // profile DB, a prune), so honoring it would leave
+                            // the guide empty. Drop the stale validators and
+                            // fetch the whole file once.
+                            GuideCacheHeaders.clear(appContext, normalizedUrl)
+                            val fresh = IptvHttpClient.streamXmltvWithRetry(
+                                client,
+                                normalizedUrl
+                            ) { stream ->
+                                importer.import(normalizedUrl, stream)
+                            }
+                            if (fresh is IptvHttpClient.XmltvFetch.Streamed) {
+                                GuideCacheHeaders.put(
+                                    appContext,
+                                    normalizedUrl,
+                                    fresh.etag,
+                                    fresh.lastModified
+                                )
+                                importedFresh = true
+                            }
+                        }
+                    }
                 }
             }
 
             waiter.complete(result)
             result.getOrThrow()
-            // Bumped BEFORE the local invalidation: this is what tells every
-            // other live instance (the guide screen's ViewModel) that the
-            // snapshot and rows it is holding predate this import.
-            GuideRevision.bump(normalizedUrl)
-            invalidateGuideSnapshot(normalizedUrl)
+            if (importedFresh) {
+                // Bumped BEFORE the local invalidation: this is what tells every
+                // other live instance (the guide screen's ViewModel) that the
+                // snapshot and rows it is holding predate this import.
+                GuideRevision.bump(normalizedUrl)
+                invalidateGuideSnapshot(normalizedUrl)
+            }
         } finally {
             importRequestMutex.withLock {
                 activeGuideImports.remove(requestKey, waiter)
@@ -700,7 +759,7 @@ class IptvRepository(
                             .sortedBy { it.startUtcMillis }
                             .take(perBatchTarget)
 
-                        Log.w(
+                        Log.d(
                             TAG,
                             "PROGRAM BATCH channels=${batch.size} rows=${batchRows.size} target=$perBatchTarget"
                         )

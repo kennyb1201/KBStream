@@ -2884,8 +2884,8 @@ class NativePlayerActivity : ComponentActivity() {
                     ?.let { path ->
                         when {
                             path.startsWith("http://") || path.startsWith("https://") -> path
-                            path.startsWith("/") -> "https://image.tmdb.org/t/p/original$path"
-                            else -> "https://image.tmdb.org/t/p/original/$path"
+                            path.startsWith("/") -> "https://image.tmdb.org/t/p/w185$path"
+                            else -> "https://image.tmdb.org/t/p/w185/$path"
                         }
                     }
                 if (!profileUrl.isNullOrBlank()) {

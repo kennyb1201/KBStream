@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -120,6 +121,7 @@ fun LandscapeCard(
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(effectiveUrl)
+                        .crossfade(false)
                         .build(),
                     contentDescription = contentDescription,
                     contentScale = ContentScale.Crop,
@@ -206,6 +208,7 @@ fun LandscapeCard(
                 AsyncImage(
                     model = ImageRequest.Builder(context)
                         .data(logoUrl)
+                        .crossfade(false)
                         .build(),
                     // The corner clearlogo is artwork, not text; give it the
                     // title it stands in for so it is not an unlabeled image.
