@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
@@ -219,7 +220,7 @@ class AddonSubtitleController(
             val configs = offers.mapNotNull { offer ->
                 val uri = downloadCache[offer.url] ?: download(offer.url) ?: return@mapNotNull null
                 MediaItem.SubtitleConfiguration.Builder(uri)
-                    .setMimeType(resolveAddonSubtitleMime(offer.url))
+                    .setMimeType(resolveAddonSubtitleMime(offer.url, uri))
                     .setLanguage(offer.lang)
                     .setLabel(offer.label ?: offer.lang?.uppercase())
                     .setSelectionFlags(0)
@@ -367,12 +368,49 @@ internal object AddonSubtitleSource {
     }
 }
 
-/** Maps a subtitle URL to the Media3 MIME type its extension implies. */
-private fun resolveAddonSubtitleMime(url: String): String {
+/**
+ * Maps a downloaded addon subtitle to the Media3 MIME type it actually holds.
+ *
+ * The URL's extension is the first answer and the cheap one - but it is not
+ * the only one, and it used to be the ONLY one. A Stremio subtitle addon
+ * routinely serves a numeric file id with no extension at all, so an ASS
+ * script fell through to the SubRip default, the SubRip parser found no cues,
+ * and the track the viewer picked looked empty. When the extension does not
+ * settle it, sniff the downloaded file - the same content probe the external
+ * file path already uses (see [AssSubtitleSource.isAssContent]).
+ */
+private fun resolveAddonSubtitleMime(url: String, local: Uri?): String =
+    resolveSubtitleMimeFrom(url, local?.let { readSubtitleProbe(it) } ?: "")
+
+/**
+ * The decision behind [resolveAddonSubtitleMime], split out so it can be unit
+ * tested without a Uri or a file: the URL's extension first, then the content
+ * probe (empty when there is nothing to sniff). See the call site's KDoc for
+ * why the probe exists.
+ */
+internal fun resolveSubtitleMimeFrom(url: String, contentProbe: String): String {
     val path = url.substringBefore('?').substringBefore('#').lowercase()
-    return when {
-        path.endsWith(".vtt") -> MimeTypes.TEXT_VTT
-        path.endsWith(".ssa") || path.endsWith(".ass") -> MimeTypes.TEXT_SSA
-        else -> MimeTypes.APPLICATION_SUBRIP
+    when {
+        path.endsWith(".vtt") -> return MimeTypes.TEXT_VTT
+        path.endsWith(".ssa") || path.endsWith(".ass") -> return MimeTypes.TEXT_SSA
     }
+    if (AssSubtitleSource.isAssContent(contentProbe)) return MimeTypes.TEXT_SSA
+    return MimeTypes.APPLICATION_SUBRIP
 }
+
+/**
+ * The first few KB of a downloaded subtitle, as text, for a content sniff.
+ *
+ * [AssSubtitleSource.isAssContent] only reads the opening lines, so a small
+ * probe is enough and avoids pulling a whole multi-megabyte script into
+ * memory. Best-effort: an unreadable file probes as empty and keeps the
+ * SubRip default rather than failing the attach.
+ */
+private fun readSubtitleProbe(uri: Uri): String = runCatching {
+    val path = uri.path ?: return@runCatching ""
+    File(path).inputStream().bufferedReader(Charsets.UTF_8).use { reader ->
+        val buffer = CharArray(4096)
+        val read = reader.read(buffer)
+        if (read <= 0) "" else String(buffer, 0, read)
+    }
+}.getOrDefault("")
