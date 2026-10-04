@@ -111,7 +111,10 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
+import com.kennyb1201.kbstream.ui.components.MdbListRatingChips
+import com.kennyb1201.kbstream.ui.components.mdbListRatingSources
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
@@ -851,6 +854,10 @@ private fun HomeHero(
     tmdbDetail: TmdbDetail?,
     heroBackdropUrl: String?,
     heroLogoUrl: String?,
+    // MDBList's critic/audience figures for this title, resolved with the
+    // rest of the hero meta. Null (the common case - no key configured, or
+    // the title is unrated) simply leaves the chips out.
+    heroRatings: MdbListRatings? = null,
     trailerKey: String?,
     autoPlayTrailer: Boolean,
     muted: Boolean,
@@ -1147,6 +1154,19 @@ private fun HomeHero(
     val heroInfo =
         heroInfoParts.joinToString("  •  ")
 
+    // Rating chips for the focused title. TMDB's own score stands in as the
+    // TMDB chip when MDBList sent no TMDB figure - which is every title when
+    // no MDBList key is set - so a title whose catalog and trackers carry no
+    // rating still shows its audience score. Empty otherwise, and the row is
+    // simply left out.
+    val ratingSources =
+        mdbListRatingSources(
+            heroRatings,
+            tmdbFallback = tmdbDetail
+                ?.voteAverage
+                ?.takeIf { it > 0.0 }
+        )
+
     // Regular hero description.
     // Prefer TMDB's overview, then addon metadata, then preview metadata.
     val heroDescription =
@@ -1410,6 +1430,18 @@ private fun HomeHero(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 14.dp)
+                )
+            }
+
+            // Critic/audience rating chips, directly under the metadata line.
+            // The compact variant keeps them to a single readable strip at the
+            // hero's type scale instead of the larger blocks the detail page
+            // uses.
+            if (ratingSources.isNotEmpty()) {
+                MdbListRatingChips(
+                    sources = ratingSources,
+                    compact = true,
+                    modifier = Modifier.padding(top = 10.dp)
                 )
             }
 
@@ -1836,6 +1868,7 @@ private fun HomeHeroHost(
     heroTmdbDetail: State<TmdbDetail?>,
     heroBackdropUrl: State<String?>,
     heroLogoUrl: State<String?>,
+    heroRatings: State<MdbListRatings?>,
     heroTrailerKey: State<String?>,
     onResolveHeroMeta: (MetaPreview) -> Unit
 ) {
@@ -1952,6 +1985,10 @@ private fun HomeHeroHost(
                 heroBrowse != null -> browseLogo
                 else -> heroLogoUrl.value
             },
+            // A KB folder / Browse tile has no catalog title behind it, so
+            // there are no ratings to show; the chips only ever describe a
+            // real focused title.
+            heroRatings = if (heroOverridden) null else heroRatings.value,
             trailerKey = if (heroOverridden) null else heroTrailerKey.value,
             autoPlayTrailer =
                 !heroOverridden &&
@@ -2415,6 +2452,7 @@ fun HomeScreen(
     val heroTmdbDetailState = viewModel.heroTmdbDetail.collectAsStateWithLifecycle()
     val heroBackdropUrlState = viewModel.heroBackdropUrl.collectAsStateWithLifecycle()
     val heroLogoUrlState = viewModel.heroLogoUrl.collectAsStateWithLifecycle()
+    val heroRatingsState = viewModel.heroRatings.collectAsStateWithLifecycle()
     val heroTrailerKeyState = viewModel.heroTrailerKey.collectAsStateWithLifecycle()
 
     // KB collections interleaved with addon rails (merged order from the
@@ -2868,6 +2906,7 @@ fun HomeScreen(
                 heroTmdbDetail = heroTmdbDetailState,
                 heroBackdropUrl = heroBackdropUrlState,
                 heroLogoUrl = heroLogoUrlState,
+                heroRatings = heroRatingsState,
                 heroTrailerKey = heroTrailerKeyState,
                 onResolveHeroMeta = { viewModel.resolveHeroMeta(it) }
             )
