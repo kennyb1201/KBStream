@@ -5,6 +5,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -55,7 +56,22 @@ val kbPureBlackSurfaceState = mutableStateOf(false)
 fun refreshThemeMirrors(context: Context) {
     kbAmoledBlackState.value = AppPreferences.getAmoledBlack(context)
     kbPureBlackSurfaceState.value = AppPreferences.getPureBlackSurface(context)
+    kbAccentIndexState.value =
+        AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX)
 }
+
+/**
+ * The chosen accent as an ARGB int, for the XML views (player chrome, guide
+ * rows) that tint themselves at runtime rather than through a Compose token.
+ * Reads the STORED index, not the live state: it is called from activities
+ * that read their theming straight from prefs.
+ */
+fun themeAccentColor(context: Context): Int =
+    KBAccentPalette
+        .getOrNull(AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX))
+        ?.color
+        ?.toArgb()
+        ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color.toArgb()
 
 private val pureBlackActive: Boolean
     get() = kbAmoledBlackState.value && kbPureBlackSurfaceState.value
@@ -75,7 +91,60 @@ val KBSurfaceRaised: Color
         else -> KBSurfaceRaisedDefault
     }
 
-val KBAccent = Color(0xFFE8A33D) // brass / projector-bulb warmth -- the one accent
+/** One choice in the accent palette: a name for the settings grid, and its colour. */
+data class KBAccentColor(val name: String, val color: Color)
+
+/**
+ * The app's accent palette - a broad spread of hues for the global theme
+ * changer, all bright enough to read AS the accent on the dark screening-room
+ * surfaces (a mid-tone that looks right as a chip fill is invisible as a
+ * 1dp border). The FIRST entry is the default, which is why the stored
+ * preference is an index rather than a colour: index 0 means "untouched".
+ */
+val KBAccentPalette: List<KBAccentColor> = listOf(
+    KBAccentColor("Brass", Color(0xFFE8A33D)),
+    KBAccentColor("Amber", Color(0xFFF0B44A)),
+    KBAccentColor("Gold", Color(0xFFF2C14E)),
+    KBAccentColor("Ember", Color(0xFFE8752F)),
+    KBAccentColor("Coral", Color(0xFFFF6B5C)),
+    KBAccentColor("Crimson", Color(0xFFE14B57)),
+    KBAccentColor("Ruby", Color(0xFFD2385A)),
+    KBAccentColor("Rose", Color(0xFFF06A8A)),
+    KBAccentColor("Magenta", Color(0xFFE247A6)),
+    KBAccentColor("Orchid", Color(0xFFC05CE0)),
+    KBAccentColor("Violet", Color(0xFF9B6BE8)),
+    KBAccentColor("Indigo", Color(0xFF6E7BE8)),
+    KBAccentColor("Sapphire", Color(0xFF4C82E8)),
+    KBAccentColor("Azure", Color(0xFF3C9BE8)),
+    KBAccentColor("Ice", Color(0xFF7FD3E8)),
+    KBAccentColor("Cyan", Color(0xFF35C4D8)),
+    KBAccentColor("Teal", Color(0xFF2FC2A8)),
+    KBAccentColor("Emerald", Color(0xFF35C56B)),
+    KBAccentColor("Lime", Color(0xFF8FD14A)),
+    KBAccentColor("Chartreuse", Color(0xFFC2D64B)),
+    KBAccentColor("Sand", Color(0xFFD9C08A)),
+    KBAccentColor("Copper", Color(0xFFC98A5E)),
+    KBAccentColor("Slate", Color(0xFF8FA3BF)),
+    KBAccentColor("Neon Pink", Color(0xFFFF4FA3))
+)
+
+/** The accent index used when the viewer has never chosen one (the brass). */
+const val DEFAULT_ACCENT_INDEX = 0
+
+/** Backing state for the accent choice. Init from prefs at app start. */
+val kbAccentIndexState = mutableStateOf(DEFAULT_ACCENT_INDEX)
+
+/**
+ * The one accent, app-wide. Every Compose call site reads this getter, so
+ * changing [kbAccentIndexState] recomposes the whole UI - the same mechanism
+ * the AMOLED surface tokens above use. The palette is never empty, so the
+ * default is always a real colour.
+ */
+val KBAccent: Color
+    get() = KBAccentPalette
+        .getOrNull(kbAccentIndexState.value)
+        ?.color
+        ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color
 val KBTextHi = Color(0xFFF3EFE4)
 val KBTextLo = Color(0xFF8891A0)
 val KBDanger = Color(0xFFB0453C)

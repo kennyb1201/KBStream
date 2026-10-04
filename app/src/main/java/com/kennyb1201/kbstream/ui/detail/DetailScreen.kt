@@ -128,6 +128,7 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.PlayFromBeginningSelection
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -5207,13 +5208,16 @@ private fun PosterGridCard(
     // The whole tile — poster plus caption — owns the focus state, so the
     // caption can marquee while the tile it belongs to is focused.
     var focused by remember { mutableStateOf(false) }
+    // Follow the app-wide Settings poster size so these rails match every
+    // other poster surface.
+    val posterSize = rememberPosterSize()
 
     Column(
         modifier = Modifier
-            .width(rememberPosterSize().width)
+            .width(posterSize.width)
             .onFocusChanged { focused = it.hasFocus }
     ) {
-        PosterCard(
+        GlobalPosterCard(
             posterUrl = remember(posterPath) {
                 posterPath?.let {
                     TmdbRepository.POSTER_BASE + it
@@ -5224,11 +5228,9 @@ private fun PosterGridCard(
             isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height,
             modifier = modifier
-                // Follow the app-wide Settings poster size so these rails
-                // match every other poster surface.
-                .width(rememberPosterSize().width)
-                .height(rememberPosterSize().height)
         )
 
         PosterCaptions(

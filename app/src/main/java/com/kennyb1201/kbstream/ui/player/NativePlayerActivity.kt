@@ -58,6 +58,8 @@ import androidx.media3.common.ForwardingPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
+import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
@@ -8691,7 +8693,7 @@ class NativePlayerActivity : ComponentActivity() {
             cornerRadius = radiusPx
         }
         return android.graphics.drawable.RippleDrawable(
-            android.content.res.ColorStateList.valueOf(getColor(R.color.kb_accent)),
+            android.content.res.ColorStateList.valueOf(themeAccentColor(this)),
             body,
             mask
         )
@@ -8717,8 +8719,13 @@ class NativePlayerActivity : ComponentActivity() {
      * panels handled by [applyPlayerPanelTheme].
      */
     private fun applyPlayerChromeTheme() {
-        // Without AMOLED the XML fills are already exactly right.
-        if (!AppPreferences.getAmoledBlack(this)) return
+        // The XML fills are already right only while NEITHER the surface toggles
+        // nor the global accent have moved: AMOLED repaints the surface fills,
+        // a non-default accent repaints the accent fills, text and tints.
+        val amoled = AppPreferences.getAmoledBlack(this)
+        val accentIsDefault =
+            AppPreferences.getAccentIndex(this, DEFAULT_ACCENT_INDEX) == DEFAULT_ACCENT_INDEX
+        if (!amoled && accentIsDefault) return
         // getColor()/getCornerRadius() on a drawable are API 24+, below the
         // app's 26 floor, so the theme walk always runs.
         refillPlayerChrome(findViewById(android.R.id.content))
@@ -8741,6 +8748,11 @@ class NativePlayerActivity : ComponentActivity() {
     /** Retints one view when its background is one of the XML chrome fills. */
     private fun refillPlayerChromeView(view: View) {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
+        val xmlAccent = getColor(R.color.kb_accent)
+        val accent = themeAccentColor(this)
+        // Text views and progress bars carry the accent as a colour, not a
+        // drawable, so they are retinted before the background-only walk below.
+        if (accent != xmlAccent) retintAccentView(view, accent, xmlAccent)
         val background = view.background ?: return
 
         /*
@@ -8783,18 +8795,26 @@ class NativePlayerActivity : ComponentActivity() {
 
         val shape = content as? android.graphics.drawable.GradientDrawable ?: return
         val fill = shape.color?.defaultColor ?: return
+        val amoled = AppPreferences.getAmoledBlack(this)
         val replacement = when {
-            fill == getColor(R.color.kb_surface) ->
+            amoled && fill == getColor(R.color.kb_surface) ->
                 themedChromeBackground(panelSurfaceColor(), shape.cornerRadius, rippled)
 
-            fill == getColor(R.color.kb_surface_raised) ->
+            amoled && fill == getColor(R.color.kb_surface_raised) ->
                 themedChromeBackground(panelRaisedColor(), shape.cornerRadius, false)
 
             // Not one of the chrome fills but the same problem: the cast card's
             // avatar circle is a fixed #FF1D2530 oval, so a pure-black theme
             // still drew gray circles behind every headshot - and the circle is
             // all that shows for the cast members TMDB has no photo for.
-            fill == AVATAR_PLACEHOLDER_FILL -> themedAvatarBackground(panelSurfaceColor())
+            amoled && fill == AVATAR_PLACEHOLDER_FILL -> themedAvatarBackground(panelSurfaceColor())
+
+            // An accent-filled drawable (the accent button, selected pills, the
+            // live badge): the XML resolved @color/kb_accent at inflation, so a
+            // new global accent has to rebuild the fill - and the press ripple
+            // that rides it - in the chosen colour.
+            accent != xmlAccent && fill == xmlAccent ->
+                themedChromeBackground(accent, shape.cornerRadius, rippled)
 
             else -> null
         }
@@ -9076,7 +9096,7 @@ class NativePlayerActivity : ComponentActivity() {
                 nextUpCountdownRemaining = 0
                 nextUpCountdown.text = "Are you still there? Press PLAY NEXT to continue"
                 nextUpCountdown.setTextColor(
-                    androidx.core.content.ContextCompat.getColor(this, R.color.kb_accent)
+                    themeAccentColor(this)
                 )
                 nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
                 return

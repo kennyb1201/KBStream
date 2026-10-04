@@ -164,6 +164,9 @@ object AppUpdater {
      */
     private const val MAX_NOTES_CHARS = 800
 
+    /** Room for the Settings → About changelog card (see [releaseChangelog]). */
+    private const val MAX_CHANGELOG_CHARS = 2400
+
     private val AUTO_CHECK_INTERVAL_MS = 12 * 60 * 60 * 1000L
 
     private const val REQUEST_CODE_INSTALL = 4242
@@ -273,6 +276,15 @@ object AppUpdater {
     val state = MutableStateFlow<UpdateState>(UpdateState.Idle)
 
     /**
+     * The latest release's changelog, kept even when this build is already
+     * current. [UpdateState.Available] carries notes only when there IS an
+     * update to offer, but Settings → About shows the last changelog either
+     * way, so it is captured on every successful check and cleared when the
+     * feed has nothing (a 404, or a release with no body).
+     */
+    val latestChangelog = MutableStateFlow("")
+
+    /**
      * True when the launch-time check found a newer release that the user has
      * NOT dismissed. The Settings row shows the update regardless of dismissal;
      * this gate is for the app-wide popup so "Later" actually stays quiet
@@ -330,9 +342,14 @@ object AppUpdater {
                 val installedCode = installedVersionCode(context)
                 val release = fetchLatestRelease()
                 if (release == null) {
+                    latestChangelog.value = ""
                     state.value = UpdateState.UpToDate
                     return@launch
                 }
+                // Read the changelog before any "nothing to install" exit
+                // below: About shows it regardless of whether this build is
+                // behind the release.
+                latestChangelog.value = releaseChangelog(release)
                 val apkAsset = assets(release)
                     .firstOrNull { it.getString("name").endsWith(".apk") }
                 if (apkAsset == null) {
@@ -562,13 +579,27 @@ object AppUpdater {
      * to install the word "null". Clamped to [MAX_NOTES_CHARS] for the reason
      * that constant documents.
      */
-    private fun releaseNotes(release: JSONObject): String {
+    private fun releaseNotes(release: JSONObject): String =
+        releaseBody(release, MAX_NOTES_CHARS)
+
+    /**
+     * The same release body, with more room for the About card.
+     *
+     * [releaseNotes] is clamped tight because the update row sits beside an
+     * Install action in a fixed-height row; About is a scrolling pane, so the
+     * commit list there may run longer before it is cut.
+     */
+    private fun releaseChangelog(release: JSONObject): String =
+        releaseBody(release, MAX_CHANGELOG_CHARS)
+
+    /** The release body, trimmed and clamped to [maxChars]; "null"/blank = "". */
+    private fun releaseBody(release: JSONObject, maxChars: Int): String {
         val body = release.optString("body", "").trim()
         if (body.isEmpty() || body == "null") return ""
-        return if (body.length <= MAX_NOTES_CHARS) {
+        return if (body.length <= maxChars) {
             body
         } else {
-            body.take(MAX_NOTES_CHARS).trimEnd() + "…"
+            body.take(maxChars).trimEnd() + "…"
         }
     }
 

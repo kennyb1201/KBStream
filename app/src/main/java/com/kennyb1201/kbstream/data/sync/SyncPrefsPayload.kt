@@ -140,6 +140,7 @@ object PrefsPayloadBuilder {
         "home_rail_hide_upcoming",
         "browse_english_only",               // catalog language filter, not device-specific
         "home_landscape_cards",
+        "landscape_posters",
         "poster_partial_watch_badge",
         "poster_border_strength",           // poster edge strength: same look on every device
         "badges_above_file",                // badge chip placement: same layout preference on every device
@@ -156,6 +157,7 @@ object PrefsPayloadBuilder {
         "live_reminder_notifications",       // live TV reminder alerts: same reasoning
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "pure_black_surface",                // Pure black cards/panels/containers toggle
+        "accent_index",                      // global theme accent (index into the palette)
         "mdblist_api_key",
         "opensubtitles_api_key",             // player → search subtitles online
         "default_subtitle_size",             // subtitle appearance: same on every device

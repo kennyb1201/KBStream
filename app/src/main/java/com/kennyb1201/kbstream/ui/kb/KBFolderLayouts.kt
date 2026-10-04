@@ -49,6 +49,7 @@ import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -498,7 +499,7 @@ private fun FollowHomeLayout(
 ) {
     val context = LocalContext.current
     val showLandscapeCards = remember {
-        AppPreferences.getHomeLandscapeCards(context)
+        AppPreferences.landscapePostersActive(context)
     }
     val showRailType = remember {
         AppPreferences.getHomeRailShowCatalogType(context)
@@ -637,7 +638,7 @@ private fun RowsLayout(
 ) {
     val context = LocalContext.current
     val showLandscapeCards = remember {
-        AppPreferences.getHomeLandscapeCards(context)
+        AppPreferences.landscapePostersActive(context)
     }
     val showRailType = remember {
         AppPreferences.getHomeRailShowCatalogType(context)
@@ -734,6 +735,7 @@ private fun GridLayout(
     onOpenItem: (KBContentItem) -> Unit,
     onLongPressItem: (KBContentItem) -> Unit
 ) {
+    val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
         FolderTitleBlock(state.folder)
         SourceTabs(state, selectedSourceId, onSelectSource)
@@ -777,8 +779,9 @@ private fun GridLayout(
                         key = { "grid:${it.type}:${it.id}" }
                     ) { item ->
                         Column {
-                            PosterCard(
+                            GlobalPosterCard(
                                 posterUrl = item.posterUrl,
+                                backdropUrl = item.backdropUrl,
                                 contentDescription = item.title,
                                 isWatched = itemWatched(item, watchedKeys, resolvedIds),
                                 isPartiallyWatched = itemWatchedPartially(
@@ -788,9 +791,11 @@ private fun GridLayout(
                                 ),
                                 onClick = { onOpenItem(item) },
                                 onLongClick = { onLongPressItem(item) },
-                                modifier = Modifier
-                                    .width(FolderPosterWidth)
-                                    .height(FolderPosterHeight)
+                                posterWidth = FolderPosterWidth,
+                                posterHeight = FolderPosterHeight,
+                                // Only the global setting reshapes the Grid;
+                                // the Home-rails toggle keeps it posters.
+                                landscape = AppPreferences.getLandscapePosters(context)
                             )
                             // Grid always keeps regular posters, but its
                             // item captions honor the toggles like Rows.

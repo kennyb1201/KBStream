@@ -52,11 +52,12 @@ jobs:
       OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_PUBLISHABLE_KEY }}
-      # Every CI build gets a strictly increasing versionCode (run number) and a
-      # versionName that identifies the exact commit, so device bug reports map
-      # to the build that produced them.
+      # Every CI build gets a strictly increasing versionCode (the run number),
+      # which is what installs compare and what a device bug report maps back to
+      # a build. The versionName is NOT the build number: it is the release's
+      # tag (see "Compute version name" below), because a version is read by
+      # people and "0.2.4631" is a run number wearing a version's clothes.
       VERSION_CODE: ${{ github.run_number }}
-      VERSION_NAME: 0.2.${{ github.run_number }}
       GIT_SHA: ${{ github.sha }}
       # The Kotlin compiler runs inside the Gradle daemon (gradle.properties
       # sets kotlin.compiler.execution.strategy=in-process), and gradle.properties
@@ -96,6 +97,19 @@ jobs:
           # the commit that is currently published is already contained in this
           # one, which a depth-1 clone cannot answer.
           fetch-depth: 0
+
+      # The release's version, from its tag: pushing v0.5 publishes versionName
+      # "0.5". A branch build or a manual dispatch gets "0.0.0-dev" so an
+      # unreleased build can never be mistaken for a release. versionCode stays
+      # the run number (a tag carries no ordering the installed app can read).
+      - name: Compute version name
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "VERSION_NAME=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION_NAME=0.0.0-dev" >> "$GITHUB_ENV"
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
@@ -566,7 +580,7 @@ jobs:
           # above reads it back on the next publish.
           # git rev-parse HEAD, not GITHUB_SHA: for an annotated tag GITHUB_SHA
           # is the tag object, which is not a commit for the ancestor check.
-          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"versionName\": \"0.2.${GITHUB_RUN_NUMBER}\", \"sha256\": \"$SHA\", \"gitSha\": \"$(git rev-parse HEAD)\"}" > metadata.json
+          echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"versionName\": \"${VERSION_NAME}\", \"sha256\": \"$SHA\", \"gitSha\": \"$(git rev-parse HEAD)\"}" > metadata.json
           cat metadata.json
 
       - name: Delete in-progress release tag
@@ -579,7 +593,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
           gh release create latest \
-            --title "KBStream 0.2.${GITHUB_RUN_NUMBER} (build ${GITHUB_RUN_NUMBER})" \
+            --title "KBStream ${VERSION_NAME}" \
             --notes-file /tmp/release-notes.md \
             --latest
           gh release upload latest \

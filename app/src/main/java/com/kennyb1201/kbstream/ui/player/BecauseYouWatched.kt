@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.Outline
@@ -17,11 +18,14 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.SeekBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.core.content.ContextCompat
 import coil3.load
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
@@ -371,6 +375,62 @@ internal fun playerPanelRaisedColor(context: Context): Int = when {
     else -> ContextCompat.getColor(context, R.color.kb_surface_raised)
 }
 
+/**
+ * Re-tints one XML chrome view to the current accent.
+ *
+ * The player and guide layouts resolve @color/kb_accent at inflation, so a
+ * non-default global accent left every accent TextView, progress / seek tint
+ * and ImageView tint on the old brass. Views are matched by the colour they
+ * already carry rather than by id, so a new accent control is covered without a
+ * hand-kept list, and a view that is not accent-coloured is left untouched.
+ * Only called when the accent is actually non-default.
+ */
+internal fun retintAccentView(view: View, accent: Int, xmlAccent: Int) {
+    when (view) {
+        is TextView -> if (view.currentTextColor == xmlAccent) view.setTextColor(accent)
+        is SeekBar -> {
+            if (view.progressTintList?.defaultColor == xmlAccent) {
+                view.progressTintList = ColorStateList.valueOf(accent)
+            }
+            if (view.indeterminateTintList?.defaultColor == xmlAccent) {
+                view.indeterminateTintList = ColorStateList.valueOf(accent)
+            }
+            if (view.thumbTintList?.defaultColor == xmlAccent) {
+                view.thumbTintList = ColorStateList.valueOf(accent)
+            }
+        }
+        is ProgressBar -> {
+            if (view.progressTintList?.defaultColor == xmlAccent) {
+                view.progressTintList = ColorStateList.valueOf(accent)
+            }
+            if (view.indeterminateTintList?.defaultColor == xmlAccent) {
+                view.indeterminateTintList = ColorStateList.valueOf(accent)
+            }
+        }
+        is ImageView -> if (view.imageTintList?.defaultColor == xmlAccent) {
+            view.imageTintList = ColorStateList.valueOf(accent)
+        }
+    }
+}
+
+/**
+ * [retintAccentView] over a whole view tree, for screens the player's own
+ * chrome walk does not already traverse (the guide rows, the external-player
+ * panel). A no-op when the accent is still the default, so callers can run it
+ * unconditionally.
+ */
+internal fun retintAccentChrome(root: View, context: Context) {
+    val xmlAccent = ContextCompat.getColor(context, R.color.kb_accent)
+    val accent = themeAccentColor(context)
+    if (accent == xmlAccent) return
+    retintAccentView(root, accent, xmlAccent)
+    if (root is ViewGroup) {
+        for (index in 0 until root.childCount) {
+            retintAccentChrome(root.getChildAt(index), context)
+        }
+    }
+}
+
 /** Rounded rectangle standing in for the XML shape drawables. */
 internal fun roundedPanelDrawable(
     context: Context,
@@ -401,7 +461,7 @@ internal fun infoPanelDrawable(context: Context): GradientDrawable =
         playerPanelRaisedColor(context),
         16f
     ).apply {
-        val accent = ContextCompat.getColor(context, R.color.kb_accent)
+        val accent = themeAccentColor(context)
         // Quarter-strength accent: the hairline the XML drawable had, kept so
         // the panel still reads as a panel rather than a black rectangle.
         setStroke(
@@ -948,7 +1008,7 @@ internal class BecauseYouWatchedUi(
             val meta = TextView(host).apply {
                 tag = TAG_FEATURED_META
                 textSize = 11f
-                setTextColor(ContextCompat.getColor(host, R.color.kb_accent))
+                setTextColor(themeAccentColor(host))
                 maxLines = 2
                 ellipsize = TextUtils.TruncateAt.END
                 setPadding(0, dp(5), 0, 0)

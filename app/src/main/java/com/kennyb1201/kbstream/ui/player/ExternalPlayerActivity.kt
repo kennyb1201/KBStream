@@ -17,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import coil3.load
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
@@ -245,6 +246,9 @@ class ExternalPlayerActivity : ComponentActivity() {
 
         readIntent()
         bindViews()
+        // The panel's accent text resolved @color/kb_accent at inflation; a
+        // custom global accent has to be re-applied over the whole tree.
+        retintAccentChrome(findViewById(android.R.id.content), this)
         historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
         setupBecauseYouWatched()
         setupEndOfEpisodeHandlers()
@@ -852,7 +856,7 @@ class ExternalPlayerActivity : ComponentActivity() {
                 nextUpCountdownHeld = false
                 nextUpCountdownRemaining = 0
                 nextUpCountdown?.text = "Are you still there? Press PLAY NEXT to continue"
-                nextUpCountdown?.setTextColor(getColor(R.color.kb_accent))
+                nextUpCountdown?.setTextColor(themeAccentColor(this))
                 nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
                 return
             }

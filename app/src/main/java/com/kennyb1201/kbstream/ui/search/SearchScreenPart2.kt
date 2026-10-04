@@ -47,7 +47,7 @@ import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.KBTextField
-import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
@@ -394,19 +394,21 @@ internal fun TitlePosterTile(
             .width(posterSize.width)
             .onFocusChanged { focused = it.hasFocus }
     ) {
-        PosterCard(
+        GlobalPosterCard(
             posterUrl = result.poster,
+            backdropUrl = result.meta.background,
+            logoUrl = result.meta.logo,
             contentDescription = result.name,
             isWatched = watched,
             isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height,
             modifier = modifier
                 // Key comes from meta, not the result: meta is what the
                 // click actually navigates with.
                 .heroSourceElement(result.meta.type, result.meta.id)
-                .width(posterSize.width)
-                .height(posterSize.height)
         )
 
         PosterCaptions(
@@ -562,13 +564,13 @@ internal fun CollectionPosterTile(
     onClick: () -> Unit
 ) {
     val posterSize = rememberPosterSize()
-    PosterCard(
+    GlobalPosterCard(
         posterUrl = collection.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
+        backdropUrl = collection.backdropPath?.let { "https://image.tmdb.org/t/p/w780$it" },
         contentDescription = collection.name,
         isWatched = false,
         onClick = onClick,
-        modifier = Modifier
-            .width(posterSize.width)
-            .height(posterSize.height)
+        posterWidth = posterSize.width,
+        posterHeight = posterSize.height
     )
 }

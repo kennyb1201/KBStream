@@ -58,7 +58,7 @@ import com.kennyb1201.kbstream.data.tmdb.metaLine
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
-import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -613,16 +613,16 @@ private fun ActorCreditCard(
             .padding(end = 12.dp)
             .onFocusChanged { focused = it.hasFocus }
     ) {
-        PosterCard(
+        GlobalPosterCard(
             posterUrl = remember(credit.posterPath) { credit.posterPath?.let { TmdbRepository.POSTER_BASE + it } },
             contentDescription = credit.title ?: credit.name ?: "",
             isWatched = isWatched,
             isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height,
             modifier = Modifier
-                .width(posterSize.width)
-                .height(posterSize.height)
                 .then(
                     if (focusRequester != null) {
                         Modifier.focusRequester(focusRequester)

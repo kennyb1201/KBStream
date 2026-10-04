@@ -56,7 +56,7 @@ import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
-import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -559,9 +559,11 @@ private fun TagRailRow(
                         .padding(end = 12.dp)
                         .onFocusChanged { focused = it.hasFocus }
                 ) {
-                    PosterCard(
+                    GlobalPosterCard(
                         posterUrl = studioItem.item.posterPath
                             ?.let { "${TmdbRepository.POSTER_BASE}$it" },
+                        backdropUrl = studioItem.item.backdropPath
+                            ?.let { "${TmdbRepository.BACKDROP_BASE}$it" },
                         contentDescription = studioItem.item.title
                             ?: studioItem.item.name,
                         isWatched = watched,
@@ -576,9 +578,9 @@ private fun TagRailRow(
                         onLongClick = {
                             onOpenPosterMenu(studioItem, requester)
                         },
+                        posterWidth = posterSize.width,
+                        posterHeight = posterSize.height,
                         modifier = Modifier
-                            .width(posterSize.width)
-                            .height(posterSize.height)
                             .focusRequester(requester)
                             .then(
                                 if (isFirstItem) {

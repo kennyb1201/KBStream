@@ -32,7 +32,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -44,20 +43,15 @@ import androidx.tv.material3.Glow
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
-import coil3.compose.AsyncImage
-import coil3.request.ImageRequest
-import coil3.request.crossfade
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
-import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -65,6 +59,7 @@ import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
@@ -73,7 +68,6 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
-import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -753,72 +747,21 @@ private fun LibraryPosterCard(
             .fillMaxWidth()
             .onFocusChanged { focused = it.hasFocus }
     ) {
-        KBCard(
+        GlobalPosterCard(
+            posterUrl = item.posterUrl,
+            contentDescription = item.title,
+            isWatched = isWatched,
             onClick = onClick,
             onLongClick = onLongClick,
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height,
             modifier = Modifier
                 // Same shared key the Library hands to Detail, so a poster
                 // flies into the hero instead of the grid hard-cutting.
                 // navigationId is null for rows with no TMDB id, and those
                 // cannot navigate at all, so the empty key is never a match.
                 .heroSourceElement(item.mediaType, item.navigationId.orEmpty())
-                .width(posterSize.width)
-                .height(posterSize.height)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    // The faint poster edge, matching every other poster tile.
-                    .then(posterBorderModifier())
-            ) {
-                if (isWatched) {
-                    // Same checkmark badge language the other poster grids
-                    // use for fully-watched titles.
-                    Text(
-                        text = "✓",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = KBAccent,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp)
-                            .background(
-                                Color.Black.copy(alpha = 0.65f),
-                                KBShapeChip
-                            )
-                            .padding(horizontal = 6.dp, vertical = 1.dp)
-                    )
-                }
-                if (!item.posterUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(item.posterUrl)
-                            // Grid tile: no crossfade on a scrolling grid, the
-                            // poster is in a grid of them, not a hero.
-                            .crossfade(false)
-                            .build(),
-                        contentDescription = item.title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(KBSurfaceRaised)
-                    ) {
-                        Text(
-                            text = item.title,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = KBTextLo,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(6.dp)
-                        )
-                    }
-                }
-            }
-        }
+        )
 
         // Captions go through the shared PosterCaptions block so the
         // Settings toggles (poster titles / years / star ratings) behave

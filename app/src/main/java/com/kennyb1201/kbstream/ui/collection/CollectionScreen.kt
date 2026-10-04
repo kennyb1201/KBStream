@@ -38,7 +38,7 @@ import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
-import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -361,14 +361,13 @@ private fun CollectionHeader(
             .padding(18.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        PosterCard(
+        GlobalPosterCard(
             posterUrl = posterUrl,
             contentDescription = name,
             isWatched = false,
             onClick = {},
-            modifier = Modifier
-                .width(110.dp)
-                .height(165.dp)
+            posterWidth = 110.dp,
+            posterHeight = 165.dp
         )
 
         Column(
@@ -433,7 +432,7 @@ private fun CollectionPosterTile(
             .width(posterSize.width)
             .onFocusChanged { focused = it.hasFocus }
     ) {
-        PosterCard(
+        GlobalPosterCard(
             posterUrl = part.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
             contentDescription = part.title
                 ?: part.name
@@ -442,9 +441,8 @@ private fun CollectionPosterTile(
             isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
-            modifier = Modifier
-                .width(posterSize.width)
-                .height(posterSize.height)
+            posterWidth = posterSize.width,
+            posterHeight = posterSize.height
         )
 
         PosterCaptions(

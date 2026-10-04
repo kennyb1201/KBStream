@@ -2350,7 +2350,7 @@ fun HomeScreen(
         mutableStateOf(AppPreferences.getHomeRailShowAddonName(context))
     }
     val landscapeCards by remember(activeProfileId) {
-        mutableStateOf(AppPreferences.getHomeLandscapeCards(context))
+        mutableStateOf(AppPreferences.landscapePostersActive(context))
     }
     // Profile-gated: rows render only while they belong to the ACTIVE
     // profile. The ViewModel clears them on a switch, but that clear is

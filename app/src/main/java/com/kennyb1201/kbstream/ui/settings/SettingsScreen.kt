@@ -9,7 +9,9 @@ import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
@@ -49,6 +51,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,16 +72,20 @@ import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
 import com.kennyb1201.kbstream.ui.player.FrameRateDiagnostics
 import com.kennyb1201.kbstream.ui.player.FrameRateMatch
 import com.kennyb1201.kbstream.ui.player.displayReport
+import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBAccentPalette
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
@@ -284,6 +291,7 @@ fun SettingsScreen(
     var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
     var browseEnglishOnly by remember { mutableStateOf(AppPreferences.getBrowseEnglishOnly(context)) }
     var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
+    var landscapePosters by remember { mutableStateOf(AppPreferences.getLandscapePosters(context)) }
     var partialWatchBadge by remember { mutableStateOf(AppPreferences.getPosterPartialWatchBadge(context)) }
     var posterBorderIdx by remember { mutableIntStateOf(AppPreferences.getPosterBorderStrength(context)) }
     var amoledBlack by remember { mutableStateOf(AppPreferences.getAmoledBlack(context)) }
@@ -1563,6 +1571,10 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                AccentColorPicker()
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 ToggleRow(
                     label = "AMOLED Black",
                     description = "True-black backgrounds for OLED/AMOLED screens — pixels turn fully off, saving power and boosting contrast. Applies instantly.",
@@ -1798,6 +1810,18 @@ fun SettingsScreen(
                     onToggle = {
                         landscapeCards = it
                         AppPreferences.setHomeLandscapeCards(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Landscape Posters Everywhere",
+                    description = "Use 16:9 backdrop cards with a small clearlogo on every poster surface — search, library, collections, browse grids and recommendation rows — not just the Home rails.",
+                    checked = landscapePosters,
+                    onToggle = {
+                        landscapePosters = it
+                        AppPreferences.setLandscapePosters(context, it)
                     }
                 )
 
@@ -2268,9 +2292,15 @@ private fun SettingsContentHost(
 private fun AboutSection() {
     // About pane: build identity + the in-app update flow. Updates live here
     // (not in Integrations) — it's app plumbing, not an integration.
-    val versionLine = "KBStream ${com.kennyb1201.kbstream.BuildConfig.VERSION_NAME} " +
-        "(build ${com.kennyb1201.kbstream.BuildConfig.VERSION_CODE}, " +
-        com.kennyb1201.kbstream.BuildConfig.GIT_SHA.take(7) + ")"
+    //
+    // The version line is just the version. The run number and commit are for
+    // bug reports (Diagnostics, Sentry), not for this pane: "0.5" is a version
+    // a viewer reads, "0.5 (build 4631, 1a2b3c4)" is a log line.
+    val versionLine = "KBStream ${com.kennyb1201.kbstream.BuildConfig.VERSION_NAME}"
+    // The most recent release's changelog, on the same GitHub feed the update
+    // row reads. Shown whichever build is current, so "what changed last" is
+    // visible without waiting for an update to exist.
+    val changelog by AppUpdater.latestChangelog.collectAsStateWithLifecycle()
     Column {
         KBCard(onClick = {}, modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -2293,6 +2323,28 @@ private fun AboutSection() {
         }
         Spacer(modifier = Modifier.height(10.dp))
         UpdateRow()
+        if (changelog.isNotBlank()) {
+            Spacer(modifier = Modifier.height(10.dp))
+            KBCard(onClick = {}, modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(KBSurfaceRaised, KBShapeSmall)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Text(
+                        text = "WHAT'S NEW",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelSmall
+                    )
+                    Text(
+                        text = changelog,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
         Spacer(modifier = Modifier.height(10.dp))
         Text(
             text = "Updates are published with every build. Check manually above — " +
@@ -2549,15 +2601,13 @@ private fun UpdateRow() {
     // release with no body, which is why every use below is guarded.
     val notes = (updateState as? AppUpdater.UpdateState.Available)?.notes.orEmpty()
     val label = when (val s = updateState) {
-        is AppUpdater.UpdateState.Available ->
-            "Update available — ${s.versionName} (build ${s.versionCode})"
+        is AppUpdater.UpdateState.Available -> "Update available — ${s.versionName}"
         is AppUpdater.UpdateState.Downloading ->
             "Downloading update… ${s.percent}%"
         is AppUpdater.UpdateState.ReadyToInstall ->
             "Update ready — installing…"
         is AppUpdater.UpdateState.Checking -> "Checking for updates…"
-        is AppUpdater.UpdateState.Updated ->
-            "Updated to ${s.versionName} (build ${s.versionCode})"
+        is AppUpdater.UpdateState.Updated -> "Updated to ${s.versionName}"
         is AppUpdater.UpdateState.Failed -> "Update check failed — tap to retry"
         AppUpdater.UpdateState.UpToDate -> "You're up to date — check again"
         AppUpdater.UpdateState.Idle -> "Check for updates"
@@ -2865,6 +2915,98 @@ private fun PillChip(label: String, selected: Boolean) {
             )
             .padding(horizontal = 14.dp, vertical = 8.dp)
     )
+}
+
+/**
+ * The global theme accent: a grid of the palette's colours, applied the moment
+ * one is picked. The choice is stored - and synced - as an INDEX; the live
+ * theme state is refreshed here so every screen repaints at once instead of
+ * waiting for the next launch or profile switch.
+ */
+@Composable
+private fun AccentColorPicker() {
+    val context = LocalContext.current
+    var selectedIndex by remember {
+        mutableStateOf(AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX))
+    }
+    Column {
+        Text(
+            text = "Accent Color",
+            color = KBTextHi,
+            style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            text = "The highlight used across the whole app - buttons, badges, " +
+                "progress bars and focus rings. Applies instantly.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        AccentColorGrid(
+            selectedIndex = selectedIndex,
+            onSelect = { index ->
+                selectedIndex = index
+                AppPreferences.setAccentIndex(context, index)
+                // The pref alone paints nothing: the live theme state is the
+                // one the Compose tokens read, so it is re-mirrored here - the
+                // same call the AMOLED toggles depend on.
+                refreshThemeMirrors(context)
+            }
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AccentColorGrid(
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        KBAccentPalette.forEachIndexed { index, entry ->
+            KBCard(onClick = { onSelect(index) }) {
+                AccentSwatch(
+                    name = entry.name,
+                    color = entry.color,
+                    selected = selectedIndex == index
+                )
+            }
+        }
+    }
+}
+
+/** One palette entry: a colour chip plus its name, marked when it is the pick. */
+@Composable
+private fun AccentSwatch(name: String, color: Color, selected: Boolean) {
+    var focused by remember { mutableStateOf(false) }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .onFocusChanged { focused = it.isFocused }
+            .then(
+                when {
+                    selected -> Modifier.border(2.dp, KBAccent, KBShapeSmall)
+                    focused -> Modifier.border(2.dp, KBAccent.copy(alpha = 0.5f), KBShapeSmall)
+                    else -> Modifier
+                }
+            )
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(18.dp)
+                .background(color, KBShapePill)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = name,
+            color = KBTextHi,
+            style = MaterialTheme.typography.labelSmall
+        )
+    }
 }
 
 @Composable

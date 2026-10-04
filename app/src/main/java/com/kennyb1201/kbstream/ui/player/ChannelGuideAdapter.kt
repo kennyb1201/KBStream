@@ -64,11 +64,15 @@ internal class ChannelGuideAdapter : RecyclerView.Adapter<ChannelGuideAdapter.Vi
         notifyDataSetChanged()
     }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder =
-        ViewHolder(
-            LayoutInflater.from(parent.context)
-                .inflate(R.layout.channel_guide_item, parent, false)
-        )
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+        val view = LayoutInflater.from(parent.context)
+            .inflate(R.layout.channel_guide_item, parent, false)
+        // The row's accent text and progress tint resolve @color/kb_accent at
+        // inflation, so a custom global accent has to be re-applied here (rows
+        // attach long after the screen's own theme pass, if any).
+        retintAccentChrome(view, parent.context)
+        return ViewHolder(view)
+    }
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val row = rows[position]

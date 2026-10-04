@@ -8,6 +8,7 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.core.content.res.ResourcesCompat
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 
 /**
  * The pill-chip rows both players' settings panels are built from.
@@ -28,7 +29,7 @@ internal class PillPanelUi(private val context: Context) {
     /** A section heading, in the panel's accent color. */
     fun header(text: String, topMarginDp: Int): TextView =
         label(text, topMarginDp, 12f).apply {
-            setTextColor(ContextCompat.getColor(context, R.color.kb_accent))
+            setTextColor(themeAccentColor(context))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         }
 

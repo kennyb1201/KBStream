@@ -2473,7 +2473,7 @@ Log.d(
             )
 
         val currentLandscape =
-            AppPreferences.getHomeLandscapeCards(
+            AppPreferences.landscapePostersActive(
                 getApplication()
             )
 
@@ -6509,7 +6509,7 @@ private suspend fun calculateEpisodesRemaining(
             )
 
         val landscapeCards =
-            AppPreferences.getHomeLandscapeCards(
+            AppPreferences.landscapePostersActive(
                 getApplication()
             )
 

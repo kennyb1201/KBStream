@@ -11,6 +11,7 @@ import androidx.core.content.res.ResourcesCompat
 import androidx.recyclerview.widget.RecyclerView
 import coil3.load
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 
@@ -40,7 +41,7 @@ class PickerAdapter(
         val item = items[position]
         holder.label.text = item.label
         holder.label.setTextColor(
-            if (item.isSelected) ContextCompat.getColor(holder.itemView.context, R.color.kb_accent)
+            if (item.isSelected) themeAccentColor(holder.itemView.context)
             else ContextCompat.getColor(holder.itemView.context, R.color.kb_text_hi)
         )
         holder.itemView.setOnClickListener { item.onClick() }

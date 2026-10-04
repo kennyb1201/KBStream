@@ -37,12 +37,12 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.compose.itemKey
 import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
-import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -247,8 +247,10 @@ fun CatalogGridScreen(
 
                         val posterSize = rememberPosterSize()
                         Column {
-                            PosterCard(
+                            GlobalPosterCard(
                                 posterUrl = meta.poster,
+                                backdropUrl = meta.background,
+                                logoUrl = meta.logo,
                                 contentDescription = meta.name,
                                 isWatched =
                                     viewModel.watchedKey(meta.id, meta.type) in
@@ -262,15 +264,13 @@ fun CatalogGridScreen(
                                 onLongClick = {
                                     menuTarget = meta
                                 },
+                                posterWidth = posterSize.width,
+                                posterHeight = posterSize.height,
                                 modifier = Modifier
                                     // Opts this tile into the poster ->
                                     // Detail hero flight (shared key is
                                     // type:id, same as the rail posters).
                                     .heroSourceElement(meta.type, meta.id)
-                                    .size(
-                                        width = posterSize.width,
-                                        height = posterSize.height
-                                    )
                             )
                             Text(
                                 text = meta.name,

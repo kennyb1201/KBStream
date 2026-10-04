@@ -90,6 +90,7 @@ object AppPreferences {
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
+    private const val KEY_LANDSCAPE_POSTERS = "landscape_posters"
     private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
     private const val KEY_POSTER_BORDER_STRENGTH = "poster_border_strength" // 0=off, 1=subtle (default), 2=medium, 3=strong
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
@@ -1061,6 +1062,22 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── Accent colour (the app-wide theme accent) ──────────────────────
+    // An INDEX into the accent palette (see ui.theme.KBAccentPalette) rather
+    // than a stored ARGB value: this keeps the data layer free of UI imports
+    // and of colour literals, and lets the palette own the actual colours.
+    // Like the AMOLED toggles, the pref is the source of truth and
+    // `ui.theme.refreshThemeMirrors` mirrors it into the live theme state.
+    private const val KEY_ACCENT_INDEX = "accent_index"
+
+    fun getAccentIndex(context: Context, default: Int = 0): Int =
+        prefs(context).getInt(KEY_ACCENT_INDEX, default)
+
+    fun setAccentIndex(context: Context, index: Int) {
+        prefs(context).edit().putInt(KEY_ACCENT_INDEX, index).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
     // ── Home rail titles: show catalog type ───────────────────────────
     fun getHomeRailShowCatalogType(context: Context): Boolean =
         prefs(context).getBoolean(KEY_SHOW_CATALOG_TYPE, false)
@@ -1221,6 +1238,22 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_LANDSCAPE_CARDS, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
+
+    // ── Global landscape posters (every poster surface, not just Home) ─
+    // A separate switch from the Home-rails one above: Home (and the KB
+    // folders) keep their own toggle, while every other poster surface asks
+    // [landscapePostersActive], which is the OR of the two.
+    fun getLandscapePosters(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_LANDSCAPE_POSTERS, false)
+
+    fun setLandscapePosters(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_LANDSCAPE_POSTERS, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    /** True when poster surfaces should render as 16:9 landscape cards. */
+    fun landscapePostersActive(context: Context): Boolean =
+        getLandscapePosters(context) || getHomeLandscapeCards(context)
 
     // ── Poster eye badge: shows started-but-not-finished shows ────────
     fun getPosterPartialWatchBadge(context: Context): Boolean =
