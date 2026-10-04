@@ -371,7 +371,7 @@ private fun ProfileAvatarTile(
                     AsyncImage(
                         model = ImageRequest.Builder(tileContext)
                             .data(customAvatarUrl)
-                            .crossfade(true)
+                            .crossfade(false)
                             .build(),
                         contentDescription = name,
                         contentScale = ContentScale.Crop,

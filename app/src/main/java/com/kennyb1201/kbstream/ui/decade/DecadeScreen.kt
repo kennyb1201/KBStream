@@ -459,6 +459,9 @@ private fun DecadeHeader(
                         model = ImageRequest.Builder(context)
                             .data(url)
                             .size(Size(200, 300))
+                            // Kept: the five-card fan is a one-off entrance
+                            // for this screen's top titles, not a scrolling
+                            // grid, so the stagger reads as designed.
                             .crossfade(true)
                             .build(),
                         contentDescription = null,

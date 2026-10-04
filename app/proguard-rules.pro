@@ -52,6 +52,18 @@
     <init>(...);
 }
 
+# --- libass JNI bridge ---
+# scripts/libass-jni/libassjni.cpp exports
+# Java_com_kennyb1201_kbstream_ui_player_AssNative_native*, so the class and
+# every native method name are the interface. The -keepnames on the player
+# package below happens to cover this today; this rule states the contract so
+# narrowing that one cannot break the bridge silently - a renamed native
+# method throws UnsatisfiedLinkError at the first ASS sidecar and nowhere
+# earlier.
+-keepclasseswithmembernames class com.kennyb1201.kbstream.ui.player.AssNative {
+    native <methods>;
+}
+
 # --- Player diagnostics: class names are printed into PLAYER_DV / PLAYER_VIDEO ---
 # The Dolby Vision compat layer narrates itself through javaClass.simpleName
 # ("Compat extractor configured=...", "Wrapping extractor=..."). R8 renames

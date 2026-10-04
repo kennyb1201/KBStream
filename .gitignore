@@ -18,3 +18,9 @@ scripts/*.txt
 # the "Build FFmpeg video extension" workflow artifact): a multi-MB native
 # binary, consumed by app/build.gradle.kts when present, never committed.
 libs/
+# libass JNI bridge (scripts/build_libass.sh, or the "Build libass JNI
+# library" workflow artifact). Dropped into the default jniLibs source set so
+# Gradle packages it with no build-file wiring, and gitignored for the same
+# reason as libs/: a multi-MB native binary that the app must keep working
+# without (AssNative.available reports its absence).
+app/src/main/jniLibs/

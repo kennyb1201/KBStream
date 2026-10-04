@@ -23,8 +23,12 @@ EPG).
   styling. A second engine (MPV/libmpv, Settings → Playback engine) backs it
   up: it is used as the fallback when ExoPlayer cannot play a stream at all —
   the box has no decoder left to hand out, or the codec has no decoder — and
-  can be selected outright for files only libmpv handles (including fansub
-  ASS/SSA typesetting). Both engines write the same watch history, scrobbles
+  can be selected outright for files only libmpv handles. Fansub ASS/SSA is
+  typeset on both: a `.ass` sidecar is rendered natively by libass over the
+  ExoPlayer surface (see below), and an ASS track carried inside a container —
+  which this engine can only flatten into plain cues, since reaching the script
+  would mean demuxing the file a second time — is what the MPV pick is for.
+  Both engines write the same watch history, scrobbles
   and Continue Watching rows, and both raise the same two end-of-episode
   panels — the Up Next card, and the because-you-watched recommendations when
   there is no next episode — each with its own on/off switch and pop-up point
@@ -135,6 +139,41 @@ engine — which bundles its own FFmpeg — is what covers those titles.
 The extension ships its FFmpeg as `libffmpegJNI.so`, which is why it can coexist
 with libmpv — see the FFmpeg block in `app/build.gradle.kts` for why the other
 prebuilt video extensions cannot.
+
+### Optional: ASS/SSA typesetting for sidecar subtitles
+
+media3 does not typeset ASS and never will — styling was removed from the
+original PR and the request (ExoPlayer #8435) has been open since 2021 — so an
+`.ass` sidecar attached to the ExoPlayer engine arrives as a wall of
+unpositioned plain text, while the MPV engine renders the same file correctly.
+The second native build in this repo closes that gap with libass itself:
+
+```sh
+# needs an Android NDK r28, plus autoconf/automake/libtool/pkg-config/meson/ninja
+scripts/build_libass.sh
+# -> app/src/main/jniLibs/{arm64-v8a,armeabi-v7a}/libassjni.so
+./gradlew assembleDebug
+```
+
+It cross-compiles libass and its dependencies (FreeType, HarfBuzz, fontconfig,
+FriBidi, expat), then links them with the JNI bridge in `scripts/libass-jni`
+into one library per ABI. `app/src/main/jniLibs` is a default Gradle source set,
+so there is nothing to wire into `app/build.gradle.kts`, and it is gitignored.
+
+The `Build KBStream APK` workflow runs the script in a cached step and uploads
+the result as the `libass-jni` artifact, so you do not need an NDK locally —
+**download that artifact from any green run and unzip it into
+`app/src/main/jniLibs/`** instead of compiling it yourself. Unlike the FFmpeg
+step, a missing library is a warning rather than a failure: the renderer is an
+upgrade to one subtitle path, and the app falls back to the flattened cues when
+`AssNative.available` is false.
+
+Like the FFmpeg extension, the result is one uniquely named library
+(`libassjni.so`) with its own static copies of libass and friends. libmpv already
+exports its own `ass_`/`FT_`/`hb_` symbols, and this stays out of their way for
+the same reason `libffmpegJNI.so` does: a separate soname means a separate load
+scope, whereas shipping a second `libass.so` would put two files with one name
+in the APK.
 
 ## Running tests
 

@@ -61,6 +61,7 @@ import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
+import com.kennyb1201.kbstream.data.iptv.ChannelRecall
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
@@ -98,12 +99,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import org.json.JSONArray
+import java.io.File
 import java.util.concurrent.TimeUnit
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 private const val TAG = "NativePlayer"
 private const val PERIODIC_SAVE_INTERVAL_MS = 5_000L
 private const val MIN_RESUME_POSITION_MS = 10_000L
+// ASS overlay redraw cadence: a frame per display refresh while playback runs
+// (libass animates signs and karaoke), and a slow poll while paused so a seek
+// or an offset nudge still lands on screen.
+private const val ASS_FRAME_INTERVAL_MS = 33L
+private const val ASS_IDLE_INTERVAL_MS = 250L
+// Drop-in directory for fansub fonts under the app's private files dir.
+private const val ASS_FONT_DIR = "fonts"
 
 /**
  * Saved-state key for the live playhead. When the system recreates this
@@ -950,6 +959,22 @@ class NativePlayerActivity : ComponentActivity() {
     // (SubtitleCueHandler.updateFromPosition) so subs can appear early.
     private var externalSubtitleCues: List<SubtitleFileParser.TimedCue> = emptyList()
 
+    // --- ASS (SSA) sidecars ---
+    //
+    // media3 does not typeset ASS (google/ExoPlayer#8435, open since 2021) and
+    // its SSA parser flattens a script into plain cues, so an .ass sidecar
+    // loses its signs, fonts and positioning on the ExoPlayer engine - while
+    // the MPV engine, whose libmpv statically links libass, renders the same
+    // file correctly. When this build carries libassjni.so the sidecar is
+    // rendered by libass here instead and drawn over the video surface; when
+    // it does not, every path below falls back to the flattened cues the text
+    // handler already renders.
+
+    /** The script being rendered. Survives a player rebuild; only the native instance does not. */
+    private var assSubtitleContent: String? = null
+    private var assRenderer: AssSubtitleRenderer? = null
+    private lateinit var subtitleAssImage: ImageView
+
     // Stream health
     private var streamWidth = 0
     private var streamHeight = 0
@@ -1295,12 +1320,40 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
+     * The live previous-channel toggle: back to the channel that was playing
+     * before this one, and back again on the next press. This is the channel
+     * the viewer came from, which is not the previous *position* in the lineup
+     * (that is [zapByOffset]) - pick A, pick B, and bounce between them.
+     *
+     * Returns false when there is nothing to go back to: no channel watched
+     * before this one, or the one that was has since left the lineup.
+     */
+    private fun recallLastChannel(): Boolean {
+        val targetId = ChannelRecall.target() ?: return false
+        val index = LiveChannelZapRegistry.indexOfChannel(targetId)
+        if (index < 0) {
+            // The channel we came from is gone from the playlist: drop the
+            // armed target rather than re-resolving it on every press.
+            ChannelRecall.clearTarget()
+            return false
+        }
+        val channel = LiveChannelZapRegistry.channelAt(index) ?: return false
+        tuneToChannel(index, channel)
+        return true
+    }
+
+    /**
      * Switch to a channel from the zap lineup and report it in the banner.
-     * Shared by UP/DOWN zapping and by typed channel numbers so both land the
-     * user the same way.
+     * Shared by UP/DOWN zapping, by typed channel numbers and by the
+     * previous-channel recall so all three land the user the same way.
      */
     private fun tuneToChannel(index: Int, channel: LiveChannelZapRegistry.ZapChannel) {
         zapChannelIndex = index
+
+        // Every live channel change comes through here, so this is where the
+        // previous-channel pair is kept: the channel being left becomes the
+        // recall target and this one becomes the channel playing now.
+        ChannelRecall.onTuned(channel.channelId)
 
         // The outgoing channel's size is not this channel's. Clear it before
         // the banner paints, or a 1080p -> 720p zap would name the old
@@ -1601,7 +1654,9 @@ class NativePlayerActivity : ComponentActivity() {
 
     /**
      * True while the video surface - not a panel, picker, error card or skip
-     * prompt - owns the remote, which is when UP/DOWN and CH+/CH- may zap.
+     * prompt - owns the remote, which is when the channel keys work: UP/DOWN
+     * and CH+/CH- step through the lineup, and LEFT/RIGHT recall the channel
+     * watched before this one.
      * One rule, read by both the surface's key listener and the activity's
      * [onKeyDown] fallback, so a channel press can never work in one place and
      * silently do nothing in the other.
@@ -2364,7 +2419,10 @@ class NativePlayerActivity : ComponentActivity() {
      * reach the overlay or the live channel zap (and a live channel never
      * offers a prompt). LEFT/RIGHT are deliberately NOT in this set: they seek
      * the video directly and raise nothing - not even the prompt - while the
-     * overlay is down. See [handleSurfaceScrubKey].
+     * overlay is down. On a live channel they recall the previous channel
+     * instead of seeking (see [recallLastChannel]), which is the one other
+     * meaning they can carry with the overlay down. See
+     * [handleSurfaceScrubKey].
      */
     private fun isOverlayRaisingKey(keyCode: Int): Boolean =
         keyCode == KeyEvent.KEYCODE_DPAD_UP ||
@@ -2434,7 +2492,10 @@ class NativePlayerActivity : ComponentActivity() {
         // holds focus while it is up, and a key it does not consume is never
         // re-offered to the surface's listener from there. Only an item that
         // can actually seek takes the key - live TV and a stream without a
-        // duration fall through to whatever handled them before.
+        // duration fall through to whatever handled them before. For a live
+        // channel that is the previous-channel recall: the press reaches the
+        // channel-key handlers below (the surface's listener, then [onKeyDown])
+        // and toggles back, which is why it must not be swallowed here.
         val horizontal = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
             event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
         if (plainPlaybackForeground() && horizontal) {
@@ -2657,6 +2718,15 @@ class NativePlayerActivity : ComponentActivity() {
         parentType = intent.getStringExtra("parent_type").orEmpty()
         sessionProfileId = PlaybackHistoryWriter.sessionProfileId(this, intent)
         isLiveChannel = parentType == "channel"
+        // Arm the live previous-channel toggle: the channel this session opens
+        // on is now the last-watched one, and whatever the last session (or the
+        // last zap) was on becomes the channel LEFT/RIGHT goes back to. See
+        // ChannelRecall - carrying the pair across sessions is what makes the
+        // toggle work when the second channel was opened from the guide, which
+        // is the normal way to pick it.
+        if (isLiveChannel) {
+            ChannelRecall.onTuned(parentId)
+        }
         season = intent.getIntExtra("season", -1).takeIf { it >= 0 }
         // A launch carrying 0 as its episode is carrying "no episode": see
         // EpisodeNumbering. Read as one, the up-next line said "Season 2
@@ -2783,7 +2853,15 @@ class NativePlayerActivity : ComponentActivity() {
                 ?.let { remembered ->
                     runCatching { Uri.parse(remembered) }
                         .getOrNull()
-                        ?.let { externalSubtitleUri = it }
+                        ?.let { uri ->
+                            externalSubtitleUri = uri
+                            // An .ass sidecar needs its libass overlay built
+                            // here: the URI above only becomes a media3
+                            // sidecar track, which for ASS means flattened
+                            // cues, so a remembered fansub file would come
+                            // back unstyled without this.
+                            restoreAssSubtitle(uri)
+                        }
                 }
         }
         totalEpisodesInSeason = intent.getIntExtra("total_episodes_in_season", -1).takeIf { it > 0 }
@@ -3093,6 +3171,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun bindViews() {
         playerView = findViewById(R.id.player_view)
         subtitleText = findViewById(R.id.custom_subtitle_text)
+        subtitleAssImage = findViewById(R.id.custom_subtitle_image)
         p5VideoGlesView = findViewById(R.id.p5_video_gles_view)
         liveBadge = findViewById(R.id.live_badge)
         zapBanner = findViewById(R.id.zap_banner)
@@ -3910,7 +3989,23 @@ class NativePlayerActivity : ComponentActivity() {
                     true
                 }
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                    if (errorContainer.visibility == View.VISIBLE) {
+                    if (liveZapKeysFree()) {
+                        // Live TV: LEFT/RIGHT are the previous-channel toggle -
+                        // back to the channel that was playing before this one,
+                        // and back again on the next press. Either direction
+                        // does the same thing, so a remote whose rocker sends
+                        // left/right works whichever way it is pushed; stepping
+                        // through the lineup in order is UP/DOWN's job. Held
+                        // keys are ignored because every tune rebuilds the
+                        // player. Gated on ACTION_DOWN because - unlike UP/DOWN
+                        // - a LEFT/RIGHT release is let through above (a scrub
+                        // needs its key up), and acting on both halves of the
+                        // press would toggle twice.
+                        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                            recallLastChannel()
+                        }
+                        true
+                    } else if (errorContainer.visibility == View.VISIBLE) {
                         focusErrorButtons()
                         true
                     } else if (controlsVisible) {
@@ -3937,6 +4032,19 @@ class NativePlayerActivity : ComponentActivity() {
                         // recommendations are up, so that rule lives in one
                         // place - see handleSurfaceScrubKey.
                         handleSurfaceScrubKey(keyCode, event)
+                    }
+                }
+                // The remote's own previous-channel button, on the remotes
+                // that have one: the same toggle as LEFT/RIGHT. Its release
+                // never reaches here (only ACTION_DOWN gets past the guard at
+                // the top of this listener), so the press is the whole event -
+                // but a held key still must not toggle over and over.
+                KeyEvent.KEYCODE_LAST_CHANNEL -> {
+                    if (liveZapKeysFree()) {
+                        if (event.repeatCount == 0) recallLastChannel()
+                        true
+                    } else {
+                        false
                     }
                 }
                 KeyEvent.KEYCODE_BACK -> {
@@ -3995,19 +4103,21 @@ class NativePlayerActivity : ComponentActivity() {
             KeyEvent.KEYCODE_MEDIA_STOP -> { finish(); return true }
             // CH+/CH- channel zapping — live channels only. Banner shows
             // channel identity + NOW (title, air time, synopsis) and NEXT so
-            // you can see where you landed. D-pad UP/DOWN zap too (handled
-            // in the player view's key listener), since most TV remotes have
-            // no dedicated channel keys.
+            // you can see where you landed. The D-pad changes channel too
+            // (handled in the player view's key listener), since most TV
+            // remotes have no dedicated channel keys: UP/DOWN step through the
+            // lineup in order, while LEFT/RIGHT are the previous-channel
+            // toggle.
             KeyEvent.KEYCODE_CHANNEL_UP -> {
                 if (isLiveChannel) { zapByOffset(+1); return true }
             }
             KeyEvent.KEYCODE_CHANNEL_DOWN -> {
                 if (isLiveChannel) { zapByOffset(-1); return true }
             }
-            // D-pad fallback. The video surface's own listener zaps when it
-            // holds focus, so reaching here means focus sits somewhere else
-            // (a button that hid with the overlay, the root view) — which used
-            // to make changing channel from the player do nothing at all.
+            // D-pad fallback. The video surface's own listener handles these
+            // when it holds focus, so reaching here means focus sits somewhere
+            // else (a button that hid with the overlay, the root view) — which
+            // used to make changing channel from the player do nothing at all.
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
                 if (liveZapKeysFree()) {
                     // Held keys are ignored: every zap rebuilds the player, so
@@ -4015,6 +4125,16 @@ class NativePlayerActivity : ComponentActivity() {
                     if ((event?.repeatCount ?: 0) == 0) {
                         zapByOffset(if (keyCode == KeyEvent.KEYCODE_DPAD_UP) +1 else -1)
                     }
+                    return true
+                }
+            }
+            // LEFT/RIGHT - and the remote's own previous-channel key, on the
+            // remotes that have one - toggle back to the channel watched before
+            // this one, the same way the surface listener handles them.
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
+            KeyEvent.KEYCODE_LAST_CHANNEL -> {
+                if (liveZapKeysFree()) {
+                    if ((event?.repeatCount ?: 0) == 0) recallLastChannel()
                     return true
                 }
             }
@@ -4325,7 +4445,8 @@ class NativePlayerActivity : ComponentActivity() {
      *
      * The one case not consumed is an item that cannot seek (live TV, or a
      * stream that reports no duration); those presses keep whatever meaning
-     * they had.
+     * they had - on a live channel that meaning is the previous-channel
+     * recall, see [recallLastChannel].
      */
     private fun handleSurfaceScrubKey(keyCode: Int, event: KeyEvent): Boolean {
         // The credits "Because you watched" panel owns LEFT/RIGHT for as long as
@@ -4962,6 +5083,13 @@ class NativePlayerActivity : ComponentActivity() {
             playerView.subtitleView?.setCues(null)
             playerView.subtitleView?.visibility = View.GONE
             subtitleCueHandler = SubtitleCueHandler().also { player.addListener(it) }
+            // An ASS sidecar outlives the player it was loaded against - only
+            // the native instance was released with the old one - so the tick
+            // has to be re-armed to rebuild it against this player.
+            if (assSubtitleContent != null) {
+                handler.removeCallbacks(assFrameTick)
+                handler.post(assFrameTick)
+            }
             armStartupWatchdog()
 
             playbackEndedHandled = false
@@ -6852,6 +6980,13 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private var languagesAutoSelected = false
 
+    /**
+     * Set once a bitmap subtitle track has sent playback to the MPV engine (or
+     * been refused one). Tracks are re-read several times per session, so the
+     * engine change is attempted once per session rather than once per callback.
+     */
+    private var subtitleEngineFallbackTried = false
+
     private fun autoSelectPreferredLanguages() {
         val player = exoPlayer ?: return
         if (languagesAutoSelected) return
@@ -6884,33 +7019,94 @@ class NativePlayerActivity : ComponentActivity() {
         // ── Subtitle ──────────────────────────────────────────
         if (preferredSubtitleLang.isNotBlank()) {
             val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
-            var found = false
-            for (group in textGroups) {
+            // Flatten to the shape SubtitleTrackRules works on, keeping the way
+            // back to the media3 objects: the rules decide, this applies. They
+            // exist because both failures they prevent are silent - an armed
+            // track that draws nothing (a bitmap format this engine has no
+            // renderer for), and a fallback onto the one track no renderer
+            // claims. Neither raises, so neither reaches the retry ladder.
+            val candidates = mutableListOf<SubtitleTrackRules.Candidate>()
+            val locations = mutableListOf<Pair<Tracks.Group, Int>>()
+            textGroups.forEach { group ->
                 for (i in 0 until group.length) {
                     val fmt = group.getTrackFormat(i)
-                    val lang = fmt.language?.lowercase()
-                    if (lang == preferredSubtitleLang.lowercase()) {
-                        player.trackSelectionParameters = player.trackSelectionParameters
-                            .buildUpon()
-                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                            .setOverrideForType(
-                                TrackSelectionOverride(group.mediaTrackGroup, i)
-                            )
-                            .build()
-                        found = true
-                        changed = true
-                        Log.i("PLAYER_LANG", "Auto-selected subtitle: $lang")
-                        break
-                    }
+                    candidates += SubtitleTrackRules.Candidate(
+                        language = fmt.language,
+                        mimeType = fmt.sampleMimeType,
+                        forced = fmt.selectionFlags and C.SELECTION_FLAG_FORCED != 0,
+                        supported = group.isTrackSupported(i)
+                    )
+                    locations += group to i
                 }
-                if (found) break
             }
-            // If no matching subtitle track found, disable subtitles
-            if (!found) {
-                player.trackSelectionParameters = player.trackSelectionParameters
-                    .buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                    .build()
+
+            when (val choice = SubtitleTrackRules.choose(candidates, preferredSubtitleLang)) {
+                is SubtitleTrackRules.Choice.Show -> {
+                    val (group, index) = locations[choice.index]
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                        .setOverrideForType(
+                            TrackSelectionOverride(group.mediaTrackGroup, index)
+                        )
+                        .build()
+                    changed = true
+                    Log.i(
+                        "PLAYER_LANG",
+                        "Auto-selected subtitle: " +
+                            (group.getTrackFormat(index).language ?: "untagged")
+                    )
+                }
+
+                is SubtitleTrackRules.Choice.NeedsMpv -> {
+                    val format = locations[choice.index].let { (group, i) ->
+                        group.getTrackFormat(i)
+                    }
+                    val label = SubtitleTrackRules.formatLabel(format.sampleMimeType)
+                        ?: "bitmap"
+                    // The preferred language IS on the file, but only as a
+                    // bitmap subtitle track. media3 ships no renderer for those,
+                    // so the track can be armed and then draws nothing - and an
+                    // armed track that renders nothing is not a
+                    // PlaybackException, so the decoder ladder never fires and
+                    // nothing is logged anywhere. MPV demuxes and draws them
+                    // itself, so the backup engine is the only place these
+                    // subtitles exist.
+                    if (!subtitleEngineFallbackTried) {
+                        subtitleEngineFallbackTried = true
+                        Log.w(
+                            "PLAYER_LANG",
+                            "preferred subtitle track is $label, which this engine " +
+                                "cannot render; handing off to the MPV engine"
+                        )
+                        if (!handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_SUBTITLE)) {
+                            // Refused: live TV, a DRM session, no libmpv, or the
+                            // automatic fallback is switched off. Say so, because
+                            // the alternative was the original bug - a silent
+                            // nothing where subtitles should be.
+                            Log.w(
+                                "PLAYER_LANG",
+                                "$label subtitles need the MPV engine; handoff refused, " +
+                                    "so subtitles stay off"
+                            )
+                        }
+                    }
+                    // Either way the bitmap track must not be left selectable:
+                    // rendering nothing is exactly the failure being fixed.
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .build()
+                }
+
+                SubtitleTrackRules.Choice.Off -> {
+                    // Nothing renderable to show, so keep text off rather than
+                    // letting media3's own selection arm a dead track.
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                        .build()
+                }
             }
         }
 
@@ -7395,9 +7591,21 @@ class NativePlayerActivity : ComponentActivity() {
          * from the playback position instead.
          */
         private val positionDriven: Boolean
-            get() = externalSubtitleCues.isNotEmpty() && subtitleOffsetMs < 0
+            get() = externalSubtitleCues.isNotEmpty() && subtitleOffsetMs < 0 && !assOwned()
+
+        /** True while the libass overlay is drawing; text cues must stay out of its way. */
+        private fun assOwned(): Boolean = assRenderer?.active == true
 
         override fun onCues(cueGroup: CueGroup) {
+            if (assOwned()) {
+                // The pipeline still emits flattened cues for an .ass sidecar
+                // that is already being typeset over the surface; drawing both
+                // would double the subtitle up in two different styles.
+                handler.removeCallbacks(delayedShow)
+                currentCues = emptyList()
+                renderText("")
+                return
+            }
             if (positionDriven) {
                 // Position-driven mode: suppress pipeline rendering entirely.
                 handler.removeCallbacks(delayedShow)
@@ -7436,6 +7644,7 @@ class NativePlayerActivity : ComponentActivity() {
          */
         fun reapplyOffset() {
             handler.removeCallbacks(delayedShow)
+            if (assOwned()) return
             if (positionDriven) {
                 updateFromPosition()
                 return
@@ -7445,6 +7654,7 @@ class NativePlayerActivity : ComponentActivity() {
 
         /** Re-renders with the new size/background (offset unchanged). */
         fun refreshStyle() {
+            if (assOwned()) return
             if (positionDriven) {
                 updateFromPosition()
                 return
@@ -7461,7 +7671,7 @@ class NativePlayerActivity : ComponentActivity() {
          */
         fun updateFromPosition() {
             handler.removeCallbacks(positionTick)
-            if (!positionDriven) return
+            if (assOwned() || !positionDriven) return
             val player = exoPlayer ?: return
             val pos = player.currentPosition + subtitleOffsetMs.toLong()
             val cue = externalSubtitleCues.firstOrNull { pos >= it.startMs && pos < it.endMs }
@@ -7565,31 +7775,174 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
-     * Reads and parses the picked external subtitle file (SRT / WebVTT)
-     * into [externalSubtitleCues] off the main thread. Parsing locally is
-     * what makes a true negative offset possible: Media3 has no
-     * subtitle-delay API and only emits cues at their authored time, but
-     * with the file in hand the handler can render any cue on demand.
+     * Reads the picked external subtitle file off the main thread and routes
+     * it to the renderer it belongs to: an ASS/SSA script goes to libass (see
+     * the ASS section below) when this build has it, everything else is parsed
+     * into [externalSubtitleCues].
+     *
+     * Parsing SRT/WebVTT locally is what makes a true negative offset
+     * possible: Media3 has no subtitle-delay API and only emits cues at their
+     * authored time, but with the file in hand the handler can render any cue
+     * on demand.
      */
     private fun loadExternalSubtitleCues(uri: Uri) {
         lifecycleScope.launch(Dispatchers.IO) {
-            val parsed = runCatching {
+            val text = runCatching {
                 contentResolver.openInputStream(uri)
                     ?.bufferedReader(Charsets.UTF_8)
                     ?.use { it.readText() }
-            }.getOrNull()?.let { SubtitleFileParser.parse(it) } ?: emptyList()
+            }.getOrNull()
+            // Sniffed from the content, not the URI: an OpenSubtitles download
+            // is a numeric file id with no extension at all.
+            val assScript = text?.takeIf {
+                AssSubtitleRenderer.available && AssSubtitleSource.isAssContent(it)
+            }
+            val parsed = if (assScript == null) {
+                text?.let { SubtitleFileParser.parse(it) } ?: emptyList()
+            } else {
+                emptyList()
+            }
             // withContext, not a nested launch(Dispatchers.Main): the IO
             // coroutine is already scoped to lifecycleScope, so handing the
             // result back on Main is the same hop - but this one the IO body
             // actually waits for, and a failure in the Main block is thrown
             // here instead of into a sibling launch nobody joins.
             withContext(Dispatchers.Main) {
+                if (assScript != null) {
+                    attachAssSubtitle(assScript)
+                    return@withContext
+                }
+                detachAssSubtitle()
                 externalSubtitleCues = parsed
                 if (!parsed.isEmpty()) {
                     Log.i(TAG, "External subtitles parsed: ${parsed.size} cues")
                 }
                 subtitleCueHandler?.updateFromPosition()
             }
+        }
+    }
+
+    // --- ASS sidecar rendering ------------------------------------------
+
+    /**
+     * The tick that keeps the libass overlay in step with the playhead. It is
+     * also the (re)loader: a player rebuild - a background return, a source
+     * switch, an engine change - frees the native instance but not the script,
+     * so the next tick rebuilds the renderer rather than leaving the sidecar
+     * dark for the rest of the session.
+     */
+    private val assFrameTick = object : Runnable {
+        override fun run() {
+            val script = assSubtitleContent ?: return
+            val renderer = assRenderer ?: AssSubtitleRenderer().also { assRenderer = it }
+            if (!renderer.active && !startAssSubtitle(script, renderer)) {
+                fallBackFromAss(script)
+                return
+            }
+            // The pipeline still emits flattened cues for the same file, and
+            // they would draw behind the rendered frame: the overlay owns the
+            // subtitle area while it is active.
+            externalSubtitleCues = emptyList()
+            if (subtitleText.visibility != View.GONE) subtitleText.visibility = View.GONE
+            drawAssFrame()
+            val delay = if (exoPlayer?.isPlaying == true) ASS_FRAME_INTERVAL_MS else ASS_IDLE_INTERVAL_MS
+            handler.postDelayed(this, delay)
+        }
+    }
+
+    /**
+     * Starts the tick for [content]. The script is loaded by the tick itself,
+     * so every caller sees the same load-and-fall-back behaviour without
+     * repeating it here.
+     */
+    private fun attachAssSubtitle(content: String) {
+        assSubtitleContent = content
+        handler.removeCallbacks(assFrameTick)
+        handler.post(assFrameTick)
+    }
+
+    /** Creates/loads the libass renderer. False when libass will not take the script. */
+    private fun startAssSubtitle(content: String, renderer: AssSubtitleRenderer): Boolean {
+        // fontconfig finds the system fonts itself; these are the extras the
+        // user dropped into the app's own folder, which fontconfig cannot see.
+        val configPath = AssSubtitleRenderer.installFontConfig(assets, filesDir)
+        val fonts = AssSubtitleSource.collectFonts(listOf(File(filesDir, ASS_FONT_DIR)))
+        return renderer.load(content, fonts, configPath, cacheDir.absolutePath)
+    }
+
+    /**
+     * libass would not take the script: keep the sidecar usable as plain cues
+     * rather than leaving the viewer with no subtitle at all.
+     */
+    private fun fallBackFromAss(content: String) {
+        Log.w(TAG, "libass could not load the ASS sidecar; rendering plain cues instead")
+        assSubtitleContent = null
+        releaseAssRenderer()
+        externalSubtitleCues = SubtitleFileParser.parse(content)
+        subtitleCueHandler?.updateFromPosition()
+    }
+
+    /**
+     * Draws the frame for the current playback position. Nothing to do until
+     * the player has told us the video's size: libass lays out against that
+     * rectangle, and rendering before it is known would place every line
+     * against the cap rectangle instead of the video's aspect ratio.
+     */
+    private fun drawAssFrame() {
+        val renderer = assRenderer?.takeIf { it.active } ?: return
+        val player = exoPlayer ?: return
+        val size = player.videoSize
+        if (size.width > 0 && size.height > 0) {
+            val viewport = AssSubtitleSource.viewport(size.width, size.height)
+            renderer.setViewport(viewport[0], viewport[1])
+        }
+        // The user's offset shifts ASS exactly as it shifts text cues.
+        val timeMs = (player.currentPosition + subtitleOffsetMs).coerceAtLeast(0L)
+        val frame = renderer.render(timeMs) ?: return
+        subtitleAssImage.setImageBitmap(frame)
+        // The frame buffer is reused across ticks, so its pixels changed while
+        // the drawable did not: without this the view has no reason to redraw.
+        subtitleAssImage.invalidate()
+        if (subtitleAssImage.visibility != View.VISIBLE) {
+            subtitleAssImage.visibility = View.VISIBLE
+        }
+    }
+
+    /** Stops the overlay and frees the native instance, keeping the script. */
+    private fun releaseAssRenderer() {
+        handler.removeCallbacks(assFrameTick)
+        assRenderer?.release()
+        assRenderer = null
+        if (::subtitleAssImage.isInitialized) {
+            subtitleAssImage.setImageDrawable(null)
+            subtitleAssImage.visibility = View.GONE
+        }
+    }
+
+    /** Drops the script too: a different subtitle source is being attached. */
+    private fun detachAssSubtitle() {
+        assSubtitleContent = null
+        releaseAssRenderer()
+    }
+
+    /**
+     * Rebuilds the libass overlay for the sidecar remembered from a previous
+     * session. Deliberately narrower than [loadExternalSubtitleCues]: the
+     * remembered URI is already turned into a media3 sidecar track by
+     * createPlayer(), so populating [externalSubtitleCues] here as well would
+     * put a remembered SRT/WebVTT into position-driven rendering - a change
+     * to the text path, which is not what restoring the ASS overlay is for.
+     */
+    private fun restoreAssSubtitle(uri: Uri) {
+        if (!AssSubtitleRenderer.available) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            val text = runCatching {
+                contentResolver.openInputStream(uri)
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+            }.getOrNull() ?: return@launch
+            if (!AssSubtitleSource.isAssContent(text)) return@launch
+            withContext(Dispatchers.Main) { attachAssSubtitle(text) }
         }
     }
 
@@ -7738,7 +8091,15 @@ class NativePlayerActivity : ComponentActivity() {
                     (0 until group.length).map { trackIdx ->
                         val format = group.getTrackFormat(trackIdx)
                         PickerItem(
-                            label = format.language?.uppercase() ?: "Track ${groupIdx + 1}",
+                            // Language plus the format, so a PGS row says "PGS"
+                            // (this engine cannot draw it at all) and an ASS row
+                            // says "ASS" (it draws without its typesetting)
+                            // before the press rather than after.
+                            label = SubtitleTrackRules.pickerLabel(
+                                language = format.language,
+                                mimeType = format.sampleMimeType,
+                                fallback = "Track ${groupIdx + 1}"
+                            ),
                             isSelected = group.isTrackSelected(trackIdx),
                             onClick = {
                                 exoPlayer?.let { player ->
@@ -9799,6 +10160,9 @@ class NativePlayerActivity : ComponentActivity() {
         scope?.cancel()
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
+        // The native libass instance goes with the player; the script stays so
+        // the rebuilt player picks the sidecar back up.
+        releaseAssRenderer()
         exoPlayer?.release()
         exoPlayer = null
         // Marked with the release, not before it: this is the stop that took
@@ -9834,6 +10198,7 @@ class NativePlayerActivity : ComponentActivity() {
         scope?.cancel()
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
+        releaseAssRenderer()
         exoPlayer?.release()
         exoPlayer = null
         mediaSession?.release()

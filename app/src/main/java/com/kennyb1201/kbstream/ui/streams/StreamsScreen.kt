@@ -200,6 +200,8 @@ fun StreamsScreen(
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(backdropUrl)
+                    // Full-screen hero backdrop: the one image on the
+                    // full-bleed backdrop.
                     .crossfade(true)
                     .build(),
                 contentDescription = displayName,
@@ -338,6 +340,7 @@ private fun StreamsHeader(
             AsyncImage(
                 model = ImageRequest.Builder(context)
                     .data(clearLogoUrl)
+                    // The title logo over that backdrop, fading in with it.
                     .crossfade(true)
                     .build(),
                 contentDescription = displayName,

@@ -271,6 +271,85 @@ jobs:
           echo "::error::${message} Re-run with allow_missing_ffmpeg if this is an upstream problem, not a regression."
           exit 1
 
+      # --- Optional ASS/SSA subtitle rendering ------------------------------
+      # Builds libass plus FreeType, HarfBuzz, fontconfig, fribidi and expat for
+      # the app's ABIs, links them into the JNI bridge in scripts/libass-jni,
+      # and drops the result at app/src/main/jniLibs/<abi>/libassjni.so -- a
+      # default Gradle source set, so the APK packages it with no build-file
+      # wiring.
+      #
+      # continue-on-error, and a WARNING-only check, unlike the FFmpeg block
+      # above. The two are opposites in kind: without the FFmpeg extension
+      # ExoPlayer loses its software video decoder outright, whereas a missing
+      # libass only leaves an .ass SIDECAR on the flattened-cue path it already
+      # uses (AssNative.available is false, the text renderer takes over). It
+      # would be wrong to block every release on a brand-new cross-compile in
+      # exchange for a cosmetic regression -- the string of release-less runs
+      # the FFmpeg comment describes is exactly the failure to avoid here.
+      #
+      # Once a run has produced the .so, tightening the check below to the
+      # FFmpeg block's hard failure (exit 1) is the right follow-up.
+      - name: Cache the libass dependency prefixes
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: build/libass-ext
+          # Covers the script and the JNI sources: both change what the
+          # dependency prefixes and the linked library must contain. Keyed on
+          # NDK_VERSION for the same reason the FFmpeg key is -- these are
+          # static archives produced by one toolchain and must not be reused
+          # by another.
+          key: libass-jni-v1-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ hashFiles('scripts/build_libass.sh', 'scripts/libass-jni/**') }}
+          restore-keys: |
+            libass-jni-v1-${{ runner.os }}-${{ env.NDK_VERSION }}-
+
+      - name: Build libass JNI library (optional)
+        continue-on-error: true
+        run: |
+          # Six autotools/meson/cmake projects: the runner image does not ship
+          # all of their prerequisites.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            autoconf automake libtool pkg-config gettext meson ninja-build
+          SDKMANAGER="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;${NDK_VERSION}" "cmake;3.22.1"
+          # Same trap as the FFmpeg block: the runner exports ANDROID_NDK
+          # pointing at a preinstalled NDK, and the script prefers it over
+          # NDK_VERSION. Pin the whole build to the version installed here so
+          # the static archives and the CMake link that consumes them are the
+          # same toolchain.
+          export ANDROID_NDK="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          if [[ ! -d "$ANDROID_NDK" ]]; then
+            echo "::error::NDK ${NDK_VERSION} missing at ${ANDROID_NDK}; refusing to silently build with a different toolchain"
+            exit 1
+          fi
+          bash scripts/build_libass.sh
+
+      # Kept even when the build failed: the log is the only record of why, and
+      # a successful run's .so is worth downloading on its own for a device
+      # test of the ASS overlay.
+      - name: Upload libass JNI library (optional)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: libass-jni
+          path: app/src/main/jniLibs
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # A warning, not the FFmpeg step's failure: see the block comment above.
+      # It still warns with the byte count in the log, so a build that lost the
+      # overlay is distinguishable from one that shipped it.
+      - name: Check whether libass was produced
+        if: always()
+        run: |
+          if [[ -s app/src/main/jniLibs/arm64-v8a/libassjni.so ]]; then
+            echo "libassjni.so built: $(wc -c < app/src/main/jniLibs/arm64-v8a/libassjni.so) bytes"
+            exit 0
+          fi
+          echo "::warning::libassjni.so was not produced, so this build renders .ass sidecars as flattened cues on the ExoPlayer engine (the MPV engine still typesets them). See the 'Build libass JNI library (optional)' step above."
+
       - name: Restore release keystore
         run: |
           echo "${{ secrets.KBSTREAM_KEYSTORE_BASE64 }}" | base64 --decode > app/kbstream-release.jks

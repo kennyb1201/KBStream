@@ -792,7 +792,9 @@ private fun LibraryPosterCard(
                     AsyncImage(
                         model = ImageRequest.Builder(LocalContext.current)
                             .data(item.posterUrl)
-                            .crossfade(true)
+                            // Grid tile: no crossfade on a scrolling grid, the
+                            // poster is in a grid of them, not a hero.
+                            .crossfade(false)
                             .build(),
                         contentDescription = item.title,
                         contentScale = ContentScale.Crop,

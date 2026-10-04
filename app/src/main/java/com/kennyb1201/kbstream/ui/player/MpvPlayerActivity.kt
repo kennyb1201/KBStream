@@ -1546,6 +1546,9 @@ class MpvPlayerActivity : ComponentActivity() {
             if (isFallbackSession && fallbackReason == FALLBACK_REASON_CONTAINER) {
                 append("  \u00b7  ExoPlayer could not read this file's container")
             }
+            if (isFallbackSession && fallbackReason == FALLBACK_REASON_SUBTITLE) {
+                append("  \u00b7  ExoPlayer cannot render this file's subtitle format")
+            }
             val parsed = surface?.diagnostics().orEmpty()
             if (parsed.isNotBlank()) append("  \u00b7  $parsed")
         }
@@ -2882,10 +2885,12 @@ class MpvPlayerActivity : ComponentActivity() {
         // engine note above the control bar now reads "switched from
         // ExoPlayer" - so this stays the automatic handoff's announcement.
         if (isFallbackSession && fallbackReason != FALLBACK_REASON_MANUAL) {
-            val hint = if (fallbackReason == FALLBACK_REASON_DECODER) {
-                "\u2014 if it stutters, open the gear and set Decoding to Software"
-            } else {
-                ""
+            val hint = when (fallbackReason) {
+                FALLBACK_REASON_DECODER ->
+                    "\u2014 if it stutters, open the gear and set Decoding to Software"
+                FALLBACK_REASON_SUBTITLE ->
+                    "\u2014 its libass renders the subtitle format ExoPlayer cannot"
+                else -> ""
             }
             runOnUiThread {
                 showToast("Continuing in the MPV backup engine $hint".trim(), 5000L)
@@ -3942,6 +3947,18 @@ class MpvPlayerActivity : ComponentActivity() {
          * this the backup engine.
          */
         const val FALLBACK_REASON_MANUAL = "manual"
+
+        /**
+         * Set when playback changed engines because the FILE's subtitles are a
+         * bitmap format (PGS/VobSub/DVB) that this app's ExoPlayer engine has no
+         * renderer for. Nothing about the video failed: the handoff is for the
+         * subtitles, and libmpv renders them with libass and its own demuxers.
+         *
+         * Without this the failure was silent - media3 claims no PGS decoder,
+         * so the track armed, matched the preferred language, and drew nothing,
+         * raising no exception for the decoder ladder to react to.
+         */
+        const val FALLBACK_REASON_SUBTITLE = "subtitle"
 
         private const val EXTRA_STREAM_URL = "stream_url"
 

@@ -97,6 +97,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
@@ -2711,6 +2712,19 @@ private fun ChannelSearchDialog(
                 // and put the keyboard up again, which made the list reachable
                 // only by pressing Back.
                 closeKeyboardOnBlur = true
+            )
+            // Voice search: the same chip the global search screen uses, wired
+            // into this overlay's query state. A transcript also bumps
+            // submitTick so the D-pad lands on the first hit the spoken query
+            // produced, exactly as Done on the field does - the alternative was
+            // the user talking to the remote and then having to press DOWN
+            // themselves to see what it found.
+            VoiceSearchChip(
+                onTranscript = { spoken ->
+                    onQueryChanged(spoken)
+                    submitTick++
+                },
+                prompt = "Search channels and programs"
             )
             if (results.isEmpty() && programHits.isEmpty()) {
                 Text(

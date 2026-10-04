@@ -442,6 +442,8 @@ private fun TagHeader(
                         model = ImageRequest.Builder(context)
                             .data(url)
                             .size(Size(200, 300))
+                            // Kept: same one-off five-card fan as the decade
+                            // screen, not a scrolling grid.
                             .crossfade(true)
                             .build(),
                         contentDescription = null,

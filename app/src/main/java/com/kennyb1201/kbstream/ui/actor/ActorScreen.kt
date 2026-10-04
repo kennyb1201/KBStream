@@ -175,6 +175,9 @@ fun ActorScreen(
                     backdropUrl?.let {
                         AsyncImage(
                             model = remember(backdropUrl) {
+                                // Full-screen hero backdrop behind the
+                                // filmography rails; one image, so it keeps
+                                // the fade.
                                 ImageRequest.Builder(context).data(backdropUrl).crossfade(true).build()
                             },
                             contentDescription = topWorkCredit?.title ?: topWorkCredit?.name ?: p.name,

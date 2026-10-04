@@ -471,7 +471,7 @@ fun ProfileEditScreen(
                         AsyncImage(
                             model = ImageRequest.Builder(context)
                                 .data(shownCustomUrl)
-                                .crossfade(true)
+                                .crossfade(false)
                                 .build(),
                             contentDescription = "Custom avatar",
                             contentScale = ContentScale.Crop,

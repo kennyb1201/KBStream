@@ -41,6 +41,21 @@
         android:focusable="false"
         android:focusableInTouchMode="false" />
 
+    <!-- libass overlay (AssSubtitleRenderer): the ASS/SSA sidecar is typeset
+         natively and the resulting full-frame bitmap is drawn here. Rendered
+         at the video's aspect ratio, so fitCenter lines it up with the video
+         surface's own fit; shown only while an ASS script is loaded, and
+         never focusable so it cannot take D-pad focus from the controls. -->
+    <ImageView
+        android:id="@+id/custom_subtitle_image"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:scaleType="fitCenter"
+        android:visibility="gone"
+        android:clickable="false"
+        android:focusable="false"
+        android:focusableInTouchMode="false" />
+
     <!-- P5 color correction renderer (GLSurfaceView-based, shown only for P5 content without FFmpeg) -->
     <com.kennyb1201.kbstream.ui.player.P5VideoGlesView
         android:id="@+id/p5_video_gles_view"

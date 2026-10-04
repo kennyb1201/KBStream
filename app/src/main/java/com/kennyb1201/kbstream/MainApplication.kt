@@ -282,7 +282,16 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
 
     override fun newImageLoader(context: android.content.Context): ImageLoader {
         return ImageLoader.Builder(context)
-            .crossfade(true)
+            // Off by default, and on purpose. The two places this loader is
+            // asked for art are a rail or a grid - hundreds of tiles a session
+            // on a 1.7 GB box - and a fade on every one of them reads as
+            // flicker on a 10-foot UI while it costs a per-tile animation the
+            // user is about to scroll past. The few surfaces where the fade is
+            // the intended look (the hero backdrop, the Detail hero, the
+            // pre-playback splash) opt back in on their own ImageRequest.
+            // Coil applies a request's own crossfade over this default, so
+            // opting in is a one-liner at the call site.
+            .crossfade(false)
             // TV browsing shows hundreds of posters/backdrops; a generous
             // memory cache keeps tiles resident so re-scrolling a rail never
             // re-decodes (the default is a small fraction of free RAM).

@@ -704,7 +704,7 @@ internal fun AddonTile(
             SubcomposeAsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
                     .data(logoUrl)
-                    .crossfade(true)
+                    .crossfade(false)
                     .build(),
                 contentDescription = name,
                 contentScale = ContentScale.Fit,

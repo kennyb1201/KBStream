@@ -89,6 +89,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.allowHardware
+import coil3.request.crossfade
 import coil3.size.Size
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Meta
@@ -1831,6 +1832,11 @@ fun DetailScreen(
                     .data(backdropUrl)
                     .size(Size(1280, 720))
                     .allowHardware(true)
+                    // The full-bleed hero is one of the few surfaces that
+                    // keeps the fade: it is a single image the user is
+                    // looking at, not a tile in a rail, so the handover
+                    // reads as intentional rather than as flicker.
+                    .crossfade(true)
                     .build()
             },
                     contentDescription = displayName,
@@ -1894,7 +1900,14 @@ fun DetailScreen(
                     ) {
                         if (!clearLogoUrl.isNullOrBlank()) {
                             AsyncImage(
-                                model = clearLogoUrl,
+                                model = ImageRequest.Builder(context)
+                                    .data(clearLogoUrl)
+                                    // The hero logo arrives with the backdrop
+                                    // under it, so it fades in as one piece
+                                    // with the art behind it rather than
+                                    // popping onto a finished hero.
+                                    .crossfade(true)
+                                    .build(),
                                 contentDescription = displayName,
                                 contentScale = ContentScale.Fit,
                                 modifier = Modifier
@@ -4635,6 +4648,9 @@ private fun CastCard(
         ) {
             if (posterUrl != null) {
                 AsyncImage(
+                    // No ImageRequest and no crossfade: this rail paints a
+                    // row of circles at once, so it takes the loader's
+                    // no-fade default (see MainApplication.newImageLoader).
                     model = posterUrl,
                     contentDescription = member.name,
                     contentScale = ContentScale.Crop,

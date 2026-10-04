@@ -359,7 +359,7 @@ private fun TopProfileItem(
                 AsyncImage(
                     model = ImageRequest.Builder(itemContext)
                         .data(customAvatarUrl)
-                        .crossfade(true)
+                        .crossfade(false)
                         .build(),
                     contentDescription = name,
                     contentScale = ContentScale.Crop,
@@ -761,6 +761,10 @@ private fun HeroClearLogo(
         AsyncImage(
             model = ImageRequest.Builder(LocalContext.current)
                 .data(url)
+                // The hero logo lands on the hero backdrop (which fades
+                // too), so it fades in with it rather than popping onto
+                // finished art. This is the hero, not a rail tile.
+                .crossfade(true)
                 .build(),
             contentDescription = name,
             contentScale = ContentScale.Fit,
@@ -1279,6 +1283,8 @@ private fun HomeHero(
                 ImageRequest.Builder(context)
                     .data(backdrop)
                     .size(Size(1920, 1080))
+                    // The Home hero backdrop is the one image the whole
+                    // screen is built around, so it keeps the fade.
                     .crossfade(true)
                     .build()
             },
