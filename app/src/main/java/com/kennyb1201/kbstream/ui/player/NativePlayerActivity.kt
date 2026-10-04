@@ -65,6 +65,8 @@ import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.iptv.ChannelRecall
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
+import com.kennyb1201.kbstream.data.iptv.GuideRevision
+import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
@@ -96,6 +98,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -307,6 +310,14 @@ private const val CHANNEL_GUIDE_LONG_PRESS_MS = 600L
  * that has finished.
  */
 private const val CHANNEL_GUIDE_ROWS_PER_CHANNEL = 2
+
+/**
+ * How often an open guide overlay checks whether the imported guide changed
+ * ([GuideRevision]). The signal is a process-local counter, so the check is
+ * cheap; the interval only has to be short enough that a guide that lands
+ * mid-view fills in before the viewer gives up on it.
+ */
+private const val CHANNEL_GUIDE_WATCH_MS = 2_500L
 
 class NativePlayerActivity : ComponentActivity() {
 
@@ -1221,6 +1232,42 @@ class NativePlayerActivity : ComponentActivity() {
     private var channelGuideJob: kotlinx.coroutines.Job? = null
 
     /**
+     * Re-reads the guide while the overlay is open, whenever the guide data
+     * changes underneath it.
+     *
+     * The overlay paints once. A viewer who opens it before the guide import
+     * that was already running has finished — the case where they clicked into
+     * a channel straight from a guide that was still filling in — used to keep
+     * that first, empty paint for as long as the overlay stayed up, so the
+     * guide looked permanently blank even after the data landed a minute
+     * later. Watching [GuideRevision] (bumped only by a successful import) and
+     * re-reading on a change fills the rows in place instead of making the
+     * viewer close and reopen the guide.
+     */
+    private var channelGuideWatchJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Guide channel ids this player resolved itself, keyed by lineup channel
+     * id, for entries the guide screen published with no match (it had not
+     * matched them to an imported guide yet). Cleared and retried whenever a
+     * new guide import bumps [GuideRevision].
+     */
+    private val guideResolvedChannelIds = HashMap<String, String>()
+
+    /** Lineup channels already resolved at [guideResolveRevision]. */
+    private val guideMatchAttempted = HashSet<String>()
+    private var guideResolveRevision = -1L
+
+    /**
+     * Used only to resolve a missing guide match; reads the guide database and
+     * the revision-cached snapshot, so it holds the same view the guide screen
+     * does without a second copy of the matching rules.
+     */
+    private val iptvRepository by lazy {
+        IptvRepository(applicationContext)
+    }
+
+    /**
      * Long-press OK opens the guide, timed here rather than read off KeyEvent
      * repeats: the first OK press raises the controls overlay and hands focus
      * to it, so the repeats that make a hold a hold never reach the surface's
@@ -1530,7 +1577,11 @@ class NativePlayerActivity : ComponentActivity() {
         cached: ZapEpgInfo?
     ): ZapEpgInfo {
         val epgUrl = channel.epgUrl?.trim().orEmpty()
-        val epgChannelId = channel.epgChannelId
+        // The same resolved match the guide overlay uses: a channel clicked
+        // before the guide screen matched it has no epgChannelId of its own,
+        // and would otherwise report "No guide data" on the banner even after
+        // the overlay resolved it.
+        val epgChannelId = guideChannelIdFor(channel)
         val now = System.currentTimeMillis()
         val isFresh = cached != null && now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS
         val noSource = epgUrl.isBlank() || epgChannelId.isNullOrBlank()
@@ -8239,6 +8290,7 @@ class NativePlayerActivity : ComponentActivity() {
         publishChannelGuideRows(programs = emptyMap(), loading = true)
         focusChannelGuideCurrent()
         loadChannelGuidePrograms()
+        startChannelGuideWatcher()
     }
 
     /** Closes the guide and gives the D-pad back where it came from. */
@@ -8247,6 +8299,8 @@ class NativePlayerActivity : ComponentActivity() {
         isGuideShowing = false
         channelGuideJob?.cancel()
         channelGuideJob = null
+        channelGuideWatchJob?.cancel()
+        channelGuideWatchJob = null
         channelGuideContainer?.visibility = View.GONE
         if (!isPickerShowing && !showSettingsPanel) scrim.visibility = View.GONE
         restoreControlsFocus()
@@ -8286,8 +8340,7 @@ class NativePlayerActivity : ComponentActivity() {
         val now = System.currentTimeMillis()
         val currentId = currentZapChannel()?.channelId
         val rows = lineupChannels().mapIndexed { index, channel ->
-            val entry = channel.epgChannelId
-                ?.takeIf { it.isNotBlank() }
+            val entry = guideChannelIdFor(channel)
                 ?.let { programs[epgProgramChannelKey(it)] }
             val nowProgram = entry?.now
             ChannelGuideRow(
@@ -8348,9 +8401,25 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun loadChannelGuidePrograms() {
         channelGuideJob?.cancel()
-        val queries = planGuideQueries(lineupChannels())
-        if (queries.isEmpty()) return
         channelGuideJob = scope?.launch {
+            val channels = lineupChannels()
+            // Fill in any guide match the published lineup lacks before
+            // planning. An entry the guide screen had not matched yet (it had
+            // no imported guide to match against) carries a null epgChannelId,
+            // and [planGuideQueries] skips those channels outright - which is
+            // why the overlay read nothing and stayed blank.
+            resolveMissingGuideMatches(channels)
+            val queries = planGuideQueries(
+                channels.map { channel -> channel.copy(epgChannelId = guideChannelIdFor(channel)) }
+            )
+            if (queries.isEmpty()) {
+                // Nothing to read for any row (no guide configured, or nothing
+                // matched yet): end the identity "…" pass rather than leaving
+                // every row looking like it is still loading for good. A guide
+                // import that lands later re-runs this (see the watcher).
+                if (isGuideShowing) publishChannelGuideRows(programs = emptyMap(), loading = false)
+                return@launch
+            }
             val now = System.currentTimeMillis()
             val programs = HashMap<String, ChannelNowNext>()
             for (query in queries) {
@@ -8373,6 +8442,77 @@ class NativePlayerActivity : ComponentActivity() {
             }
             // A slow read must not repaint a guide the viewer already closed.
             if (isGuideShowing) publishChannelGuideRows(programs, loading = false)
+        }
+    }
+
+    /**
+     * The guide channel id to query for [channel]: the match the guide screen
+     * resolved, or one this player resolved itself (see
+     * [resolveMissingGuideMatches]).
+     */
+    private fun guideChannelIdFor(channel: LiveChannelZapRegistry.ZapChannel): String? =
+        channel.epgChannelId?.takeIf { it.isNotBlank() }
+            ?: guideResolvedChannelIds[channel.channelId]
+
+    /**
+     * Resolves a guide channel id for every lineup entry the published lineup
+     * left unmatched, using the same matching the guide screen does (see
+     * [IptvRepository.resolveGuideChannelIds]).
+     *
+     * The whole set is re-attempted whenever a successful import bumps
+     * [GuideRevision] - the imported guide is exactly what matching was
+     * missing - and each channel is attempted once per revision, so an overlay
+     * left open does not re-run the match for the same entries every tick.
+     */
+    private suspend fun resolveMissingGuideMatches(
+        channels: List<LiveChannelZapRegistry.ZapChannel>
+    ) {
+        val revision = GuideRevision.total()
+        if (revision != guideResolveRevision) {
+            guideResolvedChannelIds.clear()
+            guideMatchAttempted.clear()
+            guideResolveRevision = revision
+        }
+        val pending = channels.filter { channel ->
+            needsGuideMatch(channel) && channel.channelId !in guideMatchAttempted
+        }
+        if (pending.isEmpty()) return
+        pending.forEach { guideMatchAttempted.add(it.channelId) }
+        val queries = pending.mapNotNull(::guideMatchQueryFor)
+        if (queries.isEmpty()) return
+        val resolved = runCatchingCancellable {
+            withContext(Dispatchers.IO) {
+                iptvRepository.resolveGuideChannelIds(queries)
+            }
+        }.getOrElse { t ->
+            // The resolve never ran: un-mark the entries so the next pass (a
+            // revision bump, or reopening the guide) retries them instead of
+            // leaving them permanently unresolved for the session.
+            Log.w(TAG, "CHANNEL GUIDE match resolve failed: ${t.message}")
+            pending.forEach { guideMatchAttempted.remove(it.channelId) }
+            return
+        }
+        guideResolvedChannelIds.putAll(resolved)
+    }
+
+    /**
+     * Re-reads the guide whenever the imported guide changes while the overlay
+     * is open, so a viewer who opened it before an in-flight import finished
+     * gets the rows filled in without closing and reopening the guide.
+     */
+    private fun startChannelGuideWatcher() {
+        channelGuideWatchJob?.cancel()
+        channelGuideWatchJob = scope?.launch {
+            var lastRevision = GuideRevision.total()
+            while (isGuideShowing) {
+                delay(CHANNEL_GUIDE_WATCH_MS)
+                if (!isGuideShowing) break
+                val revision = GuideRevision.total()
+                if (revision != lastRevision) {
+                    lastRevision = revision
+                    loadChannelGuidePrograms()
+                }
+            }
         }
     }
 

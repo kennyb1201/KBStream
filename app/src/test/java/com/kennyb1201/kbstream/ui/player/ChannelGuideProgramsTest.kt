@@ -3,7 +3,9 @@ package com.kennyb1201.kbstream.ui.player
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** What the in-player guide overlay shows per channel, and what it reads. */
@@ -25,7 +27,9 @@ class ChannelGuideProgramsTest {
         id: String,
         epgChannelId: String? = null,
         epgUrl: String? = null,
-        number: String? = null
+        number: String? = null,
+        tvgId: String? = null,
+        tvgName: String? = null
     ) = LiveChannelZapRegistry.ZapChannel(
         channelId = id,
         name = id,
@@ -33,8 +37,76 @@ class ChannelGuideProgramsTest {
         logoUrl = null,
         chno = number,
         epgChannelId = epgChannelId,
-        epgUrl = epgUrl
+        epgUrl = epgUrl,
+        tvgId = tvgId,
+        tvgName = tvgName
     )
+
+    @Test
+    fun `an unmatched entry with a source and an id needs a match resolved`() {
+        // The case the in-player guide could not recover from: the guide screen
+        // published the channel before matching it to an imported guide.
+        assertTrue(
+            needsGuideMatch(
+                channel("a", epgUrl = "http://epg/one", tvgId = "a.us")
+            )
+        )
+        // A name alone is enough to resolve by.
+        assertTrue(
+            needsGuideMatch(channel("a", epgUrl = "http://epg/one", tvgName = "Channel A"))
+        )
+    }
+
+    @Test
+    fun `an already matched or sourceless entry needs no match`() {
+        // Already matched by the guide screen.
+        assertFalse(
+            needsGuideMatch(
+                channel("a", epgChannelId = "a.us", epgUrl = "http://epg/one")
+            )
+        )
+        // No guide source to match against.
+        assertFalse(needsGuideMatch(channel("a", tvgId = "a.us")))
+    }
+
+    @Test
+    fun `the match query carries the same candidates the guide screen feeds the matcher`() {
+        val query = guideMatchQueryFor(
+            LiveChannelZapRegistry.ZapChannel(
+                channelId = "key.a",
+                name = "Channel A HD",
+                streamUrl = "http://host/a",
+                logoUrl = null,
+                epgUrl = "  http://epg/one  ",
+                tvgId = "a.us",
+                tvgName = "Channel A"
+            )
+        )
+        assertEquals("key.a", query?.key)
+        assertEquals("http://epg/one", query?.epgUrl)
+        assertEquals(listOf("a.us"), query?.idCandidates)
+        assertEquals(listOf("Channel A", "Channel A HD"), query?.nameCandidates)
+    }
+
+    @Test
+    fun `an entry with no source or no identity yields no match query`() {
+        // No guide source to match against.
+        assertNull(guideMatchQueryFor(channel("a", tvgId = "a.us")))
+        // A source but nothing to match WITH: no id, no tvg-name, blank name.
+        assertNull(
+            guideMatchQueryFor(
+                LiveChannelZapRegistry.ZapChannel(
+                    channelId = "a",
+                    name = "",
+                    streamUrl = "http://host/a",
+                    logoUrl = null,
+                    epgUrl = "http://epg/one"
+                )
+            )
+        )
+        // A name alone is identity enough, so this one DOES produce a query.
+        assertTrue(guideMatchQueryFor(channel("a", epgUrl = "http://epg/one")) != null)
+    }
 
     @Test
     fun `the running program is now and the following one is next`() {

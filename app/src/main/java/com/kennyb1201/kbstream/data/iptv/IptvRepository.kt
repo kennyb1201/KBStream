@@ -49,6 +49,25 @@ data class CatchupProgram(
     val url: String
 )
 
+/**
+ * One playlist channel's identity, for resolving which guide channel it matches
+ * when the caller holds no resolved match yet.
+ *
+ * The in-player guide is launched from the guide screen's lineup, which carries
+ * the resolved [ZapChannel.epgChannelId] — but only once the guide screen's own
+ * matching has run against an imported guide. Click into a channel before the
+ * import lands and every entry is unmatched, so the player had no guide id to
+ * query with and the overlay stayed blank for good. This is what lets the
+ * player resolve the match itself, using the same [matchEpgChannel] rules.
+ */
+data class GuideMatchQuery(
+    /** Caller's key for the channel; the resolved id comes back under it. */
+    val key: String,
+    val epgUrl: String,
+    val idCandidates: List<String?>,
+    val nameCandidates: List<String?>
+)
+
 class IptvRepository(
     context: Context,
     private val client: OkHttpClient = IptvHttpClient.create(),
@@ -358,6 +377,40 @@ class IptvRepository(
         withContext(Dispatchers.IO) {
             getOrCreateGuideSnapshot(epgUrl.trim()).guideChannels
         }
+
+    /**
+     * Resolves each [GuideMatchQuery] against the guide imported for its
+     * [GuideMatchQuery.epgUrl], returning `key -> guide channel id` for the ones
+     * that match.
+     *
+     * The id returned is the guide channel's RAW id (as `<channel id=...>` spells
+     * it); callers put it through [epgProgramChannelKey] before querying programs,
+     * exactly as the importer did. Queries with no match — including a source
+     * whose guide has never been imported — are simply absent from the result.
+     *
+     * A source is only read once however many queries name it, through the same
+     * revision-cached snapshot the guide screen's matching uses.
+     */
+    suspend fun resolveGuideChannelIds(
+        queries: List<GuideMatchQuery>
+    ): Map<String, String> = withContext(Dispatchers.IO) {
+        if (queries.isEmpty()) return@withContext emptyMap()
+        val out = HashMap<String, String>(queries.size)
+        queries.groupBy { it.epgUrl.trim() }.forEach { (epgUrl, group) ->
+            if (epgUrl.isBlank()) return@forEach
+            val snapshot = getOrCreateGuideSnapshot(epgUrl)
+            if (snapshot.guideChannels.isEmpty()) return@forEach
+            group.forEach { query ->
+                matchEpgChannel(
+                    idCandidates = query.idCandidates,
+                    nameCandidates = query.nameCandidates,
+                    byId = snapshot.guideById,
+                    byName = snapshot.guideByDisplayName
+                )?.first?.id?.let { matched -> out[query.key] = matched }
+            }
+        }
+        out
+    }
 
     fun observeLineupWithGuides(
         playlist: IptvPlaylist,

@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
@@ -91,4 +92,44 @@ internal fun planGuideQueries(
     return bySource.flatMap { (sourceUrl, ids) ->
         ids.distinct().chunked(batchSize).map { batch -> GuideQuery(sourceUrl, batch) }
     }
+}
+
+/**
+ * Whether an entry still needs its guide match resolved before it can be
+ * queried: it carries no guide channel id, and it has the identity (source URL
+ * plus an id or name) to resolve one.
+ *
+ * The guide screen publishes each channel's `epgChannelId` only once it has
+ * matched the playlist against an imported guide. Click into a channel before
+ * that import lands and the entry is unmatched, which is why the in-player
+ * guide has to be able to resolve the match itself.
+ */
+internal fun needsGuideMatch(channel: LiveChannelZapRegistry.ZapChannel): Boolean =
+    channel.epgChannelId.isNullOrBlank() && guideMatchQueryFor(channel) != null
+
+/**
+ * The match query for a lineup entry's own guide identity, or null when the
+ * entry has nothing to resolve with (no guide source, or no id/name at all).
+ *
+ * The candidates mirror the guide screen's matcher exactly - ids first
+ * (`tvg-id`), then names (`tvg-name`, the display name) - so a channel resolves
+ * to the same guide channel whichever side ran the match.
+ */
+internal fun guideMatchQueryFor(
+    channel: LiveChannelZapRegistry.ZapChannel
+): GuideMatchQuery? {
+    val epgUrl = channel.epgUrl?.trim().orEmpty()
+    if (epgUrl.isEmpty()) return null
+    if (channel.tvgId.isNullOrBlank() &&
+        channel.tvgName.isNullOrBlank() &&
+        channel.name.isBlank()
+    ) {
+        return null
+    }
+    return GuideMatchQuery(
+        key = channel.channelId,
+        epgUrl = epgUrl,
+        idCandidates = listOf(channel.tvgId),
+        nameCandidates = listOf(channel.tvgName, channel.name)
+    )
 }

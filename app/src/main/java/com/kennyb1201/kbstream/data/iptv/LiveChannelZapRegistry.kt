@@ -28,7 +28,16 @@ object LiveChannelZapRegistry {
          */
         val epgChannelId: String? = null,
         /** EPG source URL the guide programs were imported from. */
-        val epgUrl: String? = null
+        val epgUrl: String? = null,
+        /**
+         * The channel's own guide identity, so a reader that holds no resolved
+         * match yet (the in-player guide, opened before the guide screen's
+         * matching finished) can resolve one itself against the imported
+         * guide. The matching rules are the guide screen's; these are the same
+         * candidates it feeds them.
+         */
+        val tvgId: String? = null,
+        val tvgName: String? = null
     )
 
     @Volatile
