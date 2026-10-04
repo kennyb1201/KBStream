@@ -35,27 +35,23 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
-/**
- * The watch markers' gold: the app's own accent, not a literal of its own.
- *
- * These badges were painted the LIGHT end of the launcher play-button gradient
- * (#F7CE86) so that a 15sp glyph stayed legible over bright artwork. That made
- * the marker a second, paler gold matching nothing else on screen: beside the
- * ring around the focused card, and the progress bar under the Detail play
- * control - both [KBAccent] - it read as a different colour rather than one
- * family. The markers now use the accent itself, so a watched card, the ring
- * around the focused one and that progress bar are the same brass.
- *
- * Legibility moved to the scrim, which is why it stays at 0.92: a
- * mid-luminance gold on a near-black disc carries the contrast, rather than a
- * pale gold sitting on the artwork itself.
- */
-private val WatchedBadgeAccent = KBAccent
-
 @Composable
 fun WatchedCheckBadge(
     modifier: Modifier = Modifier
 ) {
+    // The markers' gold is the app's own accent, not a literal of its own:
+    // they were once painted the LIGHT end of the launcher play-button
+    // gradient (#F7CE86) so a 15sp glyph stayed legible over bright artwork,
+    // but that made the marker a second, paler gold matching nothing else on
+    // screen. Legibility now lives in the scrim (0.92 - a mid-luminance gold
+    // on a near-black disc carries the contrast, where a pale gold sat on the
+    // artwork itself).
+    //
+    // Read [KBAccent] live HERE rather than captured into a top-level val: the
+    // accent is profile-scoped state, and a captured copy froze the marker at
+    // whatever colour was active when this file first loaded, so the watch
+    // markers stopped matching after a profile switch or an accent change.
+    val accent = KBAccent
     Box(
         modifier = modifier
             .size(26.dp)
@@ -64,7 +60,7 @@ fun WatchedCheckBadge(
             // badge must stay legible over a bright poster as well as a dark
             // one, and the old 0.8 let busy artwork through behind it.
             .background(KBVoid.copy(alpha = 0.92f))
-            .border(1.5.dp, WatchedBadgeAccent, CircleShape)
+            .border(1.5.dp, accent, CircleShape)
             // The badge is the only place this state is stated, so it needs a
             // spoken label: without it a screen reader announces the bare
             // "✓" glyph (or nothing) beside the poster's title.
@@ -73,7 +69,7 @@ fun WatchedCheckBadge(
     ) {
         Text(
             text = "✓",
-            color = WatchedBadgeAccent,
+            color = accent,
             fontSize = 15.sp
         )
     }
@@ -81,8 +77,8 @@ fun WatchedCheckBadge(
 
 /**
  * Eye badge for shows the user has STARTED but not finished. Identical
- * treatment to [WatchedCheckBadge] — same circle, same scrim, same brass
- * accent for border and glyph — so the two read as one marker family; the
+ * treatment to [WatchedCheckBadge] — same circle, same scrim, same live
+ * theme accent for border and glyph — so the two read as one marker family; the
  * eye shape itself is what distinguishes started-but-unfinished from the
  * completed check.
  */
@@ -90,18 +86,22 @@ fun WatchedCheckBadge(
 fun WatchedEyeBadge(
     modifier: Modifier = Modifier
 ) {
+    // Same live-accent read as [WatchedCheckBadge], for the same reason: the
+    // eye and the check are one marker family and must track the profile's
+    // theme together.
+    val accent = KBAccent
     Box(
         modifier = modifier
             .size(26.dp)
             .clip(CircleShape)
             .background(KBVoid.copy(alpha = 0.92f))
-            .border(1.5.dp, WatchedBadgeAccent, CircleShape),
+            .border(1.5.dp, accent, CircleShape),
         contentAlignment = Alignment.Center
     ) {
         Icon(
             imageVector = Icons.Filled.Visibility,
             contentDescription = "Started, not finished",
-            tint = WatchedBadgeAccent,
+            tint = accent,
             modifier = Modifier.size(15.dp)
         )
     }
