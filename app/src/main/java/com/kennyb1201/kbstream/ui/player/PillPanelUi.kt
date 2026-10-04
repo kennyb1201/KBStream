@@ -60,8 +60,8 @@ internal class PillPanelUi(private val context: Context) {
         tag = false
         // The neutral fill, not the fixed @drawable/pill_chip_bg: its fill is
         // @color/kb_surface, which the AMOLED / pure-black toggles have to be
-        // able to move (see neutralPillBackground).
-        background = neutralPillBackground()
+        // able to move (see pillChipBackground).
+        background = pillChipBackground(context, selected = false, focused = false)
         setTextColor(ContextCompat.getColor(context, R.color.kb_text_hi))
         // Same look as applyPillState() in the activity: selection color plus a
         // distinct focused state, so a D-pad user can see where they are.
@@ -178,19 +178,14 @@ internal class PillPanelUi(private val context: Context) {
 
     fun stylePill(view: TextView, selected: Boolean) {
         view.tag = selected
-        when {
-            selected && view.isFocused ->
-                view.setBackgroundResource(R.drawable.pill_chip_selected_focused_bg)
-
-            selected -> view.setBackgroundResource(R.drawable.pill_chip_selected_bg)
-            view.isFocused -> view.setBackgroundResource(R.drawable.pill_chip_focused_bg)
-            // The unselected fill is the theme's own surface rather than the
-            // fixed @drawable/pill_chip_bg: that drawable hard-codes
-            // @color/kb_surface, so a pure-black theme repainted #141A24 over
-            // every pill the moment a selection or a refresh moved off it -
-            // which is what kept the panels' unselected pills out of AMOLED.
-            else -> view.background = neutralPillBackground()
-        }
+        // Every state is built from the theme at call time (see
+        // [pillChipBackground]): the fixed XML drawables kept the default brass
+        // on a chosen accent - and their focused variants were layer-lists the
+        // accent re-tint walk could not rebuild - so the panels' focused and
+        // selected pills stayed amber. The unselected fill is the theme's own
+        // surface rather than @color/kb_surface, so a pure-black theme cannot
+        // repaint #141A24 over every pill a selection moves off.
+        view.background = pillChipBackground(context, selected, view.isFocused)
         view.setTextColor(
             ContextCompat.getColor(
                 context,
@@ -199,14 +194,46 @@ internal class PillPanelUi(private val context: Context) {
         )
     }
 
-    /**
-     * The unselected pill fill: the same 6dp-cornered @color/kb_surface shape
-     * @drawable/pill_chip_bg carries, but resolved through the AMOLED /
-     * pure-black toggles so it tracks the theme like the rest of the player.
-     * Without AMOLED it is exactly the drawable's own color.
-     */
-    private fun neutralPillBackground(): android.graphics.drawable.GradientDrawable =
-        roundedPanelDrawable(context, playerPanelSurfaceColor(context), 6f)
-
     fun isSelected(view: View): Boolean = view.tag == true
+}
+
+/**
+ * The pill-chip background for one (selected, focused) state, resolved from
+ * the CURRENT theme instead of the fixed XML drawables.
+ *
+ * The drawables behind these states hard-code @color/kb_accent, so every
+ * selected or focused pill kept the default brass after the viewer picked a
+ * different accent. The two focused variants are also LAYER-LISTS, so the
+ * players' accent re-tint walk (which matches a GradientDrawable's own fill)
+ * could not rebuild them either - which is why the Up Next card's focused
+ * PLAY NEXT pill (the card focuses it on show) stayed amber on a themed
+ * install while its neutral twin followed the theme. Building every state as a
+ * plain GradientDrawable here makes the fill follow [themeAccentColor], and the
+ * neutral fill follow the AMOLED-aware panel surface, exactly as the XML
+ * drawables did on the default theme.
+ */
+internal fun pillChipBackground(
+    context: Context,
+    selected: Boolean,
+    focused: Boolean
+): android.graphics.drawable.Drawable {
+    val density = context.resources.displayMetrics.density
+    val fill = if (selected || focused) {
+        themeAccentColor(context)
+    } else {
+        playerPanelSurfaceColor(context)
+    }
+    val stroke = when {
+        // The XML's white focus ring on a selected pill.
+        selected && focused -> 0xFFFFFFFF.toInt()
+        // The XML's text-color focus border on an unselected pill.
+        focused -> ContextCompat.getColor(context, R.color.kb_text_hi)
+        else -> 0
+    }
+    return android.graphics.drawable.GradientDrawable().apply {
+        shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+        setColor(fill)
+        cornerRadius = 6f * density
+        if (stroke != 0) setStroke((2f * density).toInt(), stroke)
+    }
 }

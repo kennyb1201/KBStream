@@ -1094,12 +1094,9 @@ class ExternalPlayerActivity : ComponentActivity() {
 
     /** The pick pills' look, matching both in-app engines'. */
     private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
-        view.background = when {
-            selected && focused -> getDrawable(R.drawable.pill_chip_selected_focused_bg)
-            selected -> getDrawable(R.drawable.pill_chip_selected_bg)
-            focused -> getDrawable(R.drawable.pill_chip_focused_bg)
-            else -> roundedPanelDrawable(this, playerPanelSurfaceColor(this), 6f)
-        }
+        // Theme-resolved so a themed install does not show the default brass on
+        // a selected/focused pill (see [pillChipBackground]).
+        view.background = pillChipBackground(this, selected, focused)
         view.setTextColor(getColor(if (selected) R.color.kb_void else R.color.kb_text_hi))
     }
 

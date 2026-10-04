@@ -3486,11 +3486,12 @@ class NativePlayerActivity : ComponentActivity() {
             if (focused) removeAutoHide() else scheduleAutoHide()
             // Visible focus ring: without this the focused and unfocused
             // buttons look identical and a D-pad user can't tell when
-            // pressing OK will actually trigger the skip.
-            v.setBackgroundResource(
-                if (focused) R.drawable.button_accent_bg_focused
-                else R.drawable.button_accent_bg
-            )
+            // pressing OK will actually trigger the skip. Built from the
+            // theme, not the fixed XML drawables: the focused twin is a
+            // layer-list the accent walk cannot rebuild, so a focused SKIP
+            // INTRO kept the default brass on a chosen accent (see
+            // [accentButtonBackground]).
+            v.background = accentButtonBackground(this, focused)
             v.scaleX = if (focused) 1.06f else 1f
             v.scaleY = if (focused) 1.06f else 1f
         }
@@ -7286,13 +7287,12 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
-        view.background = when {
-            selected && focused ->
-                ContextCompat.getDrawable(this, R.drawable.pill_chip_selected_focused_bg)
-            selected -> ContextCompat.getDrawable(this, R.drawable.pill_chip_selected_bg)
-            focused -> ContextCompat.getDrawable(this, R.drawable.pill_chip_focused_bg)
-            else -> roundedDrawable(panelSurfaceColor(), 6f)
-        }
+        // Built from the current theme, not the fixed XML pill drawables: those
+        // hard-code @color/kb_accent, and their focused variants are
+        // layer-lists the accent re-tint walk cannot rebuild, so a selected or
+        // focused pill (the Up Next card focuses PLAY NEXT) stayed the default
+        // brass on a chosen accent. See [pillChipBackground].
+        view.background = pillChipBackground(this, selected, focused)
     }
 
     /**

@@ -11,6 +11,7 @@ import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
 import android.text.TextUtils
 import android.view.Gravity
@@ -491,6 +492,42 @@ internal fun themedGuideRowBackground(context: Context, accent: Int): Drawable {
             row(surface, 1, ContextCompat.getColor(context, R.color.kb_overlay_gradient_mid))
         )
     }
+}
+
+/**
+ * The accent button's background (the player's SKIP INTRO / recap control):
+ * the accent fill with an optional focus ring, resolved from the CURRENT
+ * theme.
+ *
+ * @drawable/button_accent_bg is a ripple whose content is an accent
+ * GradientDrawable, so the chrome walk ([refillPlayerChromeView]) re-tints it -
+ * but its FOCUSED twin @drawable/button_accent_bg_focused is a LAYER-LIST,
+ * which the walk (matching a GradientDrawable's own fill) cannot rebuild. A
+ * focused SKIP INTRO therefore kept the default brass under every other
+ * accent, exactly like the pill chips. Built here, the fill and ring follow
+ * [themeAccentColor], and the unfocused state keeps the XML's press flash.
+ */
+internal fun accentButtonBackground(context: Context, focused: Boolean): Drawable {
+    val density = context.resources.displayMetrics.density
+    val body = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(themeAccentColor(context))
+        cornerRadius = 8f * density
+        if (focused) {
+            setStroke(
+                (2f * density).toInt().coerceAtLeast(1),
+                ContextCompat.getColor(context, R.color.kb_text_hi)
+            )
+        }
+    }
+    if (focused) return body
+    // The XML's press flash (@color/kb_void), kept on the unfocused state.
+    val mask = roundedPanelDrawable(context, 0xFF000000.toInt(), 8f)
+    return RippleDrawable(
+        ColorStateList.valueOf(ContextCompat.getColor(context, R.color.kb_void)),
+        body,
+        mask
+    )
 }
 
 /**
