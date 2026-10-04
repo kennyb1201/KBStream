@@ -99,5 +99,57 @@ class MdbListRatingChipsTest {
         assertEquals(sources.size, sources.map { it.tint }.distinct().size)
         // The label is the icon's content description, so it must be unique too.
         assertEquals(sources.size, sources.map { it.name }.distinct().size)
+        // And the short label rides the hero's meta line, so it must be
+        // unambiguous there as well.
+        assertEquals(sources.size, sources.map { it.shortName }.distinct().size)
+    }
+
+    @Test
+    fun `every source carries a compact short name`() {
+        val sources = mdbListRatingSources(
+            MdbListRatings(
+                imdb = "8.8",
+                rottenTomatoes = "94%",
+                tmdb = "8.1",
+                metacritic = "78/100",
+                trakt = "91%",
+                letterboxd = "82%",
+                myAnimeList = "8.4"
+            )
+        )
+
+        assertEquals(
+            listOf("IMDb", "RT", "TMDB", "MC", "Trakt", "LB", "MAL"),
+            sources.map { it.shortName }
+        )
+    }
+
+    @Test
+    fun `hero tokens take the first three sources in meta-line format`() {
+        val sources = mdbListRatingSources(
+            MdbListRatings(
+                imdb = "8.8",
+                rottenTomatoes = "94%",
+                tmdb = "8.1",
+                metacritic = "78/100",
+                trakt = "91%"
+            )
+        )
+
+        assertEquals(
+            listOf("IMDb 8.8", "RT 94%", "TMDB 8.1"),
+            heroRatingTokens(sources)
+        )
+    }
+
+    @Test
+    fun `hero tokens degenerate gracefully with fewer sources`() {
+        // Only two sources present: the line carries two tokens, not three.
+        val two = mdbListRatingSources(MdbListRatings(imdb = "8.8", trakt = "91%"))
+        assertEquals(listOf("IMDb 8.8", "Trakt 91%"), heroRatingTokens(two))
+
+        // Nothing at all yields nothing to append.
+        assertTrue(heroRatingTokens(emptyList()).isEmpty())
+        assertTrue(heroRatingTokens(mdbListRatingSources(MdbListRatings())).isEmpty())
     }
 }

@@ -113,7 +113,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
-import com.kennyb1201.kbstream.ui.components.MdbListRatingChips
+import com.kennyb1201.kbstream.ui.components.heroRatingTokens
 import com.kennyb1201.kbstream.ui.components.mdbListRatingSources
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
@@ -1142,23 +1142,11 @@ private fun HomeHero(
             null
         }
 
-        val heroInfoParts =
-        listOfNotNull(
-            imdb,
-            year,
-            rating,
-            runtime,
-            genre
-        )
-
-    val heroInfo =
-        heroInfoParts.joinToString("  •  ")
-
-    // Rating chips for the focused title. TMDB's own score stands in as the
-    // TMDB chip when MDBList sent no TMDB figure - which is every title when
-    // no MDBList key is set - so a title whose catalog and trackers carry no
-    // rating still shows its audience score. Empty otherwise, and the row is
-    // simply left out.
+    // Rating sources for the focused title, from MDBList when a key is set.
+    // TMDB's own score stands in as TMDB when MDBList sent no TMDB figure -
+    // which is every title when no MDBList key is set - so a title whose
+    // catalog and trackers carry no rating still shows its audience score.
+    // Empty otherwise, and the hero simply carries no rating tokens.
     val ratingSources =
         mdbListRatingSources(
             heroRatings,
@@ -1166,6 +1154,23 @@ private fun HomeHero(
                 ?.voteAverage
                 ?.takeIf { it > 0.0 }
         )
+
+    // One ellipsized line. The ratings fold INTO it as up to three compact
+    // tokens ("2024 • 2 Seasons • IMDb 8.4 • RT 92% • TMDB 8.1") rather than
+    // drawing the chip strip underneath: zero extra vertical space, nothing to
+    // cut off, and it is the Netflix / Apple TV pattern. The detail page still
+    // shows the full strip.
+    val heroInfoParts =
+        listOfNotNull(
+            imdb,
+            year,
+            rating,
+            runtime,
+            genre
+        ) + heroRatingTokens(ratingSources)
+
+    val heroInfo =
+        heroInfoParts.joinToString("  •  ")
 
     // Regular hero description.
     // Prefer TMDB's overview, then addon metadata, then preview metadata.
@@ -1430,18 +1435,6 @@ private fun HomeHero(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 14.dp)
-                )
-            }
-
-            // Critic/audience rating chips, directly under the metadata line.
-            // The compact variant keeps them to a single readable strip at the
-            // hero's type scale instead of the larger blocks the detail page
-            // uses.
-            if (ratingSources.isNotEmpty()) {
-                MdbListRatingChips(
-                    sources = ratingSources,
-                    compact = true,
-                    modifier = Modifier.padding(top = 10.dp)
                 )
             }
 

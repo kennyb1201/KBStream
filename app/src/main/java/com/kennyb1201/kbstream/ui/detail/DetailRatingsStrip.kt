@@ -22,10 +22,12 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  * were never seen even though they were fetched and correct. They now sit
  * directly under the overview, where the other title facts are.
  *
- * The chips themselves live in [MdbListRatingChips], shared with the Home hero
- * so both surfaces name and color the sources identically; this wrapper only
- * adds the page's "RATINGS" label and its own padding. The strip is a pure
- * function of its two arguments: no state, no view model.
+ * The chips themselves live in [MdbListRatingChips]; the wrapper only adds the
+ * page's "RATINGS" label and its own padding. The shared
+ * [mdbListRatingSources] list is the single source of truth, so the detail
+ * strip and the Home hero (which folds the same sources into its metadata line
+ * as compact tokens rather than chips) name and order the sources identically.
+ * The strip is a pure function of its two arguments: no state, no view model.
  *
  * [tmdbFallback] is TMDB's own vote_average, and it is used ONLY when MDBList
  * sent no TMDB figure - which is every title when no MDBList key is set. The

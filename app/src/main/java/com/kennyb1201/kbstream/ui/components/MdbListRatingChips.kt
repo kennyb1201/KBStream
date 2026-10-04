@@ -32,14 +32,17 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
  *
  * The chips identify the source by its mark rather than a spelled-out name -
  * seven labelled chips make a row too wide to read at a glance - so the values
- * are what the eye lands on. The full name stays as the icon's content
- * description for TalkBack.
+ * are what the eye lands on. The full [name] stays as the icon's content
+ * description for TalkBack, while [shortName] is the compact label the hero's
+ * metadata line uses ("IMDb 8.4"), where a spelled-out "Rotten Tomatoes" would
+ * eat the whole line.
  */
 internal data class RatingChipSource(
     val name: String,
     val value: String,
     @DrawableRes val icon: Int,
-    val tint: Color
+    val tint: Color,
+    val shortName: String
 )
 
 // Brand colors. MDBList's own badges are color-coded per source, so the
@@ -68,56 +71,67 @@ internal fun mdbListRatingSources(
     tmdbFallback: Double? = null
 ): List<RatingChipSource> = listOfNotNull(
     ratings?.imdb?.let {
-        RatingChipSource("IMDb", it, R.drawable.ic_rating_imdb, ImdbTint)
+        RatingChipSource("IMDb", it, R.drawable.ic_rating_imdb, ImdbTint, "IMDb")
     },
     ratings?.rottenTomatoes?.let {
-        RatingChipSource("Rotten Tomatoes", it, R.drawable.ic_rating_rt, RottenTomatoesTint)
+        RatingChipSource("Rotten Tomatoes", it, R.drawable.ic_rating_rt, RottenTomatoesTint, "RT")
     },
     (ratings?.tmdb ?: tmdbFallback?.takeIf { it > 0.0 }?.let { "%.1f".format(it) })?.let {
-        RatingChipSource("TMDB", it, R.drawable.ic_rating_tmdb, TmdbTint)
+        RatingChipSource("TMDB", it, R.drawable.ic_rating_tmdb, TmdbTint, "TMDB")
     },
     ratings?.metacritic?.let {
-        RatingChipSource("Metacritic", it, R.drawable.ic_rating_metacritic, MetacriticTint)
+        RatingChipSource("Metacritic", it, R.drawable.ic_rating_metacritic, MetacriticTint, "MC")
     },
     ratings?.trakt?.let {
-        RatingChipSource("Trakt", it, R.drawable.ic_rating_trakt, TraktTint)
+        RatingChipSource("Trakt", it, R.drawable.ic_rating_trakt, TraktTint, "Trakt")
     },
     ratings?.letterboxd?.let {
-        RatingChipSource("Letterboxd", it, R.drawable.ic_rating_letterboxd, LetterboxdTint)
+        RatingChipSource("Letterboxd", it, R.drawable.ic_rating_letterboxd, LetterboxdTint, "LB")
     },
     ratings?.myAnimeList?.let {
-        RatingChipSource("MyAnimeList", it, R.drawable.ic_rating_mal, MyAnimeListTint)
+        RatingChipSource("MyAnimeList", it, R.drawable.ic_rating_mal, MyAnimeListTint, "MAL")
     }
 )
 
+/** How many rating tokens the hero's metadata line carries at most. */
+internal const val HERO_RATING_TOKEN_LIMIT = 3
+
 /**
- * The source marks as a wrapping row of chips.
+ * The rating sources as compact text tokens for the Home hero's metadata line,
+ * formatted "IMDb 8.4", "RT 92%", "TMDB 8.1".
+ *
+ * The hero folds ratings INTO its existing single ellipsized info line rather
+ * than drawing the chip strip under it (the Netflix / Apple TV pattern): zero
+ * extra vertical space and nothing to cut off. Only the first
+ * [HERO_RATING_TOKEN_LIMIT] sources are taken - the list is already ordered
+ * IMDb, RT, TMDB first, so the three a viewer scans for lead, and a title with
+ * fewer sources simply contributes fewer tokens. The detail page keeps the
+ * full [MdbListRatingChips] strip.
+ */
+internal fun heroRatingTokens(
+    sources: List<RatingChipSource>,
+    limit: Int = HERO_RATING_TOKEN_LIMIT
+): List<String> = sources.take(limit).map { "${it.shortName} ${it.value}" }
+
+/**
+ * The source marks as a wrapping row of chips, used by the detail page's
+ * RATINGS strip.
  *
  * The chips WRAP (FlowRow) rather than sitting in one long row, and they are
  * plain boxes: a Box can never take focus, so D-pad navigation walks straight
- * past the strip instead of stopping on seven pieces of read-only data. Shared
- * by the detail page's RATINGS row and the Home hero, so both name and color
- * the sources identically.
- *
- * [compact] shrinks the chip for the hero, where the panel is narrower and the
- * chips sit under the title line rather than on a page of their own.
+ * past the strip instead of stopping on seven pieces of read-only data.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun MdbListRatingChips(
     sources: List<RatingChipSource>,
-    modifier: Modifier = Modifier,
-    compact: Boolean = false
+    modifier: Modifier = Modifier
 ) {
     if (sources.isEmpty()) return
 
-    val iconSize = if (compact) 16.dp else 20.dp
-    val horizontal = if (compact) 8.dp else 12.dp
-    val vertical = if (compact) 5.dp else 9.dp
-
     FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = modifier
     ) {
         sources.forEach { source ->
@@ -126,23 +140,19 @@ internal fun MdbListRatingChips(
                 modifier = Modifier
                     .clip(KBShapeChip)
                     .background(KBSurfaceRaised)
-                    .padding(horizontal = horizontal, vertical = vertical)
+                    .padding(horizontal = 12.dp, vertical = 9.dp)
             ) {
                 Icon(
                     painter = painterResource(id = source.icon),
                     contentDescription = "${source.name} rating",
                     tint = source.tint,
-                    modifier = Modifier.size(iconSize)
+                    modifier = Modifier.size(20.dp)
                 )
-                Spacer(modifier = Modifier.width(if (compact) 6.dp else 8.dp))
+                Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = source.value,
                     color = KBAccent,
-                    style = if (compact) {
-                        MaterialTheme.typography.bodySmall
-                    } else {
-                        MaterialTheme.typography.titleMedium
-                    },
+                    style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold
                 )
             }
