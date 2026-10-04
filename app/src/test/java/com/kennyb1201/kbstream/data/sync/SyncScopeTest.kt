@@ -24,6 +24,16 @@ class SyncScopeTest {
     }
 
     @Test
+    fun `poster appearance prefs sync`() {
+        // The poster corner shape (PosterEdge) is a look preference like the
+        // border strength beside it, so both must reach the builder - a key
+        // missing here is the silent no-op push this test class exists for.
+        val synced = PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        assertTrue("poster_edge must sync", "poster_edge" in synced)
+        assertTrue("poster_border_strength must sync", "poster_border_strength" in synced)
+    }
+
+    @Test
     fun `decoder and playback prefs stay per-device`() {
         // A Fire TV Stick and a projector need different decoders: not one of
         // these may ride the sync payload. The list lives beside the allow-list

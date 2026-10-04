@@ -143,6 +143,7 @@ object PrefsPayloadBuilder {
         "landscape_posters",
         "poster_partial_watch_badge",
         "poster_border_strength",           // poster edge strength: same look on every device
+        "poster_edge",                       // poster corner shape: same look on every device
         "badges_above_file",                // badge chip placement: same layout preference on every device
         "binge_group_prefer",                // binge continuity, not device-specific
         "binge_group_reuse",

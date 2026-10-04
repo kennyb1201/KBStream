@@ -144,7 +144,8 @@ fun PosterCard(
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier
+        modifier = modifier,
+        shape = posterEdgeShape()
     ) {
         Box(
             modifier = Modifier

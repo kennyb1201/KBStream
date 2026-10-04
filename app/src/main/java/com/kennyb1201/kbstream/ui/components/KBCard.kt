@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.nativeKeyCode
@@ -48,6 +49,10 @@ fun KBCard(
     // taller than a tile -- a full-width list or guide row -- passes its own
     // class so that growing it does not shove the rows around it.
     focusedScale: Float = KBFocusCard,
+    // The corner shape, and the shape the focused border follows. Defaults to
+    // the app's card shape; a poster tile passes the viewer's chosen edge
+    // (see PosterEdge) so its artwork and its focus ring stay in step.
+    shape: Shape = CardShape,
     content: @Composable ColumnScope.() -> Unit
 ) {
     // Timestamp of the most recent "fresh" KeyDown (repeatCount == 0).
@@ -58,7 +63,7 @@ fun KBCard(
 
     Card(
         onClick = onClick,
-        shape = CardDefaults.shape(shape = CardShape),
+        shape = CardDefaults.shape(shape = shape),
         colors = CardDefaults.colors(
             containerColor = KBSurface,
             contentColor = KBTextHi,
@@ -76,7 +81,7 @@ fun KBCard(
         border = CardDefaults.border(
             focusedBorder = Border(
                 border = BorderStroke(2.dp, KBAccent),
-                shape = CardShape
+                shape = shape
             )
         ),
         glow = CardDefaults.glow(

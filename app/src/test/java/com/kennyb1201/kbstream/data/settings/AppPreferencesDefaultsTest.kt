@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.settings
 
 import com.kennyb1201.kbstream.ui.components.PosterBorder
+import com.kennyb1201.kbstream.ui.components.PosterEdge
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -23,6 +24,14 @@ class AppPreferencesDefaultsTest {
         assertEquals(
             PosterBorder.DEFAULT.ordinal,
             AppPreferences.DEFAULT_POSTER_BORDER_STRENGTH
+        )
+    }
+
+    @Test
+    fun `the poster edge default matches the UI enum`() {
+        assertEquals(
+            PosterEdge.DEFAULT.ordinal,
+            AppPreferences.DEFAULT_POSTER_EDGE
         )
     }
 

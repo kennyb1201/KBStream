@@ -294,6 +294,7 @@ fun SettingsScreen(
     var landscapePosters by remember { mutableStateOf(AppPreferences.getLandscapePosters(context)) }
     var partialWatchBadge by remember { mutableStateOf(AppPreferences.getPosterPartialWatchBadge(context)) }
     var posterBorderIdx by remember { mutableIntStateOf(AppPreferences.getPosterBorderStrength(context)) }
+    var posterEdgeIdx by remember { mutableIntStateOf(AppPreferences.getPosterEdge(context)) }
     var amoledBlack by remember { mutableStateOf(AppPreferences.getAmoledBlack(context)) }
     var pureBlackSurface by remember { mutableStateOf(AppPreferences.getPureBlackSurface(context)) }
     var clearingHistory by remember { mutableStateOf(false) }
@@ -1773,6 +1774,33 @@ fun SettingsScreen(
                             AppPreferences.setPosterBorderStrength(context, index)
                         }) {
                             PillChip(option.label, posterBorderIdx == index)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Poster Edges",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "The corner shape of every poster tile — squared off, the usual rounded corners, or a fully rounded pill.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    com.kennyb1201.kbstream.ui.components.PosterEdge.entries.forEachIndexed {
+                            index,
+                            option ->
+                        KBCard(onClick = {
+                            posterEdgeIdx = index
+                            AppPreferences.setPosterEdge(context, index)
+                        }) {
+                            PillChip(option.label, posterEdgeIdx == index)
                         }
                     }
                 }
