@@ -16,15 +16,11 @@ import java.io.File
  *
  * ## Why this is not [TrickplayFrames]
  *
- * The ExoPlayer path cannot read the frame on screen — it renders into a
- * `SurfaceView` the app cannot sample — so it decodes a second copy of the
- * stream with a second player, and pays for that in a second decoder and, on a
- * cache miss, a second connection to the source. None of that cost exists here:
- * this engine can be ASKED for the picture it is displaying, so a preview is a
- * screenshot of the very frame the viewer is scrubbing over. Nothing is opened,
- * nothing is decoded twice, and there is no cache to be cold — which is why the
- * cache-only rule that governs the other path
- * ([trickplayServableFromCache]) has no counterpart here.
+ * The two engines reach the same picture by different routes. The ExoPlayer path
+ * seeks the main player and copies that player's own surface with a PixelCopy;
+ * this engine can be ASKED for the picture it is displaying, so its preview is a
+ * screenshot of the very frame the viewer is scrubbing over. Neither path opens
+ * a second stream or decodes anything twice — only the mechanism differs.
  *
  * The command is `screenshot-to-file` because that is the only screenshot mpv
  * exposes to us: `MPVLib` binds `mpv_command` over a string array and nothing

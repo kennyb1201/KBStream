@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -96,31 +95,6 @@ class TrickplayTest {
         assertFalse(trickplayGivesUp(TRICKPLAY_MAX_TRANSIENT_FAILURES - 1))
         assertTrue(trickplayGivesUp(TRICKPLAY_MAX_TRANSIENT_FAILURES))
         assertTrue(trickplayGivesUp(TRICKPLAY_MAX_TRANSIENT_FAILURES + 5))
-    }
-
-    @Test
-    fun `a decoder the device cannot spare is permanent, not a retry`() {
-        // The second decoder is what a TV box runs out of, and the answer is not
-        // to ask again on the next press: it ends the previews there.
-        assertTrue(trickplayPermanentError(PlaybackException.ERROR_CODE_DECODER_INIT_FAILED))
-        assertTrue(trickplayPermanentError(PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED))
-        assertTrue(
-            trickplayPermanentError(
-                PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
-            )
-        )
-    }
-
-    @Test
-    fun `a source that refused is worth another press`() {
-        // A 403 from the host, a connection that timed out, a seek past the end
-        // of the stream: none of those is the device's fault, so the pipeline
-        // stays and the viewer's next press tries again.
-        assertFalse(trickplayPermanentError(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS))
-        assertFalse(
-            trickplayPermanentError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT)
-        )
-        assertFalse(trickplayPermanentError(PlaybackException.ERROR_CODE_UNSPECIFIED))
     }
 
     @Test
@@ -389,122 +363,6 @@ class TrickplayTest {
         assertEquals("ready", trickplayPlayerState(Player.STATE_READY))
         assertEquals("ended", trickplayPlayerState(Player.STATE_ENDED))
         assertEquals("unknown", trickplayPlayerState(-1))
-    }
-
-    // ── what the preview is allowed to decode ───────────────────────────────
-
-    private fun window(
-        playhead: Long,
-        buffered: Long,
-        duration: Long = 0L
-    ) = TrickplayWindow(playheadMs = playhead, bufferedMs = buffered, durationMs = duration)
-
-    @Test
-    fun `a position the main player has read is decodable from the cache`() {
-        // The ordinary scrub: the viewer presses RIGHT, the main player seeks
-        // there and fills ahead of it, and the preview decodes out of the bytes
-        // that read just put on disk. It reads nothing of its own.
-        val at = 1_200_000L
-
-        assertTrue(
-            trickplayServableFromCache(at, window(playhead = at, buffered = at + 8_000L))
-        )
-    }
-
-    @Test
-    fun `a position the main player has not read is not decodable`() {
-        // The field report: the scrub lands where the cache does not reach, and
-        // the old pipeline read it upstream instead - a second connection to a
-        // source that allows exactly one, which hangs rather than fails, with
-        // the main player's own loads starved while it does.
-        val at = 1_200_000L
-
-        assertFalse(
-            "no runway past the bucket means the read would leave the cache",
-            trickplayServableFromCache(at, window(playhead = at, buffered = at + 1_000L))
-        )
-        assertFalse(
-            "a buffer short of the bucket has not read it at all",
-            trickplayServableFromCache(
-                at,
-                window(playhead = at - TRICKPLAY_BUCKET_MS, buffered = at - 1L)
-            )
-        )
-    }
-
-    @Test
-    fun `the runway is what the preview's own read needs`() {
-        assertFalse(
-            trickplayServableFromCache(
-                bucket,
-                window(bucket, bucket + TRICKPLAY_CACHE_RUNWAY_MS - 1L)
-            )
-        )
-        assertTrue(
-            trickplayServableFromCache(bucket, window(bucket, bucket + TRICKPLAY_CACHE_RUNWAY_MS))
-        )
-        // ...and it has to FIT the buffer the main player itself keeps: the
-        // low-latency profile fills 5 s ahead, so a wider requirement would
-        // leave IPTV-shaped VOD with no previews at all.
-        assertTrue("runway must fit inside the low-latency buffer", TRICKPLAY_CACHE_RUNWAY_MS < 5_000L)
-    }
-
-    @Test
-    fun `nothing ahead of the playhead is decoded`() {
-        // Buffered bytes past the playhead are on disk, but nobody pressed for
-        // them: a preview is for the position the viewer lands on.
-        val playhead = 600_000L
-
-        assertFalse(
-            trickplayServableFromCache(
-                playhead + TRICKPLAY_BUCKET_MS,
-                window(playhead, playhead + 30_000L)
-            )
-        )
-    }
-
-    @Test
-    fun `a file read to the end is decodable right up to it`() {
-        // The last bucket has no runway left to give, and needs none: there is
-        // nothing past the end of the file for a read to reach for. A title
-        // whose length is NOT on the bucket grid is what needs the rule - a
-        // length that is leaves its last bucket a whole bucket short of the end,
-        // which the ordinary runway already covers.
-        val duration = 2_702_000L
-        val last = trickplayBucket(duration - 1L)
-
-        assertTrue(
-            trickplayServableFromCache(
-                last,
-                window(playhead = duration, buffered = duration, duration = duration)
-            )
-        )
-        assertFalse(
-            "without the end of the file that bucket has no runway",
-            trickplayServableFromCache(
-                last,
-                window(playhead = duration, buffered = duration, duration = 0L)
-            )
-        )
-    }
-
-    @Test
-    fun `a scrub resolves to either a local read or a wait, never a connection`() {
-        // The pair that makes it safe to be strict: the position the viewer
-        // pressed for decodes from the cache; anything the player has not read
-        // is deferred (TrickplayFrames), so no press spends a connection.
-        val playhead = 900_000L
-        val buffered = playhead + 12_000L
-
-        assertTrue(
-            trickplayServableFromCache(trickplayBucket(playhead), window(playhead, buffered))
-        )
-        assertFalse(
-            trickplayServableFromCache(
-                trickplayBucket(playhead + 600_000L),
-                window(playhead, buffered)
-            )
-        )
     }
 
     // ── decoding a capture down to a card ──────────────────────────────────

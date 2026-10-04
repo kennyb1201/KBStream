@@ -116,11 +116,25 @@ internal class TrickplayFrames(
      * Asks for the frame covering [positionMs]. A frame already captured for
      * that bucket is delivered immediately and for no capture cost at all, which
      * is what makes dragging back over ground already covered free.
+     *
+     * A scrub changes the wanted bucket on every press, so a capture in flight
+     * for the previous bucket is stood down here rather than waited on. The
+     * pipeline is serial and one slot deep, and letting the stale capture burn
+     * its whole timeout before the new bucket could start is what made
+     * thumbnails appear one at a time, seconds apart. Standing down is not a
+     * failure - it never touches the session's failure budget - and the PixelCopy
+     * callback already drops a copy that lands for a bucket nothing waits on.
      */
     fun request(positionMs: Long, durationMs: Long) {
         if (disabled || released) return
         if (durationMs <= 0L) return
         val bucket = trickplayBucket(positionMs).coerceAtMost(durationMs - 1L)
+        if (awaitingFrame && inFlightBucket != bucket) {
+            handler.removeCallbacks(timeoutRunnable)
+            handler.removeCallbacks(settleCheck)
+            awaitingFrame = false
+            inFlightBucket = null
+        }
         wantedBucket = bucket
         cache.get(bucket)?.let { frame ->
             onFrame(bucket, frame)
