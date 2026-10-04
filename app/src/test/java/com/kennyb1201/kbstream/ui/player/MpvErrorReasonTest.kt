@@ -74,4 +74,28 @@ class MpvErrorReasonTest {
         assertNull(MpvErrorReason.pick(emptyList()))
         assertNull(MpvErrorReason.pick(listOf("", "   ")))
     }
+
+    // --- failureDetail: what the failed-open report says when mpv was silent ---
+
+    @Test
+    fun `a named cause is the whole failure detail`() {
+        assertEquals(
+            "stream HTTP error 403",
+            MpvErrorReason.failureDetail("stream HTTP error 403", "cdn.example")
+        )
+    }
+
+    @Test
+    fun `a silent failure still names the host`() {
+        assertEquals(
+            "no reason reported (host=cdn.example)",
+            MpvErrorReason.failureDetail(null, "cdn.example")
+        )
+    }
+
+    @Test
+    fun `a silent failure with no host says only that much`() {
+        assertEquals("no reason reported", MpvErrorReason.failureDetail(null, null))
+        assertEquals("no reason reported", MpvErrorReason.failureDetail("  ", ""))
+    }
 }

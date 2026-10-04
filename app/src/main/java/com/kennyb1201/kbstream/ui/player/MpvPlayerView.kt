@@ -142,6 +142,13 @@ class MpvPlayerView @JvmOverloads constructor(
     private var lastErrorLine: String? = null
 
     /**
+     * The host of the stream the current load was for. Read only when the load
+     * failed without mpv naming a reason, so the diagnostics tell WHICH stream
+     * failed silently - the one fact a bare "no reason reported" throws away.
+     */
+    private var lastLoadHost: String? = null
+
+    /**
      * mpv's recent error lines, newest last.
      *
      * The line that names why a stream will not open is logged just BEFORE the
@@ -1017,6 +1024,9 @@ class MpvPlayerView @JvmOverloads constructor(
         lastPositionMs = 0L
         lastDurationMs = 0L
         pendingSeekMs = request.startPositionMs.coerceAtLeast(0L)
+        lastLoadHost = runCatching {
+            android.net.Uri.parse(request.url).host
+        }.getOrNull()
 
         // The source's own User-Agent if it named one, else the app's - never
         // mpv's default. Set through the option AND as a header field, because
@@ -1076,7 +1086,8 @@ class MpvPlayerView @JvmOverloads constructor(
                     // "Protocol not found" and a refused connection are the
                     // same sentence on screen and want different fixes.
                     val reason = lastErrorLine?.takeIf { it.isNotBlank() }
-                    Log.w(TAG, "MPV could not open the stream: ${reason ?: "no reason reported"}")
+                    val failureDetail = MpvErrorReason.failureDetail(reason, lastLoadHost)
+                    Log.w(TAG, "MPV could not open the stream: $failureDetail")
                     // Same report line the ExoPlayer ladder writes to: an MPV
                     // open that fails on a 403 or a refused connection is a
                     // playback failure the diagnostics dump has to carry, and
@@ -1085,7 +1096,7 @@ class MpvPlayerView @JvmOverloads constructor(
                     com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
                         com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
                             cause = "MPV could not open the stream",
-                            detail = reason ?: "no reason reported"
+                            detail = failureDetail
                         )
                     )
                     post {
@@ -1111,15 +1122,23 @@ class MpvPlayerView @JvmOverloads constructor(
     override fun eventProperty(property: String) = Unit
 
     /**
-     * mpv's log, kept only at error level.
+     * mpv's log, kept at error and warning level.
      *
      * The one channel that says WHY a stream would not open. The library
-     * requests log messages for its clients; anything below an error is noise
+     * requests log messages for its clients; anything below a warning is noise
      * here (and, on a stream host that dislikes the agent, an unreadable
-     * flood).
+     * flood). Warnings are kept too, because FFmpeg does not always put the
+     * cause of a failed open on an error line - and the ring is read only when
+     * the load failed, so a successful session's warnings are never consumed.
      */
     override fun logMessage(prefix: String, level: Int, text: String) {
-        if (level > MPVLib.MpvLogLevel.MPV_LOG_LEVEL_ERROR) return
+        // WARN as well as ERROR: FFmpeg does not always put the cause of a
+        // failed open on an ERROR line (a refused connection, an unreadable
+        // header). The ring is cleared at each load and read only when that
+        // load FAILED, so a successful session's warnings never reach the
+        // notice; and MpvErrorReason.pick still prefers a named cause over a
+        // later warning.
+        if (level > MPVLib.MpvLogLevel.MPV_LOG_LEVEL_WARN) return
 
         val line = MpvErrorReason.format(prefix, text)
         if (line.isEmpty()) return

@@ -268,6 +268,19 @@ class HomeViewModel(
     private val watchedStatePreloadInFlight =
         mutableSetOf<String>()
 
+    // Shows whose last preload could not read a COMPLETE watched state: the
+    // local history read failed, or a CONFIGURED tracker's read did.
+    //
+    // Everything the preload writes for such a show is "no evidence", not
+    // "nothing watched" - and the season walk cannot tell the two apart, so
+    // resolving against it answered S1E1 for a show the viewer was part-way
+    // through. The resolver reads this set and refuses to walk for such a
+    // show, returning only the pair it actually knows (see
+    // resolveSeriesTargetFromSharedWatchedState). Cleared with the maps and
+    // re-set by each preload, so a later successful read clears it.
+    private val watchedStateIncompleteShows =
+        mutableSetOf<String>()
+
     private var upNextRequestVersion = 0L
 
     private var watchedRefreshVersion = 0L
@@ -389,11 +402,28 @@ class HomeViewModel(
                     )
                 }
 
-                buildUpcomingSchedule(
-                    caughtUp +
-                        loadCaughtUpUpcomingItems() +
-                        loadLocalCaughtUpUpcomingItems()
-                )
+                // runCatchingCancellable, not a bare call: an exception thrown
+                // here would TERMINATE this shared flow, and with it the only
+                // publisher of the Upcoming rail, which then never emits again
+                // for the rest of the ViewModel's life - the shape of "the
+                // rail sometimes never appears" after a profile switch. A
+                // failed read degrades to an empty rail here instead of
+                // killing the publisher. Cancellation is rethrown, so a
+                // superseding emission still cancels this build as intended.
+                runCatchingCancellable {
+                    buildUpcomingSchedule(
+                        caughtUp +
+                            loadCaughtUpUpcomingItems() +
+                            loadLocalCaughtUpUpcomingItems()
+                    )
+                }.getOrElse { error ->
+                    Log.e(
+                        "UPCOMING_DIAG",
+                        "upcoming schedule build failed",
+                        error
+                    )
+                    emptyList()
+                }
             }
             .stateIn(
                 scope = viewModelScope,
@@ -3032,6 +3062,8 @@ Log.d(
 
             watchedStatePreloadInFlight.clear()
 
+            watchedStateIncompleteShows.clear()
+
             showEpisodeTotalsCache.clear()
 
             showSeasonEpisodesCache.clear()
@@ -5005,6 +5037,12 @@ episodesTotal =
                     tmdbShowId
                 )
 
+            // Whether each source actually answered. A swallowed exception is
+            // "no evidence", and the write below has to say so, or an empty
+            // map reads downstream as "this show has nothing watched".
+            var localReadFailed = false
+            var trackerReadFailed = false
+
             val localCompletedEntries =
                 try {
 
@@ -5014,6 +5052,7 @@ episodesTotal =
                         )
 
                 } catch (_: Exception) {
+                    localReadFailed = true
                     emptyList()
                 }
 
@@ -5035,6 +5074,7 @@ episodesTotal =
                             )
 
                     } catch (_: Exception) {
+                        trackerReadFailed = true
                         emptySet()
                     }
 
@@ -5067,6 +5107,7 @@ episodesTotal =
                             )
 
                     } catch (_: Exception) {
+                        trackerReadFailed = true
                         emptySet()
                     }
 
@@ -5104,6 +5145,19 @@ episodesTotal =
                     parentId
                 ] =
                     mergedWatchedKeys
+
+                if (localReadFailed || trackerReadFailed) {
+
+                    watchedStateIncompleteShows.add(
+                        parentId
+                    )
+
+                } else {
+
+                    watchedStateIncompleteShows.remove(
+                        parentId
+                    )
+                }
             }
 
         } finally {
@@ -5155,12 +5209,18 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
 
     val (
         simklWatchedEpisodes,
-        watchedEpisodeKeys
+        watchedEpisodeKeys,
+        watchedStateIsIncomplete
     ) =
         watchedStateMutex.withLock {
-            Pair(
+            Triple(
                 trackerWatchedEpisodesByShow[parentId].orEmpty(),
-                watchedEpisodeKeysByShow[parentId].orEmpty()
+                watchedEpisodeKeysByShow[parentId].orEmpty(),
+                // A preload that could not read a complete state (see
+                // watchedStateIncompleteShows) wrote "no evidence" for this
+                // show, which the walks below cannot distinguish from "nothing
+                // watched".
+                parentId in watchedStateIncompleteShows
             )
         }
 
@@ -5681,6 +5741,24 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
             } else {
                 null
             }
+
+    // The state could not be read completely, so it must not be walked: every
+    // candidate passes the not-watched test against an empty map, and the S1
+    // floor the walk starts from would come back as the answer - the "S1E1
+    // card for a show I am part-way through" this set exists to prevent. Hand
+    // back only the pair actually known (the tracker's own episode or the
+    // furthest one watched), which is null when nothing is; the caller prints
+    // the card from its own numbers then, rather than a fabricated S1E1. The
+    // counts stay null for the same reason - unknown, not zero.
+    if (watchedStateIsIncomplete) {
+        return ResolvedHomeSeriesTarget(
+            season = knownSeason,
+            episode = knownEpisode,
+            episodesWatched = null,
+            episodesTotal = null,
+            episodesRemaining = null
+        )
+    }
 
     // Where the walks below START. A missing pair still needs a floor - season
     // 1, episode 1 is "search from the beginning" - but a floor is not a

@@ -57,6 +57,21 @@ internal object MpvErrorReason {
     }
 
     /**
+     * The diagnostics detail for a failed open.
+     *
+     * When mpv named a cause that is the whole answer. When it named NOTHING,
+     * "no reason reported" on its own hides whether the stream reached the
+     * host at all, so the host is appended - a dump can then tell a silent
+     * failure on one provider from a 403 on another, which the bare phrase
+     * could not.
+     */
+    fun failureDetail(reason: String?, host: String?): String = when {
+        !reason.isNullOrBlank() -> reason
+        host.isNullOrBlank() -> "no reason reported"
+        else -> "no reason reported (host=$host)"
+    }
+
+    /**
      * The line worth showing: the LAST line that names a cause (nearest the
      * failure, which is what matters when a stream was retried), else the last
      * line there is, else null when mpv said nothing.
