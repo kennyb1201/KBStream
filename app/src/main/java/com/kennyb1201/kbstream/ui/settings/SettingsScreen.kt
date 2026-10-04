@@ -40,6 +40,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -244,11 +245,17 @@ fun SettingsScreen(
         // The immediate check enqueued by the enabling tap can race the grant
         // dialog and bail out as "not permitted"; now that the answer is in,
         // re-arm it so the first alert isn't delayed to the next 12h round.
-        if (notificationsAllowed && AppPreferences.getNewEpisodeNotifications(context)) {
+        if (
+            notificationsAllowed &&
+            (
+                AppPreferences.getNewEpisodeNotifications(context) ||
+                    com.kennyb1201.kbstream.data.notifications.AirReminderStore
+                        .hasAny(context)
+                )
+        ) {
             runCatching {
-                com.kennyb1201.kbstream.work.NewEpisodeWorker.syncSchedule(
+                com.kennyb1201.kbstream.work.NewEpisodeWorker.syncScheduleForPrefs(
                     context,
-                    enabled = true,
                     runImmediate = true
                 )
             }
@@ -263,6 +270,7 @@ fun SettingsScreen(
     }
     var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
     var useStreamRanker by remember { mutableStateOf(AppPreferences.getUseStreamRanker(context)) }
+    var maxAutoPlayQuality by remember { mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context)) }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
     // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
@@ -337,6 +345,10 @@ fun SettingsScreen(
     var mdbListKeySaved by remember { mutableStateOf(false) }
     var subsKeyInput by remember { mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context)) }
     var subsKeySaved by remember { mutableStateOf(false) }
+    var torboxKeyInput by remember { mutableStateOf(AppPreferences.getTorboxApiKey(context)) }
+    var torboxKeySaved by remember { mutableStateOf(false) }
+    var autoFetchSubtitles by remember { mutableStateOf(AppPreferences.getAutoFetchSubtitles(context)) }
+    var torboxLibrarySync by remember { mutableStateOf(AppPreferences.getTorboxLibrarySync(context)) }
 
     // Reopen on the pane last read (device-local, deliberately not synced):
     // the rail is ten panes deep and the one being tuned is rarely the first.
@@ -675,6 +687,108 @@ fun SettingsScreen(
                         }
                     }
                 }
+
+                // ── TORBOX KEY (cached-status badges in the picker) ────
+                Spacer(modifier = Modifier.height(12.dp))
+                val torboxFocusRequester = remember { FocusRequester() }
+                KBCard(
+                    onClick = { torboxFocusRequester.requestFocus() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KBSurfaceRaised, KBShapeSmall)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = "TorBox API Key",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Optional. From torbox.app → Account → API. Adds a \"Cached\" " +
+                                "badge to sources your TorBox account already holds — those " +
+                                "start instantly off the CDN, with no peers to find.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        val torboxPaste: (String) -> Unit = { pasted ->
+                            torboxKeyInput = pasted.trim()
+                            AppPreferences.setTorboxApiKey(context, torboxKeyInput)
+                            torboxKeySaved = torboxKeyInput.isNotBlank()
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                        ) {
+                            KBTextField(
+                                value = torboxKeyInput,
+                                onValueChange = {
+                                    torboxKeyInput = it.trim()
+                                    torboxKeySaved = false
+                                },
+                                placeholder = "Paste key",
+                                modifier = Modifier.weight(1f),
+                                focusRequester = torboxFocusRequester,
+                                onDone = {
+                                    AppPreferences.setTorboxApiKey(context, torboxKeyInput)
+                                    torboxKeySaved = torboxKeyInput.isNotBlank()
+                                },
+                                onFocusChanged = { focusedNow ->
+                                    if (!focusedNow) {
+                                        AppPreferences.setTorboxApiKey(context, torboxKeyInput)
+                                        torboxKeySaved = torboxKeyInput.isNotBlank()
+                                    }
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            KBPasteChip(onPaste = torboxPaste)
+                        }
+                        if (torboxKeySaved) {
+                            Text(
+                                text = "Saved — cached sources are badged in the stream picker.",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
+                        }
+                    }
+                }
+
+                // ── TORBOX CLOUD → LIBRARY ────────────────────────────
+                Spacer(modifier = Modifier.height(12.dp))
+                ToggleRow(
+                    label = "Add TorBox Cloud to Library",
+                    description = "With a TorBox key above, add the torrents in your " +
+                        "TorBox library to My List. Each is matched to a title on TMDB; " +
+                        "anything that can't be matched confidently is left out.",
+                    checked = torboxLibrarySync,
+                    onToggle = {
+                        torboxLibrarySync = it
+                        AppPreferences.setTorboxLibrarySync(context, it)
+                        com.kennyb1201.kbstream.work.TorBoxLibraryWorker
+                            .syncScheduleForPrefs(context, runImmediate = it)
+                    }
+                )
+
+                // ── AUTO-FETCH SUBTITLES ──────────────────────────────
+                Spacer(modifier = Modifier.height(12.dp))
+                ToggleRow(
+                    label = "Auto-fetch Subtitles",
+                    description = "When a stream carries no subtitle track, search " +
+                        "OpenSubtitles for your preferred subtitle language and attach " +
+                        "the best match automatically. Needs an OpenSubtitles key above " +
+                        "and a preferred subtitle language set in Player settings.",
+                    checked = autoFetchSubtitles,
+                    onToggle = {
+                        autoFetchSubtitles = it
+                        AppPreferences.setAutoFetchSubtitles(context, it)
+                    }
+                )
 
                 // ── STREAM BADGES (KB-compatible packs) ────────────────
                 val badgeFocusRequester = remember { FocusRequester() }
@@ -1323,6 +1437,45 @@ fun SettingsScreen(
                     }
                 )
 
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // A ceiling on what auto-play starts, distinct from the ranker
+                // above: the ranker weighs this device's decode headroom, this
+                // is what the viewer says the *network* can take tonight. The
+                // picker is untouched - every source stays listed and playable
+                // by hand; only the automatic head is capped.
+                Text(
+                    text = "Max Auto-play Quality",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Auto", "4K", "1080p", "720p").forEachIndexed { index, label ->
+                        KBCard(onClick = {
+                            maxAutoPlayQuality = index
+                            AppPreferences.setMaxAutoPlayQuality(context, index)
+                        }) {
+                            PillChip(label, maxAutoPlayQuality == index)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = when (maxAutoPlayQuality) {
+                        AutoPlayQuality.CAP_2160 ->
+                            "Auto-play may start anything up to 4K. Taller sources are still listed."
+                        AutoPlayQuality.CAP_1080 ->
+                            "Auto-play never starts above 1080p: a 4K remux stays in the picker, but the automatic pick takes the best 1080p or lower copy."
+                        AutoPlayQuality.CAP_720 ->
+                            "Auto-play never starts above 720p. The picker is unchanged, so a taller copy can still be chosen by hand."
+                        else ->
+                            "Auto-play takes whatever the ranker puts first, including 4K - handy to lift when the network is busy."
+                    },
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+
                 Spacer(modifier = Modifier.height(8.dp))
 
                 ToggleRow(
@@ -1516,9 +1669,8 @@ fun SettingsScreen(
                         // on should alert about an episode that already aired
                         // rather than waiting up to 12h for the next window.
                         runCatching {
-                            com.kennyb1201.kbstream.work.NewEpisodeWorker.syncSchedule(
+                            com.kennyb1201.kbstream.work.NewEpisodeWorker.syncScheduleForPrefs(
                                 context,
-                                enabled,
                                 runImmediate = enabled
                             )
                         }

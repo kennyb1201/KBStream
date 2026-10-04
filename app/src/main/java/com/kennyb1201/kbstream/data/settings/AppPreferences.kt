@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import kotlin.math.abs
 
 /**
@@ -30,6 +31,10 @@ object AppPreferences {
     private const val KEY_AUTO_SKIP_CREDITS = "auto_skip_credits"
     private const val KEY_AUTO_SELECT_STREAM = "auto_select_stream"
     private const val KEY_USE_STREAM_RANKER = "use_stream_ranker"
+    // Ceiling on what auto-play may start (see AutoPlayQuality):
+    // 0=auto, 1=4K, 2=1080p, 3=720p. Synced: it is a viewing preference, not a
+    // device capability, so the same ceiling follows the profile.
+    private const val KEY_MAX_AUTO_PLAY_QUALITY = "max_auto_play_quality"
     private const val KEY_BINGE_GROUP_PREFER = "binge_group_prefer"
     private const val KEY_BINGE_GROUP_REUSE = "binge_group_reuse"
     private const val KEY_BINGE_GROUP_FALLBACK = "binge_group_fallback"
@@ -87,6 +92,9 @@ object AppPreferences {
     private const val KEY_OMDB_API_KEY = "omdb_api_key"
     private const val KEY_MDBLIST_API_KEY = "mdblist_api_key"
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
+    private const val KEY_TORBOX_API_KEY = "torbox_api_key"
+    private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
+    private const val KEY_AUTO_FETCH_SUBTITLES = "auto_fetch_subtitles"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
@@ -328,6 +336,17 @@ object AppPreferences {
 
     fun setUseStreamRanker(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_USE_STREAM_RANKER, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Max auto-play quality ────────────────────────────────────────
+    // A ceiling on the source auto-play picks (see AutoPlayQuality). The
+    // picker still lists every source; only the automatic pick is constrained.
+    fun getMaxAutoPlayQuality(context: Context): Int =
+        readIntPref(context, KEY_MAX_AUTO_PLAY_QUALITY, AutoPlayQuality.CAP_AUTO)
+
+    fun setMaxAutoPlayQuality(context: Context, cap: Int) {
+        prefs(context).edit().putInt(KEY_MAX_AUTO_PLAY_QUALITY, cap).apply()
         syncDisplayPrefsBlob(context)
     }
 
@@ -958,6 +977,18 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── Auto-fetch subtitles when the stream carries none ────────────
+    // On by default; still requires a preferred subtitle language and an
+    // OpenSubtitles key, so it stays inert until the viewer has asked for a
+    // language to begin with. Synced: a viewing preference, not a device one.
+    fun getAutoFetchSubtitles(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUTO_FETCH_SUBTITLES, true)
+
+    fun setAutoFetchSubtitles(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUTO_FETCH_SUBTITLES, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
     // ── Hero trailer autoplay (Home hero) ─────────────────────────────
     fun getHeroTrailerAutoplay(context: Context): Boolean =
         prefs(context).getBoolean(KEY_HERO_TRAILER_AUTOPLAY, true)
@@ -1207,6 +1238,31 @@ object AppPreferences {
 
     fun setOpensubtitlesApiKey(context: Context, key: String) {
         prefs(context).edit().putString(KEY_OPENSUBTITLES_API_KEY, key.trim()).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── TorBox API key (cached-status badges in the stream picker) ────
+    // Optional. With no key the picker is exactly as before, with no "Cached"
+    // chips (see TorBoxClient). Synced like the other service keys so every
+    // device badges the same copies.
+    fun getTorboxApiKey(context: Context): String =
+        prefs(context).getString(KEY_TORBOX_API_KEY, "")?.trim().orEmpty()
+
+    fun setTorboxApiKey(context: Context, key: String) {
+        prefs(context).edit().putString(KEY_TORBOX_API_KEY, key.trim()).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Add TorBox cloud files to the Library ────────────────────────
+    // Off by default. With a TorBox key entered and this on, the account's
+    // TorBox torrents are resolved and added to My List (see TorBoxLibrarySync).
+    // Synced: which cloud titles a viewer keeps is a library preference, not a
+    // device capability.
+    fun getTorboxLibrarySync(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_TORBOX_LIBRARY_SYNC, false)
+
+    fun setTorboxLibrarySync(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_TORBOX_LIBRARY_SYNC, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 

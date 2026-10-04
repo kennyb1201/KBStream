@@ -26,6 +26,7 @@ import com.kennyb1201.kbstream.work.NewEpisodeWorker
 import com.kennyb1201.kbstream.work.OutboxFlushWorker
 import com.kennyb1201.kbstream.work.ReminderWorker
 import com.kennyb1201.kbstream.work.SimklSyncWorker
+import com.kennyb1201.kbstream.work.TorBoxLibraryWorker
 import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -100,6 +101,9 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             }
             startupStep("startup.reminderWorker", "app_create_reminder_worker") {
                 scheduleReminderAlerts()
+            }
+            startupStep("startup.torboxLibraryWorker", "app_create_torbox_library_worker") {
+                scheduleTorBoxLibrarySync()
             }
             startupStep("startup.addonWorker", "app_create_addon_worker") {
                 scheduleAddonManifestRefresh()
@@ -418,10 +422,8 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
      * work instead of leaving a job that wakes up only to bail out.
      */
     private fun scheduleNewEpisodeChecks() {
-        NewEpisodeWorker.syncSchedule(
-            this,
-            AppPreferences.getNewEpisodeNotifications(this)
-        )
+        // Keyed on the toggle OR a flagged air reminder (see the worker).
+        NewEpisodeWorker.syncScheduleForPrefs(this)
     }
 
     /**
@@ -434,6 +436,15 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             this,
             AppPreferences.getLiveReminderNotifications(this)
         )
+    }
+
+    /**
+     * TorBox cloud → Library rounds. Armed only when the toggle is on and a
+     * TorBox key is set (see the worker), so an unrelated device never wakes
+     * for it.
+     */
+    private fun scheduleTorBoxLibrarySync() {
+        TorBoxLibraryWorker.syncScheduleForPrefs(this)
     }
 
     private fun scheduleAddonManifestRefresh() {

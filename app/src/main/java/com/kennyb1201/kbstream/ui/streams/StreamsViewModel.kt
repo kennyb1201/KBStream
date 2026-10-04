@@ -8,6 +8,8 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
+import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.device.DeviceCapability
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
@@ -231,6 +233,17 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // the list reaches the UI.
         val withBadges = StreamBadgeEngine.apply(preppedStreams, getApplication())
 
+        // Which copies the viewer's own debrid account already holds (see
+        // TorBoxClient): a cached hash starts instantly off the CDN, with no
+        // peers to find. One batched check for the whole list, inert without a
+        // key, and cached for an hour. Attached after the pack badges because
+        // the pack replaces a stream's badge list rather than extending it.
+        val cachedHashes = TorBoxClient.checkCached(
+            getApplication(),
+            withBadges.map { it.infoHash }
+        )
+        val markedStreams = TorBoxCachedBadges.mark(withBadges, cachedHashes)
+
         // Per-add-on groupings for the picker's tabs: each add-on's own list,
         // prepared by the same rules as the merged one (ranked, badged) so a
         // tab reads like a filtered view of All rather than a raw dump. Empty
@@ -246,12 +259,15 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     }
                 StreamAddonGroup(
                     addonName = result.addonName,
-                    streams = StreamBadgeEngine.apply(prepared, getApplication())
+                    streams = TorBoxCachedBadges.mark(
+                        StreamBadgeEngine.apply(prepared, getApplication()),
+                        cachedHashes
+                    )
                 )
             }
             .filter { it.streams.isNotEmpty() }
-        val rankedMsg = if (useRanker) "ranked total = ${withBadges.size}" else "unranked total = ${withBadges.size}"
-        val topMsg = "top stream = ${withBadges.firstOrNull()?.let(::describeStream) ?: "none"}"
+        val rankedMsg = if (useRanker) "ranked total = ${markedStreams.size}" else "unranked total = ${markedStreams.size}"
+        val topMsg = "top stream = ${markedStreams.firstOrNull()?.let(::describeStream) ?: "none"}"
 
         Log.e(TAG, rankedMsg)
         Log.e(TAG, topMsg)
@@ -263,14 +279,14 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // quality label are invisible in the list itself.
         StreamRankReport.record(
             rankReportLines(
-                streams = withBadges,
+                streams = markedStreams,
                 results = results,
                 ranked = useRanker,
                 requestedEpisode = requestedEpisode
             )
         )
 
-        return withBadges
+        return markedStreams
     }
 
     /**

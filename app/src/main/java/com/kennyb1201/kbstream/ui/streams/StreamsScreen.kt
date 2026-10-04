@@ -47,6 +47,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
+import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.player.PlayerEngine
@@ -122,7 +123,18 @@ fun StreamsScreen(
             // it by itself is the "playing the wrong episodes" report. Every
             // source in that state means no auto-select at all, with the cards
             // below naming what each file says it is.
-            val top = EpisodeMatch.autoplayPick(streams, season, episode, runtimeMinutes)
+            // Then the viewer's own quality ceiling (see AutoPlayQuality):
+            // the episode rules above decide *which* episode, this decides how
+            // tall a copy auto-play may start without a press. The picker still
+            // shows every source; only the automatic head is capped.
+            val top = AutoPlayQuality.cappedPick(
+                pick = EpisodeMatch.autoplayPick(streams, season, episode, runtimeMinutes),
+                candidates = streams,
+                season = season,
+                episode = episode,
+                runtimeMinutes = runtimeMinutes,
+                cap = AppPreferences.getMaxAutoPlayQuality(context)
+            )
             // What auto-play did, recorded rather than inferred: the rank block
             // names the HEAD of the list, and the head is not always what a pick
             // takes - it skips every source that declares another episode and

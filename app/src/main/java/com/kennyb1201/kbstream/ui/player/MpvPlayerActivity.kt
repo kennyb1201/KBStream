@@ -429,6 +429,15 @@ class MpvPlayerActivity : ComponentActivity() {
     private var onlineSubLoading = false
 
     /**
+     * Set once an automatic OpenSubtitles fetch has been attempted this
+     * session, so the file-loaded callback cannot start a second one. The
+     * main player has the same pair for the same reason (see
+     * [NativePlayerActivity.maybeAutoFetchSubtitle]).
+     */
+    private var autoSubtitleFetchTried = false
+    private var autoSubtitleFetchInFlight = false
+
+    /**
      * The device's own file picker, for a subtitle mpv has no way to know
      * about. The picked document is copied into the app cache before mpv sees
      * it, so what mpv is handed is always a plain file path rather than a
@@ -2153,17 +2162,83 @@ class MpvPlayerActivity : ComponentActivity() {
 
                 is SubtitleDownload.Ready -> {
                     val uri = SubtitleSearchHelper.toCacheUri(this@MpvPlayerActivity, hit, result.body)
-                    externalSubtitleUri = uri
-                    externalSubtitleName = hit.fileName
-                    surface?.addExternalSubtitle(uri.toString())
-                    PlayerTrackMemory.rememberSubtitle(
-                        context = this@MpvPlayerActivity,
-                        key = subtitleMemoryKey(),
-                        uri = uri.toString()
-                    )
+                    applyDownloadedSubtitle(hit, uri)
                     showToast("Subtitle loaded: ${hit.fileName}", 4_000L)
-                    refreshSettings()
                 }
+            }
+        }
+    }
+
+    /** Hands a downloaded subtitle to mpv and remembers it for this video. */
+    private fun applyDownloadedSubtitle(hit: SubtitleSearchResult, uri: Uri) {
+        externalSubtitleUri = uri
+        externalSubtitleName = hit.fileName
+        surface?.addExternalSubtitle(uri.toString())
+        PlayerTrackMemory.rememberSubtitle(
+            context = this@MpvPlayerActivity,
+            key = subtitleMemoryKey(),
+            uri = uri.toString()
+        )
+        refreshSettings()
+    }
+
+    /**
+     * Pulls a subtitle from OpenSubtitles when the file carries none the
+     * preferred language can use - the MPV half of the main player's
+     * auto-fetch (see [NativePlayerActivity.maybeAutoFetchSubtitle]).
+     *
+     * Runs once per session, off the file-loaded callback, and only when the
+     * viewer asked for a subtitle language, set an OpenSubtitles key, left
+     * auto-fetch on, and mpv selected no track in that language. The downloaded
+     * file is handed to mpv the same way a hand-picked hit is (see
+     * [applyDownloadedSubtitle]), so it renders and is remembered identically.
+     */
+    private fun maybeAutoFetchSubtitle() {
+        if (autoSubtitleFetchTried || autoSubtitleFetchInFlight) return
+        if (!AppPreferences.getAutoFetchSubtitles(this)) return
+        if (AppPreferences.getOpensubtitlesApiKey(this).isBlank()) return
+        val queryTitle = itemName
+        if (queryTitle.isBlank()) return
+        if (externalSubtitleUri != null) return
+        // A remembered sidecar for this video is still being restored when this
+        // runs (its copy is in flight), so fetching over it would replace the
+        // viewer's own earlier choice.
+        if (PlayerTrackMemory.rememberedSubtitle(this, subtitleMemoryKey()) != null) return
+        val lang = AppPreferences.getPreferredSubtitleLanguage(this)
+        if (lang.isBlank()) return
+        // mpv already selected a preferred-language track (its `slang` option),
+        // so there is nothing to fetch.
+        if (surface?.subtitlesOn() == true) return
+        autoSubtitleFetchTried = true
+        autoSubtitleFetchInFlight = true
+        lifecycleScope.launch {
+            try {
+                val results = SubtitleSearchHelper.search(
+                    this@MpvPlayerActivity,
+                    title = queryTitle,
+                    season = season,
+                    episode = episode,
+                    languageHint = lang
+                )
+                val pick = AutoSubtitleRules.pick(results, lang) ?: return@launch
+                when (val result = SubtitleSearchHelper.download(this@MpvPlayerActivity, pick)) {
+                    is SubtitleDownload.Failed -> Log.w(
+                        TAG,
+                        "auto subtitle fetch came up empty: ${result.reason}"
+                    )
+
+                    is SubtitleDownload.Ready -> {
+                        val uri = SubtitleSearchHelper.toCacheUri(
+                            this@MpvPlayerActivity,
+                            pick,
+                            result.body
+                        )
+                        applyDownloadedSubtitle(pick, uri)
+                        showToast("Subtitles: ${pick.fileName.take(48)}")
+                    }
+                }
+            } finally {
+                autoSubtitleFetchInFlight = false
             }
         }
     }
@@ -3131,6 +3206,10 @@ class MpvPlayerActivity : ComponentActivity() {
         // restoreRememberedSubtitle); mpv only accepts a sub-add once the file
         // is open, which is exactly this callback.
         runOnUiThread { restoreRememberedSubtitle() }
+        // ...and, when the file carries no subtitle in the preferred language,
+        // one pulled from OpenSubtitles (see maybeAutoFetchSubtitle) - the same
+        // missing press the main player now fills.
+        runOnUiThread { maybeAutoFetchSubtitle() }
         // Scrobble once the file is really open — a stream that never loads
         // must not appear on a tracker as started.
         if (!scrobbleStarted) {

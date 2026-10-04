@@ -11,43 +11,43 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.kennyb1201.kbstream.data.notifications.AirReminderStore
-import com.kennyb1201.kbstream.data.notifications.NewEpisodeChecker
+import com.kennyb1201.kbstream.data.debrid.TorBoxLibrarySync
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 
 /**
- * Periodic "has a new episode aired?" round (see [NewEpisodeChecker]).
+ * Periodic "new TorBox cloud files → Library" round (see [TorBoxLibrarySync]).
  *
- * Separate from [SimklSyncWorker] on purpose: the check needs no Simkl
- * account, only the shows the profile watches, so it keeps working for users
- * who never connected a tracker.
+ * Only armed while the "Add TorBox Cloud to Library" toggle is on AND a TorBox
+ * API key is set, so a device with neither never wakes for it. A round is
+ * cheap once caught up: [com.kennyb1201.kbstream.data.debrid.TorBoxCloudStore]
+ * means only torrents new since the last round cost a TMDB lookup.
  */
-class NewEpisodeWorker(
+class TorBoxLibraryWorker(
     appContext: Context,
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result = try {
-        NewEpisodeChecker(applicationContext).run()
+        TorBoxLibrarySync.sync(applicationContext)
         Result.success()
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         // A failed round is not worth a retry storm (the next periodic run
         // covers it), but it is worth a log line.
-        Log.e(TAG, "new episode check failed: ${e.message}", e)
+        Log.e(TAG, "TorBox library sync failed: ${e.message}", e)
         Result.success()
     }
 
     companion object {
-        private const val TAG = "NEW_EPISODE_WORKER"
+        private const val TAG = "TORBOX_LIBRARY_WORKER"
 
-        /** Unique periodic work name (owned here so the toggle and startup agree). */
-        const val PERIODIC_WORK_NAME = "new_episode_periodic_check"
+        /** Unique periodic work name (owned here so toggle and startup agree). */
+        const val PERIODIC_WORK_NAME = "torbox_library_sync"
 
-        private const val ONESHOT_WORK_NAME = "new_episode_immediate_check"
+        private const val ONESHOT_WORK_NAME = "torbox_library_sync_now"
         private const val INTERVAL_HOURS = 12L
 
         private fun constraints() = Constraints.Builder()
@@ -55,44 +55,29 @@ class NewEpisodeWorker(
             .build()
 
         private fun periodicRequest() =
-            PeriodicWorkRequestBuilder<NewEpisodeWorker>(INTERVAL_HOURS, TimeUnit.HOURS)
+            PeriodicWorkRequestBuilder<TorBoxLibraryWorker>(INTERVAL_HOURS, TimeUnit.HOURS)
                 .setConstraints(constraints())
-                // Every request carries the tag, so disabling the toggle can
+                // Every request carries the tag, so turning the toggle off can
                 // cancel the periodic round and any immediate one together.
                 .addTag(TAG)
                 .build()
 
         /**
-         * Keeps scheduled work in step with the user's "New Episode
-         * Notifications" toggle — the pref alone isn't enough, or a disabled
-         * device would still wake twice a day just to bail out.
-         *
-         * Pass `runImmediate = true` only from the settings toggle: startup
-         * arms the periodic round alone, so launching the app never spends a
-         * TMDB request per followed show.
-         */
-        /**
-         * Arms the round from the current prefs: the global new-episode toggle
-         * OR at least one flagged air reminder. Both kinds of follow are served
-         * by the same round (see [NewEpisodeChecker]), so the work must stay
-         * armed while either is present — keying only off the toggle would leave
-         * a viewer who flagged a show, but muted "new episode" alerts, with no
-         * scheduled check at all.
+         * Keeps the scheduled round in step with the toggle: on only when the
+         * viewer enabled it AND a key is present. `runImmediate = true` is for
+         * the settings toggle, so flipping it on produces rows without waiting
+         * for the first periodic window.
          */
         fun syncScheduleForPrefs(context: Context, runImmediate: Boolean = false) {
             syncSchedule(
                 context,
-                enabled = AppPreferences.getNewEpisodeNotifications(context) ||
-                    AirReminderStore.hasAny(context),
+                enabled = AppPreferences.getTorboxLibrarySync(context) &&
+                    AppPreferences.getTorboxApiKey(context).isNotBlank(),
                 runImmediate = runImmediate
             )
         }
 
-        fun syncSchedule(
-            context: Context,
-            enabled: Boolean,
-            runImmediate: Boolean = false
-        ) {
+        fun syncSchedule(context: Context, enabled: Boolean, runImmediate: Boolean = false) {
             val workManager = WorkManager.getInstance(context)
             if (!enabled) {
                 workManager.cancelAllWorkByTag(TAG)
@@ -107,7 +92,7 @@ class NewEpisodeWorker(
                 workManager.enqueueUniqueWork(
                     ONESHOT_WORK_NAME,
                     ExistingWorkPolicy.REPLACE,
-                    OneTimeWorkRequestBuilder<NewEpisodeWorker>()
+                    OneTimeWorkRequestBuilder<TorBoxLibraryWorker>()
                         .setConstraints(constraints())
                         .addTag(TAG)
                         .build()

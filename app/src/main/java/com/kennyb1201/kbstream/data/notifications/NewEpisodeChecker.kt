@@ -28,8 +28,12 @@ internal class NewEpisodeChecker(private val context: Context) {
 
     suspend fun run() {
         val appContext = context.applicationContext
-        if (!AppPreferences.getNewEpisodeNotifications(appContext)) {
-            Log.i(TAG, "new episode notifications off; skipping check")
+        // Runs when either kind of follow exists: the global new-episode toggle,
+        // or an explicitly flagged air reminder. A viewer who flagged a show
+        // but left the global toggle off still gets that one show checked.
+        val flagged = AirReminderStore(appContext).flagged()
+        if (!AppPreferences.getNewEpisodeNotifications(appContext) && flagged.isEmpty()) {
+            Log.i(TAG, "new episode notifications off and no air reminders; skipping check")
             return
         }
         // No point spending one TMDB request per show when the OS will drop
@@ -106,20 +110,25 @@ internal class NewEpisodeChecker(private val context: Context) {
      */
     private suspend fun followedShowIds(appContext: Context): List<String> {
         val ids = LinkedHashSet<String>()
+        // Explicitly flagged air reminders first and always: they must survive a
+        // history database that will not open, which is exactly the state a
+        // fresh profile is in.
+        ids.addAll(AirReminderStore(appContext).flagged())
+
         val db = runCatching { WatchHistoryDatabase.getInstanceScoped(appContext) }.getOrNull()
-            ?: return emptyList()
+        if (db != null) {
+            runCatchingCancellable { db.watchHistoryDao().getContinueWatchingParentsSnapshot() }
+                .getOrNull()
+                .orEmpty()
+                .filter { it.parentId.isNotBlank() && NewEpisodeRules.isSeriesType(it.type) }
+                .forEach { ids.add(it.parentId) }
 
-        runCatchingCancellable { db.watchHistoryDao().getContinueWatchingParentsSnapshot() }
-            .getOrNull()
-            .orEmpty()
-            .filter { it.parentId.isNotBlank() && NewEpisodeRules.isSeriesType(it.type) }
-            .forEach { ids.add(it.parentId) }
-
-        runCatchingCancellable { db.watchedStatusDao().getRefreshTargets() }
-            .getOrNull()
-            .orEmpty()
-            .filter { it.imdbId.isNotBlank() && NewEpisodeRules.isSeriesType(it.mediaType) }
-            .forEach { ids.add(it.imdbId) }
+            runCatchingCancellable { db.watchedStatusDao().getRefreshTargets() }
+                .getOrNull()
+                .orEmpty()
+                .filter { it.imdbId.isNotBlank() && NewEpisodeRules.isSeriesType(it.mediaType) }
+                .forEach { ids.add(it.imdbId) }
+        }
 
         return ids.toList()
     }

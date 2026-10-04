@@ -7077,6 +7077,16 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private var subtitleEngineFallbackTried = false
 
+    /**
+     * Set once an automatic OpenSubtitles fetch has been attempted this session.
+     * Track groups are re-read several times per session, so without this the
+     * fetch would re-run on every callback.
+     */
+    private var autoSubtitleFetchTried = false
+
+    /** True while an automatic fetch is in flight, so a re-read cannot start a second. */
+    private var autoSubtitleFetchInFlight = false
+
     private fun autoSelectPreferredLanguages() {
         val player = exoPlayer ?: return
         if (languagesAutoSelected) return
@@ -7196,11 +7206,74 @@ class NativePlayerActivity : ComponentActivity() {
                         .buildUpon()
                         .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
                         .build()
+                    // With a preferred language set, `Off` means the file
+                    // carries no subtitle track at all - the stream "has no
+                    // usable subs". Pull one from OpenSubtitles rather than
+                    // making the viewer search for it (see maybeAutoFetchSubtitle).
+                    maybeAutoFetchSubtitle()
                 }
             }
         }
 
         if (changed) languagesAutoSelected = true
+    }
+
+    /**
+     * Pulls a subtitle from OpenSubtitles when the stream carries none the
+     * engine can draw.
+     *
+     * The point is the missing press: a file with no subtitle track used to
+     * leave the viewer to open the picker and search by hand, every episode.
+     * This runs the same search and attaches the best hit, but only when the
+     * viewer has actually asked for a subtitle language (see
+     * [AppPreferences.getPreferredSubtitleLanguage]), set an OpenSubtitles key,
+     * and left auto-fetch on - and only once per session. The language hint is
+     * the same one the manual search uses, so an auto-fetched track lands in the
+     * language the viewer configured.
+     */
+    private fun maybeAutoFetchSubtitle() {
+        if (autoSubtitleFetchTried || autoSubtitleFetchInFlight) return
+        if (!AppPreferences.getAutoFetchSubtitles(this)) return
+        if (AppPreferences.getOpensubtitlesApiKey(this).isBlank()) return
+        val queryTitle = itemName
+        if (queryTitle.isBlank()) return
+        autoSubtitleFetchTried = true
+        autoSubtitleFetchInFlight = true
+        val lang = AppPreferences.getPreferredSubtitleLanguage(this)
+        lifecycleScope.launch {
+            try {
+                val results = SubtitleSearchHelper.search(
+                    this@NativePlayerActivity,
+                    title = queryTitle,
+                    season = season,
+                    episode = episode,
+                    languageHint = lang
+                )
+                val pick = AutoSubtitleRules.pick(results, lang) ?: return@launch
+                when (val result = SubtitleSearchHelper.download(this@NativePlayerActivity, pick)) {
+                    is SubtitleDownload.Failed -> Log.w(
+                        "PLAYER_LANG",
+                        "auto subtitle fetch came up empty: ${result.reason}"
+                    )
+
+                    is SubtitleDownload.Ready -> {
+                        val uri = SubtitleSearchHelper.toCacheUri(
+                            this@NativePlayerActivity,
+                            pick,
+                            result.body
+                        )
+                        attachExternalSubtitle(uri)
+                        Toast.makeText(
+                            this@NativePlayerActivity,
+                            "Subtitles: ${pick.fileName.take(48)}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            } finally {
+                autoSubtitleFetchInFlight = false
+            }
+        }
     }
 
     /**

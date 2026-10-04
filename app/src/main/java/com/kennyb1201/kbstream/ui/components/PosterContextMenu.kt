@@ -44,6 +44,8 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.notifications.AirReminderRules
+import com.kennyb1201.kbstream.data.notifications.AirReminderStore
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusNone
@@ -374,6 +376,18 @@ fun PosterContextMenu(
         mutableStateOf<LibraryAddTarget?>(null)
     }
 
+    // The air reminder row, only for series (a movie has no air date). State is
+    // kept here, above the row builder, so the label can flip in place as the
+    // row is pressed without recomposing the whole menu through a reload.
+    val reminderShowId = libraryTarget
+        ?.takeIf { isSeriesType(it.mediaType) }
+        ?.let { AirReminderRules.showIdFor(it.imdbId, it.tmdbId) }
+    var reminderOn by remember(reminderShowId) {
+        mutableStateOf(
+            reminderShowId != null && AirReminderStore(context).isFlagged(reminderShowId)
+        )
+    }
+
     val firstRowFocusRequester = remember {
         FocusRequester()
     }
@@ -466,6 +480,39 @@ fun PosterContextMenu(
                     description = "Pick a personal list or watchlist"
                 ) {
                     libraryPickTarget = target
+                }
+            )
+        }
+
+        if (reminderShowId != null && libraryTarget != null) {
+            add(
+                PosterContextAction(
+                    label = if (reminderOn) "Reminder on ✓" else "Remind me when it airs",
+                    description = if (reminderOn) {
+                        "You'll be alerted on the day a new episode airs"
+                    } else {
+                        "Get a notification on the day a new episode airs"
+                    }
+                ) {
+                    val nowOn = AirReminderStore(context).toggle(reminderShowId)
+                    reminderOn = nowOn
+                    // The pref alone schedules nothing: re-arm the round so a
+                    // show flagged for an episode airing today is checked now,
+                    // and a removed flag can drop the work when it was the last
+                    // one.
+                    runCatching {
+                        com.kennyb1201.kbstream.work.NewEpisodeWorker.syncScheduleForPrefs(
+                            context,
+                            runImmediate = nowOn
+                        )
+                    }
+                    feedback.show(
+                        text = if (nowOn) {
+                            "Reminder on: ${libraryTarget.title}"
+                        } else {
+                            "Reminder off: ${libraryTarget.title}"
+                        }
+                    )
                 }
             )
         }

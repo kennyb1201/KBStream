@@ -45,6 +45,7 @@ import androidx.tv.material3.Surface
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.BingeGroupResolver
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
@@ -788,11 +789,18 @@ fun AppRoot() {
         // declaration on its card, instead of the wrong episode starting by
         // itself: "Paw Patrol is playing the wrong episodes" was a head of the
         // list the app could see was not the episode and started anyway.
-        val top = EpisodeMatch.autoplayPick(
-            ordered,
-            pending.target.season,
-            pending.target.episode,
-            pending.target.runtimeMinutes
+        val top = AutoPlayQuality.cappedPick(
+            pick = EpisodeMatch.autoplayPick(
+                ordered,
+                pending.target.season,
+                pending.target.episode,
+                pending.target.runtimeMinutes
+            ),
+            candidates = ordered,
+            season = pending.target.season,
+            episode = pending.target.episode,
+            runtimeMinutes = pending.target.runtimeMinutes,
+            cap = AppPreferences.getMaxAutoPlayQuality(context)
         )
         // Recorded, not inferred from the head of the list: this is the
         // episode-handoff path a wrong episode is reported from, and the rank

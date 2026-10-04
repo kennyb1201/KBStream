@@ -377,6 +377,29 @@ object StreamRanker {
     }
 
     /**
+     * The resolution tier a stream's own text claims: 5 = 2160p/4K, 4 = 1440p,
+     * 3 = 1080p, 2 = 720p, 1 = 480p, and 0 when it claims no resolution at all.
+     *
+     * Read from the same text every scoring rule reads ([searchableText]), and
+     * using the same tokens [score] awards the resolution bonus on, so the
+     * auto-play quality ceiling ([AutoPlayQuality]) cannot disagree with the
+     * order the ranker produced. Exposed rather than private so the ceiling is
+     * decided from one reading of the resolution instead of a second, drifting
+     * copy of these tokens.
+     */
+    internal fun resolutionRank(stream: Stream): Int {
+        val text = searchableText(stream)
+        return when {
+            "2160p" in text || "4k" in text -> 5
+            "1440p" in text -> 4
+            "1080p" in text -> 3
+            "720p" in text -> 2
+            "480p" in text -> 1
+            else -> 0
+        }
+    }
+
+    /**
      * True when the link is being served by a debrid service: the URL's host is
      * one of the services themselves (see [DEBRID_HOST]), or the entry carries
      * that service's own completion tag (see [DEBRID_TAG]).

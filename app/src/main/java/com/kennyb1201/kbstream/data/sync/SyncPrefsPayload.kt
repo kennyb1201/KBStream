@@ -125,6 +125,7 @@ object PrefsPayloadBuilder {
     internal val SYNCED_PREF_KEYS = setOf(
         "auto_play_next",                    // convenience behavior, not device-specific
         "use_stream_ranker",
+        "max_auto_play_quality",            // auto-play ceiling: a viewing preference, not device-specific
         "hero_trailer_autoplay",
         "hero_trailer_muted",
         "hero_trailer_delay_ms",            // hero trailer dwell: a viewing preference
@@ -161,13 +162,16 @@ object PrefsPayloadBuilder {
         "accent_index",                      // global theme accent (index into the palette)
         "mdblist_api_key",
         "opensubtitles_api_key",             // player → search subtitles online
+        "torbox_api_key",                    // stream picker → "Cached" status badges
+        "torbox_library_sync",               // add TorBox cloud files to the Library: a library preference
         "default_subtitle_size",             // subtitle appearance: same on every device
         "default_subtitle_bg",
         "default_subtitle_position",
         "auto_skip_intro",                   // skipping behavior, not device-specific
         "auto_skip_credits",
         "preferred_audio_language",          // preferred track languages: same on every device
-        "preferred_subtitle_language"
+        "preferred_subtitle_language",
+        "auto_fetch_subtitles"               // subtitle auto-fetch: a viewing preference
     )
 
     /**
