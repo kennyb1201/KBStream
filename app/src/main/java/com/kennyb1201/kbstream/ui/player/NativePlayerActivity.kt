@@ -4924,11 +4924,13 @@ class NativePlayerActivity : ComponentActivity() {
         // IS the stall a viewer sees on a slow source: the player must accumulate
         // that many SECONDS of media before it resumes, so at a fill rate of
         // ~0.5x realtime the spinner sits there for ~12s (measured: an 11.4s
-        // "Rebuffer stall" on a high-bitrate file). 3_000 is what the IPTV
-        // profile above already uses and what the initial bufferForPlaybackMs
-        // is, so resuming now costs the same cushion as starting. On a
-        // connection below realtime this trades one long stall for shorter, more
-        // frequent ones; the 12s no-progress watchdog is unaffected, because a
+        // "Rebuffer stall" on a high-bitrate file). It is 5_000: high enough that
+        // a burst-gap source - one that delivers for a few seconds and then goes
+        // quiet for tens of seconds - has a cushion to ride the next gap out
+        // instead of stalling again a moment later. The shorter 3_000 that
+        // preceded it resumed with so little in hand that the very next gap
+        // caught it, which is the closely-spaced "stall cluster" a viewer
+        // reports. The 12s no-progress watchdog is unaffected, because a
         // genuinely dead source never reaches this threshold at all.
         //
         // The START threshold is the third figure, and it is now higher than the
@@ -4940,11 +4942,21 @@ class NativePlayerActivity : ComponentActivity() {
         // filled drains about a second into playback and the viewer gets the
         // pattern this is meant to prevent — picture, a spinner, then normal
         // playback for the rest of the file. Six seconds costs a moment on a
-        // fast source (the loader is already targeting ten) and buys three more
-        // seconds of runway on a slow one. Resuming after a rebuffer keeps the
-        // lower 3_000: by then the connection is warm and the buffer full.
+        // fast source (the loader is already targeting fifteen) and buys three
+        // more seconds of runway on a slow one.
+        //
+        // The min/max targets are 15/60 rather than 10/30. A low-bitrate source
+        // does not stall for want of throughput - a 1 Mbps stream that stalls is
+        // being delivered in bursts with 20-30s gaps between them, and 30s of
+        // media only *almost* covers the gap: when it does not, the viewer gets
+        // the 1-4s stall the diagnostics show. A typical player keeps 50s+, which
+        // is how it rides the same gaps out. Raising the duration costs the
+        // high-bitrate case nothing, because the byte cap above - not the
+        // duration - is what bounds it (a 40 Mbps stream is capped at roughly
+        // 13s of media either way), so the cushion is only added where it was
+        // missing. At 6 Mbps, 60s is ~45MB, well under the budget.
         val bufferDurations = if (resolvedBufferMode == 1) intArrayOf(5_000, 10_000, 1_500, 3_000)
-        else intArrayOf(10_000, 30_000, 6_000, 3_000)
+        else intArrayOf(15_000, 60_000, 6_000, 5_000)
 
         // Media3 buffers sample data as JAVA-HEAP byte[] blocks (DefaultAllocator
         // uses a plain `newarray byte`, never native/direct buffers), so a
