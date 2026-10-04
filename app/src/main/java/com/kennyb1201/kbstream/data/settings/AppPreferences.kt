@@ -1070,8 +1070,15 @@ object AppPreferences {
     // `ui.theme.refreshThemeMirrors` mirrors it into the live theme state.
     private const val KEY_ACCENT_INDEX = "accent_index"
 
+    // readIntPref, NOT a raw getInt: this key syncs, and the sync applier
+    // writes every numeric pref with putLong (it only has the value's string
+    // form, not its type). A raw getInt then throws
+    // ClassCastException("java.lang.Long cannot be cast to java.lang.Integer")
+    // on any device that pulled the accent from another - Sentry ANDROID-R,
+    // app 0.5. Every other synced Int here already goes through readIntPref
+    // for the same reason.
     fun getAccentIndex(context: Context, default: Int = 0): Int =
-        prefs(context).getInt(KEY_ACCENT_INDEX, default)
+        readIntPref(context, KEY_ACCENT_INDEX, default)
 
     fun setAccentIndex(context: Context, index: Int) {
         prefs(context).edit().putInt(KEY_ACCENT_INDEX, index).apply()

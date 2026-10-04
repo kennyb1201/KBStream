@@ -5,10 +5,13 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,6 +21,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -60,6 +64,9 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 
+/** The "All" tab's index; every real tab is an index into the add-on groups. */
+private const val ALL_ADDONS_TAB = -1
+
 @Composable
 fun StreamsScreen(
     title: String,
@@ -76,6 +83,7 @@ fun StreamsScreen(
     val streams by viewModel.streams.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val loadedKey by viewModel.loadedKey.collectAsStateWithLifecycle()
+    val addonGroups by viewModel.addonGroups.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     /*
@@ -176,6 +184,17 @@ fun StreamsScreen(
         else -> "No sources found"
     }
 
+    // Per-add-on tabs. Shown only when more than one stream add-on actually
+    // answered: with a single add-on the merged list IS that add-on's list, and
+    // a lone "All" tab would be a control that does nothing. -1 is All.
+    var selectedAddonTab by remember(loadedKey) { mutableIntStateOf(ALL_ADDONS_TAB) }
+    val visibleStreams =
+        if (addonGroups.size > 1 && selectedAddonTab in addonGroups.indices) {
+            addonGroups[selectedAddonTab].streams
+        } else {
+            streams
+        }
+
     // The one case where auto-play deliberately starts nothing: every playable
     // source declares another episode of this season. Said in words, because a
     // picker that opens for no visible reason reads as a bug of its own.
@@ -244,6 +263,14 @@ fun StreamsScreen(
                 mismatchNotice = mismatchNotice
             )
 
+            if (addonGroups.size > 1) {
+                AddonTabs(
+                    addonNames = addonGroups.map { it.addonName },
+                    selectedIndex = selectedAddonTab,
+                    onSelect = { selectedAddonTab = it }
+                )
+            }
+
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(
@@ -267,7 +294,7 @@ fun StreamsScreen(
                         }
                     }
 
-                    streams.isEmpty() -> {
+                    visibleStreams.isEmpty() -> {
                         item {
                             StreamsHeroState(
                                 title = "NO SOURCES FOUND",
@@ -278,7 +305,7 @@ fun StreamsScreen(
 
                     else -> {
                         items(
-                            items = streams,
+                            items = visibleStreams,
                             key = { stream ->
                                 listOf(
                                     stream.url.orEmpty(),
@@ -553,6 +580,68 @@ private fun Stream.displayText(): String {
         .distinct()
         .joinToString(separator = "\n")
         .ifBlank { "Stream details unavailable" }
+}
+
+/**
+ * The add-on filter chips: "All" then one per answering stream add-on. Only
+ * rendered when at least two add-ons answered (see [StreamsScreen]). Pressing a
+ * chip swaps the list below it; the chips scroll horizontally so a viewer with
+ * many installed add-ons can still reach every one.
+ */
+@Composable
+private fun AddonTabs(
+    addonNames: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp)
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        StreamTabChip(
+            label = "All",
+            selected = selectedIndex == ALL_ADDONS_TAB,
+            onClick = { onSelect(ALL_ADDONS_TAB) }
+        )
+        addonNames.forEachIndexed { index, name ->
+            StreamTabChip(
+                label = name,
+                selected = selectedIndex == index,
+                onClick = { onSelect(index) }
+            )
+        }
+    }
+}
+
+/** One add-on filter chip, glass-styled to match the source cards below it. */
+@Composable
+private fun StreamTabChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    KBCard(onClick = onClick) {
+        Box(
+            modifier = Modifier
+                .background(
+                    if (selected) KBAccent.copy(alpha = 0.22f) else KBSurface.copy(alpha = 0.82f),
+                    KBShapeCard
+                )
+                .padding(horizontal = 14.dp, vertical = 6.dp)
+        ) {
+            Text(
+                text = label,
+                color = if (selected) KBAccent else KBTextHi,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
 }
 
 @Composable

@@ -22,6 +22,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withTimeout
 
+/**
+ * One stream add-on's own results, beside the merged list the picker ranks.
+ *
+ * The picker's main list mixes every add-on's sources and re-ranks them, so
+ * once it is built "which add-on offered the file I wanted" is not readable
+ * from the list at all. This keeps each add-on's contribution intact so the
+ * screen can offer a tab per add-on (plus All) when more than one answered.
+ */
+data class StreamAddonGroup(val addonName: String, val streams: List<Stream>)
+
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(application)
@@ -39,6 +49,14 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
     private val _streams = MutableStateFlow<List<Stream>>(emptyList())
     val streams: StateFlow<List<Stream>> = _streams.asStateFlow()
+
+    /**
+     * Each stream add-on's own sources, in the order the add-on returned them
+     * (re-ranked by the same rules). Empty for the live-TV path, which has no
+     * add-on, and for a single answering add-on the screen shows no tabs.
+     */
+    private val _addonGroups = MutableStateFlow<List<StreamAddonGroup>>(emptyList())
+    val addonGroups: StateFlow<List<StreamAddonGroup>> = _addonGroups.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -62,6 +80,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _isLoading.value = true
             _streams.value = emptyList()
+            _addonGroups.value = emptyList()
             _debug.value = emptyList()
 
             val debugLines = mutableListOf<String>()
@@ -105,6 +124,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         debugLines: MutableList<String>,
         onAddonResult: ((List<Stream>) -> Unit)? = null
     ): List<Stream> {
+        // A new target's groups replace the last one's as soon as this fetch
+        // starts, so a background resolve cannot leave stale tabs behind.
+        _addonGroups.value = emptyList()
         if (contentType == "channel") {
             val directStream = Stream(
                 name = "Live TV",
@@ -197,6 +219,26 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // KB-compatible badge packs: attach matched badge chips before
         // the list reaches the UI.
         val withBadges = StreamBadgeEngine.apply(preppedStreams, getApplication())
+
+        // Per-add-on groupings for the picker's tabs: each add-on's own list,
+        // prepared by the same rules as the merged one (ranked, badged) so a
+        // tab reads like a filtered view of All rather than a raw dump. Empty
+        // groups are dropped - a tab with nothing under it is not a tab.
+        _addonGroups.value = results
+            .filterIsInstance<AddonLoadResult.Success>()
+            .map { result ->
+                val prepared =
+                    if (useRanker) {
+                        StreamRanker.rank(result.streams, requestedEpisode)
+                    } else {
+                        result.streams
+                    }
+                StreamAddonGroup(
+                    addonName = result.addonName,
+                    streams = StreamBadgeEngine.apply(prepared, getApplication())
+                )
+            }
+            .filter { it.streams.isNotEmpty() }
         val rankedMsg = if (useRanker) "ranked total = ${withBadges.size}" else "unranked total = ${withBadges.size}"
         val topMsg = "top stream = ${withBadges.firstOrNull()?.let(::describeStream) ?: "none"}"
 

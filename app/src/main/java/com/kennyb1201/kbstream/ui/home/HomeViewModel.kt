@@ -381,9 +381,13 @@ class HomeViewModel(
      * Re-published whenever [upNext] changes, which is also when the watch
      * state behind those sources is freshest.
      */
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
     val upcomingSchedule: StateFlow<List<UpcomingEpisode>> =
         _upNext
             .asStateFlow()
+            // Collapse a profile switch's burst of upNext emissions into one
+            // rebuild; see UPCOMING_REBUILD_DEBOUNCE_MS.
+            .debounce(UPCOMING_REBUILD_DEBOUNCE_MS)
             .map { items ->
                 // Only a show the viewer is caught up on advertises its next
                 // unaired episode; a show with aired episodes still waiting is
@@ -3048,9 +3052,31 @@ Log.d(
     // reuses it so several Simkl rows of the SAME show don't repeat the walk:
     // the resolver builds its next-episode target, finale flags and "X of Y"
     // totals entirely from this map. Keyed by numeric TMDB id (both paths
-    // resolve to the same id for one show); cleared with the totals cache.
+    // resolve to the same id for one show).
+    //
+    // Unlike the totals cache (which carries watched counts and so is cleared
+    // with them), this map is TMDB's season listings alone - nothing in it
+    // depends on this profile's watched state. It is therefore kept ACROSS
+    // refreshes, stamped so a stale listing still expires: clearing it on every
+    // refresh only made each refresh re-read every season of every Continue
+    // Watching show (up to 50 lookups per show, see the walk below) to rebuild
+    // data it had just thrown away. The TTL matches TmdbRepository's per-season
+    // memory cache, so a listing here never outlives the entry the walk would
+    // otherwise have read, and the cap bounds how many shows a session holds.
     private val showSeasonEpisodesCache =
-        java.util.concurrent.ConcurrentHashMap<Int, Map<Int, List<ResolvedEpisode>>>()
+        java.util.concurrent.ConcurrentHashMap<Int, Pair<Long, Map<Int, List<ResolvedEpisode>>>>()
+    private val showSeasonEpisodesTtlMs = 12L * 60L * 60L * 1000L
+    private val maxShowSeasonEpisodesShows = 60
+
+    /** Drops the oldest walked shows once the map is over its cap. */
+    private fun pruneShowSeasonEpisodesCache() {
+        val over = showSeasonEpisodesCache.size - maxShowSeasonEpisodesShows
+        if (over <= 0) return
+        showSeasonEpisodesCache.entries
+            .sortedBy { it.value.first }
+            .take(over)
+            .forEach { showSeasonEpisodesCache.remove(it.key) }
+    }
 
     private suspend fun clearWatchedStateCaches() {
 
@@ -3065,8 +3091,10 @@ Log.d(
             watchedStateIncompleteShows.clear()
 
             showEpisodeTotalsCache.clear()
-
-            showSeasonEpisodesCache.clear()
+            // showSeasonEpisodesCache is deliberately NOT cleared here: it is
+            // TMDB season listings, independent of watched state, and keeping
+            // it is what stops a refresh re-walking every season (see its
+            // declaration). Its own TTL governs staleness.
         }
     }
 
@@ -5249,6 +5277,11 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // this map, so a cache hit skips the entire TMDB season walk.
     val cachedSeasonEpisodesBySeason =
         showSeasonEpisodesCache[tmdbId]
+            ?.takeIf {
+                System.currentTimeMillis() - it.first <
+                    showSeasonEpisodesTtlMs
+            }
+            ?.second
 
     val seasonEpisodesBySeason: MutableMap<Int, List<ResolvedEpisode>> =
         cachedSeasonEpisodesBySeason?.toMutableMap()
@@ -5302,7 +5335,8 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     // that isn't cached either.
     if (seasonEpisodesBySeason.isNotEmpty()) {
         showSeasonEpisodesCache[tmdbId] =
-            seasonEpisodesBySeason.toMap()
+            System.currentTimeMillis() to seasonEpisodesBySeason.toMap()
+        pruneShowSeasonEpisodesCache()
     }
     }
 
@@ -7791,6 +7825,20 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val UP_NEXT_DEBOUNCE_MS =
             100L
+
+        /**
+         * How long the Upcoming rail waits for [upNext] to settle before it
+         * rebuilds.
+         *
+         * A profile switch republishes upNext several times in quick
+         * succession - emptied, then the new profile's instant snapshot, then
+         * the enriched pass - and every emission otherwise re-runs the whole
+         * build, including its per-show next-air-date lookups. Debouncing the
+         * burst turns that into one build; the steady-state publish is delayed
+         * by the same fraction of a second, invisible on a rail.
+         */
+        private const val UPCOMING_REBUILD_DEBOUNCE_MS =
+            300L
 
         private const val MAX_FORWARD_SEASON_LOOKAHEAD =
             50
