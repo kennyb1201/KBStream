@@ -263,6 +263,22 @@ class HomeViewModel(
     private val trackerWatchedEpisodesByShow =
         mutableMapOf<String, Set<Pair<Int, Int>>>()
 
+    // Last-known tracker marks, kept across a cache refresh so Continue
+    // Watching suppression still has a signal.
+    //
+    // dropSupersededResumeRows runs at the TOP of each up-next cycle, before
+    // the enrichment pass refills trackerWatchedEpisodesByShow - so reading
+    // the live map there always found it empty right after a refresh's
+    // clear(), and the tracker's condemn-a-stale-resume-row path never fired
+    // on the refresh that most needed it. clearWatchedStateCaches snapshots
+    // the live map here before clearing it, so the read gets the previous
+    // cycle's completed marks instead of nothing. The live map keeps its
+    // exact refresh semantics for every other reader, and a profile switch
+    // resets this snapshot along with the map so a show id shared across
+    // profiles cannot inherit the marks of the profile being left.
+    private var resumeSuppressionTrackerMarks:
+        Map<String, Set<Pair<Int, Int>>> = emptyMap()
+
     private val watchedEpisodeKeysByShow =
         mutableMapOf<String, Set<String>>()
 
@@ -1097,6 +1113,13 @@ Log.d(
                     _heroTrailerKey.value = null
                     _heroRatings.value = null
                     heroResolveJob?.cancel()
+
+                    // Hard-drop the watched-state caches, including the
+                    // resume-suppression tracker snapshot, before the refresh
+                    // below: the tracker marks belong to the profile being
+                    // left, and refreshAllHomeData()/refreshUpNext() only
+                    // soft-clear.
+                    clearWatchedStateCaches(hard = true)
 
                     refreshAllHomeData()
                     refreshUpNext()
@@ -3136,9 +3159,22 @@ Log.d(
             .forEach { showSeasonEpisodesCache.remove(it.key) }
     }
 
-    private suspend fun clearWatchedStateCaches() {
+    // [hard] is the profile-switch flavor: it drops the resume-suppression
+    // snapshot too, because the tracker marks belong to the profile being
+    // left. An ordinary refresh keeps the snapshot (see its declaration).
+    private suspend fun clearWatchedStateCaches(hard: Boolean = false) {
 
         watchedStateMutex.withLock {
+
+            resumeSuppressionTrackerMarks =
+                if (hard) {
+
+                    emptyMap()
+
+                } else {
+
+                    trackerWatchedEpisodesByShow.toMap()
+                }
 
             trackerWatchedEpisodesByShow.clear()
 
@@ -4125,7 +4161,7 @@ Log.d(
         // costs a card rather than the viewer's actual stop point.
         val trackerWatched =
             watchedStateMutex.withLock {
-                trackerWatchedEpisodesByShow.toMap()
+                resumeSuppressionTrackerMarks
             }
                 .mapNotNull { (parentId, episodes) ->
                     supersededResumeShowKey(parentId)

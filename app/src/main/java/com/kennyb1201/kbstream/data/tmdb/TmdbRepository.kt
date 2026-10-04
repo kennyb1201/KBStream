@@ -19,6 +19,7 @@ import com.squareup.moshi.JsonAdapter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
@@ -307,6 +308,14 @@ class TmdbRepository private constructor(context: Context) :
     // ConcurrentHashMap: continue-watching lookups run several rows in
     // parallel, so these caches are written from multiple coroutines.
     private val detailCache = ConcurrentHashMap<String, Pair<Long, TmdbDetail?>>()
+
+    // In-flight detail fetches, keyed like [detailCache]. Home's enrichment
+    // pass and a focus-driven hero resolve routinely ask for the SAME title at
+    // once; without this the second caller missed the cache (the first had not
+    // filled it yet) and fired a duplicate request. A concurrent caller now
+    // awaits the pending fetch instead.
+    private val detailFetchInFlight =
+        ConcurrentHashMap<String, CompletableDeferred<TmdbDetail?>>()
     private val detailCacheTtlMs = 12L * 60L * 60L * 1000L
     private val detailCacheDiskTtlMs = 30L * 24L * 60L * 60L * 1000L
 
@@ -400,7 +409,15 @@ class TmdbRepository private constructor(context: Context) :
 
         if (items.isNotEmpty()) {
             if (railPageCache.size > railPageCacheMaxEntries) {
-                railPageCache.clear()
+                // Evict the OLDEST pages, not the whole map. clear() threw away
+                // up to 511 still-fresh pages because ONE overflowed the cap,
+                // so the next rail the viewer opened - however recently it had
+                // been loaded - paid the full round-trip again. Same oldest-first
+                // trim as the season-episode cache (see HomeViewModel).
+                railPageCache.entries
+                    .sortedBy { it.value.first }
+                    .take(railPageCache.size - railPageCacheMaxEntries)
+                    .forEach { railPageCache.remove(it.key) }
             }
             railPageCache[key] = now to items
         }
@@ -1427,18 +1444,42 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
 
-        val result = runCatchingCancellable {
-            if (normalizeType(type) == "series") {
-                api.getTv(tmdbId, apiKey)
-            } else {
-                api.getMovie(tmdbId, apiKey)
+        // Another caller is already fetching this key: share its result instead
+        // of firing a duplicate request. putIfAbsent closes the window between
+        // the check and the registration, so two callers that both missed the
+        // cache cannot both start a fetch.
+        detailFetchInFlight[key]?.let { pending -> return pending.await() }
+
+        val deferred = CompletableDeferred<TmdbDetail?>()
+        detailFetchInFlight.putIfAbsent(key, deferred)?.let { pending ->
+            return pending.await()
+        }
+
+        val result =
+            try {
+                runCatchingCancellable {
+                    if (normalizeType(type) == "series") {
+                        api.getTv(tmdbId, apiKey)
+                    } else {
+                        api.getMovie(tmdbId, apiKey)
+                    }
+                }.getOrNull()
+            } catch (cancellation: kotlinx.coroutines.CancellationException) {
+                detailFetchInFlight.remove(key)
+                // Unblock anyone sharing this fetch with a miss rather than a
+                // cancellation they did not ask for.
+                deferred.complete(null)
+                throw cancellation
             }
-        }.getOrNull()
 
         detailCache[key] = now to result
         if (result != null) {
             cacheJson(diskKey, detailJsonAdapter.toJson(result), now)
         }
+        // Complete before dropping the in-flight marker, so a caller that
+        // arrives between the two sees the cache and never double-fetches.
+        deferred.complete(result)
+        detailFetchInFlight.remove(key)
         return result
     }
 

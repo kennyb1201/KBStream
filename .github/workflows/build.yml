@@ -448,6 +448,40 @@ jobs:
           KBSTREAM_KEY_ALIAS: ${{ secrets.KBSTREAM_KEY_ALIAS }}
           KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
 
+      # Google Play requires every native library in a release to be 16 KB page
+      # aligned (deadline Feb 1 2027), and nothing upstream guarantees it for a
+      # THIRD-PARTY prebuilt .so. libmpv is pinned to a build verified 16 KB
+      # aligned and the FFmpeg extension is linked with NDK r28c, but
+      # sentry-native ships its own .so with no such pin - so every packaged
+      # library is checked here and the run fails on any that is not, before a
+      # release can be published. A 16 KB-aligned object reports 0x4000 (or
+      # larger) on its LOAD segments; a 4 KB one reports 0x1000.
+      - name: Verify 16 KB page alignment of native libraries
+        run: |
+          set -euo pipefail
+          APK="$(ls app/build/outputs/apk/release/*.apk | head -n1)"
+          echo "Checking native libraries in $APK"
+          rm -rf /tmp/apk-libs && mkdir -p /tmp/apk-libs
+          unzip -o -q "$APK" 'lib/*' -d /tmp/apk-libs
+          fail=0
+          while IFS= read -r so; do
+            while IFS= read -r align; do
+              case "$align" in
+                # Positively-detected 4 KB (or smaller) alignment is the only
+                # failure, so a parsing quirk cannot spuriously block a release.
+                0x1000|0x800|0x400|0x200)
+                  echo "::error file=$so::LOAD segment not 16 KB aligned ($align)"
+                  fail=1
+                  ;;
+              esac
+            done < <(readelf -lW "$so" | awk '/^[[:space:]]*LOAD/{print $NF}')
+          done < <(find /tmp/apk-libs/lib -name '*.so' | sort)
+          if [ "$fail" -ne 0 ]; then
+            echo "One or more native libraries are not 16 KB page aligned."
+            exit 1
+          fi
+          echo "All packaged native libraries are 16 KB page aligned."
+
       # Best-effort R8 mapping upload: needs an upload-capable Sentry token
       # (org auth token). With the wrong/read-only token this 403s and is
       # logged as a warning - the APK from the step above is still published.
