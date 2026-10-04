@@ -9,6 +9,7 @@ import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import dev.jdtech.mpv.MPVLib
+import java.io.File
 import java.util.Locale
 import kotlin.math.pow
 
@@ -769,6 +770,33 @@ class MpvPlayerView @JvmOverloads constructor(
 
     // --- mpv configuration --------------------------------------------------
 
+    /**
+     * Stages the bundled Mozilla CA roots for mpv and returns their file path,
+     * or null when they cannot be staged.
+     *
+     * libmpv on Android has no access to the system trust store, so with
+     * `tls-verify=yes` and ZERO trust roots EVERY https handshake fails with
+     * "unable to get local issuer certificate" - and every source this app
+     * plays is an https debrid link, so switching verification on without a CA
+     * bundle broke all playback. mpv's own default (no `tls-verify`) is to not
+     * check, which is why the explicit option was the whole cause.
+     *
+     * The roots ship in assets (see `app/src/main/assets/cacert.pem`) and are
+     * copied to a real file because mpv's `tls-ca-file` needs a filesystem
+     * path. The copy is refreshed when the asset's size differs, so a newer
+     * build's bundle replaces a stale copy on disk.
+     */
+    private fun prepareTlsCaFile(): String? = runCatching {
+        val dest = File(context.filesDir, CA_FILE_NAME)
+        val assetBytes = context.assets.open(CA_ASSET_NAME).use { it.readBytes() }
+        if (!dest.isFile || dest.length() != assetBytes.size.toLong()) {
+            dest.writeBytes(assetBytes)
+        }
+        dest.absolutePath.takeIf { dest.isFile && dest.length() > 0L }
+    }.onFailure {
+        Log.w(TAG, "CA roots could not be staged from assets", it)
+    }.getOrNull()
+
     private fun applyOptions() {
         // No user config: this is a fallback engine, and an mpv.conf picked up
         // from the device would change behavior between boxes.
@@ -808,8 +836,20 @@ class MpvPlayerView @JvmOverloads constructor(
         mpv.setOptionString("audio-set-media-role", "yes")
 
         // Networking. A dead host should fail in half a minute instead of
-        // sitting on a spinner, and TLS is verified.
-        mpv.setOptionString("tls-verify", "yes")
+        // sitting on a spinner, and TLS is verified against the BUNDLED Mozilla
+        // roots: libmpv cannot read Android's trust store, so `tls-verify=yes`
+        // with no `tls-ca-file` makes every https handshake fail with
+        // "unable to get local issuer certificate" (see [prepareTlsCaFile]).
+        // When the roots cannot be staged, verification is turned OFF instead -
+        // unverified playback beats no playback.
+        val caFile = prepareTlsCaFile()
+        if (caFile != null) {
+            mpv.setOptionString("tls-ca-file", caFile)
+            mpv.setOptionString("tls-verify", "yes")
+        } else {
+            Log.w(TAG, "no CA bundle available; disabling mpv TLS verification")
+            mpv.setOptionString("tls-verify", "no")
+        }
         mpv.setOptionString("network-timeout", "30")
 
         // The identity the app plays as. mpv asks as `mpv/<version>` by
@@ -1311,6 +1351,14 @@ class MpvPlayerView @JvmOverloads constructor(
 
         /** How close to the resume point counts as "already there". */
         const val RESUME_TOLERANCE_MS = 5_000L
+
+        /**
+         * Mozilla's CA roots, shipped in assets and handed to mpv as a file.
+         * See [prepareTlsCaFile] for why. Refresh the bundle from
+         * https://curl.se/ca/cacert.pem every few months, as CAs rotate.
+         */
+        const val CA_ASSET_NAME = "cacert.pem"
+        const val CA_FILE_NAME = "cacert.pem"
 
         /** MediaCodec first, copy-back second, then software decoding. */
         const val HWDEC_HW = "mediacodec,mediacodec-copy,no"

@@ -70,6 +70,39 @@ class MpvErrorReasonTest {
     }
 
     @Test
+    fun `a tls trust failure is named over the generic open line`() {
+        // libmpv reads no system trust store; with tls-verify on and no CA
+        // bundle every https handshake reports exactly this, and it used to
+        // fall through to the generic "Failed to open" line - which is why the
+        // card never named the cause.
+        val lines = listOf(
+            "ffmpeg tls: Unable to get local issuer certificate",
+            "stream Failed to open https://host/signed/file.mkv"
+        )
+
+        assertEquals(
+            "ffmpeg tls: Unable to get local issuer certificate",
+            MpvErrorReason.pick(lines)
+        )
+    }
+
+    @Test
+    fun `a host containing tls does not out-rank the real cause`() {
+        // The bare token "tls" is deliberately absent from SPECIFIC: a debrid
+        // host that contains it would otherwise win as the last matching line
+        // and hide the actual certificate failure.
+        val lines = listOf(
+            "ffmpeg tls: Unable to get local issuer certificate",
+            "stream Failed to open https://tls-cdn.host/signed/file.mkv"
+        )
+
+        assertEquals(
+            "ffmpeg tls: Unable to get local issuer certificate",
+            MpvErrorReason.pick(lines)
+        )
+    }
+
+    @Test
     fun `blank lines and an empty log yield nothing`() {
         assertNull(MpvErrorReason.pick(emptyList()))
         assertNull(MpvErrorReason.pick(listOf("", "   ")))

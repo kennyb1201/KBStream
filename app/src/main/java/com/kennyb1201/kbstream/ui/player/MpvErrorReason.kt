@@ -41,7 +41,18 @@ internal object MpvErrorReason {
         "name or service not known",
         "forbidden",
         "unauthorized",
-        "invalid data found"
+        "invalid data found",
+        // TLS: libmpv has no system trust store, so a missing/unusable CA
+        // bundle (see MpvPlayerView.prepareTlsCaFile) reports as an inability
+        // to verify the chain. The bare token "tls" is deliberately NOT used:
+        // mpv logs the failing URL on its own error line, and a debrid host
+        // that happens to contain "tls" would then out-rank the real cause
+        // (the matcher prefers the LAST matching line). The prefixed/qualified
+        // forms below are what ffmpeg actually emits.
+        "certificate",
+        "unable to get local issuer",
+        "tls:",
+        "tls handshake"
     )
 
     /**
