@@ -93,25 +93,44 @@ internal fun mdbListRatingSources(
     }
 )
 
-/** How many rating tokens the hero's metadata line carries at most. */
-internal const val HERO_RATING_TOKEN_LIMIT = 3
+/**
+ * How many rating tokens the hero's metadata line carries at most.
+ *
+ * Two, not three: on a TV the one ellipsized line ran out of room before the
+ * third token, so the extra source was never read - better to show two that
+ * fit than three with the last cut off. The detail page keeps the full strip.
+ */
+internal const val HERO_RATING_TOKEN_LIMIT = 2
+
+/**
+ * The IMDb short label, excluded from the hero's tokens.
+ *
+ * The hero's metadata line ALREADY carries IMDb ("IMDb 8.4", from the item's
+ * own rating), so emitting it again as a token would print it twice on the one
+ * line. [heroRatingTokens] drops it; the detail page's chip strip still shows
+ * IMDb among all seven sources.
+ */
+private const val HERO_META_IMDB_LABEL = "IMDb"
 
 /**
  * The rating sources as compact text tokens for the Home hero's metadata line,
- * formatted "IMDb 8.4", "RT 92%", "TMDB 8.1".
+ * formatted "RT 92%", "TMDB 8.1", "MC 78/100".
  *
  * The hero folds ratings INTO its existing single ellipsized info line rather
  * than drawing the chip strip under it (the Netflix / Apple TV pattern): zero
- * extra vertical space and nothing to cut off. Only the first
- * [HERO_RATING_TOKEN_LIMIT] sources are taken - the list is already ordered
- * IMDb, RT, TMDB first, so the three a viewer scans for lead, and a title with
- * fewer sources simply contributes fewer tokens. The detail page keeps the
- * full [MdbListRatingChips] strip.
+ * extra vertical space and nothing to cut off. IMDb is skipped because the
+ * line already shows it, and only the first [HERO_RATING_TOKEN_LIMIT] of the
+ * rest are taken - the list is already ordered RT, TMDB, MC first, so the two
+ * a viewer scans for lead, and a title with fewer sources simply contributes
+ * fewer tokens. The detail page keeps the full [MdbListRatingChips] strip.
  */
 internal fun heroRatingTokens(
     sources: List<RatingChipSource>,
     limit: Int = HERO_RATING_TOKEN_LIMIT
-): List<String> = sources.take(limit).map { "${it.shortName} ${it.value}" }
+): List<String> = sources
+    .filterNot { it.shortName == HERO_META_IMDB_LABEL }
+    .take(limit)
+    .map { "${it.shortName} ${it.value}" }
 
 /**
  * The source marks as a wrapping row of chips, used by the detail page's

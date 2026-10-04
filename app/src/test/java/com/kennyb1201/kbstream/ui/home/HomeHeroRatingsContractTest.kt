@@ -76,6 +76,27 @@ class HomeHeroRatingsContractTest {
     }
 
     @Test
+    fun `runtime moves off the metadata line onto the second line`() {
+        val screen = source(SCREEN)
+        assertTrue(
+            "runtime must ride the second line next to the status and the " +
+                "season/episode count, or it has nowhere to live",
+            screen.contains("listOfNotNull(statusTag, seasonEpisodeCount, runtime)")
+        )
+        // The metadata line must no longer carry runtime: it was long enough
+        // that the tail (genre and rating tokens) was ellipsized away.
+        val start = screen.indexOf("val heroInfoParts =")
+        assertTrue("heroInfoParts must exist", start >= 0)
+        val end = screen.indexOf("+ heroRatingTokens(ratingSources)", start)
+        assertTrue("the ratings must still be appended", end > start)
+        val block = screen.substring(start, end)
+        assertFalse(
+            "runtime must not be back on the metadata line",
+            block.contains("runtime")
+        )
+    }
+
+    @Test
     fun `the hero folds the ratings into its metadata line`() {
         val screen = source(SCREEN)
         assertTrue(

@@ -125,7 +125,7 @@ class MdbListRatingChipsTest {
     }
 
     @Test
-    fun `hero tokens take the first three sources in meta-line format`() {
+    fun `hero tokens take the first two non-IMDb sources in meta-line format`() {
         val sources = mdbListRatingSources(
             MdbListRatings(
                 imdb = "8.8",
@@ -136,17 +136,23 @@ class MdbListRatingChipsTest {
             )
         )
 
+        // The meta line already shows IMDb, so it is not repeated as a token,
+        // and only the first HERO_RATING_TOKEN_LIMIT (two) fit on a TV.
+        assertEquals(HERO_RATING_TOKEN_LIMIT, 2)
         assertEquals(
-            listOf("IMDb 8.8", "RT 94%", "TMDB 8.1"),
+            listOf("RT 94%", "TMDB 8.1"),
             heroRatingTokens(sources)
         )
     }
 
     @Test
-    fun `hero tokens degenerate gracefully with fewer sources`() {
-        // Only two sources present: the line carries two tokens, not three.
+    fun `hero tokens skip IMDb and degenerate gracefully`() {
+        // IMDb is the only source: nothing is duplicated onto the line.
+        assertTrue(heroRatingTokens(mdbListRatingSources(MdbListRatings(imdb = "8.8"))).isEmpty())
+
+        // IMDb + one other: the other is the only token.
         val two = mdbListRatingSources(MdbListRatings(imdb = "8.8", trakt = "91%"))
-        assertEquals(listOf("IMDb 8.8", "Trakt 91%"), heroRatingTokens(two))
+        assertEquals(listOf("Trakt 91%"), heroRatingTokens(two))
 
         // Nothing at all yields nothing to append.
         assertTrue(heroRatingTokens(emptyList()).isEmpty())

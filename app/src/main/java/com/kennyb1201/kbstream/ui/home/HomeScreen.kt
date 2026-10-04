@@ -1155,17 +1155,19 @@ private fun HomeHero(
                 ?.takeIf { it > 0.0 }
         )
 
-    // One ellipsized line. The ratings fold INTO it as up to three compact
-    // tokens ("2024 • 2 Seasons • IMDb 8.4 • RT 92% • TMDB 8.1") rather than
-    // drawing the chip strip underneath: zero extra vertical space, nothing to
-    // cut off, and it is the Netflix / Apple TV pattern. The detail page still
-    // shows the full strip.
+    // One ellipsized line. The ratings fold INTO it as up to two compact
+    // tokens ("IMDb 8.4 • 2024 • PG-13 • Action • RT 92% • TMDB 8.1") rather
+    // than drawing the chip strip underneath: zero extra vertical space and it
+    // is the Netflix / Apple TV pattern. IMDb is already the meta line's own
+    // rating, so heroRatingTokens adds only the other sources; the detail page
+    // still shows the full strip. Runtime is deliberately NOT here - it moved
+    // to the second line below, because the line was long enough that its tail
+    // (the rating tokens) was ellipsized away on a TV.
     val heroInfoParts =
         listOfNotNull(
             imdb,
             year,
             rating,
-            runtime,
             genre
         ) + heroRatingTokens(ratingSources)
 
@@ -1438,55 +1440,60 @@ private fun HomeHero(
                 )
             }
 
-            // Regular catalog items:
-            // Status comes FIRST, followed by season/episode totals.
-            //
-            // Continue Watching items intentionally do NOT show the
-            // TMDB status (Ongoing / Ended / Canceled / etc.).
-            if (
-                continueWatchingItem == null &&
-                (
-                    !statusTag.isNullOrBlank() ||
-                    !seasonEpisodeCount.isNullOrBlank()
-                )
-            ) {
+            // Second line. For catalog items the TMDB status comes FIRST,
+            // then the season/episode totals and the runtime. Continue
+            // Watching items intentionally do NOT show the TMDB status
+            // (Ongoing / Ended / Canceled / etc.), but the runtime rides along
+            // for every type - it moved OFF the metadata line above, whose
+            // tail was being ellipsized, and this line was already being drawn
+            // for the status.
+            val heroSecondaryParts =
+                if (continueWatchingItem == null) {
+                    listOfNotNull(statusTag, seasonEpisodeCount, runtime)
+                } else {
+                    listOfNotNull(runtime)
+                }
+
+            if (heroSecondaryParts.isNotEmpty()) {
                 Row(
                     modifier = Modifier.padding(top = 8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    statusTag?.let { status ->
-                        Text(
-                            text = status,
-                            color = KBAccent,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    heroSecondaryParts.forEachIndexed { index, part ->
+                        if (index > 0) {
+                            Text(
+                                text = "  •  ",
+                                color = KBTextHi.copy(alpha = 0.94f),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
 
-                    if (
-                        !statusTag.isNullOrBlank() &&
-                        !seasonEpisodeCount.isNullOrBlank()
-                    ) {
-                        Text(
-                            text = "  •  ",
-                            color = KBTextHi.copy(alpha = 0.94f),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
+                        val isStatus =
+                            continueWatchingItem == null &&
+                                index == 0 &&
+                                !statusTag.isNullOrBlank()
 
-                    seasonEpisodeCount?.let { count ->
-                        Text(
-                            text = count,
-                            color = KBTextHi.copy(alpha = 0.94f),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        if (isStatus) {
+                            Text(
+                                text = part,
+                                color = KBAccent,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            Text(
+                                text = part,
+                                color = KBTextHi.copy(alpha = 0.94f),
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
