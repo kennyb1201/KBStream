@@ -131,12 +131,14 @@ import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
+import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
@@ -152,6 +154,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.kbAccentIndexState
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.ui.components.StudioChip
 import kotlinx.coroutines.delay
@@ -367,9 +370,11 @@ private fun IconButtonBody(
     @DrawableRes iconRes: Int,
     contentDescription: String,
     progress: Float? = null,
-    // The brand mark (the detail PLAY control) carries its own brass gradients
-    // and must render UNTINTED so it reads as the logo; the plain control-bar
-    // glyphs still tint with focus/idle like every other icon button.
+    // The brand mark (the detail PLAY control) carries its own brass gradients:
+    // at the default accent it renders UNTINTED so it reads as the logo, and
+    // under a chosen global accent it tints with that accent instead, so the
+    // PLAY control follows the theme. The plain control-bar glyphs still tint
+    // with focus/idle like every other icon button.
     brandMark: Boolean = false
 ) {
     Column(
@@ -381,12 +386,17 @@ private fun IconButtonBody(
     ) {
         Icon(
             // painterResource + Icon tints with LocalContentColor, exactly as
-            // the ImageVector form did — except the brand mark, which draws its
-            // own brass and is left untinted.
+            // the ImageVector form did — except the brand mark, which keeps its
+            // own brass at the default accent and takes the theme accent once
+            // one is chosen (the ring-and-triangle silhouette survives the flat
+            // tint, so it still reads as the logo).
             painter = painterResource(iconRes),
             contentDescription = contentDescription,
-            tint = if (brandMark) Color.Unspecified
-            else androidx.tv.material3.LocalContentColor.current,
+            tint = when {
+                !brandMark -> androidx.tv.material3.LocalContentColor.current
+                kbAccentIndexState.value == DEFAULT_ACCENT_INDEX -> Color.Unspecified
+                else -> KBAccent
+            },
             modifier = Modifier.size(BUTTON_ICON_SIZE)
         )
 
@@ -3568,6 +3578,8 @@ fun DetailScreen(
                                         PosterGridCard(
                                             posterPath =
                                                 part.posterPath,
+                                            artId = part.id.toString(),
+                                            artType = "movie",
                                             contentDescription =
                                                 part.title ?: "",
                                             captionYear =
@@ -3704,6 +3716,8 @@ fun DetailScreen(
                                         PosterGridCard(
                                             posterPath =
                                                 rec.posterPath,
+                                            artId = rec.id.toString(),
+                                            artType = normalizedType,
                                             contentDescription =
                                                 rec.title
                                                     ?: rec.name
@@ -5199,7 +5213,12 @@ private fun PosterGridCard(
     modifier: Modifier = Modifier,
     isPartiallyWatched: Boolean = false,
     captionYear: String? = null,
-    captionRating: Double? = null
+    captionRating: Double? = null,
+    // Raw id + type for the shared landscape-art resolver, so a recommendation
+    // or collection part (which carries only a poster path) still draws a real
+    // backdrop with a corner clearlogo when landscape mode is on.
+    artId: String? = null,
+    artType: String? = null
 ) {
     // The Column must be pinned to the poster width: a LazyRow measures
     // children with unbounded width, so an unconstrained caption would let
@@ -5211,10 +5230,13 @@ private fun PosterGridCard(
     // Follow the app-wide Settings poster size so these rails match every
     // other poster surface.
     val posterSize = rememberPosterSize()
+    // Landscape tiles are wider than the poster they replace, so the tile's own
+    // container follows the shape the card is about to draw.
+    val tileWidth = rememberPosterTileWidth(posterSize.width)
 
     Column(
         modifier = Modifier
-            .width(posterSize.width)
+            .width(tileWidth)
             .onFocusChanged { focused = it.hasFocus }
     ) {
         GlobalPosterCard(
@@ -5230,6 +5252,8 @@ private fun PosterGridCard(
             onLongClick = onLongClick,
             posterWidth = posterSize.width,
             posterHeight = posterSize.height,
+            artId = artId,
+            artType = artType,
             modifier = modifier
         )
 

@@ -1133,6 +1133,14 @@ class MpvPlayerActivity : ComponentActivity() {
             amoled && fill == AVATAR_PLACEHOLDER_FILL ->
                 themedAvatarBackground(playerPanelSurfaceColor(this))
 
+            // A surface-fill button whose OWN press ripple is the XML accent
+            // (the control-bar buttons, the source pillars, picker rows): the
+            // fill is not the accent, so the accent branch below never matched
+            // and the press flash kept the default brass under a chosen theme.
+            // Rebuild the ripple in the accent while keeping the fill.
+            rippled && accent != xmlAccent && ripple?.getEffectColor()?.defaultColor == xmlAccent ->
+                themedChromeBackground(fill, shape.cornerRadius, true)
+
             // An accent-filled drawable (the accent button, selected pills, the
             // live badge): the XML resolved @color/kb_accent at inflation, so a
             // new global accent has to rebuild the fill - and the press ripple
@@ -3188,6 +3196,7 @@ class MpvPlayerActivity : ComponentActivity() {
         playPauseButton?.setImageResource(
             if (paused) R.drawable.ic_player_play else R.drawable.ic_player_pause
         )
+        playPauseButton?.let { tintPlayPauseIcon(it, this) }
     }
 
     /**

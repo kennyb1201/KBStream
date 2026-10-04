@@ -51,6 +51,7 @@ import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusCard
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
@@ -387,11 +388,14 @@ internal fun TitlePosterTile(
     isPartiallyWatched: Boolean = false
 ) {
     val posterSize = rememberPosterSize()
+    // Landscape tiles are wider than the poster they replace, so the tile's own
+    // container follows the shape the card is about to draw.
+    val tileWidth = rememberPosterTileWidth(posterSize.width)
     // The tile's own focus drives the caption marquee below.
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
-            .width(posterSize.width)
+            .width(tileWidth)
             .onFocusChanged { focused = it.hasFocus }
     ) {
         GlobalPosterCard(
@@ -405,6 +409,11 @@ internal fun TitlePosterTile(
             onLongClick = onLongClick,
             posterWidth = posterSize.width,
             posterHeight = posterSize.height,
+            // The add-on art above is usually present; the resolver still fills
+            // in the alternate backdrop + clearlogo the rails use, exactly as
+            // Home's scenery pass does.
+            artId = result.meta.id,
+            artType = result.meta.type,
             modifier = modifier
                 // Key comes from meta, not the result: meta is what the
                 // click actually navigates with.

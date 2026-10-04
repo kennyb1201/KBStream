@@ -755,6 +755,10 @@ private fun LibraryPosterCard(
             onLongClick = onLongClick,
             posterWidth = posterSize.width,
             posterHeight = posterSize.height,
+            // A tracker row carries only a poster URL; the shared resolver
+            // fills in the backdrop + clearlogo for the landscape shape.
+            artId = item.navigationId,
+            artType = item.mediaType,
             modifier = Modifier
                 // Same shared key the Library hands to Detail, so a poster
                 // flies into the hero instead of the grid hard-cutting.

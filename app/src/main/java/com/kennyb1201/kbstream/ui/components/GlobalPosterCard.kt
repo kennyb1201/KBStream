@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.components
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
@@ -20,13 +21,20 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  * for this, passing the backdrop/clearlogo it already has.
  *
  * The size is taken as a pair rather than left in [modifier] because the two
- * shapes cannot share it: a 124x186 poster becomes 124x70 when landscape, and
- * a caller can only express that by letting the card own its own bounds.
- * Portrait keeps the caller's exact box; landscape derives 16:9 from the width.
+ * shapes cannot share it, and a caller can only express that by letting the card
+ * own its own bounds. Portrait keeps the caller's exact box; landscape keeps the
+ * Home rails' proportion to it - a 124dp poster becomes a 210x118 landscape
+ * card (see [landscapeTileWidth]), not the 124x70 thumbnail a plain 16:9 crop
+ * of the same width used to give. The tile is therefore WIDER than the poster,
+ * so a caller that pins its own container to the poster width has to widen it
+ * too; [rememberGlobalLandscape] and [landscapeTileWidth] are there for that.
  *
- * [backdropUrl] falls back to [posterUrl] when the item carries no backdrop, so
- * turning the setting on always changes the shape even for a source that ships
- * no landscape art - a cropped poster reads better than a blank 16:9 hole.
+ * [backdropUrl] and [logoUrl] are what the caller already has. When they are
+ * missing, landscape mode resolves the item's own art from [artId]/[artType]
+ * through [rememberGlobalLandscapeArt] - the shared backdrop + clearlogo
+ * resolver - so a surface that ships only a poster still draws a real backdrop
+ * with a corner clearlogo. Whatever is still absent falls back to [posterUrl],
+ * because a cropped poster reads better than a blank 16:9 hole.
  */
 @Composable
 fun GlobalPosterCard(
@@ -39,6 +47,14 @@ fun GlobalPosterCard(
     modifier: Modifier = Modifier,
     backdropUrl: String? = null,
     logoUrl: String? = null,
+    /**
+     * The item's raw id and type for the shared landscape-art resolver (any id
+     * `TmdbRepository.fetchEnrichedMetaCached` can resolve: "tt...",
+     * "tmdb:...", or a bare numeric TMDB id). Null skips the lookup and keeps
+     * [backdropUrl]/[logoUrl] as the whole story.
+     */
+    artId: String? = null,
+    artType: String? = null,
     isPartiallyWatched: Boolean = false,
     onLongClick: (() -> Unit)? = null,
     onPosterError: ((Throwable?) -> Unit)? = null,
@@ -53,10 +69,19 @@ fun GlobalPosterCard(
 ) {
     val context = LocalContext.current
     val useLandscape = landscape ?: AppPreferences.landscapePostersActive(context)
+    // Landscape mode resolves the item's own backdrop + clearlogo when the
+    // caller's data carries none; portrait never looks anything up.
+    val art = rememberGlobalLandscapeArt(
+        enabled = useLandscape,
+        addonId = artId,
+        addonType = artType,
+        addonBackdrop = backdropUrl,
+        addonLogo = logoUrl
+    )
     if (useLandscape) {
         LandscapeCard(
-            backdropUrl = backdropUrl?.takeIf { it.isNotBlank() } ?: posterUrl,
-            logoUrl = logoUrl,
+            backdropUrl = art.first?.takeIf { it.isNotBlank() } ?: posterUrl,
+            logoUrl = art.second,
             fallbackTitle = contentDescription,
             contentDescription = contentDescription,
             isWatched = isWatched,
@@ -64,8 +89,8 @@ fun GlobalPosterCard(
             onClick = onClick,
             onLongClick = onLongClick,
             modifier = modifier
-                .width(posterWidth)
-                .height(posterWidth * 9f / 16f)
+                .width(landscapeTileWidth(posterWidth))
+                .height(landscapeTileHeight(posterWidth))
         )
     } else {
         PosterCard(
@@ -82,3 +107,18 @@ fun GlobalPosterCard(
         )
     }
 }
+
+/**
+ * Whether the global "Landscape Posters" setting is on, for a caller that has to
+ * size its own container to match the tile [GlobalPosterCard] is about to draw.
+ *
+ * [GlobalPosterCard] makes the same read internally; this exists only so a
+ * wrapper (a Column pinned to the poster width, a caption line under the card)
+ * does not disagree with the card about the shape it is drawing.
+ */
+@Composable
+fun rememberGlobalLandscape(): Boolean {
+    val context = LocalContext.current
+    return remember { AppPreferences.landscapePostersActive(context) }
+}
+

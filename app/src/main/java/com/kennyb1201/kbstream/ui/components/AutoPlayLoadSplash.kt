@@ -143,9 +143,17 @@ private fun absoluteTmdbArt(url: String?, base: String): String? =
         else base + if (raw.startsWith("/")) raw else "/$raw"
     }
 
-/** The logo slot's standing size, and so the size the name has to fit in. */
-private val LOGO_WIDTH = 240.dp
-private val LOGO_HEIGHT = 80.dp
+/**
+ * The logo slot's standing size, and so the size the name has to fit in.
+ *
+ * Grown from 240x80: on a TV that read as a thumbnail in the middle of a
+ * full-screen backdrop, smaller than the clearlogo the player's own info panel
+ * draws (400dp) even though the splash is the one moment the title graphic is
+ * the whole point. The 3:1 box stays, so the art's own aspect is preserved and
+ * the name stand-in still fits.
+ */
+private val LOGO_WIDTH = 420.dp
+private val LOGO_HEIGHT = 140.dp
 
 /** How long the name takes to hand over to the art, once the art is in. */
 private const val NAME_HANDOVER_MS = 220

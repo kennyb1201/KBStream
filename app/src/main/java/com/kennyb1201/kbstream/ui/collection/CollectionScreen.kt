@@ -40,6 +40,7 @@ import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -425,11 +426,14 @@ private fun CollectionPosterTile(
     isPartiallyWatched: Boolean = false
 ) {
     val posterSize = rememberPosterSize()
+    // Landscape tiles are wider than the poster they replace, so the tile's own
+    // container follows the shape the card is about to draw.
+    val tileWidth = rememberPosterTileWidth(posterSize.width)
     // The tile's own focus drives the caption marquee below.
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
-            .width(posterSize.width)
+            .width(tileWidth)
             .onFocusChanged { focused = it.hasFocus }
     ) {
         GlobalPosterCard(
@@ -442,7 +446,11 @@ private fun CollectionPosterTile(
             onClick = onClick,
             onLongClick = onLongClick,
             posterWidth = posterSize.width,
-            posterHeight = posterSize.height
+            posterHeight = posterSize.height,
+            // A collection part carries only a poster; the shared resolver
+            // fills in the backdrop + clearlogo for the landscape shape.
+            artId = part.id.toString(),
+            artType = "movie"
         )
 
         PosterCaptions(

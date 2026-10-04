@@ -55,6 +55,7 @@ import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -550,6 +551,9 @@ private fun TagRailRow(
                     isFirstSection && studioItem == section.items.firstOrNull()
 
                 val posterSize = rememberPosterSize()
+                // Landscape tiles are wider than the poster they replace, so the
+                // caption under one follows the shape the card draws.
+                val tileWidth = rememberPosterTileWidth(posterSize.width)
 
                 // The tile's own focus drives the caption marquee below.
                 var focused by remember { mutableStateOf(false) }
@@ -580,6 +584,10 @@ private fun TagRailRow(
                         },
                         posterWidth = posterSize.width,
                         posterHeight = posterSize.height,
+                        // The discover item ships a backdrop; the resolver adds
+                        // the corner clearlogo the landscape shape wants.
+                        artId = studioItem.item.id.toString(),
+                        artType = rawMediaType,
                         modifier = Modifier
                             .focusRequester(requester)
                             .then(
@@ -598,7 +606,7 @@ private fun TagRailRow(
                             ?: studioItem.item.firstAirDate)?.take(4),
                         rating = studioItem.item.voteAverage,
                         modifier = Modifier
-                            .width(posterSize.width)
+                            .width(tileWidth)
                             .padding(top = 5.dp)
                     )
                 }

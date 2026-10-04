@@ -60,6 +60,7 @@ import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -605,11 +606,14 @@ private fun ActorCreditCard(
     isPartiallyWatched: Boolean = false
 ) {
     val posterSize = rememberPosterSize()
+    // Landscape tiles are wider than the poster they replace, so the tile's own
+    // container follows the shape the card is about to draw.
+    val tileWidth = rememberPosterTileWidth(posterSize.width)
     // The tile's own focus drives the caption marquee below.
     var focused by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
-            .width(posterSize.width)
+            .width(tileWidth)
             .padding(end = 12.dp)
             .onFocusChanged { focused = it.hasFocus }
     ) {
@@ -622,6 +626,10 @@ private fun ActorCreditCard(
             onLongClick = onLongClick,
             posterWidth = posterSize.width,
             posterHeight = posterSize.height,
+            // A credit carries only a poster; the shared resolver fills in the
+            // backdrop + clearlogo for the landscape shape.
+            artId = credit.id.toString(),
+            artType = credit.mediaType ?: "movie",
             modifier = Modifier
                 .then(
                     if (focusRequester != null) {

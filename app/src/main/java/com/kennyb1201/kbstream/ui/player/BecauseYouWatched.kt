@@ -11,6 +11,7 @@ import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
@@ -431,6 +432,21 @@ internal fun retintAccentChrome(root: View, context: Context) {
     }
 }
 
+/**
+ * Tints the play/pause mark to the current global accent.
+ *
+ * @drawable/ic_player_play and ic_player_pause carry a fixed brass fill, so
+ * the one control a viewer presses most kept the default brass under every
+ * other accent: [retintAccentView] only retints an ImageView whose
+ * imageTintList already equals the XML accent, and these marks carry no tint
+ * list at all. Both players route the button's image through here so the mark
+ * tracks the theme - at the default accent this is a no-op (the tint equals
+ * the fill), and a flat tint still leaves the glyph's silhouette intact.
+ */
+internal fun tintPlayPauseIcon(view: ImageView, context: Context) {
+    view.imageTintList = ColorStateList.valueOf(themeAccentColor(context))
+}
+
 /** Rounded rectangle standing in for the XML shape drawables. */
 internal fun roundedPanelDrawable(
     context: Context,
@@ -440,6 +456,41 @@ internal fun roundedPanelDrawable(
     shape = GradientDrawable.RECTANGLE
     setColor(color)
     cornerRadius = radiusDp * context.resources.displayMetrics.density
+}
+
+/**
+ * The in-player guide row's background, built in code so the focus outline
+ * follows a non-default global accent.
+ *
+ * [retintAccentView] retints colours and tint lists, but the row's outline is a
+ * stroke inside @drawable/channel_guide_item_bg, and a GradientDrawable's stroke
+ * colour cannot be read back to patch it in place. Mirroring the selector here
+ * is the reliable way: the focused and selected states keep the XML's accent
+ * stroke (2dp / 1dp) at the chosen accent, and every fill goes through the same
+ * AMOLED-aware panel colours the player panels use, so the outline and the row
+ * body track the theme instead of the fixed brass they inflated with.
+ */
+internal fun themedGuideRowBackground(context: Context, accent: Int): Drawable {
+    val density = context.resources.displayMetrics.density
+
+    fun row(fill: Int, strokeWidthDp: Int, stroke: Int): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            setColor(fill)
+            setStroke((strokeWidthDp * density).toInt().coerceAtLeast(1), stroke)
+            cornerRadius = 10f * density
+        }
+
+    val raised = playerPanelRaisedColor(context)
+    val surface = playerPanelSurfaceColor(context)
+    return StateListDrawable().apply {
+        addState(intArrayOf(android.R.attr.state_focused), row(raised, 2, accent))
+        addState(intArrayOf(android.R.attr.state_selected), row(raised, 1, accent))
+        addState(
+            intArrayOf(),
+            row(surface, 1, ContextCompat.getColor(context, R.color.kb_overlay_gradient_mid))
+        )
+    }
 }
 
 /**

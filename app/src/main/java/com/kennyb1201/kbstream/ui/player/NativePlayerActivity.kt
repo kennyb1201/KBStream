@@ -7199,6 +7199,7 @@ class NativePlayerActivity : ComponentActivity() {
         btnPlayPause.setImageResource(
             if (exoPlayer?.isPlaying == true) R.drawable.ic_player_pause else R.drawable.ic_player_play
         )
+        tintPlayPauseIcon(btnPlayPause, this)
         btnSpeed.text = "${playbackSpeed}x"
         btnAspect.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
         // Live channels get the channel-change buttons and the NOW/NEXT
@@ -8227,6 +8228,11 @@ class NativePlayerActivity : ComponentActivity() {
             ?.takeIf { it.isNotBlank() }
             ?.let { "GUIDE  \u2022  ${it.uppercase()}" }
             ?: "GUIDE"
+        // The GUIDE title's accent resolved @color/kb_accent at inflation, so
+        // re-apply the chosen accent each time the overlay opens (the rows do
+        // the same as they are created) - the outline and the title then track
+        // the theme together.
+        channelGuideContainer?.let { retintAccentChrome(it, this) }
         channelGuideContainer?.visibility = View.VISIBLE
         scrim.visibility = View.VISIBLE
         removeAutoHide()
@@ -8809,6 +8815,14 @@ class NativePlayerActivity : ComponentActivity() {
             // all that shows for the cast members TMDB has no photo for.
             amoled && fill == AVATAR_PLACEHOLDER_FILL -> themedAvatarBackground(panelSurfaceColor())
 
+            // A surface-fill button whose OWN press ripple is the XML accent
+            // (the control-bar buttons, the source pillars, picker rows): the
+            // fill is not the accent, so the accent branch below never matched
+            // and the press flash kept the default brass under a chosen theme.
+            // Rebuild the ripple in the accent while keeping the fill.
+            rippled && accent != xmlAccent && ripple?.getEffectColor()?.defaultColor == xmlAccent ->
+                themedChromeBackground(fill, shape.cornerRadius, true)
+
             // An accent-filled drawable (the accent button, selected pills, the
             // live badge): the XML resolved @color/kb_accent at inflation, so a
             // new global accent has to rebuild the fill - and the press ripple
@@ -9342,6 +9356,7 @@ class NativePlayerActivity : ComponentActivity() {
                 btnPlayPause.setImageResource(
                     if (player.isPlaying) R.drawable.ic_player_pause else R.drawable.ic_player_play
                 )
+                tintPlayPauseIcon(btnPlayPause, this@NativePlayerActivity)
 
                 // Some sources (broken HLS tails, streams with wrong or unset
                 // durations) never emit STATE_ENDED: the picture goes black but

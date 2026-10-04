@@ -793,6 +793,10 @@ private fun GridLayout(
                                 onLongClick = { onLongPressItem(item) },
                                 posterWidth = FolderPosterWidth,
                                 posterHeight = FolderPosterHeight,
+                                // A folder item ships a backdrop but no logo;
+                                // the resolver adds the corner clearlogo.
+                                artId = item.id,
+                                artType = item.type,
                                 // Only the global setting reshapes the Grid;
                                 // the Home-rails toggle keeps it posters.
                                 landscape = AppPreferences.getLandscapePosters(context)

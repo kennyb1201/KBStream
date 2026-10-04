@@ -45,6 +45,7 @@ import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -246,6 +247,9 @@ fun CatalogGridScreen(
                         val meta = lazyItems[index] ?: return@items
 
                         val posterSize = rememberPosterSize()
+                        // Landscape tiles are wider than the poster they replace,
+                        // so the caption follows the shape the card draws.
+                        val tileWidth = rememberPosterTileWidth(posterSize.width)
                         Column {
                             GlobalPosterCard(
                                 posterUrl = meta.poster,
@@ -266,6 +270,11 @@ fun CatalogGridScreen(
                                 },
                                 posterWidth = posterSize.width,
                                 posterHeight = posterSize.height,
+                                // The add-on art above may be present; the
+                                // resolver still supplies the alternate backdrop
+                                // + clearlogo the rails use.
+                                artId = meta.id,
+                                artType = meta.type,
                                 modifier = Modifier
                                     // Opts this tile into the poster ->
                                     // Detail hero flight (shared key is
@@ -279,7 +288,7 @@ fun CatalogGridScreen(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                                 modifier = Modifier
-                                    .width(posterSize.width)
+                                    .width(tileWidth)
                                     .padding(top = 2.dp)
                             )
                         }

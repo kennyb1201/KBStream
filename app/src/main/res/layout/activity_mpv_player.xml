@@ -62,8 +62,8 @@
 
         <ImageView
             android:id="@+id/mpv_loading_logo"
-            android:layout_width="240dp"
-            android:layout_height="80dp"
+            android:layout_width="420dp"
+            android:layout_height="140dp"
             android:layout_gravity="center"
             android:adjustViewBounds="true"
             android:contentDescription="Clear logo"

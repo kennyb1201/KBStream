@@ -8,6 +8,7 @@ import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 
 /**
  * One channel as the in-player guide paints it.
@@ -71,6 +72,13 @@ internal class ChannelGuideAdapter : RecyclerView.Adapter<ChannelGuideAdapter.Vi
         // inflation, so a custom global accent has to be re-applied here (rows
         // attach long after the screen's own theme pass, if any).
         retintAccentChrome(view, parent.context)
+        // The focus outline is a stroke inside the row's selector background,
+        // which the tint walk above cannot reach; rebuild it so the outline and
+        // its AMOLED-aware fill track the theme too.
+        view.background = themedGuideRowBackground(
+            view.context,
+            themeAccentColor(view.context)
+        )
         return ViewHolder(view)
     }
 
