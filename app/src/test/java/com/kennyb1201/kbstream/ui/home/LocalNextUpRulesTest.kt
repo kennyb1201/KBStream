@@ -250,4 +250,107 @@ class LocalNextUpRulesTest {
 
         assertEquals(setOf("r"), superseded)
     }
+
+    // --- Tracker watched state as a supersede input -------------------------
+
+    @Test
+    fun `a resume row the tracker has watched is superseded with no local completion`() {
+        // The reported leftover: Next pressed in the credits, so the handoff
+        // filed a resume row while the same handoff's scrobble told the tracker
+        // the episode is done. Nothing local ever completes it, so the
+        // completed set is empty and only the tracker can condemn the row.
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 2, 4, touchedAt = 10)
+            ),
+            completedRows = emptyList(),
+            trackerWatchedByShow = mapOf(
+                supersededResumeShowKey("tt1")!! to setOf(2 to 4)
+            )
+        )
+
+        assertEquals(setOf("r"), superseded)
+    }
+
+    @Test
+    fun `a tracker mark for a different episode supersedes nothing`() {
+        // The tracker is watching the SHOW, not blanket-approving it: an
+        // episode the viewer paused and never finished still has a resume card.
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 2, 4, touchedAt = 10)
+            ),
+            completedRows = emptyList(),
+            trackerWatchedByShow = mapOf(
+                supersededResumeShowKey("tt1")!! to setOf(2 to 5)
+            )
+        )
+
+        assertEquals(emptySet<String>(), superseded)
+    }
+
+    @Test
+    fun `a tracker mark for another show supersedes nothing`() {
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 2, 4, touchedAt = 10)
+            ),
+            completedRows = emptyList(),
+            trackerWatchedByShow = mapOf(
+                supersededResumeShowKey("tt2")!! to setOf(2 to 4)
+            )
+        )
+
+        assertEquals(emptySet<String>(), superseded)
+    }
+
+    @Test
+    fun `a same-episode tracker mark does not turn on the row's timestamp`() {
+        // A background touch moves `updatedAt` without unwatching anything, so
+        // the "later completion" rule's timestamp comparison would keep this
+        // row. A same-episode mark is decisive on its own.
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 2, 4, touchedAt = 10_000)
+            ),
+            completedRows = listOf(
+                completedRow("c", "tt1", 2, 4, completedAt = 100)
+            ),
+            trackerWatchedByShow = mapOf(
+                supersededResumeShowKey("tt1")!! to setOf(2 to 4)
+            )
+        )
+
+        assertEquals(setOf("r"), superseded)
+    }
+
+    @Test
+    fun `the watched set is keyed the way the rule keys its rows`() {
+        // A watched set keyed by a different id flavor than the row never
+        // matches - a silent no-op that looks exactly like the bug this input
+        // exists to fix. Resume under "tmdb:123", watched set under "123".
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tmdb:123", 1, 5, touchedAt = 10)
+            ),
+            completedRows = emptyList(),
+            trackerWatchedByShow = mapOf(
+                supersededResumeShowKey("123")!! to setOf(1 to 5)
+            )
+        )
+
+        assertEquals(setOf("r"), superseded)
+    }
+
+    @Test
+    fun `no tracker state and no completions leaves every row alone`() {
+        val superseded = supersededResumeRowIds(
+            resumeRows = listOf(
+                resumeRow("r", "tt1", 2, 4, touchedAt = 10)
+            ),
+            completedRows = emptyList()
+        )
+
+        assertEquals(emptySet<String>(), superseded)
+    }
 }

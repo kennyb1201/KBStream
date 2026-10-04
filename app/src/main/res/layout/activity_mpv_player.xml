@@ -188,6 +188,32 @@
         android:paddingVertical="16dp"
         android:visibility="gone">
 
+        <!-- Wall clock + "Ends at" estimate, top-right of the chrome: the same
+             pair the main player's overlay carries, so the Interface 24-hour
+             toggle reads the same on both engines. Hidden until the bar shows
+             (see MpvPlayerActivity.setControlsVisible). -->
+        <TextView
+            android:id="@+id/mpv_player_clock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="18sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/mpv_ends_at_clock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
         <!-- Top section: content info, bounded + scrollable so nothing is
              clipped on short screens. -->
         <ScrollView

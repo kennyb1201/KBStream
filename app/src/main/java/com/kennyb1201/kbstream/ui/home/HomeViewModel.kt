@@ -1144,6 +1144,12 @@ Log.d(
                     watchHistoryRepository.getAll()
                 )
 
+                // Same cache invalidation the mark path needs: a removal that
+                // leaves the watched-state maps in place can re-merge them and
+                // feed the card back from a snapshot taken before the row was
+                // deleted (see the mark path above).
+                clearWatchedStateCaches()
+
                 _refreshTrigger.value += 1
 
                 Log.i(
@@ -1232,6 +1238,16 @@ Log.d(
                     getApplication(),
                     watchHistoryRepository.getAll()
                 )
+
+                // The watched-state caches hold the snapshot the rail was last
+                // built from, and markEpisodeWatchedLocal above does NOT go
+                // through them. Without dropping them here the re-merge reads
+                // the stale maps (which do not include the episode just
+                // marked), resolves the SAME next episode, and the rail cannot
+                // advance until the feed's TTL expires minutes later. This is
+                // refreshUpNext()'s own pair, inlined so a caller already on
+                // the viewModelScope does not start a second coroutine.
+                clearWatchedStateCaches()
 
                 _refreshTrigger.value += 1
 
@@ -3978,8 +3994,38 @@ Log.d(
             } catch (_: Exception) {
                 return resumeRows
             }
-        if (completedRows.isEmpty()) return resumeRows
-        val superseded = supersededResumeRowIds(resumeRows, completedRows)
+        // The tracker's own marks for the shows behind these rows, taken from
+        // the map the enrichment pass filled (see
+        // preloadWatchedEpisodeStateForShow). This is the one input that can
+        // condemn a resume row whose episode the tracker watched while the
+        // local file was only ever left a minute short - the "mark as watched"
+        // path has always cleaned that up (WatchedStatusRepository), and the
+        // tracker arriving with the same verdict must reach the same state.
+        //
+        // Read-side only: the rows are ignored for the rail, never deleted, so
+        // a mark that arrives from another device - or is unwound there -
+        // costs a card rather than the viewer's actual stop point.
+        val trackerWatched =
+            watchedStateMutex.withLock {
+                trackerWatchedEpisodesByShow.toMap()
+            }
+                .mapNotNull { (parentId, episodes) ->
+                    supersededResumeShowKey(parentId)
+                        ?.let { it to episodes }
+                }
+                .toMap()
+        if (
+            completedRows.isEmpty() &&
+            trackerWatched.isEmpty()
+        ) {
+            return resumeRows
+        }
+        val superseded =
+            supersededResumeRowIds(
+                resumeRows,
+                completedRows,
+                trackerWatched
+            )
         if (superseded.isEmpty()) return resumeRows
         Log.d(
             "HOME_UPNEXT",
@@ -4230,13 +4276,14 @@ Log.d(
             }
         }
 
-        if (!session.isMovie) {
-            resolvedSeason = session.season ?: 1
-            // A session the tracker could not place carries no episode, and
-            // inventing E01 for it read as confidently as a real number. Leave
-            // it unnamed so the label falls back to the season alone.
-            resolvedEpisode = namedEpisodeNumber(session.episode)
-        }
+        // The card's season/episode pair is settled AFTER the resolution below,
+        // not here: this is a tracker session, and a session the tracker could
+        // not place names no season. `session.season ?: 1` used to stand here,
+        // which invented season 1 for it - the same "S1E1 is a lie" class of
+        // bug the resolver's floor had, except this one was hardcoded and so
+        // could never be corrected by a later resolution. The pair is taken
+        // from `upNextCardEpisodePair` further down instead, which is the rule
+        // the other rails' cards already print by.
 
         // The show's watched/total aired counts, its finale flags and the
         // episode the watched state points at, from the resolver the local and
@@ -4300,6 +4347,29 @@ Log.d(
             targetIsSeasonFinale = resolvedTarget.isSeasonFinale
             targetIsSeriesFinale = resolvedTarget.isSeriesFinale
             episodeTitle = episodeTitle ?: resolvedTarget.episodeTitle
+        }
+
+        // What this card prints, by the rule the Continue Watching cards use -
+        // upNextCardEpisodePair, tested in UpNextCardEpisodePairTest - the
+        // session's own episode when it names one, keeping the session's season
+        // - which may be absent, and is then left absent rather than guessed -
+        // and otherwise the resolved pair. Resolution runs only when this
+        // device has watched something of the show, so an MDBList-only viewer
+        // still gets the session's own numbers instead of an invented S1.
+        if (!session.isMovie) {
+            val cardPair =
+                upNextCardEpisodePair(
+                    rowSeason = session.season,
+                    rowEpisode = session.episode,
+                    resolvedSeason = resolvedTarget?.season,
+                    resolvedEpisode = resolvedTarget?.episode
+                )
+
+            resolvedSeason =
+                cardPair.first
+
+            resolvedEpisode =
+                cardPair.second
         }
 
         // The finale tags and the arrival chip describe the episode the CARD
@@ -5053,6 +5123,35 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     simklSeason: Int?,
     simklEpisode: Int?
 ): ResolvedHomeSeriesTarget? {
+
+    // Reading this show's watched state is only meaningful once the preload has
+    // PUT it there. A show that has not been preloaded and a show with nothing
+    // watched are indistinguishable from inside this function - both read as
+    // "no episodes watched" - and the walks below cannot tell them apart: every
+    // candidate episode passes the not-watched test, so the S1E1 floor they
+    // search from comes back as the answer. That is the reported "S1E1 card for
+    // a show I am part-way through": not a stale resolution, but a confident
+    // one made against an empty map.
+    //
+    // Every caller here already preloads first, but the guarantee belongs at
+    // the read, not at each call site - a fifth caller that forgets it would
+    // reproduce the bug silently. The preload is idempotent and shares one
+    // in-flight load per show, so a caller that has already done it pays
+    // nothing; and with no TMDB id there is nothing to preload or to walk, so
+    // the floor cannot escape either way.
+    //
+    // Deliberately NOT "return null when the state is not loaded": null is not
+    // neutral here. buildLocalNextUpItem reads it as "the profile finished the
+    // show", records it as caught up and drops the card from Continue
+    // Watching - so answering null for a state we merely failed to read would
+    // hide a show the viewer is in the middle of. An unloaded state must be
+    // impossible, not answered around.
+    if (tmdbId > 0) {
+        preloadWatchedEpisodeStateForShow(
+            parentId = parentId,
+            tmdbShowId = tmdbId
+        )
+    }
 
     val (
         simklWatchedEpisodes,
@@ -7656,7 +7755,13 @@ private suspend fun calculateEpisodesRemaining(
                 40_000L,
                 75_000L,
                 120_000L,
-                180_000L
+                180_000L,
+                // The window used to stop here, and a Simkl feed lagging past
+                // three minutes outlived every retry - the card held until a
+                // restart. One more at five minutes covers that tail without
+                // retrying forever; the periodic refresh and the feed TTL take
+                // over after it.
+                300_000L
             )
 
         /** Watch-write burst settle time before dynamic catalog rails refetch. */

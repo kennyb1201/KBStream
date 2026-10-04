@@ -7,6 +7,21 @@ package com.kennyb1201.kbstream.ui.player
 internal const val CREDITS_TAIL_RATIO = 0.90f
 
 /**
+ * True when [positionMs] sits in the closing [CREDITS_TAIL_RATIO] of a KNOWN
+ * runtime - the window from which a filed row is a "leaving" row rather than a
+ * mid-episode resume. A zero/unknown duration never qualifies.
+ *
+ * A session left here can still be filed NOT completed: the local completion
+ * rule is stricter than the tracker's, while the tracker's own stop may mark
+ * the episode watched anyway. Continue Watching then holds a stale resume card
+ * until something asks Home to re-merge against the tracker feeds (see the
+ * players' use of ContinueWatchingRefreshBus); this is the predicate they use
+ * to raise that request.
+ */
+internal fun isCreditsTail(positionMs: Long, durationMs: Long): Boolean =
+    durationMs > 0L && positionMs >= (durationMs * CREDITS_TAIL_RATIO).toLong()
+
+/**
  * Decides whether a player session should be written to watch history as a
  * COMPLETED episode rather than a resumable position.
  *
@@ -34,17 +49,39 @@ internal const val CREDITS_TAIL_RATIO = 0.90f
  * viewer chose to open mid-episode must not be mistaken for the end. An
  * unknown duration (0) never triggers the card fallback on its own — only
  * the player's own ended verdict can complete a file whose length is unknown.
+ *
+ * [explicitAdvance] is the transport's own Next (or PLAY NEXT), and it is the
+ * one case the card fallback above could not cover: the viewer presses it
+ * *in the credits*, before the countdown has had a chance to raise the card,
+ * and the episode is handed off with the panel never shown. Without this the
+ * handoff filed a RESUME row with a minute or two left while the "stop"
+ * scrobble simultaneously told the tracker the episode was watched — two
+ * systems, two verdicts, and the tick later landed on an episode the rail was
+ * still offering as "Resume 2 min left".
+ *
+ * It deliberately does NOT complete the episode on its own. Next is also an
+ * ordinary mid-episode button, so an advance is only "done" when it happened
+ * inside the same tail the card fallback uses; an explicit advance from the
+ * middle of an episode still files a resume point. The `endPanelsShown` gate
+ * above stays untouched for every other path — an unattended exit, a stream
+ * that stops short, the app being backgrounded.
  */
 internal fun shouldRecordCompletion(
     playbackEnded: Boolean,
     endPanelsShown: Boolean,
     positionMs: Long,
     durationMs: Long,
-    played: Boolean
+    played: Boolean,
+    explicitAdvance: Boolean = false
 ): Boolean {
     if (!played) return false
     if (playbackEnded) return true
+
+    // Inside the credits tail, an explicit advance is the viewer's own "done
+    // with this episode" verdict — the same verdict the card fallback reads
+    // from a raised card, arrived at before the card could be raised.
+    if (explicitAdvance && isCreditsTail(positionMs, durationMs)) return true
+
     if (!endPanelsShown) return false
-    if (durationMs <= 0L) return false
-    return positionMs >= (durationMs * CREDITS_TAIL_RATIO).toLong()
+    return isCreditsTail(positionMs, durationMs)
 }

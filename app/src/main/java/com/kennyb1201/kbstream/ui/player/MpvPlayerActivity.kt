@@ -31,13 +31,16 @@ import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.addon.Stream
+import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.cache.DiskSweep
+import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
+import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
@@ -53,6 +56,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -206,6 +210,21 @@ class MpvPlayerActivity : ComponentActivity() {
     private var engineNoteView: TextView? = null
     private var positionView: TextView? = null
     private var durationView: TextView? = null
+    private var playerClock: TextView? = null
+    private var endsAtClock: TextView? = null
+    // The overlay clock's own 1 Hz tick and its two formatters, matching the
+    // main player's: DateTimeFormatter is immutable and thread-safe, so these
+    // are built once and the 24-hour toggle just picks between them.
+    private val clockHandler = Handler(Looper.getMainLooper())
+    private val clock12Format by lazy { DateFormats.clock12h() }
+    private val clock24Format by lazy { DateFormats.clock24h() }
+    private val clockRunnable = object : Runnable {
+        override fun run() {
+            if (!controlsVisible) return
+            refreshClock()
+            clockHandler.postDelayed(this, 1000L)
+        }
+    }
     private var seekBar: SeekBar? = null
     private var playPauseButton: ImageView? = null
     // Icon buttons, like the main player's bar (see NativePlayerActivity): this
@@ -261,6 +280,23 @@ class MpvPlayerActivity : ComponentActivity() {
 
     /** The playing source's badge chips, for the row the main player shows. */
     private var currentBadges: List<StreamBadge> = emptyList()
+
+    /**
+     * Stremio bingeGroup of the active stream (behaviorHints.bingeGroup).
+     *
+     * Persisted into the next-episode handoff so the next episode's resolver
+     * can prefer/reuse the same group - exactly as the main player does (see
+     * BingeGroupResolver). Without it a binge that passed through this engine
+     * lost its provider continuity and re-picked from the raw rank.
+     */
+    private var currentBingeGroup: String? = null
+
+    /**
+     * Best-effort addon display name of the active source, the reuse tier of
+     * [BingeGroupResolver.orderedForNextEpisode]. Resolved from the installed
+     * addons registry by matching the source label, as the main player does.
+     */
+    private var currentAddonName: String? = null
 
     /** The cast band's members, from the cast_json extra. */
     private var castMembers: List<PlayerCastMember> = emptyList()
@@ -368,6 +404,21 @@ class MpvPlayerActivity : ComponentActivity() {
     // picker ---------------------------------------------------------------
     private var externalSubtitleUri: Uri? = null
     private var externalSubtitleName: String? = null
+
+    /**
+     * True once the per-video remembered subtitle has been consulted. One
+     * restore per session, so a source switch that follows a deliberate clear
+     * does not put the file back.
+     */
+    private var subtitleMemoryRestored = false
+
+    /** Addon-published subtitle offers for this video, shown in the picker. */
+    private var addonSubtitleOffers: List<SubtitleEntry> = emptyList()
+    private var addonSubtitleFetchJob: Job? = null
+    private val addonSubtitleDownloads = mutableMapOf<String, Uri>()
+
+    /** The picker mode on screen, so late addon offers can repaint it. */
+    private var currentPickerMode: PickerMode? = null
 
     /** Results of the last online search, rendered as rows while they stand. */
     private var onlineSubResults: List<SubtitleSearchResult> = emptyList()
@@ -551,6 +602,9 @@ class MpvPlayerActivity : ComponentActivity() {
     private var isFallbackSession = false
     private var fallbackReason: String? = null
 
+    /** Random-episode mode, carried from the launch intent into the handoff. */
+    private var randomEpisodes = false
+
     private var canonicalParent: String? = null
     private var resolvedTmdbId: Int? = null
 
@@ -696,6 +750,10 @@ class MpvPlayerActivity : ComponentActivity() {
         // IntroDB rows for this session: the skip prompt and the end-of-episode
         // panel's credits marker both come from them.
         setupIntroDb()
+        // Addon-published subtitles for this video, fetched in the background:
+        // the same offers the main player merges, so the SUBTITLE picker reads
+        // the same on both engines (see loadAddonSubtitleOffers).
+        loadAddonSubtitleOffers()
         onBackPressedDispatcher.addCallback(
             this,
             object : OnBackPressedCallback(true) {
@@ -786,6 +844,10 @@ class MpvPlayerActivity : ComponentActivity() {
         historyParentIdOverride = intent.getStringExtra(EXTRA_HISTORY_PARENT_ID)
         isFallbackSession = intent.getBooleanExtra(EXTRA_MPV_FALLBACK, false)
         fallbackReason = intent.getStringExtra(EXTRA_MPV_FALLBACK_REASON)
+        // Random-episode mode rides the session: the handoff starts a NEW
+        // player, which would otherwise read its intent as a normal
+        // (arithmetic) chain. The main player carries it the same way.
+        randomEpisodes = intent.getBooleanExtra("random_episodes", false)
         streamHeaders = parseHeaders(intent.getStringExtra("stream_headers").orEmpty())
 
         // The ranked source list the caller shipped, read with the same helper
@@ -813,6 +875,8 @@ class MpvPlayerActivity : ComponentActivity() {
         val playingSource = sources.firstOrNull { it.url == currentUrl }
         currentSourceLabel = playingSource?.sourceLabel()
         currentBadges = playingSource?.badges.orEmpty()
+        currentBingeGroup = playingSource?.bingeGroup
+        resolveAddonIdentity(currentSourceLabel)
 
         // The cast band's members, the same payload the main player renders.
         castMembers = parseCastJson(intent.getStringExtra("cast_json"))
@@ -865,6 +929,8 @@ class MpvPlayerActivity : ComponentActivity() {
         engineNoteView = findViewById(R.id.mpv_engine_note)
         positionView = findViewById(R.id.mpv_position)
         durationView = findViewById(R.id.mpv_duration)
+        playerClock = findViewById(R.id.mpv_player_clock)
+        endsAtClock = findViewById(R.id.mpv_ends_at_clock)
         seekBar = findViewById(R.id.mpv_seekbar)
         playPauseButton = findViewById(R.id.mpv_btn_play_pause)
         nextButton = findViewById(R.id.mpv_btn_next)
@@ -1652,6 +1718,7 @@ class MpvPlayerActivity : ComponentActivity() {
      * same here as they do there, down to the selection mark.
      */
     private fun showPicker(mode: PickerMode) {
+        currentPickerMode = mode
         val items = when (mode) {
             PickerMode.SOURCE -> {
                 pickerTitle?.text = "SOURCES"
@@ -1728,7 +1795,20 @@ class MpvPlayerActivity : ComponentActivity() {
                         dismissPicker()
                     }
                 )
-                listOfNotNull(searchItem, openFileItem) + onlineRows + listOf(offItem) +
+                // Subtitles the installed addons publish for this video (the
+                // Stremio "subtitles" resource): the same offers the main
+                // player merges, so the picker reads the same on both engines.
+                // Tapping one downloads it and hands the file to libmpv.
+                val addonRows = addonSubtitleOffers.map { offer ->
+                    PickerItem(
+                        label = addonSubtitleLabel(offer),
+                        onClick = {
+                            dismissPicker()
+                            downloadAddonSubtitle(offer)
+                        }
+                    )
+                }
+                listOfNotNull(searchItem, openFileItem) + addonRows + onlineRows + listOf(offItem) +
                     tracks.map { track ->
                         PickerItem(
                             label = track.label,
@@ -1769,7 +1849,7 @@ class MpvPlayerActivity : ComponentActivity() {
         settingsOpen = true
         pickerOpen = true
         settingsContainer?.visibility = View.GONE
-        controlsContainer?.visibility = View.VISIBLE
+        setControlsVisible(View.VISIBLE)
         // The panel owns the remote while it is up: no auto-hide, and the
         // D-pad goes to the rows.
         removeAutoHide()
@@ -1791,6 +1871,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun dismissPicker() {
         if (!pickerOpen) return
         pickerOpen = false
+        currentPickerMode = null
         settingsOpen = false
         pickerContainer?.visibility = View.GONE
         if (controlsVisible) {
@@ -1835,14 +1916,46 @@ class MpvPlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Identity of the video the remembered subtitle belongs to. Shows key on
+     * show + season + episode (a sidecar file is authored for one episode);
+     * everything else falls back to the history item id. The same shape the
+     * main player uses, so a subtitle attached there is restored here too.
+     */
+    private fun subtitleMemoryKey(): String? =
+        PlayerTrackMemory.keyFor(
+            parentId = parentId,
+            mediaId = historyId,
+            season = season,
+            episode = episode
+        )
+
+    /**
+     * Brings back the subtitle attached to THIS video last time - the main
+     * player does the same on open, and without it a sidecar attached under
+     * ExoPlayer vanished the moment the session fell over to this engine.
+     * Called once the file is open ([onFileLoaded]), the first moment mpv can
+     * accept a `sub-add`.
+     */
+    private fun restoreRememberedSubtitle() {
+        if (subtitleMemoryRestored) return
+        subtitleMemoryRestored = true
+        if (externalSubtitleUri != null) return
+        val remembered = PlayerTrackMemory.rememberedSubtitle(this, subtitleMemoryKey())
+            ?: return
+        runCatching { Uri.parse(remembered.uri) }.getOrNull()?.let { uri ->
+            attachExternalSubtitle(uri, announce = false)
+        }
+    }
+
+    /**
      * Copies the picked document into the cache and hands it to mpv.
      *
      * A copy rather than the URI itself: mpv resolves plain paths, and a URI
      * whose permission grant dies with this activity would leave the subtitle
      * unreadable part-way through an episode.
      */
-    private fun attachExternalSubtitle(uri: Uri) {
-        showToast("Loading subtitle\u2026")
+    private fun attachExternalSubtitle(uri: Uri, announce: Boolean = true) {
+        if (announce) showToast("Loading subtitle\u2026")
         lifecycleScope.launch {
             val copied = runCatchingCancellable {
                 withContext(Dispatchers.IO) {
@@ -1875,7 +1988,7 @@ class MpvPlayerActivity : ComponentActivity() {
                 }
             }.getOrNull()
             if (copied == null) {
-                showToast("Could not read that subtitle file", 4_000L)
+                if (announce) showToast("Could not read that subtitle file", 4_000L)
                 return@launch
             }
             externalSubtitleUri = uri
@@ -1883,8 +1996,72 @@ class MpvPlayerActivity : ComponentActivity() {
             // is the only place this is shown, and the cache name is a hash now.
             externalSubtitleName = displayNameFor(uri)
             surface?.addExternalSubtitle(Uri.fromFile(copied).toString())
-            showToast("Subtitle loaded: ${displayNameFor(uri)}", 4_000L)
+            // Remembered per video, so reopening this episode re-attaches it
+            // without a second pick. Profile-scoped and device-local, exactly
+            // as the main player records it.
+            PlayerTrackMemory.rememberSubtitle(
+                context = this@MpvPlayerActivity,
+                key = subtitleMemoryKey(),
+                uri = uri.toString()
+            )
+            if (announce) showToast("Subtitle loaded: ${displayNameFor(uri)}", 4_000L)
             refreshSettings()
+        }
+    }
+
+    /**
+     * One addon subtitle row: the language first, then the addon's own label.
+     * Mirrors how the main player names the track it merges in.
+     */
+    private fun addonSubtitleLabel(offer: SubtitleEntry): String {
+        val lang = offer.lang?.uppercase()?.takeIf { it.isNotBlank() }
+        val label = offer.label?.takeIf { it.isNotBlank() }
+        return listOfNotNull(lang, label).distinct().joinToString(" \u00b7 ")
+            .ifBlank { "Addon subtitle" }
+    }
+
+    /**
+     * Downloads an addon subtitle offer and attaches it, through the same path
+     * a picked file takes (cache copy, mpv `sub-add`, remembered per video).
+     */
+    private fun downloadAddonSubtitle(offer: SubtitleEntry) {
+        val url = offer.url
+        if (url.isBlank()) return
+        lifecycleScope.launch {
+            val cached = addonSubtitleDownloads[url] ?: withContext(Dispatchers.IO) {
+                AddonSubtitleSource.download(this@MpvPlayerActivity, url)
+            }?.also { addonSubtitleDownloads[url] = it }
+            if (cached == null) {
+                showToast("Could not download that subtitle", 4_000L)
+                return@launch
+            }
+            attachExternalSubtitle(cached)
+        }
+    }
+
+    /**
+     * Fetches the addon-published subtitles for this video in the background,
+     * so the SUBTITLE picker can offer them next to the embedded tracks and
+     * the file/online paths. The main player merges the same offers as sidecar
+     * tracks; here each is downloaded on tap (see [downloadAddonSubtitle]).
+     */
+    private fun loadAddonSubtitleOffers() {
+        if (parentType == "channel") return
+        val videoId = if (parentType == "series" && season != null && episode != null) {
+            "$parentId:$season:$episode"
+        } else {
+            parentId.takeIf { it.isNotBlank() }
+        } ?: return
+        val contentType = if (parentType == "series") "series" else "movie"
+        addonSubtitleFetchJob = lifecycleScope.launch {
+            val offers = withContext(Dispatchers.IO) {
+                AddonSubtitleSource.discover(this@MpvPlayerActivity, videoId, contentType)
+            }
+            addonSubtitleOffers = offers
+            // Offers that land while the picker is open repaint its rows.
+            if (offers.isNotEmpty() && pickerOpen && currentPickerMode == PickerMode.SUBTITLE) {
+                showPicker(PickerMode.SUBTITLE)
+            }
         }
     }
 
@@ -1936,6 +2113,11 @@ class MpvPlayerActivity : ComponentActivity() {
                     externalSubtitleUri = uri
                     externalSubtitleName = hit.fileName
                     surface?.addExternalSubtitle(uri.toString())
+                    PlayerTrackMemory.rememberSubtitle(
+                        context = this@MpvPlayerActivity,
+                        key = subtitleMemoryKey(),
+                        uri = uri.toString()
+                    )
                     showToast("Subtitle loaded: ${hit.fileName}", 4_000L)
                     refreshSettings()
                 }
@@ -1958,6 +2140,28 @@ class MpvPlayerActivity : ComponentActivity() {
             ?: "subtitle-${System.nanoTime()}.srt"
     }
 
+    /**
+     * Resolves the active source's addon display name by matching [label]
+     * against the installed addons. Torrent/metadata-only streams and live
+     * channels leave it at the raw label, exactly as the main player does.
+     */
+    private fun resolveAddonIdentity(label: String?) {
+        val name = label?.trim().orEmpty()
+        if (name.isEmpty()) {
+            currentAddonName = null
+            return
+        }
+        val addon = try {
+            com.kennyb1201.kbstream.data.addon.AddonManager
+                .getInstance(applicationContext)
+                .getEnabledAddons()
+                .firstOrNull { it.displayName.equals(name, ignoreCase = true) }
+        } catch (_: Exception) {
+            null
+        }
+        currentAddonName = addon?.displayName ?: name
+    }
+
     private fun switchToSource(stream: Stream) {
         val newUrl = stream.url ?: return
         if (newUrl == currentUrl) return
@@ -1974,6 +2178,11 @@ class MpvPlayerActivity : ComponentActivity() {
         streamHeaders = stream.requestHeaders
         currentSourceLabel = stream.sourceLabel()
         currentBadges = stream.badges
+        // The switched source brings its OWN binge identity: left behind, the
+        // next-episode handoff would carry the previous provider's group and
+        // chase a continuity the viewer had just abandoned.
+        currentBingeGroup = stream.bingeGroup
+        resolveAddonIdentity(currentSourceLabel)
         startPositionMs = resumeAt
         endedHandled = false
         completionSent = false
@@ -2029,7 +2238,7 @@ class MpvPlayerActivity : ComponentActivity() {
         pickerOpen = false
         settingsContainer?.visibility = View.GONE
         pickerContainer?.visibility = View.GONE
-        controlsContainer?.visibility = View.VISIBLE
+        setControlsVisible(View.VISIBLE)
         playPauseButton?.requestFocus()
         keepControlsVisible()
     }
@@ -2573,7 +2782,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // corner so the picks get the screen, and take the chrome down with it -
         // the panel owns the remote while it is up.
         removeAutoHide()
-        controlsContainer?.visibility = View.GONE
+        setControlsVisible(View.GONE)
         enterCreditsMode()
 
         lifecycleScope.launch {
@@ -2875,6 +3084,10 @@ class MpvPlayerActivity : ComponentActivity() {
         // the option pass at open time picked a language, this picks the exact
         // track this title was left on.
         applyRememberedTracks()
+        // ...and the external subtitle this video was last opened with (see
+        // restoreRememberedSubtitle); mpv only accepts a sub-add once the file
+        // is open, which is exactly this callback.
+        runOnUiThread { restoreRememberedSubtitle() }
         // Scrobble once the file is really open — a stream that never loads
         // must not appear on a tracker as started.
         if (!scrobbleStarted) {
@@ -3016,12 +3229,20 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun fileEpisodeForHandoff() {
         val pos = runCatching { surface?.positionMs() ?: 0L }.getOrDefault(0L)
         val dur = runCatching { surface?.durationMs() ?: 0L }.getOrDefault(0L)
+        // Reached only from launchNextEpisode, which IS an advance of the
+        // session - so the rule is told so, exactly as the main player does.
+        // Pressing Next in the credits, before the end-of-episode countdown
+        // has raised the card, used to file a RESUME row with a minute or two
+        // left while the "stop" scrobble told the tracker the episode was
+        // watched. The rule keeps its tail gate, so a Next pressed in the
+        // middle of an episode still files a resumable position.
         val completed = shouldRecordCompletion(
             playbackEnded = endedHandled,
             endPanelsShown = endPanelsShown,
             positionMs = pos,
             durationMs = dur,
-            played = sessionHasPlayed()
+            played = sessionHasPlayed(),
+            explicitAdvance = true
         )
         saveProgress(reason = "handoff", forceCompleted = completed)
         scrobble("stop", progressOverride = if (completed) 100.0 else null)
@@ -3061,9 +3282,9 @@ class MpvPlayerActivity : ComponentActivity() {
             title = "S$targetSeason\u2009E$targetEpisode",
             streamId = nextStreamId(targetSeason, targetEpisode),
             runtimeMinutes = null,
-            bingeGroup = null,
-            addonName = null,
-            randomEpisodes = false
+            bingeGroup = currentBingeGroup,
+            addonName = currentAddonName,
+            randomEpisodes = randomEpisodes
         )
         com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
             "next: s=$targetSeason e=$targetEpisode from s=${season ?: "-"} e=${episode ?: "-"} id=${pending.streamId}"
@@ -3077,7 +3298,9 @@ class MpvPlayerActivity : ComponentActivity() {
                 putExtra("next_season", pending.season)
                 putExtra("next_title", pending.title)
                 putExtra("next_stream_id", pending.streamId)
-                putExtra("next_random", false)
+                putExtra("next_binge_group", pending.bingeGroup)
+                putExtra("next_addon_name", pending.addonName)
+                putExtra("next_random", pending.randomEpisodes)
             }
         )
         finish()
@@ -3123,6 +3346,19 @@ class MpvPlayerActivity : ComponentActivity() {
         val safePosition = if (completed) 0L else position.coerceAtMost(effectiveDuration)
         val now = System.currentTimeMillis()
         if (completed) completionSent = true
+
+        // A row filed from the credits tail is a "leaving" row even when the
+        // local rule above did not call it completed: the tracker's own stop
+        // can still mark the episode watched, and without a re-merge the
+        // finished episode holds its Continue Watching card until a restart.
+        // Ask Home to re-read the feeds exactly as a completion does. (A
+        // completed row's push asks again once it resolves; duplicate requests
+        // only restart the same bounded retry window.) The tail needs a REAL
+        // duration, so the effective (position-as-duration) fallback is not
+        // used here - an unknown length is not a tail.
+        if (duration > 0L && isCreditsTail(position, duration)) {
+            ContinueWatchingRefreshBus.requestRefresh()
+        }
 
         Log.i(
             TAG,
@@ -3438,7 +3674,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun showError(message: String, hint: String) {
         loadingContainer?.visibility = View.GONE
         bufferingView?.visibility = View.GONE
-        controlsContainer?.visibility = View.GONE
+        setControlsVisible(View.GONE)
         errorContainer?.visibility = View.VISIBLE
         errorText?.text = message
         errorHint?.text = hint
@@ -3475,8 +3711,49 @@ class MpvPlayerActivity : ComponentActivity() {
         playPauseButton?.requestFocus()
     }
 
+    /**
+     * The overlay's wall clock and its "Ends at" estimate, from the playhead
+     * and the device clock - the same two readouts, in the same format, the
+     * main player shows (see NativePlayerActivity.updateClock).
+     */
+    private fun refreshClock() {
+        val clock = playerClock ?: return
+        val ends = endsAtClock ?: return
+        val formatter =
+            if (AppPreferences.getUse24HourClock(this)) clock24Format else clock12Format
+        clock.text = DateFormats.now(formatter)
+        val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
+        val endsAt = DateFormats.time(System.currentTimeMillis() + remainingMs, formatter)
+        ends.text = "Ends at $endsAt"
+    }
+
+    /**
+     * Keeps the clock with the chrome: shown and ticking exactly while the bar
+     * is, and gone (with its tick stopped) otherwise - the main player's rule.
+     */
+    private fun syncClock() {
+        val visible = controlsVisible
+        playerClock?.visibility = if (visible) View.VISIBLE else View.GONE
+        endsAtClock?.visibility = if (visible) View.VISIBLE else View.GONE
+        clockHandler.removeCallbacks(clockRunnable)
+        if (visible) {
+            refreshClock()
+            clockHandler.postDelayed(clockRunnable, 1000L)
+        }
+    }
+
+    /**
+     * Shows/hides the control bar, carrying the overlay clock with it. Every
+     * place the bar appears or disappears goes through here, so the clock can
+     * never be left behind by one of them.
+     */
+    private fun setControlsVisible(visibility: Int) {
+        controlsContainer?.visibility = visibility
+        syncClock()
+    }
+
     private fun showControls() {
-        controlsContainer?.visibility = View.VISIBLE
+        setControlsVisible(View.VISIBLE)
         focusControls()
         keepControlsVisible()
     }
@@ -3490,7 +3767,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // The settings panel is its own screen: hiding the chrome under it would
         // strand the user in the panel with nothing to go back to.
         if (settingsOpen) return@Runnable
-        controlsContainer?.visibility = View.GONE
+        setControlsVisible(View.GONE)
     }
 
     /** Holds the overlay open while one of its buttons has focus. */
@@ -3739,7 +4016,10 @@ class MpvPlayerActivity : ComponentActivity() {
         trickplay?.release()
         trickplay = null
         sleepTimerSection?.release()
+        addonSubtitleFetchJob?.cancel()
+        addonSubtitleFetchJob = null
         handler.removeCallbacksAndMessages(null)
+        clockHandler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
         surface?.release()
         surface = null
@@ -3867,7 +4147,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // is the whole point.
         if (isInPictureInPictureMode) {
             removeAutoHide()
-            controlsContainer?.visibility = View.GONE
+            setControlsVisible(View.GONE)
         }
     }
 

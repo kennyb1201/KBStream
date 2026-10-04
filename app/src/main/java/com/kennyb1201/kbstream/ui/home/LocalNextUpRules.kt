@@ -64,16 +64,37 @@ internal fun selectLocalNextUpCandidates(
  * writes a fresh resume row whose timestamp is newer than every completion,
  * so it stays; a long-abandoned row cannot outweigh episodes watched since.
  *
+ * A SECOND, stronger input exists because a local completion row is not the
+ * only way an episode becomes watched: a viewer who presses transport Next (or
+ * backs out) in the closing minutes, before the end-of-episode card has been
+ * raised, writes a resume row with a minute or two left while the tracker is
+ * told the episode is watched. Nothing local ever supersedes that row — the
+ * "later local completion" rule above cannot match an episode against ITSELF,
+ * and there is no local completion at all — so the rail kept offering
+ * "Resume 2 min left" for an episode the tracker, the Detail page's tick and
+ * the viewer all call finished. [trackerWatchedByShow] supplies exactly that
+ * evidence, and a same-episode tracker mark condemns the row on its own
+ * without consulting any timestamp, because the row cannot be newer than a
+ * mark that describes the same episode.
+ *
  * @param resumeRows in-progress rows (`positionMs > 0`, `isCompleted = 0`).
  * @param completedRows completed episode rows across all shows (see
  *   `WatchHistoryDao.getCompletedSeriesRows`).
+ * @param trackerWatchedByShow watch-tracker episodes per show, as
+ *   `season to episode` pairs, keyed by [supersededResumeShowKey] so a show's
+ *   rows group together whatever id flavor they arrived under.
  * @return the ids of the resume rows that must be ignored.
  */
 internal fun supersededResumeRowIds(
     resumeRows: List<WatchHistoryEntity>,
-    completedRows: List<WatchHistoryEntity>
+    completedRows: List<WatchHistoryEntity>,
+    trackerWatchedByShow: Map<String, Set<Pair<Int, Int>>> = emptyMap()
 ): Set<String> {
-    if (resumeRows.isEmpty() || completedRows.isEmpty()) return emptySet()
+    if (resumeRows.isEmpty()) return emptySet()
+    // Deliberately not `|| completedRows.isEmpty()`: a show the tracker has
+    // marked watched can leave a local resume row behind with no local
+    // completion anywhere, which is the whole reason the tracker set is an
+    // input. The empty-completed case still short-circuits below.
 
     // Completed episodes per show, keyed the way the rail dedupes shows so a
     // "tmdb:123" row and a "123" row are the same show.
@@ -92,14 +113,30 @@ internal fun supersededResumeRowIds(
                 )
             )
     }
-    if (completedByShow.isEmpty()) return emptySet()
+    if (completedByShow.isEmpty() && trackerWatchedByShow.isEmpty()) return emptySet()
 
     return resumeRows
         .filter { row ->
             val season = row.season ?: return@filter false
             val episode = row.episode ?: return@filter false
+            val showKey =
+                showIdentifier(row) ?: return@filter false
+
+            // The tracker says this very episode is watched, so the local row
+            // is a leftover from the moment before the tracker caught up.
+            // Checked before the timestamp comparison below and without it: a
+            // same-episode mark is decisive on its own, and the row's
+            // `updatedAt` is not evidence against it - a background touch or a
+            // re-watch can move that timestamp without unwatching anything.
+            if (
+                trackerWatchedByShow[showKey]
+                    ?.contains(season to episode) == true
+            ) {
+                return@filter true
+            }
+
             val completed =
-                showIdentifier(row)?.let(completedByShow::get)
+                completedByShow[showKey]
                     ?: return@filter false
             val resumeTouchedAt = row.updatedAt
             completed.any { done ->
@@ -112,6 +149,18 @@ internal fun supersededResumeRowIds(
         .map { it.id }
         .toSet()
 }
+
+/**
+ * The key [supersededResumeRowIds] expects a show's tracker watched set under.
+ *
+ * Exposed so the caller groups a show the same way the rule groups its rows: a
+ * Continue Watching row can arrive as "tmdb:123", a bare "123" or a "tt..." id
+ * for one and the same show, and a watched set keyed by a different flavor than
+ * the row simply never matches - a silent no-op that looks exactly like the bug
+ * this input exists to fix.
+ */
+internal fun supersededResumeShowKey(parentId: String): String? =
+    parentId.trim().takeIf { it.isNotEmpty() }?.let(::upNextIdentifier)
 
 /** One completed episode, with the time it was watched. */
 private data class CompletedEpisode(

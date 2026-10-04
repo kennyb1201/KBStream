@@ -67,6 +67,57 @@ object CrashReporter {
     private val recent = ArrayDeque<RecentError>()
 
     /**
+     * Sources whose entries are periodic breadcrumbs rather than failures.
+     *
+     * They are still worth retaining - "played 0s" over a session is how you
+     * tell "it never started" from "it started and stopped" on a device with no
+     * console - but they must never cost the ring a real failure. See
+     * [evictionIndex].
+     */
+    private val ROUTINE_BREADCRUMB_SOURCES = setOf("player.stats")
+
+    /** Whether [source] files routine breadcrumbs rather than failures. */
+    internal fun isRoutineBreadcrumb(source: String): Boolean =
+        source in ROUTINE_BREADCRUMB_SOURCES
+
+    /**
+     * Which retained entry to drop so one more fits, given [retained] with the
+     * newcomer already appended.
+     *
+     * Oldest-first is the whole policy until a routine breadcrumb is in the
+     * ring, and then it is actively harmful. `player.stats` is emitted every
+     * few minutes per playback session, so oldest-first simply rotates the ring
+     * on the breadcrumb's schedule: a report exported while the viewer is
+     * looking at a failure came back with ten copies of the same benign stats
+     * line and none of the failures - the exact report the section exists to be
+     * able to give (see [recordEvent]). So a breadcrumb gives way first, and a
+     * newcomer that is itself a breadcrumb is dropped rather than taking a
+     * failure's slot. A ring with no breadcrumbs in it still evicts
+     * oldest-first, so nothing else changes.
+     */
+    internal fun evictionIndex(retained: List<RecentError>): Int {
+        if (retained.isEmpty()) return 0
+        val newcomer = retained.lastIndex
+        val oldestBreadcrumb =
+            retained.indexOfFirst { isRoutineBreadcrumb(it.source) }
+        // An existing breadcrumb yields, oldest first.
+        if (oldestBreadcrumb >= 0 && oldestBreadcrumb != newcomer) {
+            return oldestBreadcrumb
+        }
+        // The only breadcrumb is the one just added: drop it, not a failure.
+        if (isRoutineBreadcrumb(retained[newcomer].source)) return newcomer
+        return 0
+    }
+
+    /** Appends [entry] under [evictionIndex]'s policy. Caller holds the lock. */
+    private fun retain(entry: RecentError) {
+        recent.addLast(entry)
+        if (recent.size > MAX_RECENT) {
+            recent.removeAt(evictionIndex(recent.toList()))
+        }
+    }
+
+    /**
      * Report a caught Throwable (typically an Error, or an Exception from a
      * scope with no handler) that did NOT crash the process because a
      * defensive layer swallowed it. Never throws.
@@ -117,10 +168,7 @@ object CrashReporter {
             source = source,
             summary = Redaction.text(summary).take(160)
         )
-        synchronized(recentLock) {
-            recent.addLast(entry)
-            while (recent.size > MAX_RECENT) recent.removeFirst()
-        }
+        synchronized(recentLock) { retain(entry) }
     }
 
     private fun remember(throwable: Throwable, context: Map<String, String>) {
@@ -131,10 +179,7 @@ object CrashReporter {
             source = context["source"] ?: "unknown",
             summary = summary
         )
-        synchronized(recentLock) {
-            recent.addLast(entry)
-            while (recent.size > MAX_RECENT) recent.removeFirst()
-        }
+        synchronized(recentLock) { retain(entry) }
     }
 
     /**

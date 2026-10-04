@@ -9177,12 +9177,21 @@ class NativePlayerActivity : ComponentActivity() {
         val pos = player.currentPosition.coerceAtLeast(0L)
         val rawDur = player.duration
         val dur = if (rawDur <= 0L || rawDur == C.TIME_UNSET) 0L else rawDur
+        // Reached only from launchNextEpisode, which IS an advance of the
+        // session - so the rule is told so. Pressing Next in the credits,
+        // before the end-of-episode countdown has raised the card, used to
+        // file a resume row with a minute or two left while the "stop"
+        // scrobble told the tracker the episode was watched; the tracker's
+        // tick then outlived the local row (see supersededResumeRowIds). The
+        // rule keeps the tail gate, so a Next pressed in the middle of an
+        // episode still files a resumable position.
         val completed = shouldRecordCompletion(
             playbackEnded = playbackEndedHandled,
             endPanelsShown = endPanelsShown,
             positionMs = pos,
             durationMs = dur,
-            played = sessionHasPlayed()
+            played = sessionHasPlayed(),
+            explicitAdvance = true
         )
         saveProgress(reason = "handoff", forceCompleted = completed)
         scrobbleSimkl("stop", progressOverride = if (completed) 100.0 else null)
@@ -9476,6 +9485,19 @@ class NativePlayerActivity : ComponentActivity() {
                 (dur != null && pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong())
         val safePos = if (isCompleted) 0L else pos.coerceAtMost(effectiveDur)
         val now = System.currentTimeMillis()
+
+        // A row filed from the credits tail is a "leaving" row even when the
+        // local rule above did not call it completed: the tracker's own stop
+        // can still mark the episode watched, and without a re-merge the
+        // finished episode holds its Continue Watching card until a restart.
+        // Ask Home to re-read the feeds exactly as a completion does. (A
+        // completed row's push asks again once it resolves; duplicate requests
+        // only restart the same bounded retry window.) The tail needs a REAL
+        // duration, so the effective (position-as-duration) fallback is not
+        // used here - an unknown length is not a tail.
+        if (dur != null && isCreditsTail(pos, dur)) {
+            ContinueWatchingRefreshBus.requestRefresh()
+        }
 
         // NonCancellable: this write must land even when the activity is
         // being torn down (onStop/onDestroy cancel their scopes mid-exit).

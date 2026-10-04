@@ -212,7 +212,12 @@ internal object PerfTrace {
 
         val byLabel = snapshot.groupBy { it.label }
         val lines = mutableListOf<String>()
-        lines += "perf: samples=${snapshot.size} · startup=${startupLabel()}"
+        // `uptime`, not `startup`. The value is how long the PROCESS has been
+        // alive, and a report taken 82 minutes in printed "startup=4930806ms" -
+        // which reads as a four-million-millisecond cold start and sends
+        // whoever picks the report up chasing a launch-time bug that does not
+        // exist, while the real failure sits further down the same page.
+        lines += "perf: samples=${snapshot.size} · uptime=${uptimeLabel()}"
 
         // Busiest labels first — that is the order worth optimizing.
         val ranked = byLabel.entries
@@ -251,7 +256,8 @@ internal object PerfTrace {
         text.lineSequence().forEach { Log.i(tag, it) }
     }
 
-    private fun startupLabel(): String {
+    /** How long this process has been alive, or "unmarked" before app start. */
+    private fun uptimeLabel(): String {
         val since = sinceAppStartMs()
         return if (since < 0) "unmarked" else "${since}ms"
     }

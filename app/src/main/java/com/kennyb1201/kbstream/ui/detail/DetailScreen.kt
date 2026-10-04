@@ -2856,6 +2856,16 @@ fun DetailScreen(
                                                         airDatesTrusted =
                                                             effectiveSeason !in seasonsWithStaleDates,
                                                         progressFraction = run {
+                                                            // A watched episode never shows a progress
+                                                            // bar. The tick and a partial bar are two
+                                                            // contradictory statements about the same
+                                                            // episode, and the row behind the bar is a
+                                                            // leftover: leaving in the closing minutes
+                                                            // before the end card was raised files a
+                                                            // resume point locally while the tracker is
+                                                            // told the episode is watched. The tick is
+                                                            // the tracker's verdict, so it wins.
+                                                            //
                                                             // Per-episode progress first (any
                                                             // in-progress episode), then the
                                                             // resume row (covers the Simkl
@@ -2866,7 +2876,9 @@ fun DetailScreen(
                                                                     ?: resumeInfo?.takeIf {
                                                                         it.episodeStreamId == ep.streamId
                                                                     }
-                                                            if (
+                                                            if (isEpisodeWatched) {
+                                                                0f
+                                                            } else if (
                                                                 row != null &&
                                                                 row.durationMs > 0L
                                                             ) {

@@ -96,29 +96,13 @@ class AddonSubtitleController(
 
     companion object {
         private const val TAG = "AddonSubs"
-        private const val FETCH_TIMEOUT_MS = 12_000L
-        private const val MAX_TRACKS = 20
     }
 
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val repository = AddonRepository.getInstance()
 
     /** Downloaded subtitle files: offer url -> cached file URI. */
     private val downloadCache = mutableMapOf<String, Uri>()
-
-    /**
-     * Derived from the process-wide base client. This controller is built per
-     * playback session, so a private builder here meant a fresh connection
-     * pool, dispatcher and thread pool for every title opened - for subtitle
-     * downloads, on the one screen where the decoder wants the headroom.
-     */
-    private val downloadClient by lazy {
-        BaseHttpClient.derived {
-            connectTimeout(10, TimeUnit.SECONDS)
-            readTimeout(20, TimeUnit.SECONDS)
-        }
-    }
 
     private var fetchJob: Job? = null
     private var offers: List<SubtitleEntry> = emptyList()
@@ -184,41 +168,12 @@ class AddonSubtitleController(
 
         val contentType = if (parentType == "series") "series" else "movie"
         fetchJob = scope.launch(Dispatchers.IO) {
-            val addons = AddonManager.getInstance(appContext)
-                .getEnabledAddons()
-                .filter { it.resources.contains("subtitles") }
-            if (addons.isEmpty()) {
-                Log.i(TAG, "No installed addon offers the 'subtitles' resource")
-                return@launch
-            }
-            val collected = supervisorScope {
-                addons.map { addon ->
-                    async {
-                        try {
-                            val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
-                            withTimeout(FETCH_TIMEOUT_MS) {
-                                repository.getSubtitles(baseUrl, contentType, videoId)
-                            }.filter { !it.url.isNullOrBlank() }
-                        } catch (e: Exception) {
-                            // One dead addon must not sink the rest; the
-                            // picker just omits its offers.
-                            Log.w(TAG, "Subtitle lookup failed for ${addon.displayName}", e)
-                            emptyList()
-                        }
-                    }
-                }.awaitAll().flatten()
-            }
-
-            val merged = collected
-                .distinctBy { it.url }
-                .take(MAX_TRACKS)
-
+            val merged = AddonSubtitleSource.discover(appContext, videoId, contentType)
             withContext(Dispatchers.Main) {
                 offers = merged
                 pendingAttachTo?.let { player ->
                     attachTracks(player)
                 }
-                Log.i(TAG, "Addon subtitles found: ${merged.size}")
             }
         }
     }
@@ -300,7 +255,90 @@ class AddonSubtitleController(
      * download of the same track, so every use re-downloaded it AND left
      * another file behind, forever.
      */
-    private fun download(url: String): Uri? {
+    private fun download(url: String): Uri? =
+        downloadCache[url]
+            ?: AddonSubtitleSource.download(appContext, url)?.also { downloadCache[url] = it }
+}
+
+/**
+ * Engine-agnostic half of addon subtitle support: the offers the installed
+ * addons publish for one video id, and download of one offer into the shared
+ * subtitle cache.
+ *
+ * [AddonSubtitleController] merges those into an ExoPlayer as sidecar tracks;
+ * the MPV picker downloads one on tap and hands the file to libmpv. Both sit
+ * on this, so the two engines offer the same subtitles and the two caches
+ * cannot drift.
+ */
+internal object AddonSubtitleSource {
+
+    private const val TAG = "AddonSubs"
+    private const val FETCH_TIMEOUT_MS = 12_000L
+    private const val MAX_TRACKS = 20
+
+    private val repository = AddonRepository.getInstance()
+
+    /**
+     * Derived from the process-wide base client. A private builder per session
+     * meant a fresh connection pool, dispatcher and thread pool for every
+     * title opened - for subtitle downloads, on the one screen where the
+     * decoder wants the headroom.
+     */
+    private val downloadClient by lazy {
+        BaseHttpClient.derived {
+            connectTimeout(10, TimeUnit.SECONDS)
+            readTimeout(20, TimeUnit.SECONDS)
+        }
+    }
+
+    /**
+     * Subtitle offers for [videoId] ("tt…" for movies, "tt…:S:E" for series
+     * episodes), from every installed addon that declares the Stremio
+     * "subtitles" resource. A dead addon contributes nothing rather than
+     * sinking the rest. Empty when no addon offers them.
+     */
+    suspend fun discover(
+        context: Context,
+        videoId: String,
+        contentType: String
+    ): List<SubtitleEntry> {
+        val addons = AddonManager.getInstance(context.applicationContext)
+            .getEnabledAddons()
+            .filter { it.resources.contains("subtitles") }
+        if (addons.isEmpty()) {
+            Log.i(TAG, "No installed addon offers the 'subtitles' resource")
+            return emptyList()
+        }
+        val collected = supervisorScope {
+            addons.map { addon ->
+                async {
+                    try {
+                        val baseUrl = addon.manifestUrl.removeSuffix("/manifest.json")
+                        withTimeout(FETCH_TIMEOUT_MS) {
+                            repository.getSubtitles(baseUrl, contentType, videoId)
+                        }.filter { !it.url.isNullOrBlank() }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Subtitle lookup failed for ${addon.displayName}", e)
+                        emptyList()
+                    }
+                }
+            }.awaitAll().flatten()
+        }
+
+        val merged = collected.distinctBy { it.url }.take(MAX_TRACKS)
+        Log.i(TAG, "Addon subtitles found: ${merged.size}")
+        return merged
+    }
+
+    /**
+     * Downloads [url] into the shared subtitle cache, or returns the copy
+     * already there.
+     *
+     * The file name is derived from the URL (see DiskSweep) rather than from
+     * the clock, so a second use of the same track reuses one file instead of
+     * downloading it again and leaving another behind.
+     */
+    fun download(context: Context, url: String): Uri? {
         val extension = url
             .substringBefore('?')
             .substringAfterLast('.', missingDelimiterValue = "")
@@ -308,21 +346,19 @@ class AddonSubtitleController(
             .let { if (it in DiskSweep.SUBTITLE_EXTENSIONS) it else "srt" }
 
         return try {
-            DiskSweep.existingSubtitleFile(appContext, url, extension)?.let { cached ->
-                return Uri.fromFile(cached).also { downloadCache[url] = it }
+            DiskSweep.existingSubtitleFile(context.applicationContext, url, extension)?.let {
+                return Uri.fromFile(it)
             }
 
             val request = okhttp3.Request.Builder().url(url).build()
             downloadClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return null
                 val body = response.body ?: return null
-                val file = DiskSweep.targetSubtitleFile(appContext, url, extension)
+                val file = DiskSweep.targetSubtitleFile(context.applicationContext, url, extension)
                 file.outputStream().use { out ->
                     body.byteStream().copyTo(out)
                 }
-                val uri = Uri.fromFile(file)
-                downloadCache[url] = uri
-                uri
+                Uri.fromFile(file)
             }
         } catch (e: Exception) {
             Log.w(TAG, "Subtitle download failed: $url", e)
