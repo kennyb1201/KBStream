@@ -33,16 +33,13 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
  * The chips identify the source by its mark rather than a spelled-out name -
  * seven labelled chips make a row too wide to read at a glance - so the values
  * are what the eye lands on. The full [name] stays as the icon's content
- * description for TalkBack, while [shortName] is the compact label the hero's
- * metadata line uses ("IMDb 8.4"), where a spelled-out "Rotten Tomatoes" would
- * eat the whole line.
+ * description for TalkBack.
  */
 internal data class RatingChipSource(
     val name: String,
     val value: String,
     @DrawableRes val icon: Int,
-    val tint: Color,
-    val shortName: String
+    val tint: Color
 )
 
 // Brand colors. MDBList's own badges are color-coded per source, so the
@@ -71,66 +68,27 @@ internal fun mdbListRatingSources(
     tmdbFallback: Double? = null
 ): List<RatingChipSource> = listOfNotNull(
     ratings?.imdb?.let {
-        RatingChipSource("IMDb", it, R.drawable.ic_rating_imdb, ImdbTint, "IMDb")
+        RatingChipSource("IMDb", it, R.drawable.ic_rating_imdb, ImdbTint)
     },
     ratings?.rottenTomatoes?.let {
-        RatingChipSource("Rotten Tomatoes", it, R.drawable.ic_rating_rt, RottenTomatoesTint, "RT")
+        RatingChipSource("Rotten Tomatoes", it, R.drawable.ic_rating_rt, RottenTomatoesTint)
     },
     (ratings?.tmdb ?: tmdbFallback?.takeIf { it > 0.0 }?.let { "%.1f".format(it) })?.let {
-        RatingChipSource("TMDB", it, R.drawable.ic_rating_tmdb, TmdbTint, "TMDB")
+        RatingChipSource("TMDB", it, R.drawable.ic_rating_tmdb, TmdbTint)
     },
     ratings?.metacritic?.let {
-        RatingChipSource("Metacritic", it, R.drawable.ic_rating_metacritic, MetacriticTint, "MC")
+        RatingChipSource("Metacritic", it, R.drawable.ic_rating_metacritic, MetacriticTint)
     },
     ratings?.trakt?.let {
-        RatingChipSource("Trakt", it, R.drawable.ic_rating_trakt, TraktTint, "Trakt")
+        RatingChipSource("Trakt", it, R.drawable.ic_rating_trakt, TraktTint)
     },
     ratings?.letterboxd?.let {
-        RatingChipSource("Letterboxd", it, R.drawable.ic_rating_letterboxd, LetterboxdTint, "LB")
+        RatingChipSource("Letterboxd", it, R.drawable.ic_rating_letterboxd, LetterboxdTint)
     },
     ratings?.myAnimeList?.let {
-        RatingChipSource("MyAnimeList", it, R.drawable.ic_rating_mal, MyAnimeListTint, "MAL")
+        RatingChipSource("MyAnimeList", it, R.drawable.ic_rating_mal, MyAnimeListTint)
     }
 )
-
-/**
- * How many rating tokens the hero's metadata line carries at most.
- *
- * Two, not three: on a TV the one ellipsized line ran out of room before the
- * third token, so the extra source was never read - better to show two that
- * fit than three with the last cut off. The detail page keeps the full strip.
- */
-internal const val HERO_RATING_TOKEN_LIMIT = 2
-
-/**
- * The IMDb short label, excluded from the hero's tokens.
- *
- * The hero's metadata line ALREADY carries IMDb ("IMDb 8.4", from the item's
- * own rating), so emitting it again as a token would print it twice on the one
- * line. [heroRatingTokens] drops it; the detail page's chip strip still shows
- * IMDb among all seven sources.
- */
-private const val HERO_META_IMDB_LABEL = "IMDb"
-
-/**
- * The rating sources as compact text tokens for the Home hero's metadata line,
- * formatted "RT 92%", "TMDB 8.1", "MC 78/100".
- *
- * The hero folds ratings INTO its existing single ellipsized info line rather
- * than drawing the chip strip under it (the Netflix / Apple TV pattern): zero
- * extra vertical space and nothing to cut off. IMDb is skipped because the
- * line already shows it, and only the first [HERO_RATING_TOKEN_LIMIT] of the
- * rest are taken - the list is already ordered RT, TMDB, MC first, so the two
- * a viewer scans for lead, and a title with fewer sources simply contributes
- * fewer tokens. The detail page keeps the full [MdbListRatingChips] strip.
- */
-internal fun heroRatingTokens(
-    sources: List<RatingChipSource>,
-    limit: Int = HERO_RATING_TOKEN_LIMIT
-): List<String> = sources
-    .filterNot { it.shortName == HERO_META_IMDB_LABEL }
-    .take(limit)
-    .map { "${it.shortName} ${it.value}" }
 
 /**
  * The source marks as a wrapping row of chips, used by the detail page's

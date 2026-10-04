@@ -22,7 +22,6 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
-import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
@@ -501,18 +500,6 @@ class HomeViewModel(
     val heroTmdbDetail: StateFlow<TmdbDetail?> =
         _heroTmdbDetail.asStateFlow()
 
-    /**
-     * MDBList's audience/critic figures for the current hero title, resolved
-     * alongside the rest of the hero metadata. Null when no MDBList key is
-     * configured or the title has no ratings, in which case the hero shows no
-     * ratings row at all.
-     */
-    private val _heroRatings =
-        MutableStateFlow<MdbListRatings?>(null)
-
-    val heroRatings: StateFlow<MdbListRatings?> =
-        _heroRatings.asStateFlow()
-
     private var heroResolveJob: Job? = null
 
     /**
@@ -543,7 +530,6 @@ class HomeViewModel(
             _heroLogoUrl.value = null
             _heroTrailerKey.value = null
             _heroTmdbDetail.value = null
-            _heroRatings.value = null
             return
         }
 
@@ -567,9 +553,6 @@ class HomeViewModel(
         }
         _heroTmdbDetail.value = null
         _heroTrailerKey.value = null
-        // Ratings belong to the title too: clear them so the previous item's
-        // chips never sit under the new item's name while it resolves.
-        _heroRatings.value = null
 
         heroResolveJob = viewModelScope.launch {
             try {
@@ -864,44 +847,6 @@ Log.d(
                         "Hero resolved: title=${item.name}, id=$requestedId, type=$requestedType, tmdbId=$resolvedTmdbId, logo=${resolvedLogo != null}, backdrop=${resolvedBackdrop != null}, trailer=${_heroTrailerKey.value != null}"
                     )
 
-                    // MDBList ratings ride along with the hero resolution, on
-                    // the same job. A separate launch keeps them off the
-                    // critical path: the title, art and buttons have already
-                    // painted by the time this runs, and a slow ratings call
-                    // can never delay them. Cancelled with the job, so a fast
-                    // rail scroll abandons an in-flight lookup exactly like
-                    // the rest of the hero work. Skipped entirely without a
-                    // key - the hero then simply shows no rating chips.
-                    launch {
-                        val appContext = getApplication<Application>()
-                        if (!MdbListClient.isConfigured(appContext)) return@launch
-                        val key = MdbListClient.apiKey(appContext)
-                        if (key.isBlank()) return@launch
-
-                        // An IMDb id is the most portable key; otherwise the
-                        // numeric TMDB id (provider "tmdb") is a valid one -
-                        // the same preference DetailScreen's enrichment uses.
-                        val tmdbIdForRatings = resolvedTmdbDetail?.id
-                            ?.takeIf { it > 0 }
-                            ?: resolvedTmdbId?.takeIf { it > 0 }
-                        val queryId = requestedId.trim().takeIf { it.startsWith("tt") }
-                            ?: tmdbIdForRatings?.toString()
-                        if (queryId == null) return@launch
-
-                        val ratings = runCatchingCancellable {
-                            MdbListClient.fetchRatings(
-                                queryId,
-                                TmdbRepository.normalizeMediaType(requestedType),
-                                key
-                            )
-                        }.getOrNull()
-                        Log.d(
-                            "HOME_HERO",
-                            "Hero ratings: title=${item.name}, id=$queryId, " +
-                                "sources=${ratings?.hasAny == true}"
-                        )
-                        _heroRatings.value = ratings
-                    }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Expected when the user moves focus before this item's
@@ -923,7 +868,6 @@ Log.d(
                 _heroLogoUrl.value = null
                 _heroTrailerKey.value = null
                 _heroTmdbDetail.value = null
-                _heroRatings.value = null
             }
         }
     }
@@ -1111,7 +1055,6 @@ Log.d(
                     _heroBackdropUrl.value = null
                     _heroLogoUrl.value = null
                     _heroTrailerKey.value = null
-                    _heroRatings.value = null
                     heroResolveJob?.cancel()
 
                     // Hard-drop the watched-state caches, including the

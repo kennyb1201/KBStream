@@ -6,19 +6,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The Home hero folds MDBList's critic/audience ratings INTO its metadata line.
+ * The Home hero deliberately shows NO MDBList rating tokens.
  *
- * The hero resolves its title asynchronously on focus (see
- * [HomeViewModel.resolveHeroMeta]) and the ratings ride along on the same job.
- * Wire only half of this up - fetch the ratings but never expose them, or
- * collect them but never append the tokens - and the feature compiles cleanly
- * while the hero simply shows nothing, which is exactly the "invisible until
- * someone looks at the screen" failure this reads the sources to prevent.
- *
- * The ratings are tokens appended to the one ellipsized info line ("IMDb 8.4 •
- * RT 92% • TMDB 8.1"), not a chip strip under it; the detail page keeps the
- * full strip. Reintroducing the hero chip row silently adds a second rating
- * surface, so it is asserted absent here.
+ * The hero's single ellipsized metadata line carries only the item's own IMDb
+ * rating, year, certification, runtime and first genre, so its tail is never
+ * clipped on a TV; the detail page owns the full rating chip strip. The hero
+ * used to fold MDBList tokens into that line ("RT 92%", "TMDB 8.1") and fetch
+ * the figures alongside the rest of the hero meta, and either half of that is
+ * invisible until someone reads the screen - so both are asserted absent to
+ * stop the tokens creeping back.
  */
 class HomeHeroRatingsContractTest {
 
@@ -51,79 +47,41 @@ class HomeHeroRatingsContractTest {
     }
 
     @Test
-    fun `the view model resolves and exposes hero ratings`() {
-        val vm = source(VIEW_MODEL)
-        assertTrue(
-            "HomeViewModel must hold hero ratings state",
-            vm.contains("MutableStateFlow<MdbListRatings?>(null)")
+    fun `the hero carries no rating tokens`() {
+        val screen = source(SCREEN)
+        assertFalse(
+            "the hero must not append MDBList tokens to its metadata line",
+            screen.contains("heroRatingTokens(")
         )
-        assertTrue(
-            "HomeViewModel must expose hero ratings as a StateFlow",
-            vm.contains("val heroRatings: StateFlow<MdbListRatings?>")
+        assertFalse(
+            "the hero must not draw the rating chip strip",
+            screen.contains("MdbListRatingChips(")
         )
-        assertTrue(
-            "hero ratings are only fetched when an MDBList key is configured",
-            vm.contains("MdbListClient.isConfigured(appContext)")
-        )
-        assertTrue(
-            "hero ratings must actually be fetched",
-            vm.contains("MdbListClient.fetchRatings(")
-        )
-        assertTrue(
-            "hero ratings must be cleared when the focused item changes",
-            vm.contains("_heroRatings.value = null")
+        assertFalse(
+            "HomeScreen must not thread hero ratings into the hero",
+            screen.contains("heroRatings")
         )
     }
 
     @Test
-    fun `runtime moves off the metadata line onto the second line`() {
+    fun `runtime rides the first metadata line`() {
         val screen = source(SCREEN)
-        assertTrue(
-            "runtime must ride the second line next to the status and the " +
-                "season/episode count, or it has nowhere to live",
-            screen.contains("listOfNotNull(statusTag, seasonEpisodeCount, runtime)")
-        )
-        // The metadata line must no longer carry runtime: it was long enough
-        // that the tail (genre and rating tokens) was ellipsized away.
         val start = screen.indexOf("val heroInfoParts =")
         assertTrue("heroInfoParts must exist", start >= 0)
-        val end = screen.indexOf("+ heroRatingTokens(ratingSources)", start)
-        assertTrue("the ratings must still be appended", end > start)
-        val block = screen.substring(start, end)
-        assertFalse(
-            "runtime must not be back on the metadata line",
-            block.contains("runtime")
+        val end = screen.indexOf("val heroInfo =", start)
+        assertTrue("heroInfo must follow heroInfoParts", end > start)
+        assertTrue(
+            "runtime must be on the first metadata line",
+            screen.substring(start, end).contains("runtime")
         )
     }
 
     @Test
-    fun `the hero folds the ratings into its metadata line`() {
-        val screen = source(SCREEN)
-        assertTrue(
-            "HomeScreen must collect hero ratings",
-            screen.contains("viewModel.heroRatings.collectAsStateWithLifecycle()")
-        )
-        assertTrue(
-            "the host must thread hero ratings into the hero",
-            screen.contains("heroRatings = heroRatingsState")
-        )
-        assertTrue(
-            "the hero must accept a heroRatings parameter",
-            screen.contains("heroRatings: MdbListRatings? = null")
-        )
-        assertTrue(
-            "the hero must build its rating tokens from the shared source list",
-            screen.contains("mdbListRatingSources(") && screen.contains("heroRatingTokens(")
-        )
-        assertTrue(
-            "the tokens must be APPENDED to the single hero metadata line, or " +
-                "the ratings never reach the screen",
-            screen.contains("+ heroRatingTokens(ratingSources)")
-        )
+    fun `the view model no longer fetches hero ratings`() {
+        val vm = source(VIEW_MODEL)
         assertFalse(
-            "the hero must no longer draw the chip strip - ratings live in the " +
-                "metadata line now, and the detail page owns the full strip",
-            screen.contains("MdbListRatingChips(")
+            "the hero ratings state must be gone",
+            vm.contains("_heroRatings") || vm.contains("heroRatings")
         )
     }
 }

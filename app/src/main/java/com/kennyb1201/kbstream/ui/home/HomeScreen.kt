@@ -111,10 +111,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
-import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
-import com.kennyb1201.kbstream.ui.components.heroRatingTokens
-import com.kennyb1201.kbstream.ui.components.mdbListRatingSources
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
@@ -854,10 +851,6 @@ private fun HomeHero(
     tmdbDetail: TmdbDetail?,
     heroBackdropUrl: String?,
     heroLogoUrl: String?,
-    // MDBList's critic/audience figures for this title, resolved with the
-    // rest of the hero meta. Null (the common case - no key configured, or
-    // the title is unrated) simply leaves the chips out.
-    heroRatings: MdbListRatings? = null,
     trailerKey: String?,
     autoPlayTrailer: Boolean,
     muted: Boolean,
@@ -1142,34 +1135,18 @@ private fun HomeHero(
             null
         }
 
-    // Rating sources for the focused title, from MDBList when a key is set.
-    // TMDB's own score stands in as TMDB when MDBList sent no TMDB figure -
-    // which is every title when no MDBList key is set - so a title whose
-    // catalog and trackers carry no rating still shows its audience score.
-    // Empty otherwise, and the hero simply carries no rating tokens.
-    val ratingSources =
-        mdbListRatingSources(
-            heroRatings,
-            tmdbFallback = tmdbDetail
-                ?.voteAverage
-                ?.takeIf { it > 0.0 }
-        )
-
-    // One ellipsized line. The ratings fold INTO it as up to two compact
-    // tokens ("IMDb 8.4 • 2024 • PG-13 • Action • RT 92% • TMDB 8.1") rather
-    // than drawing the chip strip underneath: zero extra vertical space and it
-    // is the Netflix / Apple TV pattern. IMDb is already the meta line's own
-    // rating, so heroRatingTokens adds only the other sources; the detail page
-    // still shows the full strip. Runtime is deliberately NOT here - it moved
-    // to the second line below, because the line was long enough that its tail
-    // (the rating tokens) was ellipsized away on a TV.
+    // One ellipsized line. IMDb is the meta line's own rating - no MDBList
+    // tokens are folded in, so the line stays short enough that its tail is
+    // never ellipsized away on a TV. The detail page keeps the full rating
+    // chip strip. Runtime sits here beside the year and rating.
     val heroInfoParts =
         listOfNotNull(
             imdb,
             year,
             rating,
+            runtime,
             genre
-        ) + heroRatingTokens(ratingSources)
+        )
 
     val heroInfo =
         heroInfoParts.joinToString("  •  ")
@@ -1441,17 +1418,15 @@ private fun HomeHero(
             }
 
             // Second line. For catalog items the TMDB status comes FIRST,
-            // then the season/episode totals and the runtime. Continue
-            // Watching items intentionally do NOT show the TMDB status
-            // (Ongoing / Ended / Canceled / etc.), but the runtime rides along
-            // for every type - it moved OFF the metadata line above, whose
-            // tail was being ellipsized, and this line was already being drawn
-            // for the status.
+            // then the season/episode totals. Continue Watching items show no
+            // TMDB status (Ongoing / Ended / Canceled / etc.), so they carry
+            // no second line at all - their runtime rides the metadata line
+            // above.
             val heroSecondaryParts =
                 if (continueWatchingItem == null) {
-                    listOfNotNull(statusTag, seasonEpisodeCount, runtime)
+                    listOfNotNull(statusTag, seasonEpisodeCount)
                 } else {
-                    listOfNotNull(runtime)
+                    emptyList<String>()
                 }
 
             if (heroSecondaryParts.isNotEmpty()) {
@@ -1868,7 +1843,6 @@ private fun HomeHeroHost(
     heroTmdbDetail: State<TmdbDetail?>,
     heroBackdropUrl: State<String?>,
     heroLogoUrl: State<String?>,
-    heroRatings: State<MdbListRatings?>,
     heroTrailerKey: State<String?>,
     onResolveHeroMeta: (MetaPreview) -> Unit
 ) {
@@ -1985,10 +1959,6 @@ private fun HomeHeroHost(
                 heroBrowse != null -> browseLogo
                 else -> heroLogoUrl.value
             },
-            // A KB folder / Browse tile has no catalog title behind it, so
-            // there are no ratings to show; the chips only ever describe a
-            // real focused title.
-            heroRatings = if (heroOverridden) null else heroRatings.value,
             trailerKey = if (heroOverridden) null else heroTrailerKey.value,
             autoPlayTrailer =
                 !heroOverridden &&
@@ -2452,7 +2422,6 @@ fun HomeScreen(
     val heroTmdbDetailState = viewModel.heroTmdbDetail.collectAsStateWithLifecycle()
     val heroBackdropUrlState = viewModel.heroBackdropUrl.collectAsStateWithLifecycle()
     val heroLogoUrlState = viewModel.heroLogoUrl.collectAsStateWithLifecycle()
-    val heroRatingsState = viewModel.heroRatings.collectAsStateWithLifecycle()
     val heroTrailerKeyState = viewModel.heroTrailerKey.collectAsStateWithLifecycle()
 
     // KB collections interleaved with addon rails (merged order from the
@@ -2906,7 +2875,6 @@ fun HomeScreen(
                 heroTmdbDetail = heroTmdbDetailState,
                 heroBackdropUrl = heroBackdropUrlState,
                 heroLogoUrl = heroLogoUrlState,
-                heroRatings = heroRatingsState,
                 heroTrailerKey = heroTrailerKeyState,
                 onResolveHeroMeta = { viewModel.resolveHeroMeta(it) }
             )
