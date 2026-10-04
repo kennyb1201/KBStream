@@ -2,12 +2,14 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
 import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.text.TextOutput
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 
 /**
@@ -37,11 +39,37 @@ import androidx.media3.exoplayer.video.VideoRendererEventListener
  */
 internal class SplitModeRenderersFactory(
     context: Context,
-    audioExtMode: Int
+    audioExtMode: Int,
+    /**
+     * Builds the libass text renderer for this player, or null when this build
+     * has no libassjni.so. Supplied by the activity so the renderer feeds the
+     * same shared libass instance the overlay tick draws from.
+     */
+    private val buildLibassTextRenderer: (() -> LibassSubtitleRenderer?)? = null
 ) : DefaultRenderersFactory(context) {
     init {
         setExtensionRendererMode(audioExtMode)
         setEnableDecoderFallback(true)
+    }
+
+    /**
+     * Prepends the libass text renderer so an embedded ASS/SSA track is claimed
+     * by it rather than by media3's default text renderer (which flattens the
+     * script into plain cues). With no libass in this build the lambda is null
+     * and the stock text renderers are the whole list, exactly as before.
+     */
+    override fun buildTextRenderers(
+        context: Context,
+        output: TextOutput,
+        outputLooper: Looper,
+        extensionRendererMode: Int,
+        out: ArrayList<Renderer>
+    ) {
+        super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, out)
+        buildLibassTextRenderer?.invoke()?.let { renderer ->
+            out.add(0, renderer)
+            Log.i("PLAYER_ASS", "libass text renderer prepended (embedded ASS/SSA)")
+        }
     }
 
     override fun buildVideoRenderers(

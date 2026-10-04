@@ -351,3 +351,87 @@ Java_com_kennyb1201_kbstream_ui_player_AssNative_nativeRenderFrame(
     AndroidBitmap_unlockPixels(env, bitmap);
     return drawn > 0 ? JNI_TRUE : JNI_FALSE;
 }
+
+/**
+ * Streaming feed: an embedded ASS/SSA track arrives progressively, so the
+ * header and each event are separate samples rather than one whole file. This
+ * first call allocates the empty track the later chunks append to.
+ *
+ * The whole-file path ([nativeLoadTrack]) is deliberately not reused here:
+ * `ass_read_memory` parses a complete script, and calling it with the header
+ * this function is about to feed would parse the styles twice. `ass_new_track`
+ * allocates the track `ass_process_codec_private` / `ass_process_chunk` are
+ * built to append to - the same sequence mpv and VLC drive.
+ *
+ * The codec-private block is the ASS header (the `[Script Info]` and
+ * `[V4+ Styles]` sections, up to and including the `[Events]` Format line).
+ */
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_kennyb1201_kbstream_ui_player_AssNative_nativeProcessCodecPrivate(
+    JNIEnv* env, jclass /*clazz*/, jlong handle, jbyteArray data) {
+    AssHandle* h = asHandle(handle);
+    if (h == nullptr || data == nullptr) return JNI_FALSE;
+    std::lock_guard<std::mutex> guard(h->lock);
+    if (h->library == nullptr) return JNI_FALSE;
+
+    const jsize size = env->GetArrayLength(data);
+    if (size <= 0) return JNI_FALSE;
+
+    if (h->track == nullptr) {
+        h->track = ass_new_track(h->library);
+        if (h->track == nullptr) {
+            LOGW("ass_new_track failed");
+            return JNI_FALSE;
+        }
+    }
+
+    std::vector<char> bytes(static_cast<size_t>(size));
+    env->GetByteArrayRegion(data, 0, size, reinterpret_cast<jbyte*>(bytes.data()));
+    // ass_process_codec_private takes a mutable pointer; it only reads the
+    // buffer, but does not declare the parameter const.
+    ass_process_codec_private(h->track, bytes.data(), size);
+    LOGI("codec private fed to libass: %d bytes", static_cast<int>(size));
+    return JNI_TRUE;
+}
+
+/**
+ * Appends one event line. [data] is a Matroska-style ASS block
+ * (`ReadOrder,Layer,Style,...`), which is what `ass_process_chunk` expects -
+ * the same input mpv hands libass per subtitle packet. [timeMs] is the packet's
+ * presentation time; [durationMs] is 0 when the container states none, in which
+ * case libass holds the event until the next one.
+ */
+extern "C" JNIEXPORT void JNICALL
+Java_com_kennyb1201_kbstream_ui_player_AssNative_nativeProcessChunk(
+    JNIEnv* env, jclass /*clazz*/, jlong handle, jbyteArray data,
+    jlong timeMs, jlong durationMs) {
+    AssHandle* h = asHandle(handle);
+    if (h == nullptr || data == nullptr) return;
+    std::lock_guard<std::mutex> guard(h->lock);
+    if (h->track == nullptr) return;
+
+    const jsize size = env->GetArrayLength(data);
+    if (size <= 0) return;
+
+    std::vector<char> bytes(static_cast<size_t>(size));
+    env->GetByteArrayRegion(data, 0, size, reinterpret_cast<jbyte*>(bytes.data()));
+    ass_process_chunk(h->track, bytes.data(), size,
+                      static_cast<long long>(timeMs),
+                      static_cast<long long>(durationMs));
+}
+
+/**
+ * Drops every accumulated event, for a seek: the events after the new
+ * position have not arrived yet, so the pre-seek ones must go rather than
+ * linger. The caller re-feeds the codec private afterwards so the track's
+ * header state is rebuilt from a known point.
+ */
+extern "C" JNIEXPORT void JNICALL
+Java_com_kennyb1201_kbstream_ui_player_AssNative_nativeFlushEvents(
+    JNIEnv* /*env*/, jclass /*clazz*/, jlong handle) {
+    AssHandle* h = asHandle(handle);
+    if (h == nullptr) return;
+    std::lock_guard<std::mutex> guard(h->lock);
+    if (h->track == nullptr) return;
+    ass_flush_events(h->track);
+}

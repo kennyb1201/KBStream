@@ -47,4 +47,16 @@ internal object AssNative {
     external fun nativeLoadTrack(handle: Long, content: String): Boolean
 
     external fun nativeRenderFrame(handle: Long, timeMs: Long, bitmap: Bitmap): Boolean
+
+    /**
+     * Streaming feed for an embedded ASS/SSA track, whose header and events
+     * arrive as separate, progressively-delivered samples rather than as one
+     * whole file (see [LibassSubtitleRenderer]). The first call allocates the
+     * empty track; the whole-file [nativeLoadTrack] path is unaffected.
+     */
+    external fun nativeProcessCodecPrivate(handle: Long, data: ByteArray): Boolean
+
+    external fun nativeProcessChunk(handle: Long, data: ByteArray, timeMs: Long, durationMs: Long)
+
+    external fun nativeFlushEvents(handle: Long)
 }

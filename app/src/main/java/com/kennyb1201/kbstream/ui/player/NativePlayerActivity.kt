@@ -983,9 +983,25 @@ class NativePlayerActivity : ComponentActivity() {
     // it does not, every path below falls back to the flattened cues the text
     // handler already renders.
 
+    /** Which source currently owns the libass overlay, so one cannot clobber another's detach. */
+    private enum class AssOverlaySource { NONE, SIDECAR, ADDON, EMBEDDED }
+
     /** The script being rendered. Survives a player rebuild; only the native instance does not. */
     private var assSubtitleContent: String? = null
-    private var assRenderer: AssSubtitleRenderer? = null
+
+    /** The overlay's current owner (sidecar whole-file, addon whole-file, or embedded streaming). */
+    private var assOverlaySource = AssOverlaySource.NONE
+
+    /** The addon URL the overlay shows, when [assOverlaySource] is ADDON. */
+    private var assOverlayAddonUrl: String? = null
+
+    /**
+     * The one libass instance for this activity, shared by the whole-script
+     * paths (sidecar/addon) and the streaming renderer (embedded), so the
+     * overlay tick and the sample feed drive the same native state.
+     */
+    private val assRenderer: AssSubtitleRenderer by lazy { AssSubtitleRenderer() }
+
     private lateinit var subtitleAssImage: ImageView
 
     // Stream health
@@ -5024,7 +5040,31 @@ class NativePlayerActivity : ComponentActivity() {
         // Gate the raw-plane renderer for THIS session before the player (and
         // its renderers) are built.
         P5PlaneVideoRenderer.enabled = p5GlesActive
-        val renderersFactory = SplitModeRenderersFactory(this, audioExtMode)
+        val renderersFactory = SplitModeRenderersFactory(
+            this,
+            audioExtMode,
+            buildLibassTextRenderer = {
+                if (!AssNative.available) {
+                    null
+                } else {
+                    LibassSubtitleRenderer(
+                        sink = AssStreamingSink(
+                            renderer = assRenderer,
+                            fonts = {
+                                AssSubtitleSource.collectFonts(
+                                    listOf(File(filesDir, ASS_FONT_DIR))
+                                )
+                            },
+                            configPath = { AssSubtitleRenderer.installFontConfig(assets, filesDir) },
+                            cacheDir = { cacheDir.absolutePath }
+                        ),
+                        // The first format arriving means the libass instance is
+                        // up; the overlay tick can start drawing its frames.
+                        onActive = { handler.post(assFrameTick) }
+                    )
+                }
+            }
+        )
         Log.i(
             "PLAYER_DV",
             "Renderer policy audioDecoder=$audioDecoderPriority (video always hardware)"
@@ -5608,6 +5648,7 @@ class NativePlayerActivity : ComponentActivity() {
                     }
                 }
             }
+            handleAssTrackSelection(tracks)
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -7757,7 +7798,7 @@ class NativePlayerActivity : ComponentActivity() {
             get() = externalSubtitleCues.isNotEmpty() && subtitleOffsetMs < 0 && !assOwned()
 
         /** True while the libass overlay is drawing; text cues must stay out of its way. */
-        private fun assOwned(): Boolean = assRenderer?.active == true
+        private fun assOwned(): Boolean = assRenderer.active
 
         override fun onCues(cueGroup: CueGroup) {
             if (assOwned()) {
@@ -7972,7 +8013,7 @@ class NativePlayerActivity : ComponentActivity() {
             // here instead of into a sibling launch nobody joins.
             withContext(Dispatchers.Main) {
                 if (assScript != null) {
-                    attachAssSubtitle(assScript)
+                    attachAssSubtitle(assScript, AssOverlaySource.SIDECAR)
                     return@withContext
                 }
                 detachAssSubtitle()
@@ -7996,10 +8037,16 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private val assFrameTick = object : Runnable {
         override fun run() {
-            val script = assSubtitleContent ?: return
-            val renderer = assRenderer ?: AssSubtitleRenderer().also { assRenderer = it }
-            if (!renderer.active && !startAssSubtitle(script, renderer)) {
-                fallBackFromAss(script)
+            val renderer = assRenderer
+            val script = assSubtitleContent
+            if (script != null) {
+                if (!renderer.active && !startAssSubtitle(script, renderer)) {
+                    fallBackFromAss(script)
+                    return
+                }
+            } else if (!renderer.active) {
+                // No whole script and no streaming source yet: nothing to draw
+                // until one arrives (see armEmbeddedAssOverlay).
                 return
             }
             // The pipeline still emits flattened cues for the same file, and
@@ -8018,8 +8065,14 @@ class NativePlayerActivity : ComponentActivity() {
      * so every caller sees the same load-and-fall-back behaviour without
      * repeating it here.
      */
-    private fun attachAssSubtitle(content: String) {
+    private fun attachAssSubtitle(
+        content: String,
+        source: AssOverlaySource,
+        addonUrl: String? = null
+    ) {
         assSubtitleContent = content
+        assOverlaySource = source
+        assOverlayAddonUrl = addonUrl
         handler.removeCallbacks(assFrameTick)
         handler.post(assFrameTick)
     }
@@ -8052,7 +8105,7 @@ class NativePlayerActivity : ComponentActivity() {
      * against the cap rectangle instead of the video's aspect ratio.
      */
     private fun drawAssFrame() {
-        val renderer = assRenderer?.takeIf { it.active } ?: return
+        val renderer = assRenderer.takeIf { it.active } ?: return
         val player = exoPlayer ?: return
         val size = player.videoSize
         if (size.width > 0 && size.height > 0) {
@@ -8074,8 +8127,7 @@ class NativePlayerActivity : ComponentActivity() {
     /** Stops the overlay and frees the native instance, keeping the script. */
     private fun releaseAssRenderer() {
         handler.removeCallbacks(assFrameTick)
-        assRenderer?.release()
-        assRenderer = null
+        assRenderer.release()
         if (::subtitleAssImage.isInitialized) {
             subtitleAssImage.setImageDrawable(null)
             subtitleAssImage.visibility = View.GONE
@@ -8085,7 +8137,81 @@ class NativePlayerActivity : ComponentActivity() {
     /** Drops the script too: a different subtitle source is being attached. */
     private fun detachAssSubtitle() {
         assSubtitleContent = null
+        assOverlaySource = AssOverlaySource.NONE
+        assOverlayAddonUrl = null
         releaseAssRenderer()
+    }
+
+    /**
+     * Arms the overlay for an embedded ASS track. There is no whole script to
+     * load: the streaming renderer feeds the shared libass instance as samples
+     * arrive, and the tick draws once it is active.
+     */
+    private fun armEmbeddedAssOverlay() {
+        assOverlaySource = AssOverlaySource.EMBEDDED
+        assSubtitleContent = null
+        assOverlayAddonUrl = null
+        handler.removeCallbacks(assFrameTick)
+        handler.post(assFrameTick)
+    }
+
+    /**
+     * Routes the selected addon ASS track to the libass overlay.
+     *
+     * The offer was already downloaded by the controller (its own cached copy),
+     * so this re-reads that file and loads it as a whole script — the same path
+     * a sidecar takes. Guarded so a repeated onTracksChanged for the same track
+     * does not reload it.
+     */
+    private fun attachAddonAss(url: String) {
+        if (assOverlaySource == AssOverlaySource.ADDON && assOverlayAddonUrl == url) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            val uri = AddonSubtitleSource.download(this@NativePlayerActivity, url) ?: return@launch
+            val text = runCatching {
+                contentResolver.openInputStream(uri)
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+            }.getOrNull() ?: return@launch
+            if (!AssSubtitleSource.isAssContent(text)) return@launch
+            withContext(Dispatchers.Main) {
+                attachAssSubtitle(text, AssOverlaySource.ADDON, url)
+            }
+        }
+    }
+
+    /**
+     * Routes the selected text track to the libass overlay when it is an ASS
+     * source, and drops the overlay when that ASS track is deselected.
+     *
+     * The source guard is the point: an ADDON or EMBEDDED overlay is cleared
+     * when its track goes away, but a user-picked sidecar (SIDECAR) is never
+     * clobbered by a track change elsewhere.
+     */
+    private fun handleAssTrackSelection(tracks: Tracks) {
+        var addonUrl: String? = null
+        var embeddedAss = false
+        for (group in tracks.groups) {
+            if (group.type != C.TRACK_TYPE_TEXT) continue
+            for (i in 0 until group.length) {
+                if (!group.isSelected) continue
+                val fmt = group.getTrackFormat(i)
+                val url = addonSubtitleController.assSourceFor(fmt)
+                if (url != null) {
+                    addonUrl = url
+                    break
+                }
+                if (fmt.sampleMimeType == MimeTypes.TEXT_SSA) embeddedAss = true
+            }
+            if (addonUrl != null) break
+        }
+
+        val selectedAddon = addonUrl
+        when {
+            selectedAddon != null -> attachAddonAss(selectedAddon)
+            embeddedAss && AssSubtitleRenderer.available -> armEmbeddedAssOverlay()
+            assOverlaySource == AssOverlaySource.ADDON ||
+                assOverlaySource == AssOverlaySource.EMBEDDED -> detachAssSubtitle()
+        }
     }
 
     /**
@@ -8105,7 +8231,7 @@ class NativePlayerActivity : ComponentActivity() {
                     ?.use { it.readText() }
             }.getOrNull() ?: return@launch
             if (!AssSubtitleSource.isAssContent(text)) return@launch
-            withContext(Dispatchers.Main) { attachAssSubtitle(text) }
+            withContext(Dispatchers.Main) { attachAssSubtitle(text, AssOverlaySource.SIDECAR) }
         }
     }
 
@@ -8256,8 +8382,9 @@ class NativePlayerActivity : ComponentActivity() {
                         PickerItem(
                             // Language plus the format, so a PGS row says "PGS"
                             // (this engine cannot draw it at all) and an ASS row
-                            // says "ASS" (it draws without its typesetting)
-                            // before the press rather than after.
+                            // says "ASS" before the press rather than after. An
+                            // ASS track is typeset by libass when the build
+                            // carries it, and flattened to plain cues otherwise.
                             label = SubtitleTrackRules.pickerLabel(
                                 language = format.language,
                                 mimeType = format.sampleMimeType,

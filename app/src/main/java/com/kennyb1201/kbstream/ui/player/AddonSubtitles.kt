@@ -5,6 +5,7 @@ import android.net.Uri
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import android.util.AttributeSet
 import android.util.Log
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
@@ -114,6 +115,13 @@ class AddonSubtitleController(
     private var attachedPlayer: Player? = null
 
     /**
+     * Addon ASS offers by "language|label", for the fallback when media3 does
+     * not carry a config id through to the track's Format (see [assSourceFor]).
+     */
+    @Volatile
+    private var assOffersByKey: Map<String, String> = emptyMap()
+
+    /**
      * Starts discovery for [parentId] and re-attaches tracks to every
      * player attached to [view] from now on. Safe to call repeatedly; the
      * fetch happens once per video id.
@@ -217,16 +225,27 @@ class AddonSubtitleController(
         }
 
         scope.launch(Dispatchers.IO) {
+            val assKeys = mutableMapOf<String, String>()
             val configs = offers.mapNotNull { offer ->
                 val uri = downloadCache[offer.url] ?: download(offer.url) ?: return@mapNotNull null
-                MediaItem.SubtitleConfiguration.Builder(uri)
-                    .setMimeType(resolveAddonSubtitleMime(offer.url, uri))
+                val label = offer.label ?: offer.lang?.uppercase()
+                val mime = resolveAddonSubtitleMime(offer.url, uri)
+                val builder = MediaItem.SubtitleConfiguration.Builder(uri)
+                    .setMimeType(mime)
                     .setLanguage(offer.lang)
-                    .setLabel(offer.label ?: offer.lang?.uppercase())
+                    .setLabel(label)
                     .setSelectionFlags(0)
-                    .build()
+                // Tag ASS offers so the player can route the selected track to
+                // the libass overlay instead of rendering them flattened; a
+                // non-ASS offer is left exactly as before.
+                AddonAssTracks.configIdFor(mime, offer.url)?.let { id ->
+                    builder.setId(id)
+                    assKeys[AddonAssTracks.languageKey(offer.lang, label)] = offer.url
+                }
+                builder.build()
             }
             if (configs.isEmpty()) return@launch
+            assOffersByKey = assKeys
 
             withContext(Dispatchers.Main) {
                 // Re-check on the main thread: the media item can change
@@ -245,6 +264,15 @@ class AddonSubtitleController(
             }
         }
     }
+
+    /**
+     * The addon ASS source URL [format] names, or null when it is not an addon
+     * ASS track. Tries the config id media3 should have carried through first
+     * (see [AddonAssTracks]), then falls back to language + label.
+     */
+    fun assSourceFor(format: Format): String? =
+        AddonAssTracks.urlFromConfigId(format.id)
+            ?: assOffersByKey[AddonAssTracks.languageKey(format.language, format.label)]
 
     /**
      * Downloads [url] into the shared subtitle cache, or returns the copy

@@ -48,6 +48,37 @@ internal class AssSubtitleRenderer {
             return false
         }
 
+        if (!createInstance(fonts, configPath, cacheDir)) return false
+
+        loaded = AssNative.nativeLoadTrack(handle, normalized)
+        if (!loaded) {
+            Log.w(TAG, "libass rejected the script")
+            release()
+            return false
+        }
+        Log.i(TAG, "ASS script loaded: ${normalized.length} chars")
+        return true
+    }
+
+    /**
+     * Creates the native instance for the STREAMING path (an embedded track fed
+     * header-then-events), without loading a whole script. [active] becomes true
+     * on success so the overlay tick runs from here, before the first events
+     * have arrived — the frames it draws are simply empty until they do.
+     */
+    fun create(fonts: List<File>, configPath: String?, cacheDir: String?): Boolean {
+        if (!createInstance(fonts, configPath, cacheDir)) return false
+        loaded = true
+        return true
+    }
+
+    /** Shared body of [load] and [create]: allocate the instance and attach fonts. */
+    private fun createInstance(
+        fonts: List<File>,
+        configPath: String?,
+        cacheDir: String?
+    ): Boolean {
+        if (!AssNative.available) return false
         release()
         val created = AssNative.nativeCreate(configPath, cacheDir)
         if (created == 0L) {
@@ -61,15 +92,29 @@ internal class AssSubtitleRenderer {
                 .onFailure { Log.w(TAG, "could not attach font ${font.name}", it) }
         }
         if (fonts.isNotEmpty()) Log.i(TAG, "attached ${fonts.size} font(s) to libass")
-
-        loaded = AssNative.nativeLoadTrack(handle, normalized)
-        if (!loaded) {
-            Log.w(TAG, "libass rejected the script")
-            release()
-            return false
-        }
-        Log.i(TAG, "ASS script loaded: ${normalized.length} chars")
         return true
+    }
+
+    /**
+     * Feeds the header block of a streaming track. Returns whether libass took
+     * it; the empty track is created on the native side by this first call.
+     */
+    fun processCodecPrivate(data: ByteArray): Boolean =
+        active && runCatching { AssNative.nativeProcessCodecPrivate(handle, data) }
+            .getOrDefault(false)
+
+    /** Appends one event block to a streaming track. No-op when inactive. */
+    fun processChunk(data: ByteArray, timeMs: Long, durationMs: Long) {
+        if (!active || data.isEmpty()) return
+        runCatching { AssNative.nativeProcessChunk(handle, data, timeMs, durationMs) }
+            .onFailure { Log.w(TAG, "could not append an ASS event", it) }
+    }
+
+    /** Drops every accumulated event (for a seek). Styles are unaffected. */
+    fun flushEvents() {
+        if (handle == 0L) return
+        runCatching { AssNative.nativeFlushEvents(handle) }
+            .onFailure { Log.w(TAG, "could not flush ASS events", it) }
     }
 
     /**
