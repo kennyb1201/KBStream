@@ -172,6 +172,13 @@ val KBShapeChip = RoundedCornerShape(10.dp) // rating / badge chips
 val KBShapeSmall = RoundedCornerShape(8.dp) // small pills, poster fans
 val KBShapePill = RoundedCornerShape(999.dp) // avatars, fully-round pills
 
+// A firmer-than-card radius for a poster's "Pill" edge. Not KBShapePill: a
+// capsule rounds a portrait poster's short side by half its width, which eats
+// into the artwork and clips the corners of the image. This is a plain, larger
+// corner instead, so a pill poster reads as "more curved than rounded" rather
+// than as a lozenge.
+val KBShapeSoftPill = RoundedCornerShape(20.dp)
+
 // The focus scale. D-pad focus is the app's most-touched feedback — a viewer
 // crosses a rail in twenty focus steps — and like the corner radii it had
 // drifted to nine hand-picked values (1.0 / 1.015 / 1.02 / 1.03 / 1.04 / 1.05 /

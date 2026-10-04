@@ -688,6 +688,21 @@ fun SettingsScreen(
                     }
                 }
 
+                // ── AUTO-FETCH SUBTITLES (uses the OpenSubtitles key above) ───
+                Spacer(modifier = Modifier.height(12.dp))
+                ToggleRow(
+                    label = "Auto-fetch Subtitles",
+                    description = "When a stream carries no subtitle track, search " +
+                        "OpenSubtitles for your preferred subtitle language and attach " +
+                        "the best match automatically. Needs an OpenSubtitles key above " +
+                        "and a preferred subtitle language set in Player settings.",
+                    checked = autoFetchSubtitles,
+                    onToggle = {
+                        autoFetchSubtitles = it
+                        AppPreferences.setAutoFetchSubtitles(context, it)
+                    }
+                )
+
                 // ── TORBOX KEY (cached-status badges in the picker) ────
                 Spacer(modifier = Modifier.height(12.dp))
                 val torboxFocusRequester = remember { FocusRequester() }
@@ -772,21 +787,6 @@ fun SettingsScreen(
                         AppPreferences.setTorboxLibrarySync(context, it)
                         com.kennyb1201.kbstream.work.TorBoxLibraryWorker
                             .syncScheduleForPrefs(context, runImmediate = it)
-                    }
-                )
-
-                // ── AUTO-FETCH SUBTITLES ──────────────────────────────
-                Spacer(modifier = Modifier.height(12.dp))
-                ToggleRow(
-                    label = "Auto-fetch Subtitles",
-                    description = "When a stream carries no subtitle track, search " +
-                        "OpenSubtitles for your preferred subtitle language and attach " +
-                        "the best match automatically. Needs an OpenSubtitles key above " +
-                        "and a preferred subtitle language set in Player settings.",
-                    checked = autoFetchSubtitles,
-                    onToggle = {
-                        autoFetchSubtitles = it
-                        AppPreferences.setAutoFetchSubtitles(context, it)
                     }
                 )
 

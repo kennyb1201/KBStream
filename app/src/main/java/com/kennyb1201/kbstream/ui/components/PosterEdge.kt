@@ -6,7 +6,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.CardShape
-import com.kennyb1201.kbstream.ui.theme.KBShapePill
+import com.kennyb1201.kbstream.ui.theme.KBShapeSoftPill
 
 /**
  * How round a poster tile's corners are, chosen in Settings → Display
@@ -15,7 +15,8 @@ import com.kennyb1201.kbstream.ui.theme.KBShapePill
  * The rounded corner is the app's long-standing card shape ([CardShape]), so
  * [ROUNDED] is the default and nothing changes for an install that never
  * opens the row. [STRAIGHT] squares the tile off for a wall-to-wall look, and
- * [PILL] rounds the short sides into a capsule. The choice reaches every
+ * [PILL] curves the corners well past [ROUNDED] without becoming a capsule
+ * (a capsule rounds a portrait poster's short side away). The choice reaches every
  * surface that draws a [PosterCard] or [LandscapeCard]; the surrounding
  * chrome (rows, buttons) keeps its own shape.
  *
@@ -34,9 +35,9 @@ enum class PosterEdge(val label: String) {
         when (this) {
             STRAIGHT -> RectangleShape
             ROUNDED -> CardShape
-            // Reuses the theme's fully-round pill radius, so a poster becomes
-            // a capsule rather than a rectangle with big corners.
-            PILL -> KBShapePill
+            // A firm radius, not the theme's capsule: KBShapePill halves a
+            // portrait poster's short side and rounds the artwork away.
+            PILL -> KBShapeSoftPill
         }
 
     companion object {

@@ -499,7 +499,7 @@ private fun FollowHomeLayout(
 ) {
     val context = LocalContext.current
     val showLandscapeCards = remember {
-        AppPreferences.landscapePostersActive(context)
+        AppPreferences.homeLandscapeActive(context)
     }
     val showRailType = remember {
         AppPreferences.getHomeRailShowCatalogType(context)
@@ -638,7 +638,7 @@ private fun RowsLayout(
 ) {
     val context = LocalContext.current
     val showLandscapeCards = remember {
-        AppPreferences.landscapePostersActive(context)
+        AppPreferences.homeLandscapeActive(context)
     }
     val showRailType = remember {
         AppPreferences.getHomeRailShowCatalogType(context)

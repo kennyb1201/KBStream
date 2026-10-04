@@ -978,11 +978,12 @@ object AppPreferences {
     }
 
     // ── Auto-fetch subtitles when the stream carries none ────────────
-    // On by default; still requires a preferred subtitle language and an
-    // OpenSubtitles key, so it stays inert until the viewer has asked for a
-    // language to begin with. Synced: a viewing preference, not a device one.
+    // Off by default: it only does anything with an OpenSubtitles key, which
+    // most viewers have not set, so it has to be opted into rather than
+    // silently armed. Even on, it still requires a preferred subtitle language
+    // and a key. Synced: a viewing preference, not a device one.
     fun getAutoFetchSubtitles(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_AUTO_FETCH_SUBTITLES, true)
+        prefs(context).getBoolean(KEY_AUTO_FETCH_SUBTITLES, false)
 
     fun setAutoFetchSubtitles(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_FETCH_SUBTITLES, enabled).apply()
@@ -1304,9 +1305,11 @@ object AppPreferences {
     }
 
     // ── Global landscape posters (every poster surface, not just Home) ─
-    // A separate switch from the Home-rails one above: Home (and the KB
-    // folders) keep their own toggle, while every other poster surface asks
-    // [landscapePostersActive], which is the OR of the two.
+    // A separate switch from the Home-rails one above, and the two must not
+    // bleed into each other: [landscapePostersActive] is the every-surface
+    // switch alone, while a Home surface asks [homeLandscapeActive], which the
+    // everywhere switch also turns on. The Home switch must never reach a
+    // non-Home surface.
     fun getLandscapePosters(context: Context): Boolean =
         prefs(context).getBoolean(KEY_LANDSCAPE_POSTERS, false)
 
@@ -1315,8 +1318,21 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
-    /** True when poster surfaces should render as 16:9 landscape cards. */
+    /**
+     * The "Landscape Posters Everywhere" switch alone: true when every poster
+     * surface — not just Home — renders 16:9 landscape cards. A Home surface
+     * must ask [homeLandscapeActive] instead, or the Home-rails switch would
+     * reshape the whole app (the bug this split fixes).
+     */
     fun landscapePostersActive(context: Context): Boolean =
+        getLandscapePosters(context)
+
+    /**
+     * The landscape state for a HOME surface: on when the everywhere switch is
+     * on, or the Home-rails switch is on. This is the only place the Home
+     * switch is allowed to matter.
+     */
+    fun homeLandscapeActive(context: Context): Boolean =
         getLandscapePosters(context) || getHomeLandscapeCards(context)
 
     // ── Poster eye badge: shows started-but-not-finished shows ────────

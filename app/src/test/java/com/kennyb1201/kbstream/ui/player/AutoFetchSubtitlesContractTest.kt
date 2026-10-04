@@ -85,6 +85,16 @@ class AutoFetchSubtitlesContractTest {
     }
 
     @Test
+    fun `auto-fetch is off unless the viewer opts in`() {
+        // It only does anything with an OpenSubtitles key, which most viewers
+        // have not set, so an on-by-default toggle would silently pose as armed.
+        assertTrue(
+            "auto-fetch must default off",
+            source(PREFS).contains("prefs(context).getBoolean(KEY_AUTO_FETCH_SUBTITLES, false)")
+        )
+    }
+
+    @Test
     fun `the setting exists and syncs`() {
         assertTrue(source(PREFS).contains("fun getAutoFetchSubtitles("))
         assertTrue(
