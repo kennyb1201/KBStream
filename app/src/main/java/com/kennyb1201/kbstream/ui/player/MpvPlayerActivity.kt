@@ -200,6 +200,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private var errorText: TextView? = null
     private var errorHint: TextView? = null
     private var errorSwitchButton: TextView? = null
+    private var errorNextSourceButton: TextView? = null
     private var bufferingView: View? = null
     private var toastView: TextView? = null
     private var controlsContainer: View? = null
@@ -918,6 +919,10 @@ class MpvPlayerActivity : ComponentActivity() {
         // is behind the card. Wired here because it belongs to that card alone.
         errorSwitchButton = findViewById(R.id.mpv_error_switch)
         errorSwitchButton?.setOnClickListener { switchToExoPlayerFromButton() }
+        // The card's one-tap retry on a DIFFERENT source (see tryNextSource):
+        // the same switch the SOURCES picker makes, without the dig.
+        errorNextSourceButton = findViewById(R.id.mpv_error_next)
+        errorNextSourceButton?.setOnClickListener { tryNextSource() }
         bufferingView = findViewById(R.id.mpv_buffering)
         toastView = findViewById(R.id.mpv_toast)
         // The stream-info readout this engine's INFO button brings up - and
@@ -1010,16 +1015,14 @@ class MpvPlayerActivity : ComponentActivity() {
      * cannot wait for the view's own flag to be current.
      */
     private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
-        view.background = when {
-            selected && focused -> getDrawable(R.drawable.pill_chip_selected_focused_bg)
-            selected -> getDrawable(R.drawable.pill_chip_selected_bg)
-            focused -> getDrawable(R.drawable.pill_chip_focused_bg)
-            // The neutral pill's fill is the theme's own surface, exactly like
-            // the main player's applyPillBackground: the fixed
-            // @drawable/pill_chip_bg would repaint #141A24 over a pure-black
-            // theme every time a selection moved off a pill.
-            else -> roundedPanelDrawable(this, playerPanelSurfaceColor(this), 6f)
-        }
+        // Built from the current theme, not the fixed XML pill drawables: those
+        // hard-code @color/kb_accent, and their focused variants are
+        // layer-lists the accent re-tint walk cannot rebuild, so a selected or
+        // focused pill (the Up Next card focuses PLAY NEXT) stayed the default
+        // brass on a chosen accent. The neutral fill stays the theme's own
+        // surface, so a pure-black theme cannot repaint #141A24 over a pill a
+        // selection moves off. See [pillChipBackground].
+        view.background = pillChipBackground(this, selected, focused)
         view.setTextColor(getColor(if (selected) R.color.kb_void else R.color.kb_text_hi))
     }
 
@@ -3727,7 +3730,43 @@ class MpvPlayerActivity : ComponentActivity() {
         // player's copy of this button there is no case where a press could not
         // land - and it takes focus, since the card is the only thing on screen.
         errorSwitchButton?.visibility = View.VISIBLE
+        // "TRY NEXT SOURCE" only where the ranked list actually has one left:
+        // a dead-end button is worse than none. Kept the secondary action -
+        // SWITCH PLAYER stays the card's default focus.
+        errorNextSourceButton?.visibility =
+            if (nextSourceOrNull() != null) View.VISIBLE else View.GONE
         errorSwitchButton?.post { errorSwitchButton?.requestFocus() }
+    }
+
+    /**
+     * The next source in the ranked list after the one playing now, or null
+     * when nothing else is loaded. The list is the same ranked order the
+     * SOURCES picker shows, so "next" means what the viewer sees: the row
+     * under the current one.
+     */
+    private fun nextSourceOrNull(): Stream? {
+        val current = currentUrl
+        val index = sources.indexOfFirst { it.url == current }
+        val start = if (index >= 0) index + 1 else 0
+        return sources.drop(start).firstOrNull { stream ->
+            val url = stream.url
+            !url.isNullOrBlank() && url != current
+        }
+    }
+
+    /**
+     * The error card's retry on ANOTHER source: it replaces the failed file
+     * with the next one in the ranked list, saving the viewer a trip through
+     * the SOURCES picker. Deliberately manual - no heuristic switches sources
+     * on its own - which is why this is a button and not a watchdog.
+     */
+    private fun tryNextSource() {
+        val next = nextSourceOrNull() ?: return
+        // The card is otherwise terminal for this engine; the new load replaces
+        // it, and a failure of the new source raises the card again with fresh
+        // state (see showError).
+        errorContainer?.visibility = View.GONE
+        switchToSource(next)
     }
 
     /**
