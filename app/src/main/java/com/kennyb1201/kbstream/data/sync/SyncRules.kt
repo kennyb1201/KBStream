@@ -1,9 +1,12 @@
 package com.kennyb1201.kbstream.data.sync
 
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
+import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /**
  * Pure rules behind the sync layer, extracted so they can be unit tested
@@ -78,6 +81,32 @@ internal object ProfileScopeRules {
  */
 internal fun remoteWins(remoteUpdated: Long, localUpdated: Long): Boolean =
     remoteUpdated > localUpdated
+
+/**
+ * The history merge decision: the same newest-write-wins rule as [remoteWins],
+ * plus a deterministic tie-break for an exact-millisecond collision.
+ *
+ * Equal stamps are vanishingly rare (two devices have to write the same row in
+ * the same millisecond), but the old rule simply kept the local copy on a tie,
+ * so the two devices each kept their own forever and never converged. When
+ * both sides can hand in a [remoteToken]/[localToken] the larger one wins on
+ * BOTH devices, so a tie resolves to one shared row instead of two diverging
+ * ones. [HistoryTombstoneRules.mergeToken] supplies those tokens, and makes a
+ * delete outrank a live row at the same stamp.
+ *
+ * A missing token (a row written by a build that predates this) falls back to
+ * the old behaviour: keep the local row.
+ */
+internal fun historyRemoteWins(
+    remoteUpdated: Long,
+    remoteToken: String,
+    localUpdated: Long,
+    localToken: String?
+): Boolean {
+    if (remoteUpdated != localUpdated) return remoteUpdated > localUpdated
+    if (localToken == null) return false
+    return remoteToken > localToken
+}
 
 /**
  * Scope rule for the bulk push passes (history, watched markers, prefs).
@@ -206,6 +235,115 @@ internal object DisplayPrefsRules {
         now: Long
     ): Long =
         timestamps.values.maxOrNull() ?: now
+}
+
+/**
+ * The exact JSON payload written for a watch-history row.
+ *
+ * Extracted from [SupabaseSync.enqueueHistory] so the merge paths can rebuild
+ * a local row's payload from its entity: the deterministic tie-break
+ * ([historyRemoteWins]) compares those payloads, and a tie can only resolve to
+ * the same winner on both devices if the rebuild is byte-for-byte the payload
+ * the producing device pushed.
+ */
+internal object HistoryRowRules {
+
+    const val UPDATED_AT_FIELD = "updatedAt"
+
+    fun payload(entity: WatchHistoryEntity): JsonObject =
+        buildJsonObject {
+            put("id", entity.id)
+            put("parentId", entity.parentId)
+            put("type", entity.type)
+            put("name", entity.name)
+            entity.episodeTitle?.let { put("episodeTitle", it) }
+            entity.overview?.let { put("overview", it) }
+            entity.clearLogo?.let { put("clearLogo", it) }
+            entity.backdropUrl?.let { put("backdropUrl", it) }
+            entity.totalEpisodesInSeason?.let { put("totalEpisodesInSeason", it) }
+            entity.poster?.let { put("poster", it) }
+            entity.streamUrl?.let { put("streamUrl", it) }
+            entity.season?.let { put("season", it) }
+            entity.episode?.let { put("episode", it) }
+            entity.episodeStreamId?.let { put("episodeStreamId", it) }
+            put("positionMs", entity.positionMs)
+            put("durationMs", entity.durationMs)
+            put(UPDATED_AT_FIELD, entity.updatedAt)
+            put("isCompleted", entity.isCompleted)
+            entity.completedAt?.let { put("completedAt", it) }
+        }
+}
+
+/**
+ * Deletion tombstones for watch-history rows.
+ *
+ * A local delete used to hard-DELETE the cloud row (fire-and-forget). The
+ * deletion was then invisible to the merge: a DELETED local row has no
+ * timestamp, so any surviving cloud copy won [remoteWins] and came straight
+ * back on the next pull or realtime event; a sibling device that still held the
+ * row re-uploaded it on its next full push; and realtime dropped the DELETE
+ * event entirely. That is the "deleted items resurrect" report.
+ *
+ * A tombstone makes the delete a first-class, NEWER write instead of the
+ * absence of one. Wire shape: the SAME cloud row (same item_id), with its
+ * payload replaced by a deletion marker carrying `deletedAt` (epoch ms) — and
+ * [HistoryRowRules.UPDATED_AT_FIELD] set to that same instant, so every
+ * existing last-write-wins comparison already treats the tombstone as the
+ * newest write. No schema change is needed: the marker lives inside the JSON
+ * payload, so it rides the outbox, the pull, and realtime unchanged — and a
+ * tombstone arrives as an INSERT/UPDATE, which the realtime applier already
+ * handles.
+ */
+internal object HistoryTombstoneRules {
+
+    /** Payload field that marks a row as a deletion tombstone (epoch ms). */
+    const val DELETED_AT_FIELD = "deletedAt"
+
+    fun isTombstone(payload: JsonObject): Boolean = deletedAt(payload) != null
+
+    /** Epoch ms the row was deleted at, or null for a live row. */
+    fun deletedAt(payload: JsonObject): Long? =
+        (payload[DELETED_AT_FIELD] as? JsonPrimitive)?.content?.toLongOrNull()
+
+    /** The payload written in place of a deleted row. */
+    fun tombstone(id: String, deletedAt: Long): JsonObject =
+        buildJsonObject {
+            put("id", id)
+            put(DELETED_AT_FIELD, deletedAt)
+            put(HistoryRowRules.UPDATED_AT_FIELD, deletedAt)
+        }
+
+    /**
+     * Whether a pulled tombstone removes the local row. It carries its own
+     * write stamp, so it only wins over a row at least as old — a resume
+     * position recorded AFTER the delete (the same title played again) is
+     * genuinely newer and must survive.
+     */
+    fun tombstoneWins(tombstoneUpdatedAt: Long, localUpdatedAt: Long): Boolean =
+        remoteWins(tombstoneUpdatedAt, localUpdatedAt)
+
+    /**
+     * Whether this device may re-publish [localUpdatedAt] for a row whose cloud
+     * copy is the tombstone written at [cloudDeletedAt]. Only a genuinely
+     * NEWER local write may: re-uploading the row the user deleted is exactly
+     * the resurrection being fixed.
+     */
+    fun shouldPublishOverTombstone(localUpdatedAt: Long, cloudDeletedAt: Long): Boolean =
+        localUpdatedAt > cloudDeletedAt
+
+    /**
+     * The deterministic tie token for one history payload, compared only when
+     * two writes carry the same `updatedAt` (see [historyRemoteWins]).
+     *
+     * A tombstone always outranks a live row at the same stamp: the token is
+     * prefixed with `~` (0x7E), which sorts after the `{` a JSON payload
+     * starts with, so an exact-millisecond collision can never resurrect a
+     * deleted title. Otherwise the payload's own text is the token, which
+     * every device computes identically for the same row, so both devices
+     * pick the SAME winner and converge.
+     */
+    fun mergeToken(payload: JsonObject): String =
+        deletedAt(payload)?.let { at -> "~tombstone:$at" } ?: payload.toString()
 }
 
 /**

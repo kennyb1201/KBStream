@@ -761,49 +761,39 @@ object SupabaseSync {
 
     fun enqueueHistory(entity: WatchHistoryEntity, profileId: String? = currentProfileId()) {
         if (!isSignedIn()) return
-        val payload = buildJsonObject {
-            put("id", entity.id)
-            put("parentId", entity.parentId)
-            put("type", entity.type)
-            put("name", entity.name)
-            entity.episodeTitle?.let { put("episodeTitle", it) }
-            entity.overview?.let { put("overview", it) }
-            entity.clearLogo?.let { put("clearLogo", it) }
-            entity.backdropUrl?.let { put("backdropUrl", it) }
-            entity.totalEpisodesInSeason?.let { put("totalEpisodesInSeason", it) }
-            entity.poster?.let { put("poster", it) }
-            entity.streamUrl?.let { put("streamUrl", it) }
-            entity.season?.let { put("season", it) }
-            entity.episode?.let { put("episode", it) }
-            entity.episodeStreamId?.let { put("episodeStreamId", it) }
-            put("positionMs", entity.positionMs)
-            put("durationMs", entity.durationMs)
-            put("updatedAt", entity.updatedAt)
-            put("isCompleted", entity.isCompleted)
-            entity.completedAt?.let { put("completedAt", it) }
-        }
+        val payload = HistoryRowRules.payload(entity)
         val row = OutboxItem(TABLE_HISTORY, "item_id", scopedKey(entity.id, profileId), payload)
         outbox.put(row)
         scheduleFlush()
     }
 
     /**
-     * Deletes watch-history rows [ids] from the cloud, for a local delete that
-     * has to STICK.
+     * Records a watch-history delete for [ids] as a TOMBSTONE that has to
+     * STICK everywhere.
      *
-     * A local row deletion was previously invisible to the sync layer, and the
-     * pull merge ruled the other way: [applyHistoryRow] lets the remote row win
-     * whenever it is newer than the local one, and a DELETED local row has no
-     * timestamp at all — so any surviving cloud copy came straight back on the
-     * next pull or realtime event. That is how a resume row a "mark as watched"
-     * had just cleared returned with its progress bar, and with it the Continue
-     * Watching card, while the completed marker stayed behind (the marker is a
-     * different row, so the checkmark and the bar showed at once).
+     * A local row deletion used to be invisible to the sync layer, and the
+     * merge ruled the other way: a DELETED local row has no timestamp at all, so
+     * any surviving cloud copy won [remoteWins] and came straight back on the
+     * next pull or realtime event — and realtime dropped the DELETE event
+     * entirely, while a sibling device that still held the row re-uploaded it on
+     * its next full push. That is how a resume row a "mark as watched" had just
+     * cleared returned with its progress bar, and with it the Continue Watching
+     * card, while the completed marker stayed behind (the marker is a different
+     * row, so the checkmark and the bar showed at once).
      *
-     * The pending outbox writes for those keys are dropped first: a queued
-     * upload of the same row would otherwise land after the delete and put it
-     * back. Fire-and-forget, and a no-op when signed out — with no cloud copy
-     * there is nothing that can resurrect the row.
+     * The delete is therefore a WRITE now: the same cloud row is replaced by a
+     * payload that carries `deletedAt` and a matching `updatedAt`, so every
+     * merge path (this device's own pull, realtime on a sibling, and the sibling's
+     * next full push - see [pushHistory]) treats the delete as the newest write
+     * and deletes the row instead of restoring it (see [HistoryTombstoneRules]).
+     *
+     * Enqueued through the durable outbox rather than fire-and-forget: the
+     * tombstone survives process death and flushes on reconnect, so an offline
+     * delete still reaches the account instead of leaving the cloud copy to win.
+     * The pending outbox writes for those keys are dropped first - a queued
+     * upload of the same row would otherwise flush after the tombstone and put
+     * the live row back. A no-op when signed out: with no cloud copy there is
+     * nothing that can resurrect the row.
      */
     fun deleteHistoryRows(
         ids: List<String>,
@@ -812,34 +802,28 @@ object SupabaseSync {
         if (ids.isEmpty()) return
         if (!isSignedIn()) return
 
-        val scopedIds =
-            ids.mapNotNull { id -> id.trim().takeIf { it.isNotBlank() } }
-                .distinct()
-                .map { id -> scopedKey(id, profileId) }
-        if (scopedIds.isEmpty()) return
+        val cleanIds =
+            ids.mapNotNull { id -> id.trim().takeIf { it.isNotBlank() } }.distinct()
+        if (cleanIds.isEmpty()) return
 
-        outbox.removeKeys(TABLE_HISTORY, "item_id", scopedIds)
+        outbox.removeKeys(
+            TABLE_HISTORY,
+            "item_id",
+            cleanIds.map { id -> scopedKey(id, profileId) }
+        )
 
-        scope.launch {
-            val c = client ?: return@launch
-            for (chunk in scopedIds.chunked(50)) {
-                try {
-                    c.from(TABLE_HISTORY).delete {
-                        filter { isIn("item_id", chunk) }
-                    }
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    Log.w(TAG, "deleteHistoryRows failed: ${e.message}")
-                    recordSyncError("Delete", e)
-                } catch (t: Throwable) {
-                    if (t is CancellationException) throw t
-                    CrashReporter.recordNonFatal(
-                        t,
-                        mapOf("source" to "delete_history_rows")
-                    )
-                }
-            }
+        val now = System.currentTimeMillis()
+        cleanIds.forEach { id ->
+            outbox.put(
+                OutboxItem(
+                    TABLE_HISTORY,
+                    "item_id",
+                    scopedKey(id, profileId),
+                    HistoryTombstoneRules.tombstone(id, now)
+                )
+            )
         }
+        scheduleFlush()
     }
 
     /**
@@ -1238,6 +1222,7 @@ object SupabaseSync {
                 }.distinct())
                 .associateBy { it.id }
             var applied = 0
+            var removed = 0
             for (row in rows) {
                 // Bail on a mid-pull profile switch: remaining rows belong
                 // to a filter/DB pair that no longer matches.
@@ -1248,9 +1233,32 @@ object SupabaseSync {
                 if (!storedKeyMatchesProfile(storedId, pid)) continue
                 val id = unscopedKey(storedId)
 
-                val localUpdated = localById[id]?.updatedAt ?: 0L
+                val localRow = localById[id]
 
-                if (remoteWins(remoteUpdated, localUpdated)) {
+                // A tombstone is a delete, not a row to store: apply it by
+                // removing the local copy when it is the newer write (see
+                // HistoryTombstoneRules). This is what stops a delete from
+                // being undone by the next pull.
+                val deletedAt = HistoryTombstoneRules.deletedAt(remote)
+                if (deletedAt != null) {
+                    if (localRow != null &&
+                        HistoryTombstoneRules.tombstoneWins(deletedAt, localRow.updatedAt)
+                    ) {
+                        db.watchHistoryDao().deleteById(id)
+                        removed++
+                    }
+                    continue
+                }
+
+                val localUpdated = localRow?.updatedAt ?: 0L
+
+                if (historyRemoteWins(
+                        remoteUpdated = remoteUpdated,
+                        remoteToken = HistoryTombstoneRules.mergeToken(remote),
+                        localUpdated = localUpdated,
+                        localToken = localRow?.let { HistoryTombstoneRules.mergeToken(HistoryRowRules.payload(it)) }
+                    )
+                ) {
                     db.watchHistoryDao().upsert(
                         WatchHistoryEntity(
                             id = id,
@@ -1277,8 +1285,8 @@ object SupabaseSync {
                     applied++
                 }
             }
-            if (applied > 0) {
-                Log.i(TAG, "history pull applied $applied rows")
+            if (applied > 0 || removed > 0) {
+                Log.i(TAG, "history pull applied $applied rows, removed $removed (tombstones)")
                 WatchedStatusRepository.invalidateAllCaches()
                 com.kennyb1201.kbstream.data.tv.TvLauncherPublisher.sync(
                     context,
@@ -1408,9 +1416,51 @@ object SupabaseSync {
         val pid = currentProfileId()
         val db = WatchHistoryDatabase.getInstanceScoped(context)
         val all = db.watchHistoryDao().getAll()
+        // A row this account already TOMBSTONED must never be re-uploaded. The
+        // tombstone loses its race the moment a sibling that still holds the
+        // row re-pushes it, which is how a deleted title came back; publishing
+        // is therefore gated on the cloud not holding a newer delete (see
+        // [HistoryTombstoneRules.shouldPublishOverTombstone]). A title played
+        // AGAIN after the delete carries a newer stamp and publishes normally,
+        // which is what clears the tombstone.
+        val cloudTombstones = cloudHistoryTombstones()
+        val toPublish =
+            all.filter { entity ->
+                val deletedAt = cloudTombstones[scopedKey(entity.id, pid)]
+                deletedAt == null ||
+                    HistoryTombstoneRules.shouldPublishOverTombstone(
+                        localUpdatedAt = entity.updatedAt,
+                        cloudDeletedAt = deletedAt
+                    )
+            }
         if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
-        all.forEach { enqueueHistory(it, pid) }
+        toPublish.forEach { enqueueHistory(it, pid) }
         flushOutbox()
+    }
+
+    /**
+     * storedKey -> `deletedAt` for every TOMBSTONED history row in the cloud.
+     * Empty when signed out or when the read fails — an empty map publishes
+     * everything, the safe fallback (losing a user's real history is worse
+     * than the cloud's tombstone being overwritten, and the next pull repairs
+     * it). The read mirrors [cloudMarkerTimestamps].
+     */
+    private suspend fun cloudHistoryTombstones(): Map<String, Long> {
+        val c = client ?: return emptyMap()
+        return runCatching {
+            c.from(TABLE_HISTORY)
+                .select()
+                .decodeList<SyncRowDto>()
+                .mapNotNull { row ->
+                    val stored = row.itemId ?: return@mapNotNull null
+                    val at = HistoryTombstoneRules.deletedAt(row.payload)
+                        ?: return@mapNotNull null
+                    stored to at
+                }
+                .toMap()
+        }.onFailure {
+            Log.w(TAG, "pushHistory: cloud tombstone read failed (${it.message})")
+        }.getOrDefault(emptyMap())
     }
 
     private suspend fun pushWatched(context: Context) {
@@ -1878,8 +1928,30 @@ object SupabaseSync {
         val id = unscopedKey(storedId)
 
         val local = db.watchHistoryDao().getById(id)
+
+        // A realtime tombstone deletes the local row, exactly like the pull
+        // path. It arrives as an INSERT/UPDATE (a delete is a payload now), so
+        // this is the same single-row apply a live row takes (see
+        // HistoryTombstoneRules).
+        val deletedAt = HistoryTombstoneRules.deletedAt(remote)
+        if (deletedAt != null) {
+            if (local != null &&
+                HistoryTombstoneRules.tombstoneWins(deletedAt, local.updatedAt)
+            ) {
+                db.watchHistoryDao().deleteById(id)
+                WatchedStatusRepository.invalidateAllCaches()
+            }
+            return
+        }
+
         val localUpdated = local?.updatedAt ?: 0L
-        if (remoteWins(remoteUpdated, localUpdated)) {
+        if (historyRemoteWins(
+                remoteUpdated = remoteUpdated,
+                remoteToken = HistoryTombstoneRules.mergeToken(remote),
+                localUpdated = localUpdated,
+                localToken = local?.let { HistoryTombstoneRules.mergeToken(HistoryRowRules.payload(it)) }
+            )
+        ) {
             db.watchHistoryDao().upsert(
                 WatchHistoryEntity(
                     id = id,
