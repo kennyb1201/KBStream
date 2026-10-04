@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.device.DeviceCapability
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -35,6 +36,12 @@ data class StreamAddonGroup(val addonName: String, val streams: List<Stream>)
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(application)
+
+    // Resolved once: the ranker demotes 4K on a box that cannot decode it, so
+    // the fact about this device is passed into every rank call below.
+    private val constrainedDevice: Boolean by lazy {
+        DeviceCapability.constrainedStreamDevice(application)
+    }
 
     private companion object {
         const val TAG = "KBStream"
@@ -215,7 +222,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // auto-play both take from.
         val requestedEpisode = EpisodeMatch.requestedFrom(streamId)
         val preppedStreams =
-            if (useRanker) StreamRanker.rank(allStreams, requestedEpisode) else allStreams
+            if (useRanker) {
+                StreamRanker.rank(allStreams, requestedEpisode, constrainedDevice)
+            } else {
+                allStreams
+            }
         // KB-compatible badge packs: attach matched badge chips before
         // the list reaches the UI.
         val withBadges = StreamBadgeEngine.apply(preppedStreams, getApplication())
@@ -229,7 +240,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             .map { result ->
                 val prepared =
                     if (useRanker) {
-                        StreamRanker.rank(result.streams, requestedEpisode)
+                        StreamRanker.rank(result.streams, requestedEpisode, constrainedDevice)
                     } else {
                         result.streams
                     }
@@ -299,7 +310,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             streams.take(RANK_REPORT_TOP).forEach { stream ->
                 add(
                     "  ${addonByStream[streamKey(stream)] ?: "?"} · " +
-                        StreamRanker.explain(stream, requestedEpisode)
+                        StreamRanker.explain(stream, requestedEpisode, constrainedDevice)
                 )
             }
             // Why auto-play did or did not start a source, in the report's own

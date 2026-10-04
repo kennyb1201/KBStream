@@ -36,6 +36,7 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.cache.DiskSweep
+import com.kennyb1201.kbstream.data.device.DeviceCapability
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
@@ -869,7 +870,11 @@ class MpvPlayerActivity : ComponentActivity() {
         }
         val parsedSources = parseSourcesJson(intent.getStringExtra("sources_json"))
         val orderedSources = if (AppPreferences.getUseStreamRanker(this)) {
-            StreamRanker.rank(parsedSources, requestedEpisode)
+            StreamRanker.rank(
+                parsedSources,
+                requestedEpisode,
+                constrainedDevice = DeviceCapability.constrainedStreamDevice(this)
+            )
         } else {
             parsedSources
         }

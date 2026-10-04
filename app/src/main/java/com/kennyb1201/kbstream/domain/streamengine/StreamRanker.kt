@@ -199,6 +199,23 @@ object StreamRanker {
     private const val MIN_PLAUSIBLE_1080P_GB = 0.25
 
     /**
+     * The 4K bonus on a device that cannot decode it: deliberately BELOW the
+     * 1080p bonus, so a well-served 1080p outranks a 4K remux the box will
+     * stall on. It still beats 720p, so 4K is preferred over genuinely lower
+     * resolutions rather than vetoed.
+     */
+    private const val CONSTRAINED_4K_BONUS = 90
+
+    /**
+     * On a constrained device, a 4K/high-bitrate file at or above this size is
+     * a stall rather than a treat: the box has neither the decode headroom nor
+     * the buffer to ride out its bitrate. A 4K file this large also implies a
+     * bitrate (tens of Mbps) the tuner-class hardware manages poorly.
+     */
+    private const val CONSTRAINED_HEAVY_4K_GB = 12.0
+    private const val CONSTRAINED_HEAVY_PENALTY = 120
+
+    /**
      * One stream and the facts the rules read, worked out once per stream. The
      * comparator runs O(n log n) times, so the text join, the URL decode and
      * the host parse must not happen inside a selector.
@@ -218,7 +235,11 @@ object StreamRanker {
      * that season under every other source. Null (a movie, a live channel, an
      * id that carries no episode) leaves the order exactly as it was.
      */
-    fun rank(streams: List<Stream>, episode: Pair<Int, Int>? = null): List<Stream> =
+    fun rank(
+        streams: List<Stream>,
+        episode: Pair<Int, Int>? = null,
+        constrainedDevice: Boolean = false
+    ): List<Stream> =
         streams
             .filter { stream -> isPlayable(stream) || !stream.infoHash.isNullOrBlank() }
             // The text every rule reads, whether the debrid service the viewer
@@ -262,7 +283,7 @@ object StreamRanker {
                     // Availability, because it is what the sorted addons sort on
                     // first and what the viewer's configuration asked for.
                     .thenByDescending { if (INSTANT_HINT.containsMatchIn(it.text)) 1 else 0 }
-                    .thenByDescending { score(it.stream, it.text) }
+                    .thenByDescending { score(it.stream, it.text, constrainedDevice) }
             )
             .map { it.stream }
 
@@ -277,7 +298,11 @@ object StreamRanker {
      * invisible in the picker. Read-only: it walks exactly the paths [rank]
      * does.
      */
-    internal fun explain(stream: Stream, episode: Pair<Int, Int>? = null): String {
+    internal fun explain(
+        stream: Stream,
+        episode: Pair<Int, Int>? = null,
+        constrainedDevice: Boolean = false
+    ): String {
         val text = searchableText(stream)
         return buildString {
             append(if (isPlayable(stream)) "playable" else "hash-only")
@@ -285,7 +310,8 @@ object StreamRanker {
             if (episodeRank(stream, episode) == EPISODE_OTHER) append(" other-episode")
             if (isDebridServed(stream, text)) append(" debrid-served")
             if (INSTANT_HINT.containsMatchIn(text)) append(" instant")
-            append(" score=").append(score(stream, text))
+            if (constrainedDevice) append(" constrained-device")
+            append(" score=").append(score(stream, text, constrainedDevice))
             sizeInGb(stream, text)?.let { size ->
                 append(" size=")
                     .append(String.format(java.util.Locale.US, "%.1f", size))
@@ -393,7 +419,7 @@ object StreamRanker {
             THREE_D_RELEASE.containsMatchIn(text) ||
             FOREIGN_OR_HARDSUBBED_RELEASE.containsMatchIn(text)
 
-    private fun score(stream: Stream, text: String): Int {
+    private fun score(stream: Stream, text: String, constrainedDevice: Boolean): Int {
         var score = 0
 
         // --- Signals from the stream's own fields ---
@@ -408,8 +434,14 @@ object StreamRanker {
         if (!stream.audioUrl.isNullOrBlank()) score += 40
 
         // --- Resolution ---
+        //
+        // On a memory-constrained box the 4K bonus drops below the 1080p one:
+        // the +200 that was unconditional is what put a 40 Mbps remux at the
+        // head of auto-play on hardware that cannot decode it. A capable device
+        // is untouched.
         when {
-            "2160p" in text || "4k" in text -> score += 200
+            "2160p" in text || "4k" in text ->
+                score += if (constrainedDevice) CONSTRAINED_4K_BONUS else 200
             "1440p" in text -> score += 175
             "1080p" in text -> score += 150
             "720p" in text -> score += 100
@@ -443,7 +475,16 @@ object StreamRanker {
         // --- Size: bigger usually means less compressed, but it is a nudge
         // next to resolution/HDR and it is capped - past ~20 GB the file is
         // likelier to stall this device than to look better.
-        sizeInGb(stream, text)?.let { score += (it.coerceAtMost(20.0) * 1.5).toInt() }
+        val sizeGb = sizeInGb(stream, text)
+        sizeGb?.let { score += (it.coerceAtMost(20.0) * 1.5).toInt() }
+
+        // A heavy 4K on a constrained device is the stall this ranker was
+        // picking: penalize it below the honest 1080p it was beating.
+        if (constrainedDevice && sizeGb != null && sizeGb >= CONSTRAINED_HEAVY_4K_GB &&
+            ("2160p" in text || "4k" in text)
+        ) {
+            score -= CONSTRAINED_HEAVY_PENALTY
+        }
 
         // --- The one penalty left in the score ---
         //

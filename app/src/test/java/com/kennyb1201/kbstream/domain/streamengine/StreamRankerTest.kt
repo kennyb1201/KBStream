@@ -586,4 +586,39 @@ class StreamRankerTest {
 
         assertEquals("https://host/web.mkv", StreamRanker.rank(streams).first().url)
     }
+
+    // ── The device ──
+    //
+    // Reported: auto-play "will always pick the 40 Mbps remux on your 1.7 GB
+    // TCL". The 4K bonus was unconditional, so a file the box cannot decode
+    // outranked the 1080p it could.
+
+    private fun orderConstrained(vararg streams: Stream): List<Stream> =
+        StreamRanker.rank(streams.toList(), constrainedDevice = true)
+
+    @Test
+    fun `a capable device still prefers the 4K remux`() {
+        val uhd = stream("Some Film 2024 2160p REMUX DV 40 GB", url = "https://host/4k.mkv")
+        val hd = stream("Some Film 2024 1080p WEB-DL 6 GB", url = "https://host/1080.mkv")
+
+        assertEquals(listOf(uhd, hd), order(uhd, hd))
+    }
+
+    @Test
+    fun `a constrained device prefers the 1080p over a heavy 4K remux`() {
+        val uhd = stream("Some Film 2024 2160p REMUX DV 40 GB", url = "https://host/4k.mkv")
+        val hd = stream("Some Film 2024 1080p WEB-DL 6 GB", url = "https://host/1080.mkv")
+
+        assertEquals(listOf(hd, uhd), orderConstrained(uhd, hd))
+    }
+
+    @Test
+    fun `a constrained device still prefers 4K over 720p`() {
+        // The 4K bonus drops below 1080p but stays above 720p: it is demoted,
+        // not vetoed.
+        val uhd = stream("Some Film 2024 2160p WEB-DL 8 GB", url = "https://host/4k.mkv")
+        val hd = stream("Some Film 2024 720p HDTV 1 GB", url = "https://host/720.mkv")
+
+        assertEquals(listOf(uhd, hd), orderConstrained(uhd, hd))
+    }
 }
