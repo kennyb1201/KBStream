@@ -93,6 +93,7 @@ object AppPreferences {
     private const val KEY_LANDSCAPE_POSTERS = "landscape_posters"
     private const val KEY_POSTER_PARTIAL_WATCH_BADGE = "poster_partial_watch_badge"
     private const val KEY_POSTER_BORDER_STRENGTH = "poster_border_strength" // 0=off, 1=subtle (default), 2=medium, 3=strong
+    private const val KEY_POSTER_EDGE = "poster_edge" // 0=straight, 1=rounded (default), 2=pill
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
     // Which settings pane to reopen on, by SettingsPane name. Device-local on
     // purpose: the pane someone was last reading says nothing about the
@@ -1293,6 +1294,25 @@ object AppPreferences {
 
     fun setPosterBorderStrength(context: Context, strength: Int) {
         prefs(context).edit().putInt(KEY_POSTER_BORDER_STRENGTH, strength).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Poster edge (corner shape, all poster surfaces) ──────────────
+    // 0=straight, 1=rounded (default), 2=pill. Spelled as a plain Int for the
+    // same reason as the border strength: the data layer must not reference
+    // the UI enum that draws the shape. PosterEdgeDefaultTest pins it to
+    // PosterEdge.DEFAULT.
+    internal const val DEFAULT_POSTER_EDGE = 1
+
+    fun getPosterEdge(context: Context): Int =
+        readIntPref(
+            context,
+            KEY_POSTER_EDGE,
+            DEFAULT_POSTER_EDGE
+        )
+
+    fun setPosterEdge(context: Context, edge: Int) {
+        prefs(context).edit().putInt(KEY_POSTER_EDGE, edge).apply()
         syncDisplayPrefsBlob(context)
     }
 

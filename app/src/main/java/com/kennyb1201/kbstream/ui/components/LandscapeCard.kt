@@ -99,7 +99,8 @@ fun LandscapeCard(
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier.onFocusChanged { focused = it.hasFocus }
+        modifier = modifier.onFocusChanged { focused = it.hasFocus },
+        shape = posterEdgeShape()
     ) {
         BoxWithConstraints(
             modifier = Modifier

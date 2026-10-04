@@ -357,7 +357,9 @@ fun GuideScreen(
                     headers = item.channel.headers,
                     chno = item.channel.tvgChno?.trim()?.takeIf { it.isNotBlank() },
                     epgChannelId = item.epgChannel?.id,
-                    epgUrl = epgUrl.trim().takeIf { it.isNotBlank() }
+                    epgUrl = epgUrl.trim().takeIf { it.isNotBlank() },
+                    tvgId = item.channel.tvgId,
+                    tvgName = item.channel.tvgName
                 )
             },
             browsingGroup = selectedGroup

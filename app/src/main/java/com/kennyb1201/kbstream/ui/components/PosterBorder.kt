@@ -6,7 +6,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.kennyb1201.kbstream.data.settings.AppPreferences
-import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 
 /**
@@ -43,9 +42,10 @@ enum class PosterBorder(val label: String, val alpha: Float) {
 /**
  * The border a poster tile draws, from the saved strength.
  *
- * A single pixel of [KBTextHi] at the level's alpha, on the card's own corner
- * radius so it follows the artwork's shape. Returns an empty modifier for
- * [PosterBorder.OFF], so a viewer who wants no edge pays for no draw.
+ * A single pixel of [KBTextHi] at the level's alpha, on the tile's own corner
+ * radius (the chosen [PosterEdge]) so it follows the artwork's shape. Returns
+ * an empty modifier for [PosterBorder.OFF], so a viewer who wants no edge
+ * pays for no draw.
  *
  * Read directly rather than remembered: the pref is a cheap SharedPreferences
  * hit, and this keeps the setting honest for a screen that is already on
@@ -60,6 +60,6 @@ fun posterBorderModifier(): Modifier {
     return Modifier.border(
         width = 1.dp,
         color = KBTextHi.copy(alpha = border.alpha),
-        shape = CardShape
+        shape = posterEdgeShape()
     )
 }
