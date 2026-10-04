@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -95,7 +96,15 @@ class PlayPauseThemeContractTest {
             assertTrue(
                 "a surface-fill button whose own ripple is the XML accent must have " +
                     "that ripple rebuilt in the chosen accent ($path)",
-                player.contains("ripple?.getEffectColor()?.defaultColor == xmlAccent")
+                player.contains(
+                    "rippled && accent != xmlAccent && fill == getColor(R.color.kb_surface)"
+                )
+            )
+            assertFalse(
+                "the retint must not call RippleDrawable#getEffectColor(), which needs " +
+                    "API 31 while this app ships minSdk 26 (lint's NewApi fails the " +
+                    "release build) ($path)",
+                player.contains(".getEffectColor()")
             )
         }
     }

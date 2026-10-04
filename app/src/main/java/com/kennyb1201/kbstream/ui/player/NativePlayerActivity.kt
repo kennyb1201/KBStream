@@ -8816,11 +8816,15 @@ class NativePlayerActivity : ComponentActivity() {
             amoled && fill == AVATAR_PLACEHOLDER_FILL -> themedAvatarBackground(panelSurfaceColor())
 
             // A surface-fill button whose OWN press ripple is the XML accent
-            // (the control-bar buttons, the source pillars, picker rows): the
-            // fill is not the accent, so the accent branch below never matched
-            // and the press flash kept the default brass under a chosen theme.
-            // Rebuild the ripple in the accent while keeping the fill.
-            rippled && accent != xmlAccent && ripple?.getEffectColor()?.defaultColor == xmlAccent ->
+            // (the control-bar buttons, the button_surface_bg pills, picker
+            // rows): the fill is not the accent, so the accent branch below
+            // never matched and the press flash kept the default brass under a
+            // chosen theme. Rebuild the ripple in the accent while keeping the
+            // fill. Reading a drawable's own ripple colour needs API 31
+            // (RippleDrawable#getEffectColor), so this keys off the surface
+            // fill instead - every surface-fill ripple in the player chrome
+            // flashes the accent.
+            !amoled && rippled && accent != xmlAccent && fill == getColor(R.color.kb_surface) ->
                 themedChromeBackground(fill, shape.cornerRadius, true)
 
             // An accent-filled drawable (the accent button, selected pills, the
