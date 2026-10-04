@@ -1089,6 +1089,17 @@ class NativePlayerActivity : ComponentActivity() {
     private var manualRetryToken = 0
     private var rebufferStartedAtMs = 0L
 
+    // Adaptive source downshift (see RebufferDownshift.kt). The tracker holds
+    // the current source's mid-playback rebuffers; the latch remembers that the
+    // ladder is spent so a session with no rung left stops re-counting the
+    // stalls it keeps producing.
+    private val rebufferDownshift = RebufferDownshiftTracker()
+    private var rebufferDownshiftGivenUp = false
+
+    // When the last seek was processed, so a seek's own buffering is not read
+    // as a starved source (see [rebufferFollowsSeek]). 0 = no seek this session.
+    private var lastSeekAtMs = 0L
+
     // Startup cost breakdown, logged once per attempt at the first frame.
     // The "Rebuffer stall" line alone cannot say whether the seconds went into
     // loading the source or into the decoder's first frame, and any buffering
@@ -5385,7 +5396,8 @@ class NativePlayerActivity : ComponentActivity() {
                         }
                     }
                     if (rebufferStartedAtMs != 0L) {
-                        val stalledMs = System.currentTimeMillis() - rebufferStartedAtMs
+                        val rebufferStartMs = rebufferStartedAtMs
+                        val stalledMs = System.currentTimeMillis() - rebufferStartMs
                         Log.w("PLAYER_PERF", "Rebuffer stall: ${stalledMs}ms")
                         // Only a stall AFTER the first frame is a mid-playback
                         // rebuffer. The first buffering of a session is the
@@ -5397,6 +5409,14 @@ class NativePlayerActivity : ComponentActivity() {
                                 "playback.stall",
                                 stalledMs
                             )
+                            // A source that keeps stalling is handed to the
+                            // next-ranked one; true means that switch already
+                            // started and the rest of this READY belongs to a
+                            // player being torn down (see RebufferDownshift.kt).
+                            if (maybeDownshiftOnRebuffer(rebufferStartMs, stalledMs)) {
+                                rebufferStartedAtMs = 0L
+                                return
+                            }
                         }
                         rebufferStartedAtMs = 0L
                     }
@@ -5496,6 +5516,10 @@ class NativePlayerActivity : ComponentActivity() {
                 reason == Player.DISCONTINUITY_REASON_SEEK_ADJUSTMENT
             ) {
                 stallRecoveries = 0
+                // Stamp the seek so the buffering it flushes the read-ahead
+                // buffer into is not counted as a slow source by the downshift
+                // counter (see RebufferDownshift.kt).
+                lastSeekAtMs = System.currentTimeMillis()
             }
             // Unknown, not the pre-seek position: the next poller tick must
             // not count the jump itself as a frozen position.
@@ -10460,6 +10484,12 @@ class NativePlayerActivity : ComponentActivity() {
         streamWidth = 0
         streamHeight = 0
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
+        // The downshift window is per source: the one just left cannot make the
+        // next one look like it is already stalling, and a source switch is a
+        // fresh start for a ladder that had been given up on (see
+        // RebufferDownshift.kt).
+        rebufferDownshift.reset()
+        rebufferDownshiftGivenUp = false
         retryAttempt = 0; retryExhausted = false; errorMessageStr = null; forceTextureViewFallback = false; languagesAutoSelected = false
         dvStripRetryDone = false; forceDvStripForSession = false
         decoderResourceFallbackDone = false
@@ -10488,6 +10518,54 @@ class NativePlayerActivity : ComponentActivity() {
         }
         dismissPicker()
         recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)
+    }
+
+    /**
+     * Counts a finished mid-playback rebuffer and, once the current source has
+     * stacked enough of them, hands the session to the next-ranked source.
+     *
+     * See [RebufferDownshift.kt] for why this exists. Returns true only when a
+     * switch actually started, so the caller skips the rest of the READY
+     * handling for a player that is already being replaced.
+     */
+    private fun maybeDownshiftOnRebuffer(rebufferStartMs: Long, stalledMs: Long): Boolean {
+        if (rebufferDownshiftGivenUp) return false
+        // A stall the seek itself caused is not evidence the source is slow.
+        if (rebufferFollowsSeek(rebufferStartMs, lastSeekAtMs)) return false
+        // Only a real stall counts, and only while the viewer is actually
+        // playing: a paused actor-return session keeps its frame and must not be
+        // yanked to another source.
+        if (stalledMs < REBUFFER_DOWNSHIFT_MIN_STALL_MS) return false
+        if (isLiveChannel) return false
+        if (exoPlayer?.playWhenReady != true) return false
+        if (reconnectingContainer.visibility == View.VISIBLE) return false
+        val now = System.currentTimeMillis()
+        rebufferDownshift.record(now)
+        if (!rebufferDownshift.due(now)) return false
+        val stalledCount = rebufferDownshift.count(now)
+        Log.w(
+            "PLAYER_STALL",
+            "Source rebuffered $stalledCount times in ${REBUFFER_DOWNSHIFT_WINDOW_MS / 60_000}min " +
+                "— downshifting to the next source"
+        )
+        PlaybackEngineTrace.note(
+            PlaybackEngineTrace.describe(
+                cause = "source could not keep up",
+                detail = "$stalledCount rebuffers, last ${stalledMs}ms, " +
+                    "${currentSourceLabel ?: "unknown source"}"
+            )
+        )
+        val switching = tryNextSource(
+            statusText = "This source keeps stalling — trying the next one…"
+        )
+        // The window is spent either way: a switch starts the next source
+        // fresh, and with no rung left there is nothing more to reach for, so
+        // stop re-counting the stalls this session keeps producing.
+        rebufferDownshift.reset()
+        if (!switching) {
+            rebufferDownshiftGivenUp = true
+        }
+        return switching
     }
 
     /**
