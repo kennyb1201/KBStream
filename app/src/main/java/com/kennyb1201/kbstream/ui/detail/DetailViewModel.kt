@@ -1860,6 +1860,14 @@ for ((metaAddon, response, error) in probeResults) {
                     return@forEach
                 }
 
+                // Preserve the ORIGINAL completion stamp on a re-mark: see
+                // WatchedStatusRepository. A fresh stamp here re-ordered
+                // "recently watched" every time a season was re-marked.
+                val existingCompletedAt =
+                    runCatchingCancellable {
+                        historyDao.getById(key)?.completedAt
+                    }.getOrNull()
+
                 val row =
                     WatchHistoryEntity(
                         id = key,
@@ -1874,7 +1882,7 @@ for ((metaAddon, response, error) in probeResults) {
                         episode = episode,
                         updatedAt = now,
                         isCompleted = true,
-                        completedAt = now
+                        completedAt = existingCompletedAt ?: now
                     )
 
                 runCatchingCancellable {
@@ -2450,6 +2458,30 @@ for ((metaAddon, response, error) in probeResults) {
             // 1. Local: one completed row per episode, so the season and
             // episode badges survive the next load()/restart. One bulk write,
             // not one transaction per episode.
+            //
+            // Existing completion stamps are read in one batch first, so a
+            // re-mark of a season the viewer already finished keeps each
+            // episode's original "recently watched" position instead of
+            // jumping the whole show to the top of the rail.
+            val existingCompletedAtByKey =
+                runCatchingCancellable {
+                    historyDao.getByIds(
+                        seasonsToMark.flatMap { (season, episodes) ->
+                            episodes.mapNotNull { episode ->
+                                WatchedEpisodeState.buildEpisodeKey(
+                                    parentId = parentId,
+                                    season = season,
+                                    episode = episode
+                                )
+                            }
+                        }
+                    )
+                }.getOrDefault(emptyList())
+                    .mapNotNull { entity ->
+                        entity.completedAt?.let { entity.id to it }
+                    }
+                    .toMap()
+
             val rows =
                 seasonsToMark.flatMap { (season, episodes) ->
                     episodes.mapNotNull { episode ->
@@ -2473,7 +2505,7 @@ for ((metaAddon, response, error) in probeResults) {
                                     episode = episode,
                                     updatedAt = now,
                                     isCompleted = true,
-                                    completedAt = now
+                                    completedAt = existingCompletedAtByKey[key] ?: now
                                 )
                             }
                     }

@@ -812,6 +812,12 @@ class WatchedStatusRepository(
     suspend fun invalidateRemoteWatchSets() {
         cacheMutex.withLock {
             simklSetsFetchedAt = 0L
+            // And MDBList's snapshot on the same terms. Resetting only the
+            // Simkl stamp left THIS copy of the MDBList watched snapshot live
+            // for [REMOTE_SET_TTL_MS], so an unmark that had just been pushed
+            // to MDBList was overwritten on the next read by the pre-unmark
+            // snapshot - the checkmark came back after the unmark.
+            mdbListFetchedAt = 0L
         }
 
         _watchedStateVersion.value =
@@ -1835,6 +1841,16 @@ class WatchedStatusRepository(
             )
 
         if (markerKey != null) {
+            // Preserve the ORIGINAL completion stamp on a re-mark. This path
+            // used to overwrite completedAt with now every time, so re-marking
+            // a title - or a sync arriving with it - jumped it to the top of
+            // "recently watched" and re-ordered the rail. The first time it was
+            // completed is the fact; only the absence of one takes [now].
+            val existingCompletedAt =
+                runCatchingCancellable {
+                    historyDao.getById(markerKey)?.completedAt
+                }.getOrNull()
+
             val row =
                 WatchHistoryEntity(
                     id = markerKey,
@@ -1849,7 +1865,7 @@ class WatchedStatusRepository(
                     episode = episode,
                     updatedAt = now,
                     isCompleted = true,
-                    completedAt = now
+                    completedAt = existingCompletedAt ?: now
                 )
 
             runCatchingCancellable {
@@ -2218,6 +2234,57 @@ class WatchedStatusRepository(
             }
         }
 
+        // 2c. Drop the LOCAL playback record for the title. The manual
+        // override is only one of the watched signals the resolver reads:
+        // isMovieLocallyWatched() answers from the history row's progress, so
+        // a film stopped a couple of minutes shy of the end re-resolved as
+        // watched the moment anything re-read the history and the checkmark
+        // came back. Movies have a single row; a series' rows all go, matching
+        // removeWatchedShow's whole-show DELETE. Cloud copies of the rows are
+        // deleted too, or the next pull re-inserts them and the state returns.
+        runCatchingCancellable {
+            val parents = (idForms + normalizedId).toList()
+            val removedIds = ArrayList<String>()
+
+            if (normalizedType == "movie") {
+                parents.forEach { form ->
+                    val row = runCatchingCancellable { historyDao.getById(form) }
+                        .getOrNull()
+                    if (row != null) {
+                        historyDao.deleteById(row.id)
+                        removedIds += row.id
+                    }
+                }
+            } else {
+                removedIds += historyDao
+                    .getInProgressForParents(parents)
+                    .map { it.id }
+                removedIds += historyDao
+                    .getCompletedForParents(parents)
+                    .map { it.id }
+
+                historyDao.deleteResumeRowsForParents(parents)
+                historyDao.deleteCompletedForParents(parents)
+            }
+
+            val distinctRemovedIds = removedIds.distinct()
+            if (distinctRemovedIds.isNotEmpty()) {
+                com.kennyb1201.kbstream.data.sync.SupabaseSync
+                    .deleteHistoryRows(distinctRemovedIds)
+
+                Log.i(
+                    "WATCHED_REPO",
+                    "unmark: ended ${distinctRemovedIds.size} local history row(s)"
+                )
+            }
+        }.onFailure { e ->
+            Log.e(
+                "WATCHED_REPO",
+                "mark unwatched local-history cleanup failed for $key",
+                e
+            )
+        }
+
         // 3. Delete the persisted Room cache row so a cold start / disk read
         // cannot re-seed the watched state from before the unmark.
         try {
@@ -2284,6 +2351,26 @@ class WatchedStatusRepository(
                         simklRepository.removeWatchedShow(
                             normalizedId
                         )
+                }
+
+                // removeWatched* rewrites the HISTORY, but the paused PLAYBACK
+                // session survives it - and Simkl re-promotes a movie left at
+                // ~95% straight back into the watched list from that open
+                // session, which is how the checkmark returned a couple of
+                // minutes after the unmark. Close every open session for the
+                // title as well.
+                runCatchingCancellable {
+                    simklRepository.deletePlaybackSessionsForParent(
+                        parentId = normalizedId,
+                        title = null,
+                        seasonsEpisodes = null
+                    )
+                }.onFailure { e ->
+                    Log.e(
+                        "WATCHED_REPO",
+                        "SIMKL playback-session cleanup failed for $key",
+                        e
+                    )
                 }
             } catch (e: Exception) {
                 Log.e(
