@@ -347,6 +347,39 @@ internal object HistoryTombstoneRules {
 }
 
 /**
+ * Rules for the ACCOUNT-SCOPED staging of deletes made while SIGNED OUT (see
+ * [SyncDeferredDeletes]).
+ *
+ * A delete made while signed out cannot be enqueued in the ordinary outbox —
+ * that is cleared on sign-out so a queued write never lands under the wrong
+ * account. It is staged instead, tagged with the account it belongs to, and
+ * replayed only when THAT account signs back in. The account identity the app
+ * already persists is the email, so it is normalized here (trimmed, lowercased)
+ * so a case/whitespace difference between sign-in and the stored id cannot make
+ * a delete replay under the wrong account or fail to replay under the right one.
+ */
+internal object DeferredDeleteRules {
+
+    /** Normalized account id, or null when there is nothing to attribute to. */
+    fun normalizeAccount(raw: String?): String? =
+        raw?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+
+    /** Stable identity of one staged delete (dedupe on re-stage). */
+    fun id(accountId: String, table: String, keyColumn: String, key: String): String =
+        "$accountId|$table|$keyColumn|$key"
+
+    /**
+     * True when a delete staged under [stagedAccountId] may replay because
+     * [signingInAccount] is that same account. Both sides normalized; a blank
+     * signing-in account replays nothing.
+     */
+    fun mayReplay(stagedAccountId: String, signingInAccount: String?): Boolean {
+        val target = normalizeAccount(signingInAccount) ?: return false
+        return normalizeAccount(stagedAccountId) == target
+    }
+}
+
+/**
  * Publish/read rules for the watched-marker table (`sync_watched_status`),
  * the table behind the poster checkmark and the eye badge.
  *

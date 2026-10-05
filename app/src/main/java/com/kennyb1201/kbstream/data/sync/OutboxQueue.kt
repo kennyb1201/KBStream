@@ -180,6 +180,15 @@ internal class OutboxQueue(
 
     fun snapshot(): List<OutboxItem> = rows.values.toList()
 
+    /**
+     * The pending write for [table]/[keyColumn]/[key], or null when nothing is
+     * queued for it. Used by the pull to spot a delete that is queued but not
+     * yet flushed (see [SupabaseSync.pullHistory]): its tombstone outranks a
+     * still-live cloud copy, so the pull must not re-insert the row first.
+     */
+    fun pending(table: String, keyColumn: String, key: String): OutboxItem? =
+        rows[id(table, keyColumn, key)]
+
     fun id(row: OutboxItem): String = id(row.table, row.keyColumn, row.key)
 
     companion object {

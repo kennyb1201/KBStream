@@ -289,9 +289,13 @@ object SupabaseSync {
                         persistSession(context, savedEmail.orEmpty())
                         _authState.value = AuthState.SignedIn(savedEmail.orEmpty())
                         _syncEnabled.value = true
+                        rememberDeferredDeleteAccount(context, savedEmail.orEmpty())
                         startRealtime()
                         startPeriodicFlush()
                         ensureBackgroundPull(context)
+                        // Replay this account's signed-out deletes BEFORE the
+                        // pull, so the pull cannot restore a row they delete.
+                        replayDeferredDeletes(context, savedEmail.orEmpty())
                         pullAll(context)
 
                         restoreAttempts = 0
@@ -405,8 +409,12 @@ object SupabaseSync {
                 persistSession(context, email.trim())
                 _authState.value = AuthState.SignedIn(email.trim())
                 _syncEnabled.value = true
+                rememberDeferredDeleteAccount(context, email.trim())
                 startRealtime()
                 startPeriodicFlush()
+                // Replay this account's signed-out deletes BEFORE the pull, so
+                // the pull cannot restore a row they delete.
+                replayDeferredDeletes(context, email.trim())
                 // Pull FIRST and AWAIT it: a fresh device must ingest the
                 // cloud state before it pushes. pullAll/pushAll are
                 // fire-and-forget Jobs — running them back-to-back raced
@@ -461,6 +469,7 @@ object SupabaseSync {
                 persistSession(context, email.trim())
                 _authState.value = AuthState.SignedIn(email.trim())
                 _syncEnabled.value = true
+                rememberDeferredDeleteAccount(context, email.trim())
                 startRealtime()
                 startPeriodicFlush()
                 // Fresh account: push local state up as the initial seed.
@@ -475,6 +484,12 @@ object SupabaseSync {
 
     fun signOut(context: Context) {
         val c = client ?: return
+        // Capture the account id BEFORE the session store is cleared below: a
+        // delete made after this sign-out must be attributed to THIS account so
+        // it replays only when this account signs back in (see
+        // [stageSignedOutDelete]). An upgraded install may sign out before the
+        // id was ever recorded, which is why this reads the session email too.
+        rememberDeferredDeleteAccount(context)
         // Drop queued writes: they belong to the account being left, and a
         // later flush (or the OutboxFlushWorker) would push them under
         // whichever account signs in next.
@@ -799,48 +814,31 @@ object SupabaseSync {
      * upload of the same row would otherwise flush after the tombstone and put
      * the live row back.
      *
-     * KNOWN GAP - delete while SIGNED OUT. This returns early without staging
-     * anything, on the reasoning that a signed-out device has no cloud copy to
-     * protect. That is wrong: signing out does NOT delete the account's cloud
-     * rows, so a delete made while signed out removes only the local row, and
-     * the next sign-in as the SAME account pulls the cloud copy straight back -
-     * the exact resurrection this tombstone exists to prevent. It cannot simply
-     * be staged in [outbox] like the signed-in path, because [signOut] clears
-     * the outbox on purpose: a pending write belongs to the account being left,
-     * and replaying it after a DIFFERENT account signs in would push one
-     * account's deletion into another's rows, which is strictly worse than the
-     * resurrection above.
-     *
-     * DEFERRED DESIGN - account-scoped staging. Deliberately NOT implemented
-     * yet: the failure mode is cross-account data loss and it cannot be
-     * verified without a signed-in device, so the shape is recorded here for a
-     * future change to build against rather than changed blind:
-     *  1. Identify the account durably. Today the only persisted account
-     *     identity is the email in [syncPrefs] (KEY_EMAIL), and [signOut]
-     *     clears it. A last-signed-in account id (a Supabase user id is the
-     *     stable choice; the email is what the rest of the app already
-     *     compares) must survive sign-out so a later delete can be attributed.
-     *  2. Stage the delete WITH that id in a store that is NOT [outbox] and is
-     *     NOT cleared on sign-out: the table / key column / profile-scoped key
-     *     plus a [HistoryTombstoneRules.tombstone] payload, filed under the
-     *     account it belongs to.
-     *  3. Replay ONLY when that same account signs back in - never on a
-     *     different account's sign-in - by moving the staged items into
-     *     [outbox] BEFORE [pullAll] runs, so the tombstone is applied before the
-     *     pull can resurrect the row. (Replaying after the pull leaves a
-     *     re-inserted local row that the tombstone flush does not remove.)
-     *  4. Leave other accounts' staged deletes untouched; they replay on their
-     *     own account's next sign-in.
-     *  5. An account that never signs back in leaves its deletes staged, which
-     *     is correct: the cloud copy is only wrong for a device that can still
-     *     see it.
+     * Delete while SIGNED OUT. A signed-out device still has the account's cloud
+     * rows, so dropping the delete let the next same-account sign-in pull the row
+     * straight back. Such a delete cannot go into [outbox] - [signOut] clears
+     * that on purpose so a queued write never lands under a DIFFERENT account -
+     * so it is staged with the account id in [SyncDeferredDeletes] (see
+     * [stageSignedOutDelete]) and replayed only when that SAME account signs
+     * back in (see [replayDeferredDeletes], run before the pull on both the
+     * sign-in and session-restore paths). The pull also honors a tombstone that
+     * is queued but not yet flushed, so the pull racing a replay cannot
+     * re-insert the row the tombstone deletes.
      */
     fun deleteHistoryRows(
         ids: List<String>,
         profileId: String? = currentProfileId()
     ) {
         if (ids.isEmpty()) return
-        if (!isSignedIn()) return
+        if (!isSignedIn()) {
+            // Signed out: there is no session to enqueue into, but the
+            // account's cloud copy still EXISTS, so the next same-account
+            // sign-in would pull this row straight back. Stage the delete under
+            // the account it belongs to and replay it on that account's next
+            // sign-in (see [SyncDeferredDeletes]).
+            stageSignedOutDelete(ids, profileId)
+            return
+        }
 
         val cleanIds =
             ids.mapNotNull { id -> id.trim().takeIf { it.isNotBlank() } }.distinct()
@@ -1333,6 +1331,22 @@ object SupabaseSync {
                 val id = unscopedKey(storedId)
 
                 val localRow = localById[id]
+
+                // A delete that is queued but not yet flushed outranks this
+                // still-live cloud copy: applying the row here would resurrect
+                // it locally, leaving the tombstone flush to remove only the
+                // cloud copy. A signed-out delete replayed on sign-in walks
+                // straight into this (replay runs before this pull). Apply the
+                // queued delete locally instead.
+                val pendingTombstone = outbox.pending(TABLE_HISTORY, "item_id", storedId)
+                    ?.takeIf { HistoryTombstoneRules.isTombstone(it.payload) }
+                if (pendingTombstone != null) {
+                    if (localRow != null) {
+                        pendingDeletes.add(id)
+                        removed++
+                    }
+                    continue
+                }
 
                 // A tombstone is a delete, not a row to store: apply it by
                 // removing the local copy when it is the newer write (see
@@ -2136,6 +2150,82 @@ object SupabaseSync {
     internal var appContextRef: java.lang.ref.WeakReference<Context>? = null
 
     fun isSignedIn(): Boolean = _authState.value is AuthState.SignedIn
+
+    /**
+     * Remembers the account a later SIGNED-OUT delete belongs to (see
+     * [stageSignedOutDelete]). Pass [email] when the account is known at the
+     * call site; otherwise the current auth state - then the persisted session
+     * email - is used, which is what [signOut] needs before it clears the
+     * session store.
+     */
+    private fun rememberDeferredDeleteAccount(context: Context, email: String? = null) {
+        val known = email
+            ?: (_authState.value as? AuthState.SignedIn)?.email
+            ?: syncPrefs(context).getString(KEY_EMAIL, null)
+        SyncDeferredDeletes.rememberAccount(context, known)
+    }
+
+    /**
+     * Stages a signed-out delete for replay on the account's next sign-in. A
+     * no-op when no account has ever signed in on this device: there is nothing
+     * to attribute the delete to, and no cloud copy it could be wrong about.
+     */
+    private fun stageSignedOutDelete(ids: List<String>, profileId: String?) {
+        val context = appContextRef?.get() ?: return
+        val accountId = SyncDeferredDeletes.lastAccountId(context) ?: return
+        val cleanIds =
+            ids.mapNotNull { id -> id.trim().takeIf { it.isNotBlank() } }.distinct()
+        if (cleanIds.isEmpty()) return
+        val now = System.currentTimeMillis()
+        cleanIds.forEach { id ->
+            SyncDeferredDeletes.stage(
+                context,
+                SyncDeferredDeletes.Staged(
+                    accountId = accountId,
+                    table = TABLE_HISTORY,
+                    keyColumn = "item_id",
+                    key = scopedKey(id, profileId),
+                    payloadJson = HistoryTombstoneRules.tombstone(id, now).toString(),
+                    enqueuedAtMs = now
+                )
+            )
+        }
+        Log.i(TAG, "staged ${cleanIds.size} signed-out delete(s) for $accountId")
+    }
+
+    /**
+     * Replays the deletes staged for [accountId] now that it has signed back
+     * in: each becomes an ordinary tombstone in the outbox, so it flushes like
+     * any other delete. Called BEFORE the pull so the tombstone is queued
+     * first; only this account's staged deletes move, the rest stay for their
+     * own sign-in.
+     */
+    private suspend fun replayDeferredDeletes(context: Context, accountId: String?) {
+        val normalized = DeferredDeleteRules.normalizeAccount(accountId) ?: return
+        val staged = SyncDeferredDeletes.stagedFor(context, normalized)
+        if (staged.isEmpty()) return
+        staged.forEach { item ->
+            // Same contract as the signed-in delete path: drop any queued
+            // upload of this key first, then enqueue the tombstone.
+            outbox.removeKeys(item.table, item.keyColumn, listOf(item.key))
+            val payload = runCatching {
+                Json.parseToJsonElement(item.payloadJson).jsonObject
+            }.getOrNull() ?: return@forEach
+            outbox.put(
+                OutboxItem(
+                    table = item.table,
+                    keyColumn = item.keyColumn,
+                    key = item.key,
+                    payload = payload,
+                    enqueuedAtMs = item.enqueuedAtMs.takeIf { it > 0L }
+                        ?: System.currentTimeMillis()
+                )
+            )
+        }
+        SyncDeferredDeletes.remove(context, staged.map { it.id })
+        scheduleFlush()
+        Log.i(TAG, "replayed ${staged.size} signed-out delete(s) for $normalized")
+    }
 
     private fun JsonObject.str(key: String): String? =
         this[key]?.let { runCatching { it.jsonPrimitive.content }.getOrNull() }

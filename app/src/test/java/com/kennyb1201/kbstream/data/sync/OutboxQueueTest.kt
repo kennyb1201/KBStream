@@ -164,4 +164,21 @@ class OutboxQueueTest {
         assertEquals(1, snap.size)
         assertEquals(2, queue.size)
     }
+
+    @Test
+    fun `pending returns the queued row for its exact key`() {
+        val queue = OutboxQueue()
+        queue.put(item("p:a:tt1", "v", table = "sync_watch_history", keyColumn = "item_id"))
+        val found = queue.pending("sync_watch_history", "item_id", "p:a:tt1")
+        assertEquals("v", found?.payload?.get("marker")?.toString()?.trim('"'))
+    }
+
+    @Test
+    fun `pending is null for a key that is not queued`() {
+        val queue = OutboxQueue()
+        queue.put(item("p:a:tt1", "v", table = "sync_watch_history", keyColumn = "item_id"))
+        assertEquals(null, queue.pending("sync_watch_history", "item_id", "p:a:tt2"))
+        // A different table/key column is a different slot entirely.
+        assertEquals(null, queue.pending("sync_watched_status", "item_key", "p:a:tt1"))
+    }
 }
