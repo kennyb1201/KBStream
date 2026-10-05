@@ -797,8 +797,43 @@ object SupabaseSync {
      * delete still reaches the account instead of leaving the cloud copy to win.
      * The pending outbox writes for those keys are dropped first - a queued
      * upload of the same row would otherwise flush after the tombstone and put
-     * the live row back. A no-op when signed out: with no cloud copy there is
-     * nothing that can resurrect the row.
+     * the live row back.
+     *
+     * KNOWN GAP - delete while SIGNED OUT. This returns early without staging
+     * anything, on the reasoning that a signed-out device has no cloud copy to
+     * protect. That is wrong: signing out does NOT delete the account's cloud
+     * rows, so a delete made while signed out removes only the local row, and
+     * the next sign-in as the SAME account pulls the cloud copy straight back -
+     * the exact resurrection this tombstone exists to prevent. It cannot simply
+     * be staged in [outbox] like the signed-in path, because [signOut] clears
+     * the outbox on purpose: a pending write belongs to the account being left,
+     * and replaying it after a DIFFERENT account signs in would push one
+     * account's deletion into another's rows, which is strictly worse than the
+     * resurrection above.
+     *
+     * DEFERRED DESIGN - account-scoped staging. Deliberately NOT implemented
+     * yet: the failure mode is cross-account data loss and it cannot be
+     * verified without a signed-in device, so the shape is recorded here for a
+     * future change to build against rather than changed blind:
+     *  1. Identify the account durably. Today the only persisted account
+     *     identity is the email in [syncPrefs] (KEY_EMAIL), and [signOut]
+     *     clears it. A last-signed-in account id (a Supabase user id is the
+     *     stable choice; the email is what the rest of the app already
+     *     compares) must survive sign-out so a later delete can be attributed.
+     *  2. Stage the delete WITH that id in a store that is NOT [outbox] and is
+     *     NOT cleared on sign-out: the table / key column / profile-scoped key
+     *     plus a [HistoryTombstoneRules.tombstone] payload, filed under the
+     *     account it belongs to.
+     *  3. Replay ONLY when that same account signs back in - never on a
+     *     different account's sign-in - by moving the staged items into
+     *     [outbox] BEFORE [pullAll] runs, so the tombstone is applied before the
+     *     pull can resurrect the row. (Replaying after the pull leaves a
+     *     re-inserted local row that the tombstone flush does not remove.)
+     *  4. Leave other accounts' staged deletes untouched; they replay on their
+     *     own account's next sign-in.
+     *  5. An account that never signs back in leaves its deletes staged, which
+     *     is correct: the cloud copy is only wrong for a device that can still
+     *     see it.
      */
     fun deleteHistoryRows(
         ids: List<String>,

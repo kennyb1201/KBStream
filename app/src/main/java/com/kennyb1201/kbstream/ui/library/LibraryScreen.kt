@@ -58,6 +58,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
+import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
@@ -518,6 +519,10 @@ private fun ItemGrid(
     watchedKeys: Set<String> = emptySet(),
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
+    // The app-wide transient-message channel (see KBFeedback): a card with no
+    // detail page says why instead of swallowing the press.
+    val feedback = rememberKBFeedback()
+
     if (items.isEmpty()) {
         Box(
             contentAlignment = Alignment.Center,
@@ -569,8 +574,17 @@ private fun ItemGrid(
                 rating = ratings[LocalLibraryStore.dedupeKey(item)],
                 isWatched = item.watchedKey() in watchedKeys,
                 onClick = {
-                    item.navigationId?.let { id ->
-                        onItemClick(item.mediaType, id)
+                    val navigationId = item.navigationId
+                    if (navigationId != null) {
+                        onItemClick(item.mediaType, navigationId)
+                    } else {
+                        // A tracker row can carry only a title and a poster —
+                        // no IMDB or TMDB id — so there is no detail page to
+                        // open. The press used to do nothing at all, which
+                        // reads as a frozen grid; say so instead of dropping
+                        // it. The row is kept (rather than filtered) so its
+                        // long-press menu can still remove it.
+                        feedback.show("No details page for \"${item.title}\"")
                     }
                 },
                 onLongClick = onItemLongClick?.let { handler ->
