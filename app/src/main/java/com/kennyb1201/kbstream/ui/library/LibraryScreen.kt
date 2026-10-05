@@ -61,6 +61,7 @@ import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
@@ -533,6 +534,11 @@ private fun ItemGrid(
     }
 
     val posterSize = rememberPosterSize()
+    // Landscape tiles are wider than the poster they replace, so the grid cell
+    // has to follow the shape GlobalPosterCard actually draws. Sized from
+    // posterSize.width alone, a landscape card was clamped to the ~124dp poster
+    // cell while its height stayed the landscape height, so it read as square.
+    val tileWidth = rememberPosterTileWidth(posterSize.width)
 
     // A real grid whose cells are sized from the Poster Size setting, instead
     // of hand-chunked rows of six: with six hard-coded tiles the row could be
@@ -540,7 +546,7 @@ private fun ItemGrid(
     // adapted to the screen or the setting. Adaptive cells always fill the
     // pane, so every poster is fully visible and nothing is left half cut.
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = posterSize.width),
+        columns = GridCells.Adaptive(minSize = tileWidth),
         // The top gap is not decoration: a focused KBCard scales to 1.03 and
         // throws a 12.dp glow, and a lazy grid clips its viewport — with
         // bottom-only padding the FIRST row was sliced flat along its top edge
