@@ -2157,6 +2157,10 @@ class NativePlayerActivity : ComponentActivity() {
     // showControls() doesn't hit TMDB on every auto-hide cycle.
     private var overlayNextPrefetchKey: String? = null
     private var pendingNextEpisodeRuntime: Int? = null
+    // The next episode's synopsis, resolved from the same TMDB lookup the
+    // panel's name/still already use. Carried into the handoff so the next
+    // session's overlay does not open on the FINISHED episode's text.
+    private var pendingNextEpisodeOverview: String? = null
     private var nextUpCountdownRemaining = 0
 
     // True when the Up Next panel opened while the episode still had real time
@@ -2221,7 +2225,8 @@ class NativePlayerActivity : ComponentActivity() {
                     pendingNextSeason ?: return,
                     pendingNextEpisode ?: return,
                     pendingNextEpisodeName,
-                    pendingNextEpisodeRuntime
+                    pendingNextEpisodeRuntime,
+                    pendingNextEpisodeOverview
                 )
             } else {
                 nextUpCountdown.text = "Playing next in $nextUpCountdownRemaining"
@@ -3652,7 +3657,8 @@ class NativePlayerActivity : ComponentActivity() {
                 pendingNextSeason ?: return@setOnClickListener,
                 pendingNextEpisode ?: return@setOnClickListener,
                 pendingNextEpisodeName,
-                pendingNextEpisodeRuntime
+                pendingNextEpisodeRuntime,
+                pendingNextEpisodeOverview
             )
         }
         btnNextDismiss.setOnClickListener { finish() }
@@ -4312,7 +4318,8 @@ class NativePlayerActivity : ComponentActivity() {
                 target.first,
                 target.second,
                 pendingNextEpisodeName,
-                pendingNextEpisodeRuntime
+                pendingNextEpisodeRuntime,
+                pendingNextEpisodeOverview
             )
         }
     }
@@ -9471,6 +9478,7 @@ class NativePlayerActivity : ComponentActivity() {
         pendingNextEpisode = null
         pendingNextEpisodeName = null
         pendingNextEpisodeRuntime = null
+        pendingNextEpisodeOverview = null
         bywUi.show(itemName)
         // Credits are rolling: shrink the video into the corner so the picks
         // own the screen while the credits keep playing.
@@ -9544,6 +9552,7 @@ class NativePlayerActivity : ComponentActivity() {
         pendingNextSeason = targetSeason
         pendingNextEpisode = targetEpisode
         pendingNextEpisodeName = null
+        pendingNextEpisodeOverview = null
         // This IS the decision now: only the countdown and PLAY that follow
         // from it may auto-advance.
         nextUpHandoffArmed = true
@@ -9614,6 +9623,7 @@ class NativePlayerActivity : ComponentActivity() {
                 pendingNextEpisodeName = nextEp.name
                 nextUpEpisodeTitle.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
                 nextEp.runtimeMinutes?.takeIf { it > 0 }?.let { pendingNextEpisodeRuntime = it }
+                pendingNextEpisodeOverview = nextEp.overview?.takeIf { it.isNotBlank() }
                 val still = nextEp.thumbnail
                 if (!still.isNullOrBlank()) {
                     try {
@@ -9708,7 +9718,8 @@ class NativePlayerActivity : ComponentActivity() {
         targetSeason: Int,
         targetEpisode: Int,
         episodeName: String? = null,
-        runtimeMinutes: Int? = null
+        runtimeMinutes: Int? = null,
+        episodeOverview: String? = null
     ) {
         // One handoff per session: whichever trigger gets here first wins, and
         // the rest are no-ops (see [nextEpisodeHandoffStarted]).
@@ -9750,6 +9761,7 @@ class NativePlayerActivity : ComponentActivity() {
             runtimeMinutes = runtimeMinutes,
             bingeGroup = currentBingeGroup,
             addonName = currentAddonName,
+            overview = episodeOverview,
             // Random mode rides along: the handoff starts a NEW player, which
             // would otherwise read its intent as a normal (arithmetic) chain.
             randomEpisodes = randomEpisodes
@@ -9779,6 +9791,7 @@ class NativePlayerActivity : ComponentActivity() {
                 putExtra("next_stream_id", pendingNext.streamId)
                 putExtra("next_binge_group", pendingNext.bingeGroup)
                 putExtra("next_addon_name", pendingNext.addonName)
+                putExtra("next_overview", pendingNext.overview)
                 putExtra("next_random", pendingNext.randomEpisodes)
             }
         )
@@ -10751,7 +10764,23 @@ class NativePlayerActivity : ComponentActivity() {
     fun switchToSource(stream: Stream) {
         val newUrl = stream.url ?: return
         if (newUrl == currentUrl) return
-        carryPositionMs = if (isLiveChannel) 0L else exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        // Carry the playhead only when the old source actually rendered
+        // something. A source that never produced a frame (black video,
+        // endless buffering, the error card) still runs its wall clock while
+        // the viewer waits, so carrying currentPosition starts the new source
+        // 30-60s in. With no frame rendered, the new source starts where the
+        // session was asked to start: a resume point survives, a fresh start
+        // begins at 0. [firstFrameRendered] is read here BEFORE
+        // [recreatePlayer] runs, so it is still the old source's latch;
+        // [createPlayer] resets it per attempt and the new source re-arms it
+        // on its own first frame.
+        carryPositionMs = if (isLiveChannel) {
+            0L
+        } else if (firstFrameRendered) {
+            exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        } else {
+            startPositionMs.coerceAtLeast(0L)
+        }
         currentSourceLabel = stream.displayLabel()
         currentBadges = stream.badges
         currentBingeGroup = stream.bingeGroup

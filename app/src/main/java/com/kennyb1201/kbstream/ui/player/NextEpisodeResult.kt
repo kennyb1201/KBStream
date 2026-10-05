@@ -53,6 +53,18 @@ object NextEpisodeResult {
          */
         val addonName: String? = null,
         /**
+         * Synopsis of the episode being handed TO, taken from the same cached
+         * TMDB season lookup the Up Next panel already performs. Null when
+         * that lookup had not answered (or the source never resolved one), in
+         * which case the caller falls back to the overview it already had.
+         *
+         * The handoff has always carried the next episode's NUMBER and title,
+         * but the screen that built the intent only ever held the FINISHED
+         * episode's synopsis - so the new session's overlay read
+         * "S02E11" over S02E10's text.
+         */
+        val overview: String? = null,
+        /**
          * The episode that just finished was started from the Random button:
          * the chain keeps picking random aired episodes instead of the
          * arithmetic next one.
@@ -133,25 +145,53 @@ object NextEpisodeResult {
     private fun prefs(context: Context): SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    private fun encode(p: PendingNext): String =
+    /**
+     * Serializes a handoff for the SharedPreferences copy. Internal (rather
+     * than private) so the wire format itself is unit-testable without an
+     * Android Context - see NextEpisodeResultOverviewContractTest.
+     */
+    internal fun encode(p: PendingNext): String =
         "${p.season}|${p.episode}|${p.title}|${p.streamId}|${p.runtimeMinutes ?: -1}" +
             "|${p.bingeGroup?.replace("|", "") ?: ""}" +
             "|${p.addonName?.replace("|", "") ?: ""}" +
+            "|${p.overview?.replace("|", "") ?: ""}" +
             if (p.randomEpisodes) "|$RANDOM_MARKER" else ""
 
-    private fun decode(raw: String?): PendingNext? {
+    /** The [encode] counterpart. Internal for the same reason. */
+    internal fun decode(raw: String?): PendingNext? {
         if (raw.isNullOrBlank()) return null
-        // Titles can contain '|'; streamId and the trailing runtime/binge
-        // fields never do, so the fixed fields are taken from the END and
-        // everything in between is the title. Seven fields = current format;
-        // six = pre-addon-name format (addonName stays null); five =
-        // pre-binge-group format (both stay null).
+        // Titles can contain '|'; streamId and the trailing runtime/binge/
+        // addon-name/overview fields never do (a pipe in the overview is
+        // stripped by encode), so the fixed fields are taken from the END and
+        // everything in between is the title. Eight fields = current format;
+        // seven = pre-overview format (overview stays null, and the caller's
+        // fallback covers it); six = pre-addon-name (that stays null too);
+        // five = pre-binge-group.
         val rawParts = raw.split("|")
         val randomEpisodes = rawParts.lastOrNull() == RANDOM_MARKER
         val parts = if (randomEpisodes) rawParts.dropLast(1) else rawParts
         if (parts.size < 5) return null
         val season = parts[0].toIntOrNull() ?: return null
         val episode = parts[1].toIntOrNull() ?: return null
+        if (parts.size >= 8) {
+            val overview = parts[parts.size - 1].takeIf { it.isNotBlank() }
+            val addonName = parts[parts.size - 2].takeIf { it.isNotBlank() }
+            val bingeGroup = parts[parts.size - 3].takeIf { it.isNotBlank() }
+            val runtime = parts[parts.size - 4].toIntOrNull()?.takeIf { it >= 0 }
+            val streamId = parts[parts.size - 5]
+            val title = parts.subList(2, parts.size - 5).joinToString("|")
+            return PendingNext(
+                season = season,
+                episode = episode,
+                title = title,
+                streamId = streamId,
+                runtimeMinutes = runtime,
+                bingeGroup = bingeGroup,
+                addonName = addonName,
+                overview = overview,
+                randomEpisodes = randomEpisodes
+            )
+        }
         if (parts.size >= 7) {
             val runtime = parts[parts.size - 3].toIntOrNull()?.takeIf { it >= 0 }
             val streamId = parts[parts.size - 4]

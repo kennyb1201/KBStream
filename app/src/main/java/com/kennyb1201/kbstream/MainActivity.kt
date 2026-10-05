@@ -1646,6 +1646,24 @@ fun AppRoot() {
                     val manualSourceSelection =
                         ManualSourceSelection.consume()
 
+                    // A manual pick must never auto-play, no matter how long
+                    // the source fetch takes: the picker's own suppression
+                    // (ManualSourceSelection.isPendingPickFor) is time-based
+                    // (12s) while addon fetches are unbounded, so a slow
+                    // addon's late result used to flip the picker into
+                    // auto-play after it had already opened. Marking the key
+                    // here gives this route the same permanent, key-based
+                    // suppression the Home manual route already has (see the
+                    // manualKey block above); the picker reads it as
+                    // suppressAutoSelect.
+                    if (manualSourceSelection) {
+                        autoPlayedStreamKeys =
+                            (autoPlayedStreamKeys + streamNavigationKey(
+                                target.contentType,
+                                target.streamId
+                            )).distinct()
+                    }
+
                     if (
                         !manualSourceSelection &&
                         AppPreferences.getAutoSelectStream(context)
@@ -1923,7 +1941,13 @@ fun AppRoot() {
                             itemPoster = current.itemPoster,
                             backdropUrl = current.backdropUrl,
                             clearLogoUrl = current.clearLogoUrl,
-                            overview = current.overview,
+                            // The episode being handed TO, not the finished
+                            // one: NextEpisodeResult carries the overview the
+                            // Up Next panel resolved, and current.overview is
+                            // only the fallback for a handoff that has none
+                            // (panel dismissed early, TMDB miss, an older
+                            // persisted string, the external engine).
+                            overview = next.overview ?: current.overview,
                             cast = nextCast,
                             returnTo = current.returnTo,
                             totalEpisodesInSeason = current.totalEpisodesInSeason,
@@ -1939,7 +1963,7 @@ fun AppRoot() {
                             itemPoster = current.itemPoster,
                             backdropUrl = current.backdropUrl,
                             clearLogoUrl = current.clearLogoUrl,
-                            overview = current.overview,
+                            overview = next.overview ?: current.overview,
                             cast = nextCast
                         )
                     }
@@ -1954,6 +1978,7 @@ fun AppRoot() {
                             val nextStreamId = data.getStringExtra("next_stream_id")
                             val nextBingeGroup = data.getStringExtra("next_binge_group")
                             val nextAddonName = data.getStringExtra("next_addon_name")
+                            val nextOverview = data.getStringExtra("next_overview")
                             val nextTarget = StreamsTarget(
                                 contentType = current.parentType,
                                 streamId = nextStreamId.orEmpty(),
@@ -1981,7 +2006,10 @@ fun AppRoot() {
                                     itemPoster = current.itemPoster,
                                     backdropUrl = current.backdropUrl,
                                     clearLogoUrl = current.clearLogoUrl,
-                                    overview = current.overview,
+                                    // See the persisted branch above: the
+                                    // handoff's own overview wins, the finished
+                                    // episode's is only the fallback.
+                                    overview = nextOverview ?: current.overview,
                                     cast = nextCast,
                                     returnTo = current.returnTo,
                                     totalEpisodesInSeason = current.totalEpisodesInSeason,
@@ -1997,7 +2025,7 @@ fun AppRoot() {
                                     itemPoster = current.itemPoster,
                                     backdropUrl = current.backdropUrl,
                                     clearLogoUrl = current.clearLogoUrl,
-                                    overview = current.overview,
+                                    overview = nextOverview ?: current.overview,
                                     cast = nextCast
                                 )
                             }

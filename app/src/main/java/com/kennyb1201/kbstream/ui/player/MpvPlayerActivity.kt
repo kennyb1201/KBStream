@@ -479,6 +479,10 @@ class MpvPlayerActivity : ComponentActivity() {
     private var pendingNextSeason: Int? = null
     private var pendingNextEpisode: Int? = null
     private var pendingNextEpisodeName: String? = null
+    // The next episode's synopsis, from the same TMDB lookup as the name and
+    // still. Carried into the handoff so the next session's overlay does not
+    // open on the FINISHED episode's text.
+    private var pendingNextEpisodeOverview: String? = null
     private var nextUpCountdownRemaining = 0
     private var nextUpCountdownHeld = false
 
@@ -2785,6 +2789,7 @@ class MpvPlayerActivity : ComponentActivity() {
         pendingNextSeason = targetSeason
         pendingNextEpisode = targetEpisode
         pendingNextEpisodeName = null
+        pendingNextEpisodeOverview = null
 
         nextUpShowTitle?.text = itemName
         nextUpEpisodeLabel?.text = "Season $targetSeason \u2022 Episode $targetEpisode"
@@ -2850,7 +2855,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun advanceToPendingNext() {
         val showSeason = pendingNextSeason ?: return
         val showEpisode = pendingNextEpisode ?: return
-        launchNextEpisode(showSeason, showEpisode)
+        launchNextEpisode(showSeason, showEpisode, pendingNextEpisodeOverview)
     }
 
     /**
@@ -2872,6 +2877,7 @@ class MpvPlayerActivity : ComponentActivity() {
             } ?: return@launch
             if (nextUpPanel?.visibility != View.VISIBLE) return@launch
             pendingNextEpisodeName = nextEp.name
+            pendingNextEpisodeOverview = nextEp.overview?.takeIf { it.isNotBlank() }
             nextUpEpisodeTitle?.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
             nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
                 runCatching { nextUpThumb?.load(still) }
@@ -3379,7 +3385,11 @@ class MpvPlayerActivity : ComponentActivity() {
      * [NextEpisodeResult] (survives MainActivity being killed while the player
      * was up) and the classic result extras for the live callback.
      */
-    private fun launchNextEpisode(targetSeason: Int, targetEpisode: Int) {
+    private fun launchNextEpisode(
+        targetSeason: Int,
+        targetEpisode: Int,
+        episodeOverview: String? = null
+    ) {
         // One handoff per session: whichever trigger gets here first wins.
         if (nextEpisodeHandoffStarted) return
         nextEpisodeHandoffStarted = true
@@ -3407,6 +3417,7 @@ class MpvPlayerActivity : ComponentActivity() {
             runtimeMinutes = null,
             bingeGroup = currentBingeGroup,
             addonName = currentAddonName,
+            overview = episodeOverview,
             randomEpisodes = randomEpisodes
         )
         com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
@@ -3423,6 +3434,7 @@ class MpvPlayerActivity : ComponentActivity() {
                 putExtra("next_stream_id", pending.streamId)
                 putExtra("next_binge_group", pending.bingeGroup)
                 putExtra("next_addon_name", pending.addonName)
+                putExtra("next_overview", pending.overview)
                 putExtra("next_random", pending.randomEpisodes)
             }
         )
