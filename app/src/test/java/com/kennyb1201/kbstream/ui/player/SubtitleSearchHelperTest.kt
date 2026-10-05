@@ -244,6 +244,41 @@ class SubtitleSearchHelperTest {
     }
 
     @Test
+    fun `a body with no readable cues is not a usable subtitle`() {
+        // SRT and WebVTT both parse into real cues.
+        assertTrue(
+            SubtitleSearchHelper.isUsableSubtitleBody(
+                "1\n00:00:01,000 --> 00:00:03,000\nHello\n",
+                assRenderable = false
+            )
+        )
+        assertTrue(
+            SubtitleSearchHelper.isUsableSubtitleBody(
+                "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nhi\n",
+                assRenderable = false
+            )
+        )
+
+        // An ASS script only counts when the engine can render one: the
+        // ExoPlayer build needs libass, mpv always has it.
+        val ass = "[Script Info]\nTitle: x\n" +
+            "[Events]\n" +
+            "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,hi\n"
+        assertTrue(SubtitleSearchHelper.isUsableSubtitleBody(ass, assRenderable = true))
+        assertFalse(SubtitleSearchHelper.isUsableSubtitleBody(ass, assRenderable = false))
+
+        // A 200 that is neither is refused: nothing to attach, nothing to claim.
+        assertFalse(SubtitleSearchHelper.isUsableSubtitleBody("", assRenderable = false))
+        assertFalse(SubtitleSearchHelper.isUsableSubtitleBody("   \n", assRenderable = false))
+        assertFalse(
+            SubtitleSearchHelper.isUsableSubtitleBody(
+                "You have reached your download limit. Try again later.",
+                assRenderable = false
+            )
+        )
+    }
+
+    @Test
     fun `search rows are parsed from the api payload`() {
         val body = """
             {"total_pages":1,"data":[

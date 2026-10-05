@@ -162,6 +162,33 @@ internal object SubtitleSearchHelper {
         return !lower.startsWith("<!doctype html") && !lower.startsWith("<html")
     }
 
+    /**
+     * Whether a downloaded body can actually be drawn, not merely whether it is
+     * an error page.
+     *
+     * [looksLikeSubtitle] catches the CDN's HTML served with a 200. This catches
+     * the subtler shape that also arrives as [SubtitleDownload.Ready]: a
+     * truncated file, a plain-text notice ("you have reached the download
+     * limit") or binary junk - a body that is not HTML yet carries no cue the
+     * player can render. Handing one of those on is a silent no-cues failure
+     * dressed up as success, which is what the manual picker's "Subtitle
+     * loaded" line and the auto-fetch toast both used to claim.
+     *
+     * It mirrors the player's own load path exactly, so a body this accepts is a
+     * body the player can show: an ASS script counts when the engine can render
+     * one, everything else has to parse into at least one cue. [assRenderable]
+     * is the engine's answer - the ExoPlayer build's
+     * `AssSubtitleRenderer.available`, or true for mpv, which renders ASS
+     * itself. It stays a parameter so the rule is pure and unit tested rather
+     * than discovered on the TV.
+     */
+    internal fun isUsableSubtitleBody(body: String, assRenderable: Boolean): Boolean =
+        if (assRenderable && AssSubtitleSource.isAssContent(body)) {
+            body.isNotBlank()
+        } else {
+            SubtitleFileParser.parse(body).isNotEmpty()
+        }
+
     /** The API's own explanation when it sent one, else what the status means. */
     internal fun failureReason(reply: HttpReply): String {
         val message = runCatching { JSONObject(reply.body).optString("message") }

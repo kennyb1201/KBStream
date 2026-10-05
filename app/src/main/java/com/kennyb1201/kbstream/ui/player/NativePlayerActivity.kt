@@ -78,6 +78,7 @@ import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
@@ -1196,6 +1197,13 @@ class NativePlayerActivity : ComponentActivity() {
     private var streamMimeType: String? = null
     private var firstFrameRendered = false
     private var firstFrameRenderedAtMs = 0L
+
+    /**
+     * Set once a launch that reused a cached debrid link has had that link
+     * forgotten, so a session that walks several errors forgets at most once.
+     * See [invalidateCachedLinkBeforeFirstFrame].
+     */
+    private var linkCacheInvalidated = false
     private var blackVideoNoticeShown = false
     // True while either per-profile 8.1 conversion (P5/P7) is active so the
     // codec badge can report "DV P7 → 8.1" instead of "→ HDR10".
@@ -2405,6 +2413,23 @@ class NativePlayerActivity : ComponentActivity() {
                     Toast.makeText(this@NativePlayerActivity, result.reason, Toast.LENGTH_LONG).show()
 
                 is SubtitleDownload.Ready -> {
+                    // A 200 that is not a subtitle - a truncated file, a
+                    // plain-text limit notice - used to be attached anyway: the
+                    // player rebuilt for a track that never drew, and the
+                    // viewer was told nothing. Refuse it out loud and leave the
+                    // running player alone.
+                    if (!SubtitleSearchHelper.isUsableSubtitleBody(
+                            result.body,
+                            AssSubtitleRenderer.available
+                        )
+                    ) {
+                        Toast.makeText(
+                            this@NativePlayerActivity,
+                            "Subtitle download failed: the file had no readable subtitles",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@launch
+                    }
                     val uri = SubtitleSearchHelper.toCacheUri(this@NativePlayerActivity, hit, result.body)
                     attachExternalSubtitle(uri)
                 }
@@ -4737,6 +4762,19 @@ class NativePlayerActivity : ComponentActivity() {
     // DefaultTrackSelector.Parameters.Builder(Context) is deprecated in media3
     // 1.9; the no-arg Builder() is not a drop-in for the context-derived
     // defaults, so this waits for the media3 upgrade.
+    /**
+     * Forgets a cached debrid link whose launch failed before a single frame
+     * rendered - the signature of a link that expired or was pulled. Called
+     * from the error path only; the session still walks its remaining cached
+     * sources (the error ladder), and only a FUTURE replay re-resolves fresh.
+     */
+    private fun invalidateCachedLinkBeforeFirstFrame() {
+        if (firstFrameRendered || linkCacheInvalidated) return
+        val cacheKey = intent.getStringExtra("played_link_key") ?: return
+        linkCacheInvalidated = true
+        PlayedLinkCache.forget(this, cacheKey)
+    }
+
     @Suppress("DEPRECATION")
     private fun createPlayer() {
         // Fresh attempt at the current URL: reset per-attempt state so the
@@ -5781,6 +5819,10 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            // A cached link that fails before a single frame is a dead link:
+            // forget it now, so the next replay resolves fresh instead of
+            // looping back into this same error card.
+            invalidateCachedLinkBeforeFirstFrame()
             lastPlaybackError = error
             var msg = friendlyErrorMessage(error, hostOf(currentUrl))
             // Resource exhaustion is a different animal from "this box can't
@@ -7427,6 +7469,23 @@ class NativePlayerActivity : ComponentActivity() {
                     )
 
                     is SubtitleDownload.Ready -> {
+                        // Validate before the player is ever touched: a 200 with
+                        // an empty/unparsable body must not rebuild the player -
+                        // the attach below is what makes the picture/audio blink
+                        // - nor claim success for a track that never lands. The
+                        // rule is the same one the manual picker applies, so
+                        // both routes agree on what a usable subtitle is.
+                        if (!SubtitleSearchHelper.isUsableSubtitleBody(
+                                result.body,
+                                AssSubtitleRenderer.available
+                            )
+                        ) {
+                            Log.w(
+                                "PLAYER_LANG",
+                                "auto subtitle fetch: download parsed to 0 cues, ignoring"
+                            )
+                            return@launch
+                        }
                         val uri = SubtitleSearchHelper.toCacheUri(
                             this@NativePlayerActivity,
                             pick,

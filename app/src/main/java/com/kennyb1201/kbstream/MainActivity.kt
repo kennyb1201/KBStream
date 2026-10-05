@@ -82,6 +82,7 @@ import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingScreen
+import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.player.ExternalPlayerActivity
 import com.kennyb1201.kbstream.ui.player.MpvPlayerActivity
@@ -130,6 +131,9 @@ import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.components.screenTransitionMs
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/** Screen-level log tag for this activity (startup lines use TAG_STARTUP). */
+private const val TAG = "MAIN"
 
 sealed class Screen {
 
@@ -284,7 +288,12 @@ sealed class Screen {
         val totalEpisodesInSeason: Int? = null,
         val runtimeMinutes: Int? = null,
         val drmLicenseUrl: String? = null,
-        val drmHeaders: Map<String, String> = emptyMap()
+        val drmHeaders: Map<String, String> = emptyMap(),
+        /**
+         * Non-null when this launch reused a cached debrid link; the key doubles
+         * as the invalidation handle if the link turns out to be dead.
+         */
+        val linkCacheKey: String? = null
     ) : Screen()
 }
 
@@ -762,6 +771,18 @@ fun AppRoot() {
         // auto-select it again if we fall through to it (no playable source).
         autoPlayedStreamKeys =
             (autoPlayedStreamKeys + pending.streamKey).distinct()
+        // Replay inside the link's lifetime: hand the player the link that
+        // played last time instead of paying the addon round-trip again. A miss
+        // (nothing cached, expired, or a different episode) falls straight
+        // through to the resolve below, unchanged.
+        val cached = PlayedLinkCache.get(context, pending.streamKey)
+        if (cached != null) {
+            Log.i(TAG, "played-link cache hit for ${pending.streamKey}; skipping resolve")
+            pendingAutoPlay = null
+            screen = pending.toPlayerScreen(cached.played, cached.sources)
+                .copy(linkCacheKey = pending.streamKey)
+            return@LaunchedEffect
+        }
         val streams = streamsViewModel.resolve(
             pending.target.contentType,
             pending.target.streamId
@@ -815,6 +836,9 @@ fun AppRoot() {
         )
         pendingAutoPlay = null
         screen = if (top != null) {
+            // Remember what actually started, so a replay within the link's
+            // lifetime can skip this resolve entirely.
+            PlayedLinkCache.remember(context, pending.streamKey, top, ordered)
             pending.toPlayerScreen(top, ordered)
         } else {
             pending.toStreamsScreen()
@@ -1894,6 +1918,9 @@ fun AppRoot() {
                             drmLicenseUrl = stream.drm?.licenseUrl,
                             drmHeaders = stream.drm?.headers.orEmpty()
                         )
+                        // Remember the manual pick too, so a replay of this
+                        // episode within the link's lifetime skips the resolve.
+                        PlayedLinkCache.remember(context, streamKey, stream, allSources)
                     }
                 },
 
@@ -2235,6 +2262,7 @@ fun AppRoot() {
                     current.overview?.let { putExtra("item_overview", it) }
                     putExtra("start_position_ms", current.startPositionMs)
                     putExtra("from_beginning", current.startFromBeginning)
+                    current.linkCacheKey?.let { putExtra("played_link_key", it) }
                     putExtra("random_episodes", current.randomEpisodes)
                     putExtra("from_actor_return", current.fromActorReturn)
                     if (current.streamHeaders.isNotEmpty()) {

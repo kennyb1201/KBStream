@@ -41,6 +41,7 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
+import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
@@ -598,6 +599,13 @@ class MpvPlayerActivity : ComponentActivity() {
     /** True once the file is open: the prompt must never appear over the splash. */
     private var fileLoaded = false
 
+    /**
+     * Set once a launch that reused a cached debrid link has had that link
+     * forgotten, so a session that walks several errors forgets at most once.
+     * See [invalidateCachedLinkBeforeFirstFrame].
+     */
+    private var linkCacheInvalidated = false
+
     // --- Session state, read from the launch intent -------------------------
     private var currentUrl = ""
     private var currentAudioUrl: String? = null
@@ -753,6 +761,9 @@ class MpvPlayerActivity : ComponentActivity() {
         }
         view.onEnded = { onPlaybackEnded() }
         view.onPlaybackError = { message ->
+            // A cached link that never opened is dead: forget it now, so the
+            // next replay resolves fresh instead of looping back into this card.
+            invalidateCachedLinkBeforeFirstFrame()
             showError(
                 message,
                 "The stream may be offline, or the source may have changed. " +
@@ -2178,6 +2189,21 @@ class MpvPlayerActivity : ComponentActivity() {
                 is SubtitleDownload.Failed -> showToast(result.reason, 4_000L)
 
                 is SubtitleDownload.Ready -> {
+                    // A 200 that is not a subtitle used to reach mpv anyway and
+                    // then announce "Subtitle loaded" - a success message for a
+                    // track that never drew. Refuse it out loud instead. mpv
+                    // renders ASS itself, so an ASS body is always usable here.
+                    if (!SubtitleSearchHelper.isUsableSubtitleBody(
+                            result.body,
+                            assRenderable = true
+                        )
+                    ) {
+                        showToast(
+                            "Subtitle download failed: the file had no readable subtitles",
+                            4_000L
+                        )
+                        return@launch
+                    }
                     val uri = SubtitleSearchHelper.toCacheUri(this@MpvPlayerActivity, hit, result.body)
                     applyDownloadedSubtitle(hit, uri)
                     showToast("Subtitle loaded: ${hit.fileName}", 4_000L)
@@ -2245,6 +2271,20 @@ class MpvPlayerActivity : ComponentActivity() {
                     )
 
                     is SubtitleDownload.Ready -> {
+                        // Same rule as the manual picker: a 200 that parses to
+                        // nothing is not a subtitle, so it must neither be
+                        // attached nor announced as one.
+                        if (!SubtitleSearchHelper.isUsableSubtitleBody(
+                                result.body,
+                                assRenderable = true
+                            )
+                        ) {
+                            Log.w(
+                                TAG,
+                                "auto subtitle fetch: download parsed to 0 cues, ignoring"
+                            )
+                            return@launch
+                        }
                         val uri = SubtitleSearchHelper.toCacheUri(
                             this@MpvPlayerActivity,
                             pick,
@@ -3911,6 +3951,19 @@ class MpvPlayerActivity : ComponentActivity() {
         loadingTitle?.text = itemTitle()
         loadingSubtitle?.text = subtitle
         bufferingView?.visibility = View.GONE
+    }
+
+    /**
+     * Forgets a cached debrid link whose launch failed before the file ever
+     * opened - the signature of a link that expired or was pulled. Called from
+     * the playback-error path only, which (see MpvPlayerView's END_FILE
+     * handling) fires precisely when nothing was ever loaded.
+     */
+    private fun invalidateCachedLinkBeforeFirstFrame() {
+        if (fileLoaded || linkCacheInvalidated) return
+        val cacheKey = intent.getStringExtra("played_link_key") ?: return
+        linkCacheInvalidated = true
+        PlayedLinkCache.forget(this, cacheKey)
     }
 
     private fun showError(message: String, hint: String) {
