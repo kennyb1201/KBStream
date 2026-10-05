@@ -150,10 +150,32 @@
                 <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
+            <!-- A picked global-search suggestion: the row's own
+                 SUGGEST_COLUMN_INTENT_DATA (a kbstream://title/... link
+                 carrying the TMDB id) is resolved here into the title's detail
+                 screen, the same way a spoken title is. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data
+                    android:scheme="kbstream"
+                    android:host="title" />
+            </intent-filter>
             <meta-data
                 android:name="android.app.searchable"
                 android:resource="@xml/searchable" />
         </activity>
+
+        <!-- Global-search suggestions for the TV launcher: the rows the system's
+             search box draws while the viewer types. Exported because the
+             launcher queries it from its own process - which is what every
+             global-search provider does - and read-only besides: it answers only
+             with titles matching the query it is handed, stores nothing and
+             enumerates nothing. -->
+        <provider
+            android:name=".ui.search.SearchSuggestionsProvider"
+            android:authorities="com.kennyb1201.kbstream.search"
+            android:exported="true" />
 
         <!-- configChanges is the set the other two engines declare. density and
              uiMode are the easy ones to leave out and the expensive ones to

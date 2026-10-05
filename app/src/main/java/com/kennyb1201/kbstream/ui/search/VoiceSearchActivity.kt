@@ -47,6 +47,21 @@ class VoiceSearchActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // A picked global-search suggestion (see SearchSuggestionsProvider)
+        // arrives as a VIEW of its own kbstream:// link rather than as a query:
+        // the row already names the title, so nothing has to be searched for -
+        // only the IMDB id resolved.
+        if (intent?.action == Intent.ACTION_VIEW) {
+            val parsed = TitleDeepLink.parse(intent.dataString)
+            if (parsed == null) {
+                finish()
+                return
+            }
+            openDeepLinkedTitle(parsed)
+            return
+        }
+
         val query = extractQuery(intent)
         if (query.isNullOrBlank()) {
             finish()
@@ -87,6 +102,45 @@ class VoiceSearchActivity : ComponentActivity() {
             }
             if (target == null) {
                 openSearch(query)
+            } else {
+                startActivity(detailIntent(target.type, target.id))
+            }
+            finish()
+        }
+    }
+
+    /**
+     * A tapped global-search suggestion.
+     *
+     * The row carries the TMDB id, so the search a spoken title pays for is
+     * already done and only the IMDB id the detail screen and the add-ons speak
+     * is left - resolved under the same deadline, and falling back the same way:
+     * the title rides in the link so a lookup that comes back empty still opens
+     * Search with it applied, which is where a spoken title with no match lands.
+     */
+    private fun openDeepLinkedTitle(parsed: TitleDeepLink.Parsed) {
+        lifecycleScope.launch {
+            val target = withTimeoutOrNull(LOOKUP_TIMEOUT_MS) {
+                withContext(Dispatchers.IO) {
+                    val tmdb = TmdbRepository.getInstance(applicationContext)
+                    // The external-id lookup wants the "series" spelling for the
+                    // second kind, which is the app's own name for it everywhere
+                    // history and scrobbling are concerned.
+                    val imdbId = runCatchingCancellable {
+                        tmdb.resolveImdbId(
+                            parsed.tmdbId,
+                            if (parsed.type == "tv") "series" else "movie"
+                        )
+                    }.getOrNull()
+                    imdbId?.takeIf { it.isNotBlank() }?.let { PlayTarget(parsed.type, it) }
+                }
+            }
+            val fallback = parsed.title
+            if (target == null) {
+                if (!fallback.isNullOrBlank()) {
+                    SearchSeed.set(fallback)
+                    openSearch(fallback)
+                }
             } else {
                 startActivity(detailIntent(target.type, target.id))
             }

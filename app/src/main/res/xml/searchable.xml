@@ -2,9 +2,23 @@
 <!-- Makes the app eligible as a search target for the system's search surface
      (TV remote mic / assistant). Queries are delivered to
      ui.search.VoiceSearchActivity as ACTION_SEARCH and open the in-app Search
-     screen with the query already submitted. -->
+     screen with the query already submitted.
+
+     searchSuggestAuthority is what puts the app IN the launcher's search box
+     rather than only behind it: the system queries that provider with the text
+     so far and draws the rows it returns (see SearchSuggestionsProvider). A
+     picked row launches with searchSuggestIntentAction, carrying the row's own
+     SUGGEST_COLUMN_INTENT_DATA, the kbstream://title/... link that
+     VoiceSearchActivity resolves into the title's screen.
+
+     searchSuggestSelection=" ?" is what makes the typed text arrive as the
+     first selection argument instead of only in the URI. -->
 <searchable xmlns:android="http://schemas.android.com/apk/res/android"
     android:label="KBStream"
     android:hint="Search movies, shows and channels"
     android:includeInGlobalSearch="true"
-    android:searchSettingsDescription="Search your add-on catalogs and live TV" />
+    android:searchSettingsDescription="Search your add-on catalogs and live TV"
+    android:searchSuggestAuthority="com.kennyb1201.kbstream.search"
+    android:searchSuggestIntentAction="android.intent.action.VIEW"
+    android:searchSuggestSelection=" ?"
+    android:searchSuggestThreshold="2" />
