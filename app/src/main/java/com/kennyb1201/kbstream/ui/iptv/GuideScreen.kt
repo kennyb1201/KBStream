@@ -880,10 +880,12 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 }
 
                 // Channel-number entry only when the guide owns the stage:
-                // never while the setup form, hidden-items manager, or
-                // channel menu is up, so digits keep reaching those controls.
+                // never while the setup form, hidden-items manager, channel
+                // menu, or catch-up dialog is up, so digits keep reaching
+                // those controls instead of zapping the guide behind them.
                 val digitsAllowed = playlist != null && !showSetup &&
-                    menuItem == null && !showHiddenManager && !showSearch
+                    menuItem == null && !showHiddenManager && !showSearch &&
+                    catchupChannel == null
                 if (!digitsAllowed) return@onPreviewKeyEvent false
 
                 // Remote search button opens the channel-search overlay.
@@ -2741,22 +2743,42 @@ private fun ChannelSearchDialog(
     // is not a dead end.
     val firstResultFocusRequester = remember { FocusRequester() }
     val closeFocusRequester = remember { FocusRequester() }
-    val resultTargetFocusRequester =
-        if (results.isNotEmpty() || programHits.isNotEmpty()) firstResultFocusRequester
-        else closeFocusRequester
-    var submitTick by remember { mutableStateOf(0) }
-    LaunchedEffect(submitTick) {
-        if (submitTick == 0) return@LaunchedEffect
-        // Retried across frames: the hit rows may not have attached on the
-        // frame the query's last keystroke produced them.
+    val hasHits = results.isNotEmpty() || programHits.isNotEmpty()
+    // Grab focus on the first hit, retried across frames: the hit rows may not
+    // have attached on the frame the query's last keystroke produced them.
+    suspend fun focusFirstHit() {
         var focused = false
         var attempts = 0
         while (!focused && attempts < 8) {
             awaitFrame()
-            focused = runCatching { resultTargetFocusRequester.requestFocus() }
+            focused = runCatching { firstResultFocusRequester.requestFocus() }
                 .getOrDefault(false)
             attempts++
         }
+    }
+    var submitTick by remember { mutableStateOf(0) }
+    // Done on a non-blank query whose hits have not landed yet (the program
+    // search is debounced) must not fall through to CLOSE and stay there: mark
+    // the submit as waiting and hand the D-pad to the first hit when it arrives.
+    var awaitingSubmitFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(submitTick) {
+        if (submitTick == 0) return@LaunchedEffect
+        when {
+            hasHits -> {
+                awaitingSubmitFocus = false
+                focusFirstHit()
+            }
+            query.isBlank() -> {
+                awaitingSubmitFocus = false
+                runCatching { closeFocusRequester.requestFocus() }
+            }
+            else -> awaitingSubmitFocus = true
+        }
+    }
+    LaunchedEffect(hasHits) {
+        if (!awaitingSubmitFocus || !hasHits) return@LaunchedEffect
+        awaitingSubmitFocus = false
+        focusFirstHit()
     }
 
     Dialog(onDismissRequest = onDismiss) {
