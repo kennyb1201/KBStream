@@ -9707,11 +9707,15 @@ class NativePlayerActivity : ComponentActivity() {
             played = sessionHasPlayed(),
             explicitAdvance = true
         )
-        saveProgress(reason = "handoff", forceCompleted = completed)
+        // The verdict is reported AFTER the write commits (onWritten), so the
+        // trace can no longer claim "filed" for a row that was never stored.
+        saveProgress(reason = "handoff", forceCompleted = completed) { ok, profile ->
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "filed s=${season ?: "-"} e=${episode ?: "-"} " +
+                    "row=$historyId completed=$completed written=$ok profile=${profile ?: "-"}"
+            )
+        }
         scrobbleSimkl("stop", progressOverride = if (completed) 100.0 else null)
-        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
-            "filed s=${season ?: "-"} e=${episode ?: "-"} row=$historyId completed=$completed"
-        )
     }
 
     private fun launchNextEpisode(
@@ -9974,7 +9978,11 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- History ---
-    private fun saveProgress(reason: String, forceCompleted: Boolean = false) {
+    private fun saveProgress(
+        reason: String,
+        forceCompleted: Boolean = false,
+        onWritten: ((Boolean, String?) -> Unit)? = null
+    ) {
         val player = exoPlayer ?: return
         if (isLiveChannel || parentId.isBlank() || historyId.isBlank()) return
 
@@ -10040,12 +10048,13 @@ class NativePlayerActivity : ComponentActivity() {
                     // the writer reads it back from the row it replaces.
                     completedAt = null
                 )
-            PlaybackHistoryWriter.write(
+            val result = PlaybackHistoryWriter.write(
                 this@NativePlayerActivity,
                 sessionProfileId,
                 entry
             )
             if (isCompleted) syncCompletedToSimkl()
+            onWritten?.invoke(result.ok, result.profileId)
         }
     }
 

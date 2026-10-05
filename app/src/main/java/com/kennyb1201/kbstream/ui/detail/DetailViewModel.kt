@@ -33,6 +33,7 @@ import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.data.tmdb.certification
+import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
@@ -2070,6 +2071,15 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             refreshPostersAfterWatchedChange()
+
+            // This path writes its own DB rows and pushes its own tracker
+            // records - it never runs through WatchedStatusRepository, which
+            // is the only other place that could signal Home. Home does not
+            // ON_RESUME for in-app navigation, so without this the marked
+            // episodes' Continue Watching cards sat on the rail until the
+            // next incidental refresh. Fire-and-forget; the feed-lag retry
+            // window covers Simkl's own lag behind this push.
+            ContinueWatchingRefreshBus.requestRefresh()
         }
     }
 
@@ -2979,6 +2989,11 @@ for ((metaAddon, response, error) in probeResults) {
             }
 
             refreshPostersAfterWatchedChange()
+
+            // Unmark is symmetric: this path also bypasses the repository, and
+            // the title must return to Continue Watching promptly rather than
+            // minutes later.
+            ContinueWatchingRefreshBus.requestRefresh()
         }
     }
 

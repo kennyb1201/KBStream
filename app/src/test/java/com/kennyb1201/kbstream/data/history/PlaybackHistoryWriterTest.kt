@@ -27,20 +27,21 @@ import org.robolectric.annotation.Config
  * the profile the viewer had moved TO, locally and in the cloud. The card then
  * re-downloaded on every pull, which is why deleting it never stuck.
  *
- * The two halves of the fix are tested here:
+ * The halves of the fix are tested here:
  *
  *  - the session's profile is pinned at launch and carried in the intent, so it
  *    is the profile the session STARTED on rather than whichever one is active
- *    when the save finally runs ([sessionProfileId]); and
- *  - a save whose profile is no longer active is refused before any database is
- *    resolved ([write]), so the departing profile keeps the last row it
- *    legitimately owns and the incoming profile's Continue Watching stays clean.
+ *    when the save finally runs ([sessionProfileId]);
+ *  - a save whose profile is no longer active is REDIRECTED to the session
+ *    profile's own database ([write]), so the departing profile keeps its row
+ *    and the incoming profile's Continue Watching stays clean; and
+ *  - a session profile that no longer exists is refused LOUDLY rather than
+ *    silently dropped ([write]).
  *
- * The refusal assertions are the ones that matter, and they are deliberately
- * limited to refusals: the accepting path opens a real Room database, and what
- * needs pinning here is that the guard runs FIRST. Robolectric is only used to
- * give the resolver a real SharedPreferences (the profile store) - the rule
- * itself is pure, which is why [PlaybackHistoryWriter.mayWrite] exists.
+ * Robolectric is used to give the resolver a real SharedPreferences (the
+ * profile store) and to let the redirect branch open its one-shot Room file;
+ * the rule itself is pure, which is why [PlaybackHistoryWriter.mayWrite]
+ * exists.
  */
 @RunWith(AndroidJUnit4::class)
 @Config(application = PlaybackHistoryWriterTest.NoopApplication::class)
@@ -150,27 +151,40 @@ class PlaybackHistoryWriterTest {
         assertNull(PlaybackHistoryWriter.profileIdForNewSession(context))
     }
 
-    // ── the refusal ─────────────────────────────────────────────────────
+    // ── write routing ───────────────────────────────────────────────────
 
     @Test
-    fun `a session from another profile never writes into the one that is active now`() = runBlocking {
+    fun `a session from another profile redirects its row to that profile`() = runBlocking {
         seedProfiles(active = "profile-1", "profile-1", "profile-3")
         assertEquals("profile-1", ProfileStorage.activeProfileId(context))
 
-        val stored = PlaybackHistoryWriter.write(context, "profile-3", entry())
+        val result = PlaybackHistoryWriter.write(context, "profile-3", entry())
 
-        assertFalse(
-            "a kids-profile session filed its row under profile 1 - the reported leak",
-            stored
-        )
+        // The row is NOT dropped and NEVER filed under profile 1 - the reported
+        // leak. It lands in the profile that started the session.
+        assertTrue("a real session profile must get its own row", result.ok)
+        assertEquals("profile-3", result.profileId)
     }
 
     @Test
-    fun `a session with no profile cannot write into a profile that now exists`() = runBlocking {
+    fun `a session whose profile is gone is refused loudly, not misfiled`() = runBlocking {
         seedProfiles(active = "profile-1", "profile-1")
         assertEquals("profile-1", ProfileStorage.activeProfileId(context))
 
-        assertFalse(PlaybackHistoryWriter.write(context, null, entry()))
+        val result = PlaybackHistoryWriter.write(context, null, entry())
+
+        assertFalse("a legacy session cannot write into a profile that now exists", result.ok)
+        assertNull("a refused row has no destination profile", result.profileId)
+    }
+
+    @Test
+    fun `the redirect target names the session profile's file`() {
+        // The one-shot open in the redirect branch resolves the SESSION
+        // profile's file, not the active one - the isolation guarantee.
+        assertEquals(
+            "profile-3.kbstream_watch_history",
+            ProfileStorage.dbName("profile-3", "kbstream_watch_history")
+        )
     }
 
     private companion object {

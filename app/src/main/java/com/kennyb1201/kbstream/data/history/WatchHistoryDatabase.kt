@@ -240,6 +240,29 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * A ONE-SHOT handle on a SPECIFIC profile's history file, for the case
+         * where the row belongs to a profile that is no longer active (see
+         * [PlaybackHistoryWriter.write]'s redirect branch).
+         *
+         * Deliberately outside the active-instance bookkeeping ([profileInstance]
+         * / [pendingClose]): it is opened, used and closed by the caller, so the
+         * same swap-guard shape as [withScopedDao] (pin the file, throw on a
+         * mid-operation switch) is not needed and the active instance's
+         * tombstone/revive logic is left untouched. [buildScoped] supplies the
+         * same migrations, journal mode and busy-timeout callback as any other
+         * scoped handle, so the file it opens is one the app could open itself.
+         */
+        internal fun openForProfile(
+            context: Context,
+            profileId: String
+        ): WatchHistoryDatabase =
+            buildScoped(
+                context,
+                com.kennyb1201.kbstream.data.sync.ProfileStorage
+                    .dbName(profileId, "kbstream_watch_history")
+            )
+
         private fun buildScoped(
             context: Context,
             dbName: String

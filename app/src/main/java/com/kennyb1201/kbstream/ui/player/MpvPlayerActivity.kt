@@ -3373,11 +3373,15 @@ class MpvPlayerActivity : ComponentActivity() {
             played = sessionHasPlayed(),
             explicitAdvance = true
         )
-        saveProgress(reason = "handoff", forceCompleted = completed)
+        // The verdict is reported AFTER the write commits (onWritten), so the
+        // trace can no longer claim "filed" for a row that was never stored.
+        saveProgress(reason = "handoff", forceCompleted = completed) { ok, profile ->
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "filed s=${season ?: "-"} e=${episode ?: "-"} " +
+                    "row=$historyId completed=$completed written=$ok profile=${profile ?: "-"}"
+            )
+        }
         scrobble("stop", progressOverride = if (completed) 100.0 else null)
-        com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
-            "filed s=${season ?: "-"} e=${episode ?: "-"} row=$historyId completed=$completed"
-        )
     }
 
     /**
@@ -3460,7 +3464,11 @@ class MpvPlayerActivity : ComponentActivity() {
      * canonical parentId — so a session that started in ExoPlayer and finished
      * here updates ONE Continue Watching card.
      */
-    private fun saveProgress(reason: String, forceCompleted: Boolean = false) {
+    private fun saveProgress(
+        reason: String,
+        forceCompleted: Boolean = false,
+        onWritten: ((Boolean, String?) -> Unit)? = null
+    ) {
         val view = surface ?: return
         if (parentId.isBlank() || historyId.isBlank()) return
 
@@ -3530,8 +3538,9 @@ class MpvPlayerActivity : ComponentActivity() {
                     // the writer reads it back from the row it replaces.
                     completedAt = null
                 )
-            PlaybackHistoryWriter.write(this@MpvPlayerActivity, sessionProfileId, entry)
+            val result = PlaybackHistoryWriter.write(this@MpvPlayerActivity, sessionProfileId, entry)
             if (completed) pushCompletion()
+            onWritten?.invoke(result.ok, result.profileId)
         }
     }
 

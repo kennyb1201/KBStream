@@ -1781,6 +1781,15 @@ class WatchedStatusRepository(
         // (which rewrote the title's record) is exactly what makes the
         // snapshot wrong. Same reasoning for the unmark / partial paths.
         invalidateRemoteWatchSets()
+
+        // The same push that makes the cached sets wrong also leaves the
+        // Continue Watching feeds stale for a minute or more, and a manual
+        // mark never travelled through a player - the only place that used to
+        // signal Home. Without this the marked title's card sat on the rail
+        // until the next incidental refresh (a Home ON_RESUME never fires for
+        // in-app navigation). Fire-and-forget: Home re-merges immediately and
+        // runs its feed-lag retry window.
+        ContinueWatchingRefreshBus.requestRefresh()
     }
 
     /**
@@ -2004,6 +2013,12 @@ class WatchedStatusRepository(
 
         _watchedStateVersion.value = now
         invalidateRemoteWatchSets()
+
+        // Same signal as [markWatchedLocal]: this episode's mark was pushed to
+        // the trackers, so Home must re-merge Continue Watching now. The CW
+        // card's own call keeps its local dismissal and inline rebuild; the
+        // bus adds the feed-lag retry window that rebuild alone did not have.
+        ContinueWatchingRefreshBus.requestRefresh()
     }
 
     /**
@@ -2418,6 +2433,11 @@ class WatchedStatusRepository(
         // instead of resurrecting this title from the pre-unmark snapshot
         // (which is how an unmarked show kept its completed checkmark).
         invalidateRemoteWatchSets()
+
+        // An unmark is symmetric: the title must return to Continue Watching
+        // promptly, and the tracker removal lags the same way the mark's push
+        // does. Signal Home here too.
+        ContinueWatchingRefreshBus.requestRefresh()
     }
 
     /**
