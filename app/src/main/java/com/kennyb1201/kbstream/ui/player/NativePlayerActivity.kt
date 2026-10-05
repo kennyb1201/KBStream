@@ -10344,6 +10344,15 @@ class NativePlayerActivity : ComponentActivity() {
         // paused playback whenever Simkl had no session - Simkl not
         // configured, or a start that failed.
         if (action == "pause" && !simklScrobbleActive && !MdbListClient.isConfigured(this)) return
+        // A tracker call resolves the ACTIVE profile's token/key at fire time,
+        // so a session that outlived a profile switch must not scrobble the
+        // departing episode to the profile the viewer moved TO.
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) {
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "tracker $action skipped: session profile departed"
+            )
+            return
+        }
         val player = exoPlayer ?: return
         val pos = player.currentPosition.coerceAtLeast(0L)
         val dur = player.duration
@@ -10391,6 +10400,12 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun syncCompletedToSimkl() {
         if (simklScrobbleSent || parentId.isBlank()) return
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) {
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "tracker completion skipped: session profile departed"
+            )
+            return
+        }
         simklScrobbleSent = true
         simklSyncJob?.cancel()
         simklSyncJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {

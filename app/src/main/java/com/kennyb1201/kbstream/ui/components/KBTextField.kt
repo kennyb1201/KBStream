@@ -160,9 +160,17 @@ fun KBTextField(
         onDone?.invoke()
     }
 
-    // The field was readOnly when it took focus, so the IME has to be asked
-    // for once it becomes editable.
-    LaunchedEffect(editing) {
+    // Ask for the IME whenever the field is BOTH editable and focused.
+    //
+    // Keyed on `focused` as well as `editing`, not just `editing`: the standard
+    // field starts editable (openKeyboardOnFocus defaults true), so `editing`
+    // does not change when focus arrives and this effect would never re-run on
+    // first focus - the explicit show() was dead for exactly the fields that
+    // are editable from the start. On Fire TV an app that delivers text through
+    // the TV's IME connection (ATV Tools' "Send text") needs that connection to
+    // exist, so a field whose implicit IME start never attached accepted no
+    // pasted text.
+    LaunchedEffect(editing, focused) {
         if (editing && focused) keyboardController?.show()
     }
 

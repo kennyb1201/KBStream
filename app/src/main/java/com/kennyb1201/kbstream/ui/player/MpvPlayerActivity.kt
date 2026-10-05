@@ -3715,6 +3715,15 @@ class MpvPlayerActivity : ComponentActivity() {
 
     private fun scrobble(action: String, progressOverride: Double? = null) {
         if (parentId.isBlank()) return
+        // A tracker call resolves the ACTIVE profile's token/key at fire time,
+        // so a session that outlived a profile switch must not scrobble the
+        // departing episode to the profile the viewer moved TO.
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) {
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "tracker $action skipped: session profile departed"
+            )
+            return
+        }
         val progress = progressOverride ?: if (durationMs > 0L) {
             ((positionMs.toDouble() / durationMs.toDouble()) * 100.0).coerceIn(0.0, 100.0)
         } else {
@@ -3754,6 +3763,12 @@ class MpvPlayerActivity : ComponentActivity() {
     /** Marks the title watched on both trackers, once per session. */
     private fun pushCompletion() {
         if (trackersMarkedWatched || parentId.isBlank()) return
+        if (!PlaybackHistoryWriter.sessionStillActive(this, sessionProfileId)) {
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "tracker completion skipped: session profile departed"
+            )
+            return
+        }
         trackersMarkedWatched = true
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             runCatchingCancellable {

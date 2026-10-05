@@ -144,10 +144,49 @@ class HandoffFilingContractTest {
         }
     }
 
+    // ── the tracker push is pinned to the session profile too ──────────
+
+    @Test
+    fun `a departed session cannot scrobble to the profile the viewer moved to`() {
+        val writer = readSource(WRITER)
+        assertTrue(
+            "the session guard must exist",
+            writer.contains("fun sessionStillActive(context: Context, sessionProfileId: String?)")
+        )
+        listOf(NATIVE, MPV, EXTERNAL).forEach { path ->
+            val src = readSource(path)
+            val guards = Regex(
+                "PlaybackHistoryWriter\\.sessionStillActive\\(this, sessionProfileId\\)"
+            ).findAll(src).count()
+            assertTrue(
+                "$path must guard BOTH its scrobble and its completion push (found $guards)",
+                guards >= 2
+            )
+            assertTrue(
+                "$path must say why the tracker call was skipped",
+                src.contains("session profile departed")
+            )
+        }
+    }
+
+    // ── an editable key field asks for the IME on focus ────────────────
+
+    @Test
+    fun `an editable field requests the IME the moment it takes focus`() {
+        val src = readSource(KB_FIELD)
+        assertTrue(
+            "the IME request must react to focus, not only to the editable flag",
+            src.contains("LaunchedEffect(editing, focused)")
+        )
+        assertTrue(src.contains("keyboardController?.show()"))
+    }
+
     private companion object {
         private const val WRITER = "com/kennyb1201/kbstream/data/history/PlaybackHistoryWriter.kt"
         private const val DB = "com/kennyb1201/kbstream/data/history/WatchHistoryDatabase.kt"
         private const val NATIVE = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
         private const val MPV = "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
+        private const val EXTERNAL = "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt"
+        private const val KB_FIELD = "com/kennyb1201/kbstream/ui/components/KBTextField.kt"
     }
 }

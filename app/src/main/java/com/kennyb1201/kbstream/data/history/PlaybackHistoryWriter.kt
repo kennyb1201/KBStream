@@ -98,6 +98,23 @@ internal object PlaybackHistoryWriter {
     ): Boolean = activeProfileId == sessionProfileId
 
     /**
+     * True while the session that owns [sessionProfileId] is still the profile
+     * that is ACTIVE — the guard every TRACKER push uses.
+     *
+     * A Simkl scrobble or MDBList call resolves the ACTIVE profile's token/key
+     * at FIRE time, and playback can outlive a profile switch (PiP is the
+     * everyday case). Without this guard the departing session's completion is
+     * scrobbled to the profile the viewer moved TO — the same cross-profile
+     * leak the local history write already refuses to create (see [write])
+     * and, on the tracker side, the more damaging half: a valid token accepts
+     * the row, so the incoming profile's account is poisoned rather than the
+     * call simply being rejected. Null on both sides is the legacy no-profiles
+     * device, which stays true.
+     */
+    fun sessionStillActive(context: Context, sessionProfileId: String?): Boolean =
+        mayWrite(ProfileStorage.activeProfileId(context), sessionProfileId)
+
+    /**
      * Stores one playback row, preserving the completion stamp of the row it
      * replaces, and mirrors the active profile's Continue Watching to the TV
      * launcher.
