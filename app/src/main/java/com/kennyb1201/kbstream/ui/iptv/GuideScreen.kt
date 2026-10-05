@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -111,11 +112,13 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.withContext
 
 private const val GUIDE_PREFETCH_BEFORE_COUNT = 12
 private const val GUIDE_PREFETCH_AFTER_COUNT = 36
@@ -518,16 +521,25 @@ fun GuideScreen(
     }
 
     // Live-filtered channel list for the search overlay: case-insensitive
-    // contains on display name and channel number.
-    val searchResults = remember(searchQuery, unhiddenChannels) {
+    // contains on display name and channel number. Filtered off the main
+    // thread: a 10k-channel playlist scanned on every keystroke was a visible
+    // hitch, and the scan is pure so it has no business on the UI thread.
+    val searchResults by produceState(
+        initialValue = emptyList<IptvChannelWithEpg>(),
+        searchQuery,
+        unhiddenChannels
+    ) {
         val q = searchQuery.trim()
-        when {
-            q.isBlank() -> emptyList()
-            else -> unhiddenChannels.filter { item ->
-                item.channel.displayName.contains(q, ignoreCase = true) ||
-                    item.channel.name.contains(q, ignoreCase = true) ||
-                    item.channel.tvgChno?.trim() == q
-            }.take(40)
+        value = if (q.isBlank()) {
+            emptyList()
+        } else {
+            withContext(Dispatchers.Default) {
+                unhiddenChannels.filter { item ->
+                    item.channel.displayName.contains(q, ignoreCase = true) ||
+                        item.channel.name.contains(q, ignoreCase = true) ||
+                        item.channel.tvgChno?.trim() == q
+                }.take(40)
+            }
         }
     }
 
