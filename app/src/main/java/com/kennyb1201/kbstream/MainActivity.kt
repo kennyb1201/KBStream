@@ -918,10 +918,14 @@ fun AppRoot() {
     var confirmExit by remember { mutableStateOf(false) }
     // Only the ENTRY picker (no returnTo) treats Back as exit; a picker opened
     // from inside the app belongs to its returnTo screen.
+    // `screen` is a delegated property, so it cannot be smart-cast: read the
+    // picker into a local once and test that. The previous form ANDed a
+    // safe-cast against a second `is` check, which read as if one of them were
+    // redundant when neither could be dropped.
+    val profilePicker = screen as? Screen.ProfilePicker
     val interceptBack =
         (screen == Screen.Home ||
-            ((screen as? Screen.ProfilePicker)?.returnTo == null &&
-                screen is Screen.ProfilePicker)) &&
+            (profilePicker != null && profilePicker.returnTo == null)) &&
             pendingAutoPlay == null
 
     BackHandler {
@@ -2044,36 +2048,60 @@ fun AppRoot() {
                             val bywName = data.getStringExtra("byw_name").orEmpty()
                             val bywPoster = data.getStringExtra("byw_poster")
                             val bywBackdrop = data.getStringExtra("byw_backdrop")
-                            val bywTarget = StreamsTarget(
-                                contentType = bywType,
-                                streamId = bywId,
-                                title = bywName,
-                                displayName = bywName.ifBlank { bywId },
-                                season = null,
-                                episode = null,
-                                resumePositionMs = 0L
-                            )
-                            if (AppPreferences.getAutoSelectStream(context)) {
-                                pendingAutoPlay = PendingPlay(
-                                    target = bywTarget,
-                                    parentId = bywId,
-                                    parentType = bywType,
+                            // A recommendation card names a SHOW, never one of
+                            // its episodes, so a series pick carries no
+                            // season/episode. Building a season-less stream
+                            // target here asked the resolver to play an
+                            // unspecified episode. A series has no single
+                            // playable target: open its Detail page, which is
+                            // exactly where PLAY resolves the next-unwatched or
+                            // resume episode. Movies are self-contained and
+                            // still follow the auto-select rule below.
+                            val bywIsSeries =
+                                bywType.equals("series", ignoreCase = true) ||
+                                    bywType.equals("show", ignoreCase = true) ||
+                                    bywType.equals("tv", ignoreCase = true)
+                            if (bywIsSeries) {
+                                screen = Screen.Detail(
+                                    bywType,
+                                    bywId,
                                     itemPoster = bywPoster,
-                                    backdropUrl = bywBackdrop,
-                                    clearLogoUrl = null,
-                                    overview = null,
-                                    cast = emptyList(),
+                                    itemBackdrop = bywBackdrop,
+                                    itemOverview = null,
                                     returnTo = stableBackDestination(current.returnTo)
                                 )
                             } else {
-                                screen = Screen.Streams(
-                                    target = bywTarget,
-                                    parentId = bywId,
-                                    returnTo = stableBackDestination(current.returnTo),
-                                    parentType = bywType,
-                                    itemPoster = bywPoster,
-                                    backdropUrl = bywBackdrop
+                                val bywTarget = StreamsTarget(
+                                    contentType = bywType,
+                                    streamId = bywId,
+                                    title = bywName,
+                                    displayName = bywName.ifBlank { bywId },
+                                    season = null,
+                                    episode = null,
+                                    resumePositionMs = 0L
                                 )
+                                if (AppPreferences.getAutoSelectStream(context)) {
+                                    pendingAutoPlay = PendingPlay(
+                                        target = bywTarget,
+                                        parentId = bywId,
+                                        parentType = bywType,
+                                        itemPoster = bywPoster,
+                                        backdropUrl = bywBackdrop,
+                                        clearLogoUrl = null,
+                                        overview = null,
+                                        cast = emptyList(),
+                                        returnTo = stableBackDestination(current.returnTo)
+                                    )
+                                } else {
+                                    screen = Screen.Streams(
+                                        target = bywTarget,
+                                        parentId = bywId,
+                                        returnTo = stableBackDestination(current.returnTo),
+                                        parentType = bywType,
+                                        itemPoster = bywPoster,
+                                        backdropUrl = bywBackdrop
+                                    )
+                                }
                             }
                         }
 

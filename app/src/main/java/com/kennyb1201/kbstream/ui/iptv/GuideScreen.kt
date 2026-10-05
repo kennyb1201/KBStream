@@ -377,15 +377,22 @@ fun GuideScreen(
         latestOnPlayChannel?.invoke(item)
     }
 
-    fun moveSelectedGroup(direction: Int) {
-    if (groups.isEmpty()) return
+    /**
+     * Moves the selected group by [direction] and returns whether it actually
+     * changed. Callers use the return value so a press at either end of the chip
+     * row does not reset the channel list: the move no-ops at the boundary, and
+     * the old unconditional focus jump then scrolled a list the user was reading
+     * back to the top.
+     */
+    fun moveSelectedGroup(direction: Int): Boolean {
+        if (groups.isEmpty()) return false
 
-    val currentIndex = groups.indexOf(selectedGroup).takeIf { it >= 0 } ?: 0
-    val newIndex = (currentIndex + direction).coerceIn(0, groups.lastIndex)
+        val currentIndex = groups.indexOf(selectedGroup).takeIf { it >= 0 } ?: 0
+        val newIndex = (currentIndex + direction).coerceIn(0, groups.lastIndex)
 
-    if (newIndex != currentIndex) {
+        if (newIndex == currentIndex) return false
         selectedGroup = groups[newIndex]
-    }
+        return true
     }
     
     val groupedChannelIds = remember(groupedChannels) {
@@ -633,7 +640,12 @@ LaunchedEffect(pendingGroupChipFocus) {
         awaitFrame()
         val requester = groupChipFocusRequesters[selectedGroup]
         if (requester != null) {
-            focused = runCatching { requester.requestFocus() }.isSuccess
+            // requestFocus() reports success by its RETURN VALUE; runCatching's
+            // isSuccess only ever means "no exception" (always true), so this
+            // loop exited after one frame with focus still unmoved. Retry on
+            // the real result, exactly as the field-focus grab below does.
+            focused = runCatching { requester.requestFocus() }
+                .getOrDefault(false)
         }
         attempts++
     }
@@ -715,16 +727,21 @@ LaunchedEffect(channelListState, groupedChannelIds) {
     channelListState.scrollToItem(if (targetIndex > 0) targetIndex else 0)
 
     if (target != null && wasPendingFocus) {
-        val rowRequester = channelRowFocusRequesters[channelKey(target)]
-        if (rowRequester != null) {
-            var focused = false
-            var attempts = 0
-            while (!focused && attempts < 6) {
-                awaitFrame()
+        // The row for a distant restore is not composed yet: scrollToItem has
+        // only queued it, so the FocusRequester map has no entry until a frame
+        // (or a few) later. Look it up inside the retry loop instead of once
+        // before it, otherwise a far restore always misses and focus strands.
+        val key = channelKey(target)
+        var focused = false
+        var attempts = 0
+        while (!focused && attempts < 6) {
+            awaitFrame()
+            val rowRequester = channelRowFocusRequesters[key]
+            if (rowRequester != null) {
                 focused = runCatching { rowRequester.requestFocus() }
                     .getOrDefault(false)
-                attempts++
             }
+            attempts++
         }
     } else if (pending != null && target == null) {
         // Saved channel vanished (playlist changed) -- make sure something
@@ -751,7 +768,7 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             awaitFrame()
             focused = runCatching {
                 firstChannelFocusRequester.requestFocus()
-            }.isSuccess
+            }.getOrDefault(false)
             attempts++
         }
 
@@ -1069,13 +1086,18 @@ Spacer(modifier = Modifier.height(14.dp))
 
     when (event.key) {
         Key.DirectionLeft -> {
-            moveSelectedGroup(-1)
-            moveFocusToChannelList = true
+            // Only jump focus into the list when the group actually changed. At
+            // the boundary moveSelectedGroup no-ops, and setting the flag then
+            // reset the list to row 0 (row 50 of "All", press Left).
+            if (moveSelectedGroup(-1)) {
+                moveFocusToChannelList = true
+            }
             true
         }
         Key.DirectionRight -> {
-            moveSelectedGroup(1)
-            moveFocusToChannelList = true
+            if (moveSelectedGroup(1)) {
+                moveFocusToChannelList = true
+            }
             true
         }
         Key.DirectionUp -> {

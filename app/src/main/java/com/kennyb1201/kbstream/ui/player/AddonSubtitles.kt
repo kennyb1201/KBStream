@@ -226,6 +226,7 @@ class AddonSubtitleController(
 
         scope.launch(Dispatchers.IO) {
             val assKeys = mutableMapOf<String, String>()
+            val ambiguousAssKeys = mutableSetOf<String>()
             val configs = offers.mapNotNull { offer ->
                 val uri = downloadCache[offer.url] ?: download(offer.url) ?: return@mapNotNull null
                 val label = offer.label ?: offer.lang?.uppercase()
@@ -240,11 +241,23 @@ class AddonSubtitleController(
                 // non-ASS offer is left exactly as before.
                 AddonAssTracks.configIdFor(mime, offer.url)?.let { id ->
                     builder.setId(id)
-                    assKeys[AddonAssTracks.languageKey(offer.lang, label)] = offer.url
+                    val key = AddonAssTracks.languageKey(offer.lang, label)
+                    val existing = assKeys[key]
+                    if (existing == null) {
+                        assKeys[key] = offer.url
+                    } else if (existing != offer.url) {
+                        // Two ASS tracks share language+label: the fallback key
+                        // cannot name one of them, and guessing would paint the
+                        // OTHER track's typesetting over the one selected. Drop
+                        // the key - only the config id can route these, and
+                        // flattened rendering is the safe default.
+                        ambiguousAssKeys += key
+                    }
                 }
                 builder.build()
             }
             if (configs.isEmpty()) return@launch
+            ambiguousAssKeys.forEach { assKeys.remove(it) }
             assOffersByKey = assKeys
 
             withContext(Dispatchers.Main) {

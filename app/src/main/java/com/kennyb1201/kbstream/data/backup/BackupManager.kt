@@ -6,7 +6,9 @@ import androidx.room.withTransaction
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -112,6 +114,18 @@ object BackupManager {
             error("This file is not a KBStream backup")
         }
 
+        // A file written by a NEWER app may carry fields and shapes this build
+        // cannot read; refusing it is better than silently importing a partial
+        // restore. A missing version is read as the current one (older exports
+        // predate the field).
+        val version = json.optInt("version", BACKUP_VERSION)
+        if (version > BACKUP_VERSION) {
+            error(
+                "This backup was made by a newer version of KBStream " +
+                    "(v$version). Update the app, then try again."
+            )
+        }
+
         val history = json.optJSONArray("watchHistory")
             ?.let { arr ->
                 (0 until arr.length()).mapNotNull { i ->
@@ -148,9 +162,21 @@ object BackupManager {
             }
         }
 
+        // The restore is a LOCAL write only; push it to the account so the
+        // restored rows reach the cloud and the other devices, instead of
+        // sitting in this device's Room tables where the next pull could
+        // overwrite them. It goes through the durable outbox, so an offline
+        // import still lands on reconnect. No-op when signed out.
+        history.forEach { SupabaseSync.enqueueHistory(it) }
+        watched.forEach { SupabaseSync.enqueueWatched(it) }
+
         // Drop in-memory watched snapshots so restored markers appear
         // immediately, and rebuild the TV launcher rail from restored data.
         WatchedStatusRepository.invalidateAllCaches()
+        // The restore replaced the whole history table in one shot, so the
+        // Continue Watching rails have to re-read it: without this they kept
+        // the pre-restore rows until the next unrelated refresh.
+        ContinueWatchingRefreshBus.requestRefresh()
         TvLauncherPublisher.sync(context, history)
 
         return "Backup restored — " +

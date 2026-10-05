@@ -18,7 +18,12 @@ import org.junit.Test
  *
  * The fix gates the carry on `firstFrameRendered`: a source that rendered video
  * hands the new one its playhead (mid-playback switches are unchanged), and a
- * source that never did hands it the session's start/resume point instead.
+ * source that never did hands it the LAST KNOWN carry instead. `carryPositionMs`
+ * starts at the session's start/resume point, so the first switch from a
+ * never-rendered source still lands on that point - but a later switch in a
+ * multi-source fallback keeps the position a previous source already carried,
+ * instead of the frozen launch position (`startPositionMs`), which restarted the
+ * fallback at 0.
  *
  * This is wiring inside an Android activity, so a unit test cannot drive it
  * without a TV in the room. What it can pin is the branch itself: the gate on
@@ -83,15 +88,19 @@ class SourceSwitchClockContractTest {
     }
 
     @Test
-    fun `a source that never rendered falls back to the session start`() {
+    fun `a source that never rendered falls back to the last known carry`() {
         assertTrue(
-            "no frame rendered must hand the new source the launch/resume point",
+            "no frame rendered must hand the new source the last known carry",
+            nativeSwitch.contains("carryPositionMs.coerceAtLeast(0L)")
+        )
+        assertFalse(
+            "the frozen launch point must not restart a multi-source fallback at 0",
             nativeSwitch.contains("startPositionMs.coerceAtLeast(0L)")
         )
         // The gate must be checked before the position is carried: the reset
         // lives in createPlayer() and runs after this line.
         val gate = nativeSwitch.indexOf("} else if (firstFrameRendered) {")
-        val fallback = nativeSwitch.indexOf("startPositionMs.coerceAtLeast(0L)")
+        val fallback = nativeSwitch.indexOf("carryPositionMs.coerceAtLeast(0L)")
         assertTrue("the frame gate must precede the fallback", gate in 0 until fallback)
     }
 

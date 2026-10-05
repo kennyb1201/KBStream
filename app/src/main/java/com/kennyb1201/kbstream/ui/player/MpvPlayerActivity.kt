@@ -282,6 +282,18 @@ class MpvPlayerActivity : ComponentActivity() {
     /** Label of the source playing now, for the SOURCES picker's selected row. */
     private var currentSourceLabel: String? = null
 
+    /** Adaptive source downshift on repeated stalls (see RebufferDownshift.kt). */
+    private val rebufferDownshift = RebufferDownshiftTracker()
+
+    /** Set once the ranked list is spent: stop re-counting stalls this session. */
+    private var rebufferDownshiftGivenUp = false
+
+    /** When the current mid-playback buffer began, or 0 while not buffering. */
+    private var bufferingStartedAtMs = 0L
+
+    /** End of the last user seek, so its own buffering is not counted as a stall. */
+    private var lastSeekAtMs = 0L
+
     /** The playing source's badge chips, for the row the main player shows. */
     private var currentBadges: List<StreamBadge> = emptyList()
 
@@ -737,6 +749,7 @@ class MpvPlayerActivity : ComponentActivity() {
         view.onPausedChanged = { paused -> onPausedChanged(paused) }
         view.onBufferingChanged = { buffering ->
             bufferingView?.visibility = if (buffering) View.VISIBLE else View.GONE
+            onMpvBufferingChanged(buffering)
         }
         view.onEnded = { onPlaybackEnded() }
         view.onPlaybackError = { message ->
@@ -1264,9 +1277,9 @@ class MpvPlayerActivity : ComponentActivity() {
             onSkipPrevious = {
                 // The same rule the main player's session uses: near the start
                 // of an episode, PREVIOUS means the one before this.
-                if (positionMs > 5_000L) surface?.seekTo(0L) else skipToNextEpisode(-1)
+                if (positionMs > 5_000L) seekTo(0L) else skipToNextEpisode(-1)
             },
-            onSeek = { position -> surface?.seekTo(position) }
+            onSeek = { position -> seekTo(position) }
         ).also { it.start() }
     }
 
@@ -1401,7 +1414,7 @@ class MpvPlayerActivity : ComponentActivity() {
             override fun onStopTrackingTouch(bar: SeekBar?) {
                 scrubbing = false
                 if (durationMs > 0L) {
-                    surface?.seekTo(durationMs * (bar?.progress ?: 0) / 1000L)
+                    seekTo(durationMs * (bar?.progress ?: 0) / 1000L)
                 }
                 keepControlsVisible()
                 endTrickplayScrub()
@@ -2287,6 +2300,13 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun switchToSource(stream: Stream) {
         val newUrl = stream.url ?: return
         if (newUrl == currentUrl) return
+
+        // A fresh source starts with an empty stall window: the source just
+        // left cannot condemn its replacement, and its seek clock is gone too.
+        rebufferDownshift.reset()
+        rebufferDownshiftGivenUp = false
+        bufferingStartedAtMs = 0L
+        lastSeekAtMs = 0L
 
         val resumeAt = (if (positionMs > 0L) positionMs else startPositionMs).coerceAtLeast(0L)
         currentUrl = newUrl
@@ -3179,7 +3199,59 @@ class MpvPlayerActivity : ComponentActivity() {
      */
     private fun seekPastSegment(stamp: IntroDbStamp, durationMs: Long) {
         val target = AutoSkipRules.targetMs(stamp, introDbStamps, durationMs)
-        surface?.seekTo(target)
+        seekTo(target)
+    }
+
+    /**
+     * The one seek entry point: stamps the time so a buffering that follows a
+     * jump is not read as the source starving (see [rebufferFollowsSeek]).
+     */
+    private fun seekTo(position: Long) {
+        lastSeekAtMs = System.currentTimeMillis()
+        surface?.seekTo(position)
+    }
+
+    /**
+     * Adaptive source downshift for the MPV engine (see [RebufferDownshift.kt]).
+     *
+     * The main player reacts to a source that opens and simply cannot keep up;
+     * this engine only ever offered the error card's manual "next source"
+     * button, so a viewer who fell through to mpv - or picked it deliberately -
+     * watched a spinner in slices with no recovery. Same tracker and thresholds,
+     * and the switch reuses the ranked list's own [nextSourceOrNull] ladder.
+     */
+    private fun onMpvBufferingChanged(buffering: Boolean) {
+        if (buffering) {
+            bufferingStartedAtMs = System.currentTimeMillis()
+            return
+        }
+        val startedAt = bufferingStartedAtMs
+        bufferingStartedAtMs = 0L
+        if (startedAt == 0L) return
+        if (rebufferDownshiftGivenUp) return
+        if (rebufferFollowsSeek(startedAt, lastSeekAtMs)) return
+        // Only a mid-playback stall counts: the buffer that covers the initial
+        // load fires the same callback, and the playhead is still at zero for it.
+        if (positionMs <= 0L) return
+        if (endedHandled || errorContainer?.visibility == View.VISIBLE) return
+        if (surface?.isPaused() == true) return
+        if (System.currentTimeMillis() - startedAt < REBUFFER_DOWNSHIFT_MIN_STALL_MS) return
+        val now = System.currentTimeMillis()
+        rebufferDownshift.record(now)
+        if (!rebufferDownshift.due(now)) return
+        val stalledCount = rebufferDownshift.count(now)
+        Log.w(
+            TAG,
+            "Source rebuffered $stalledCount times in ${REBUFFER_DOWNSHIFT_WINDOW_MS / 60_000}min " +
+                "— downshifting to the next source"
+        )
+        val next = nextSourceOrNull()
+        rebufferDownshift.reset()
+        if (next == null) {
+            rebufferDownshiftGivenUp = true
+            return
+        }
+        switchToSource(next)
     }
 
     /**
@@ -3872,8 +3944,10 @@ class MpvPlayerActivity : ComponentActivity() {
     /**
      * The error card's retry on ANOTHER source: it replaces the failed file
      * with the next one in the ranked list, saving the viewer a trip through
-     * the SOURCES picker. Deliberately manual - no heuristic switches sources
-     * on its own - which is why this is a button and not a watchdog.
+     * the SOURCES picker. Manual on the error path - the one exception is the
+     * repeated-rebuffer downshift (see [onMpvBufferingChanged]), which mirrors
+     * the main player so a source that opens but cannot keep up is not left to
+     * stall forever on this engine.
      */
     private fun tryNextSource() {
         val next = nextSourceOrNull() ?: return
@@ -4155,8 +4229,14 @@ class MpvPlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // mpv is paused just below, so guide writes may proceed again.
-        EpgWriteGate.setPlayerActive(false)
+        // mpv is paused just below, so guide writes may proceed again - except on
+        // a handoff: Android starts the successor activity before this one's
+        // onStop, so the successor has already set the gate active, and clearing
+        // it here ran EPG writes un-gated mid-playback (the stall the gate
+        // exists to stop).
+        if (!playerSwitchStarted && !nextEpisodeHandoffStarted) {
+            EpgWriteGate.setPlayerActive(false)
+        }
         // Paused and off screen, so the panel goes back to the mode the rest of
         // the TV interface expects and onStart asks for it again on the way
         // back. Deliberately not in onPause: Picture-in-Picture keeps the video

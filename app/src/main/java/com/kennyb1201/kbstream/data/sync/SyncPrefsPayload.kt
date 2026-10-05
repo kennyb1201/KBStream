@@ -160,9 +160,10 @@ object PrefsPayloadBuilder {
         "amoled_black",                      // AMOLED theme toggle (pure display pref)
         "pure_black_surface",                // Pure black cards/panels/containers toggle
         "accent_index",                      // global theme accent (index into the palette)
-        "mdblist_api_key",
-        "opensubtitles_api_key",             // player → search subtitles online
-        "torbox_api_key",                    // stream picker → "Cached" status badges
+        // The MDBList / OpenSubtitles / TorBox API keys are deliberately NOT
+        // here: each is a live bearer credential, and a synced pref travels as
+        // plaintext in the cloud table. They live in the encrypted
+        // SecureTokenStore instead (see AppPreferences.apiKeyPrefs).
         "torbox_library_sync",               // add TorBox cloud files to the Library: a library preference
         "default_subtitle_size",             // subtitle appearance: same on every device
         "default_subtitle_bg",

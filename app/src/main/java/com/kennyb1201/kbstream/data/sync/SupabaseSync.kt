@@ -10,7 +10,6 @@ import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.postgrest.from
-import io.github.jan.supabase.postgrest.query.filter.FilterOperator
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
@@ -848,51 +847,77 @@ object SupabaseSync {
         val pid = currentProfileId()
         if (!isSignedIn()) return
 
-        // Drop the queued writes BEFORE the deletes: otherwise the flush loop
-        // can push the row we are about to delete right between the two.
+        // Drop the queued writes BEFORE the tombstones: a queued progress
+        // write would otherwise flush after the wipe and resurrect the row.
         outbox.removeProfileScoped(TABLE_HISTORY, "item_id", pid)
         outbox.removeProfileScoped(TABLE_WATCHED, "item_key", pid)
 
-        // Suspending on purpose: the caller clears the LOCAL rows only once
-        // the cloud wipe has finished, so there is no window where local is
-        // empty while the cloud still holds the rows a pull would restore.
+        // The wipe is a WRITE now, not a cloud DELETE. A real delete is
+        // invisible to a sibling that still holds the row - a pull only iterates
+        // rows that still EXIST - so the sibling kept its resume bar and
+        // checkmark forever (the "Clear Continue Watching doesn't reach my
+        // other TV" report). Instead, enumerate this profile's cloud rows and
+        // replace each with a history tombstone / a cleared watched marker
+        // through the durable outbox - the same "a delete is a newer write"
+        // mechanism single-row deletes use (see [HistoryTombstoneRules]), so
+        // every merge path on every device deletes the row too.
         withContext(Dispatchers.IO) {
             val c = client ?: return@withContext
+            val now = System.currentTimeMillis()
+
             runCatching {
-                c.from(TABLE_HISTORY).delete {
-                    filter { scopeToProfile("item_id", pid) }
-                }
+                c.from(TABLE_HISTORY)
+                    .select()
+                    .decodeList<SyncRowDto>()
+                    .mapNotNull { row -> row.itemId }
+                    .filter { storedKeyMatchesProfile(it, pid) }
+                    .forEach { storedId ->
+                        outbox.put(
+                            OutboxItem(
+                                TABLE_HISTORY,
+                                "item_id",
+                                storedId,
+                                HistoryTombstoneRules.tombstone(unscopedKey(storedId), now)
+                            )
+                        )
+                    }
             }.onFailure { e ->
                 Log.w(TAG, "clearWatchState history failed: ${e.message}")
                 (e as? Exception)?.let { recordSyncError("Clear", it) }
             }
+
             runCatching {
-                c.from(TABLE_WATCHED).delete {
-                    filter { scopeToProfile("item_key", pid) }
-                }
+                c.from(TABLE_WATCHED)
+                    .select()
+                    .decodeList<SyncRowDto>()
+                    .forEach { row ->
+                        val storedKey = row.itemKey ?: return@forEach
+                        if (!storedKeyMatchesProfile(storedKey, pid)) return@forEach
+                        val remote = row.payload
+                        // A cleared watched row is a NEGATIVE marker with a
+                        // fresh stamp, not a delete: the watched table has no
+                        // tombstone field, so retracting a marker is how it
+                        // syncs (see [WatchedMarkerRules]).
+                        val cleared = WatchedMarkerRules.payload(
+                            key = remote.str("key") ?: unscopedKey(storedKey),
+                            imdbId = remote.str("imdbId") ?: "",
+                            mediaType = remote.str("mediaType") ?: "",
+                            isWatched = false,
+                            isPartiallyWatched = false,
+                            updatedAt = now
+                        )
+                        outbox.put(
+                            OutboxItem(TABLE_WATCHED, "item_key", storedKey, cleared)
+                        )
+                    }
             }.onFailure { e ->
                 Log.w(TAG, "clearWatchState watched failed: ${e.message}")
                 (e as? Exception)?.let { recordSyncError("Clear", it) }
             }
-            Log.i(TAG, "clearWatchState: wiped cloud watch state profile=$pid")
+            Log.i(TAG, "clearWatchState: queued tombstones for profile=$pid")
         }
-    }
 
-    /**
-     * Filter that matches only rows [column] scoped to [pid]. A null profile
-     * means the legacy un-namespaced rows, matched as "everything NOT
-     * scoped" so an old install clears its own data without touching the
-     * namespaced rows of any profile.
-     */
-    private fun io.github.jan.supabase.postgrest.query.filter.PostgrestFilterBuilder.scopeToProfile(
-        column: String,
-        pid: String?
-    ) {
-        if (pid != null) {
-            like(column, "${SyncKeys.SCOPE_PREFIX}$pid:%")
-        } else {
-            filterNot(column, FilterOperator.LIKE, "${SyncKeys.SCOPE_PREFIX}%")
-        }
+        scheduleFlush()
     }
 
     fun enqueueWatched(entity: WatchedStatusEntity, profileId: String? = currentProfileId()) {
@@ -955,7 +980,7 @@ object SupabaseSync {
         flushJob = scope.launch {
             while (true) {
                 delay(FLUSH_DEBOUNCE_MS)
-                flushOutbox()
+                val removed = flushOutbox()
                 // Sign-out strands retry rows until the next sign-in (the
                 // periodic loop restarts then) — don't busy-loop on them.
                 if (!isSignedIn()) break
@@ -963,6 +988,14 @@ object SupabaseSync {
                 // enqueued during flushOutbox() re-arms this loop instead of
                 // waiting for the next enqueue/60s retry.
                 if (outbox.isEmpty) break
+                // No rows left the queue: a chunk failed (offline, or rejected
+                // by RLS), or a write that landed during the flush failed too.
+                // Do NOT loop on that — the old `while(true)` retried every
+                // 400 ms for as long as one row could never upload, a ~150
+                // req/min storm. The 60 s periodic loop and the network-gated
+                // OutboxFlushWorker own retries from here; the rows stay queued
+                // (dead-lettering them would lose a legitimate offline write).
+                if (removed == 0) break
             }
         }
     }
@@ -986,12 +1019,19 @@ object SupabaseSync {
         }
     }
 
-    private suspend fun flushOutbox() {
-        val c = client ?: return
-        if (!isSignedIn()) return
+    /**
+     * Returns how many rows left the outbox. A zero result with a non-empty
+     * outbox means the flush made no progress — the caller uses that to stop
+     * hot-looping on rows that cannot upload.
+     */
+    private suspend fun flushOutbox(): Int {
+        val c = client ?: return 0
+        if (!isSignedIn()) return 0
 
         val batch = outbox.snapshot()
-        if (batch.isEmpty()) return
+        if (batch.isEmpty()) return 0
+
+        var removed = 0
 
         // Max one in-flight flush at a time: two flushOutbox() runs racing
         // (scheduled + periodic) would both upload the same rows — harmless
@@ -1032,7 +1072,7 @@ object SupabaseSync {
                     // holds that newer row — removing by key alone would
                     // silently drop a write that never reached the cloud
                     // (lost update).
-                    chunk.forEach { row -> outbox.remove(row) }
+                    chunk.forEach { row -> if (outbox.remove(row)) removed++ }
                     clearSyncError()
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
@@ -1065,6 +1105,7 @@ object SupabaseSync {
                 }
             }
         }
+        return removed
     }
 
     /**

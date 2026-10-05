@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -604,9 +605,15 @@ private fun ListsPane(
     Row(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             verticalArrangement = Arrangement.spacedBy(8.dp),
+            // The rail is a fixed 280dp column, so it must NOT chain a
+            // `fillMaxSize()` after `width(280.dp)`. Modifiers are wrapper
+            // nodes and the FIRST size modifier sets the exact width it wraps,
+            // so the chain happened to resolve to 280dp here; `fillMaxHeight()`
+            // states the intent (fixed width, fill the row's height) and cannot
+            // drift into filling the row's width if the order is ever touched.
             modifier = Modifier
                 .width(280.dp)
-                .fillMaxSize()
+                .fillMaxHeight()
         ) {
             items(lists, key = { list -> list.id }) { list ->
                 var focused by remember { mutableStateOf(false) }

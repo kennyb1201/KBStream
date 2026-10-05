@@ -78,6 +78,26 @@ internal class MpvScrubPreviews(
     private val handler = Handler(Looper.getMainLooper())
     private val cache = TrickplayFrameCache<Bitmap>(TRICKPLAY_CACHE_FRAMES)
 
+    /**
+     * Dedicated thread for the screenshot command.
+     *
+     * `mpv.command` is synchronous and writes a full-resolution (up to 4K) JPEG
+     * plus the file, so running it on the main thread blocked the UI for a full
+     * encode on every scrub step. Daemon so a stuck capture can never keep the
+     * process alive.
+     */
+    private val captureExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "mpv-scrub-capture").apply { isDaemon = true }
+    }
+
+    /**
+     * Serialises the native screenshot against [release]: [release] sets
+     * [released] and then waits on this lock, so an in-flight capture always
+     * finishes before mpv is torn down (a command against a destroyed handle is
+     * the crash this exists to avoid).
+     */
+    private val captureLock = Any()
+
     /** The bucket being dragged over now; see [TrickplayFrames.wantedBucket]. */
     private var wantedBucket: Long? = null
 
@@ -136,7 +156,11 @@ internal class MpvScrubPreviews(
     fun release() {
         released = true
         handler.removeCallbacks(idleRelease)
+        // Wait out any in-flight native screenshot before mpv is torn down, so
+        // the capture thread cannot issue a command against a dead handle.
+        synchronized(captureLock) { }
         teardown()
+        captureExecutor.shutdown()
     }
 
     // --- Capture ------------------------------------------------------------
@@ -182,16 +206,28 @@ internal class MpvScrubPreviews(
         runCatching { file.delete() }
         pendingFile = file
 
-        val error = runCatching { captureTo(file.absolutePath) }.exceptionOrNull()
-        if (error != null) {
-            fail(bucket, "the screenshot command failed: ${error.message}")
-            return
+        // Off the main thread: the screenshot is a full-resolution JPEG encode
+        // plus a file write, and doing it here stuttered playback on every
+        // scrub step. The outcome is posted back to the main handler.
+        captureExecutor.execute {
+            val error = synchronized(captureLock) {
+                if (released) return@execute
+                runCatching { captureTo(file.absolutePath) }.exceptionOrNull()
+            }
+            handler.post {
+                if (released || !awaitingCapture) return@post
+                if (error != null) {
+                    fail(bucket, "the screenshot command failed: ${error.message}")
+                    return@post
+                }
+                // mpv writes the file inside the command, but that is not a
+                // promise the bytes are all there the instant the call returns,
+                // so the first look is given a beat and a second one (see
+                // [captureRead]).
+                handler.postDelayed(captureRead, CAPTURE_READ_DELAY_MS)
+                handler.postDelayed(timeoutRunnable, TRICKPLAY_TIMEOUT_MS)
+            }
         }
-        // mpv writes the file inside the command, but that is not a promise the
-        // bytes are all there the instant the call returns, so the first look is
-        // given a beat and a second one (see [captureRead]).
-        handler.postDelayed(captureRead, CAPTURE_READ_DELAY_MS)
-        handler.postDelayed(timeoutRunnable, TRICKPLAY_TIMEOUT_MS)
     }
 
     // Typed explicitly because it re-posts itself: the type of an initializer

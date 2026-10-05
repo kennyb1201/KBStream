@@ -176,13 +176,14 @@ class LibraryViewModel(
             }
 
             LibraryFilter.MY_LIST -> {
-                _uiState.value = _uiState.value.copy(
-                    localItems = sortItems(
-                        LocalLibraryStore.myList(getApplication()),
-                        _uiState.value.sort,
-                        _uiState.value.ratings
-                    )
-                )
+                // Re-read the store, then run the SAME display pipeline every
+                // other view uses (pushDisplay: year/poster backfill, sort,
+                // UNWATCHED toggle). The old branch set localItems directly
+                // from a bare sortItems(), which dropped the backfills (DATE
+                // mis-ordered, a poster flashed empty) and ignored the
+                // UNWATCHED toggle until the next full refresh.
+                canonicalLocal = LocalLibraryStore.myList(getApplication())
+                pushDisplay()
             }
 
             LibraryFilter.WATCHLIST -> refresh()
@@ -506,74 +507,80 @@ class LibraryViewModel(
                 val year: Int?
             )
 
+            suspend fun resolve(item: LibraryItem): Resolved {
+                val normalizedType = when (item.mediaType.lowercase()) {
+                    "tv", "series" -> "series"
+                    else -> "movie"
+                }
+                var imdbId = item.imdbId
+                if (imdbId == null && item.tmdbId != null) {
+                    imdbId = runCatchingCancellable {
+                        tmdbRepository.resolveImdbId(item.tmdbId, normalizedType)
+                    }.getOrNull()
+                }
+
+                var watched: String? = null
+
+                if (imdbId != null) {
+                    if (watchedRepository.isWatchedCached(imdbId, normalizedType)) {
+                        watched = "$normalizedType::$imdbId"
+                    }
+                }
+
+                // Ratings come from the shared TMDB detail cache
+                // (disk + memory), so a title already enriched on
+                // any screen costs nothing here.
+                val detail = runCatchingCancellable {
+                    tmdbRepository.fetchEnrichedMetaCached(
+                        imdbId = imdbId ?: "tmdb:${item.tmdbId}",
+                        type = normalizedType
+                    )
+                }.getOrNull()
+                val rating = detail?.voteAverage?.takeIf { it > 0.0 }
+
+                // Poster backfill: only needed when the tracker
+                // payload did not carry artwork. Reuses the same
+                // cached TMDB detail this block already fetched
+                // for the rating, so it costs no extra request.
+                val poster = if (item.posterUrl.isNullOrBlank()) {
+                    detail?.posterPath?.takeIf { it.isNotBlank() }
+                        ?.let { TmdbRepository.POSTER_BASE + it }
+                } else {
+                    null
+                }
+
+                // Release-year backfill, off the same record: an
+                // add-on catalog is not obliged to send one, and
+                // the pinned "Top Today" rails send none at all, so
+                // a title saved from them had no year under its
+                // poster while every other row had one. A year the
+                // row already carries always wins.
+                val year = if (item.year == null) {
+                    detail?.releaseYear()?.toIntOrNull()
+                } else {
+                    null
+                }
+
+                return Resolved(
+                    key = LocalLibraryStore.dedupeKey(item),
+                    rating = rating,
+                    watched = watched,
+                    poster = poster,
+                    year = year
+                )
+            }
+
+            // Every row is enriched, in bounded-concurrency windows. The old
+            // `.take(250)` left every title past the first 250 without a
+            // rating/poster/year, and the unbounded `.map { async }` launched
+            // one request per row at once - a thundering herd of TMDB calls on
+            // a box this small the moment a large library was opened.
             val resolved = coroutineScope {
                 items.distinctBy { LocalLibraryStore.dedupeKey(it) }
-                    .take(250)
-                    .map { item ->
-                        async {
-                            val normalizedType = when (item.mediaType.lowercase()) {
-                                "tv", "series" -> "series"
-                                else -> "movie"
-                            }
-                            var imdbId = item.imdbId
-                            if (imdbId == null && item.tmdbId != null) {
-                                imdbId = runCatchingCancellable {
-                                    tmdbRepository.resolveImdbId(item.tmdbId, normalizedType)
-                                }.getOrNull()
-                            }
-
-                            var rating: Double? = null
-                            var watched: String? = null
-
-                            if (imdbId != null) {
-                                if (watchedRepository.isWatchedCached(imdbId, normalizedType)) {
-                                    watched = "$normalizedType::$imdbId"
-                                }
-                            }
-
-                            // Ratings come from the shared TMDB detail cache
-                            // (disk + memory), so a title already enriched on
-                            // any screen costs nothing here.
-                            val detail = runCatchingCancellable {
-                                tmdbRepository.fetchEnrichedMetaCached(
-                                    imdbId = imdbId ?: "tmdb:${item.tmdbId}",
-                                    type = normalizedType
-                                )
-                            }.getOrNull()
-                            rating = detail?.voteAverage?.takeIf { it > 0.0 }
-
-                            // Poster backfill: only needed when the tracker
-                            // payload did not carry artwork. Reuses the same
-                            // cached TMDB detail this block already fetched
-                            // for the rating, so it costs no extra request.
-                            val poster = if (item.posterUrl.isNullOrBlank()) {
-                                detail?.posterPath?.takeIf { it.isNotBlank() }
-                                    ?.let { TmdbRepository.POSTER_BASE + it }
-                            } else {
-                                null
-                            }
-
-                            // Release-year backfill, off the same record: an
-                            // add-on catalog is not obliged to send one, and
-                            // the pinned "Top Today" rails send none at all, so
-                            // a title saved from them had no year under its
-                            // poster while every other row had one. A year the
-                            // row already carries always wins.
-                            val year = if (item.year == null) {
-                                detail?.releaseYear()?.toIntOrNull()
-                            } else {
-                                null
-                            }
-
-                            Resolved(
-                                key = LocalLibraryStore.dedupeKey(item),
-                                rating = rating,
-                                watched = watched,
-                                poster = poster,
-                                year = year
-                            )
-                        }
-                    }.awaitAll()
+                    .chunked(ENRICH_CONCURRENCY)
+                    .map { chunk -> async { chunk.map { resolve(it) } } }
+                    .awaitAll()
+                    .flatten()
             }
 
             if (version != requestVersion) return@launch
@@ -728,6 +735,13 @@ class LibraryViewModel(
 
     companion object {
         private const val TAG = "LIBRARY"
+
+        /**
+         * How many rows the enrichment resolves at once. Bounded so opening a
+         * large library does not fire one TMDB request per title at the same
+         * moment; the rest are processed in the next window.
+         */
+        private const val ENRICH_CONCURRENCY = 8
     }
 }
 

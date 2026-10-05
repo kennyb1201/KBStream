@@ -222,8 +222,11 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
          * [getInstance] remains for global caches (tmdb_json_cache).
          */
         fun getInstanceScoped(context: Context): WatchHistoryDatabase {
-            val dbName = activeFileName(context)
             synchronized(this) {
+                // Resolve the active file INSIDE the monitor: reading it
+                // outside left a window where a profile switch retargeted the
+                // open while the caller still pinned the old file.
+                val dbName = activeFileName(context)
                 profileInstance?.let { if (profileInstanceName == dbName) return it }
                 // Same file, retired moments ago and not closed yet: take that
                 // instance back instead of opening a second connection to it.
@@ -333,13 +336,25 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                     Log.w(TAG, "HISTORY DB RETRY $attempt after database swap", error)
                 }
             ) {
-                if (activeFileName(context) != pinnedName) {
-                    throw IllegalStateException(
-                        "profile changed during watch-history operation " +
-                            "(was $pinnedName, now ${activeFileName(context)})"
-                    )
+                // Resolve-and-verify under the SAME monitor the profile switch
+                // uses (closeScopedInstance). Pinning the file and then
+                // resolving the DAO in two steps left a window where a switch
+                // between them resolved the NEW profile's DAO while the
+                // departing profile's row was still written to it - the
+                // poisoned row this guard exists to prevent. The resolved
+                // instance's own name is checked against the pin, so a switch
+                // anywhere in the resolve still rethrows instead of retrying.
+                val dao = synchronized(this) {
+                    val resolved = getInstanceScoped(context)
+                    if (profileInstanceName != pinnedName) {
+                        throw IllegalStateException(
+                            "profile changed during watch-history operation " +
+                                "(was $pinnedName, now $profileInstanceName)"
+                        )
+                    }
+                    resolved.watchHistoryDao()
                 }
-                block(getInstanceScoped(context).watchHistoryDao())
+                block(dao)
             }
         }
 

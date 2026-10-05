@@ -1018,16 +1018,29 @@ fun DetailScreen(
     val seasonEpisodeNumbersFor = remember(
         tmdbDetail,
         episodes,
-        effectiveSeason
+        effectiveSeason,
+        seasonsWithStaleDates
     ) {
         fun numbersFor(seasonNum: Int): List<Int>? {
             if (
                 seasonNum == effectiveSeason &&
                 episodes.isNotEmpty()
             ) {
-                return episodes.map {
-                    it.episodeNumber
-                }.distinct().sorted()
+                return episodes
+                    // A season mark/unmark must not sweep up UNAIRED episodes:
+                    // the loaded season lists them (and greys the cards), but a
+                    // whole-season push would tell the tracker the whole season
+                    // is watched. Air dates that are not trusted for this
+                    // season are left alone rather than guessed at.
+                    .filter { ep ->
+                        effectiveSeason in seasonsWithStaleDates ||
+                            !isEpisodeUnavailable(ep.airDate)
+                    }
+                    .map {
+                        it.episodeNumber
+                    }
+                    .distinct()
+                    .sorted()
             }
             val count = tmdbDetail?.seasons
                 ?.firstOrNull {
@@ -2904,10 +2917,18 @@ fun DetailScreen(
                                                             backdropUrl
                                                                 ?: m.poster,
                                                         onClick = {
-                                                            val hasResumeHere =
-                                                                resumeInfo
-                                                                    ?.episodeStreamId ==
-                                                                    ep.streamId
+                                                            // The row the progress bar above reads: per-episode
+                                                            // history first, then the resume fallback. Clicking a
+                                                            // card that shows 40% must resume at 40%, not 0 - the
+                                                            // old code only passed a position when this episode
+                                                            // happened to be the single newest resume row.
+                                                            val resumeRow =
+                                                                inProgressByStreamId[ep.streamId]
+                                                                    ?: resumeInfo
+                                                                        ?.takeIf {
+                                                                            it.episodeStreamId ==
+                                                                                ep.streamId
+                                                                        }
 
                                                             val epSuffix =
                                                                 ep.name?.let {
@@ -2929,33 +2950,22 @@ fun DetailScreen(
                                                                     episode =
                                                                         ep.episodeNumber,
                                                                     resumePositionMs =
-                                                                        if (
-                                                                            hasResumeHere
-                                                                        ) {
-                                                                            resumeInfo
-                                                                                ?.positionMs
-                                                                                ?: 0L
-                                                                        } else {
-                                                                            0L
-                                                                        },
+                                                                        resumeRow
+                                                                            ?.positionMs
+                                                                            ?: 0L,
                                                                     totalEpisodesInSeason = episodes.size,
                                                                     runtimeMinutes =
-                                                                        if (
-                                                                            hasResumeHere
-                                                                        ) {
-                                                                            resumeInfo
-                                                                                ?.durationMs
-                                                                                ?.div(60_000L)
-                                                                                ?.toInt()
+                                                                        resumeRow
+                                                                            ?.durationMs
+                                                                            ?.div(60_000L)
+                                                                            ?.toInt()
+                                                                            ?.takeIf {
+                                                                                it > 0
+                                                                            }
+                                                                            ?: ep.runtimeMinutes
                                                                                 ?.takeIf {
                                                                                     it > 0
                                                                                 }
-                                                                        } else {
-                                                                            ep.runtimeMinutes
-                                                                                ?.takeIf {
-                                                                                    it > 0
-                                                                                }
-                                                                        }
                                                                 )
 
                                                             onNavigateStreams(
@@ -4254,10 +4264,16 @@ fun DetailScreen(
                                 ) {
                                     val selected = target
                                     episodeMenu = null
-                                    val hasResumeHere =
-                                        resumeInfo
-                                            ?.episodeStreamId ==
-                                            selected.streamId
+                                    // Same rule as the episode card's click: resume
+                                    // from whatever the progress bar showed for this
+                                    // episode, not just the newest resume row.
+                                    val resumeRow =
+                                        inProgressByStreamId[selected.streamId]
+                                            ?: resumeInfo
+                                                ?.takeIf {
+                                                    it.episodeStreamId ==
+                                                        selected.streamId
+                                                }
 
                                     val epSuffix =
                                         selected.episodeTitle?.let {
@@ -4278,36 +4294,25 @@ fun DetailScreen(
                                             episode =
                                                 selected.episode,
                                             resumePositionMs =
-                                                if (
-                                                    hasResumeHere
-                                                ) {
-                                                    resumeInfo
-                                                        ?.positionMs
-                                                        ?: 0L
-                                                } else {
-                                                    0L
-                                                },
+                                                resumeRow
+                                                    ?.positionMs
+                                                    ?: 0L,
                                             totalEpisodesInSeason =
                                                 selected
                                                     .seasonEpisodeNumbers
                                                     .size,
                                             runtimeMinutes =
-                                                if (
-                                                    hasResumeHere
-                                                ) {
-                                                    resumeInfo
-                                                        ?.durationMs
-                                                        ?.div(60_000L)
-                                                        ?.toInt()
+                                                resumeRow
+                                                    ?.durationMs
+                                                    ?.div(60_000L)
+                                                    ?.toInt()
+                                                    ?.takeIf {
+                                                        it > 0
+                                                    }
+                                                    ?: selected.runtimeMinutes
                                                         ?.takeIf {
                                                             it > 0
                                                         }
-                                                } else {
-                                                    selected.runtimeMinutes
-                                                        ?.takeIf {
-                                                            it > 0
-                                                        }
-                                                }
                                         )
 
                                     onNavigateStreams(
@@ -4792,8 +4797,11 @@ private fun EpisodeCard(
         posterUrl = posterUrl,
         contentDescription = ep.name ?: "",
         isWatched = isWatched,
-        onClick = onClick,
-        onLongClick = onLongClick,
+        // An unaired episode still draws the UNAVAILABLE badge; it must not
+        // also be playable. Clicking it used to launch source resolution for an
+        // episode that has not aired, which then failed with a source error.
+        onClick = { if (!isUnavailable) onClick() },
+        onLongClick = if (isUnavailable) null else onLongClick,
         modifier = modifier
             .width(260.dp)
             .height(170.dp)

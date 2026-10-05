@@ -118,6 +118,15 @@ private const val ASS_FRAME_INTERVAL_MS = 33L
 private const val ASS_IDLE_INTERVAL_MS = 250L
 // Drop-in directory for fansub fonts under the app's private files dir.
 private const val ASS_FONT_DIR = "fonts"
+// A subtitle file is kilobytes; an unbounded readText() on a hostile or
+// corrupt source (a mislabeled multi-GB file, a decompression bomb) would OOM
+// the player. Anything past this cap is refused rather than read.
+private const val MAX_SUBTITLE_FILE_BYTES = 8 * 1024 * 1024
+// Format id stamped on the user's own sidecar subtitle track so the ASS
+// track-selection pass can tell it apart from an aggressively-embedded SSA
+// track: a sidecar is rendered whole-script under the SIDECAR overlay and must
+// never be re-routed to the embedded streaming path.
+private const val SIDECAR_TRACK_ID = "kbstream.sidecar"
 
 /**
  * Saved-state key for the live playhead. When the system recreates this
@@ -448,7 +457,12 @@ class NativePlayerActivity : ComponentActivity() {
             return
         }
         if (PlayerAudioTuning.isNeutral == wasNeutral) return
-        carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        // Frame-gated like the other carry writes: before the first frame the
+        // player clock is still on the launch position, so restating it here
+        // would overwrite a real carry with the frozen start.
+        if (firstFrameRendered) {
+            carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        }
         recreatePlayer()
     }
 
@@ -1098,6 +1112,17 @@ class NativePlayerActivity : ComponentActivity() {
 
     // Retry
     private var retryAttempt = 0
+
+    /**
+     * The one pending retry rebuild. Held as a field so [scheduleRetry] can
+     * drop a queued attempt before posting a new one: two media3 errors landing
+     * together used to post two runnables and double-rebuild the player.
+     */
+    private val retryRunnable = Runnable {
+        retryAttempt++
+        errorMessageStr = null
+        recreatePlayer()
+    }
     /**
      * The ladder has rolled over instead of parking on the error card (see
      * [retryLoopRung]): this is a live channel that has spent the ladder at
@@ -1464,6 +1489,14 @@ class NativePlayerActivity : ComponentActivity() {
      * previous-channel recall so all three land the user the same way.
      */
     private fun tuneToChannel(index: Int, channel: LiveChannelZapRegistry.ZapChannel) {
+        // A channel with no stream URL cannot be tuned: switching to an empty
+        // URL blanks the player and raises a source error. Refuse before the
+        // banner and the recall state change, so the session stays on the
+        // channel it is already showing.
+        if (channel.streamUrl.isBlank()) {
+            Log.w(TAG, "Channel ${channel.channelId} has no stream URL; ignoring zap")
+            return
+        }
         zapChannelIndex = index
 
         // Diagnostics: was this channel warmed by the guide prefetch? The hit
@@ -2314,7 +2347,11 @@ class NativePlayerActivity : ComponentActivity() {
             uri = uri.toString()
         )
         loadExternalSubtitleCues(uri)
-        carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+        // Frame-gated like the other carry writes: an attach before the first
+        // frame must not replace the launch position with a broken clock read.
+        if (firstFrameRendered) {
+            carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
+        }
         recreatePlayer()
     }
 
@@ -5192,6 +5229,9 @@ class NativePlayerActivity : ComponentActivity() {
 
                 externalSubtitleUri?.let { subtitleUri ->
                     val subtitle = MediaItem.SubtitleConfiguration.Builder(subtitleUri)
+                        // Tagged so handleAssTrackSelection() never mistakes this
+                        // SSA sidecar for an embedded track (see SIDECAR_TRACK_ID).
+                        .setId(SIDECAR_TRACK_ID)
                         .setMimeType(resolveSubtitleMimeType(subtitleUri))
                         .setLanguage("und")
                         .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
@@ -5280,7 +5320,7 @@ class NativePlayerActivity : ComponentActivity() {
             // An ASS sidecar outlives the player it was loaded against - only
             // the native instance was released with the old one - so the tick
             // has to be re-armed to rebuild it against this player.
-            if (assSubtitleContent != null) {
+            if (assSubtitleContent != null || assOverlaySource == AssOverlaySource.EMBEDDED) {
                 handler.removeCallbacks(assFrameTick)
                 handler.post(assFrameTick)
             }
@@ -8068,6 +8108,30 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     /**
+     * Reads a subtitle source, bounded by [MAX_SUBTITLE_FILE_BYTES]: a file
+     * larger than the cap is refused (null) rather than pulled into memory, so
+     * a mislabeled or hostile source cannot OOM the player. UTF-8, matching the
+     * previous readText() behaviour.
+     */
+    private fun readSubtitleText(uri: Uri): String? =
+        runCatching {
+            val input = contentResolver.openInputStream(uri) ?: return@runCatching null
+            input.use { stream ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                var total = 0
+                while (true) {
+                    val read = stream.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_SUBTITLE_FILE_BYTES) return@runCatching null
+                    out.write(buffer, 0, read)
+                }
+                out.toString(Charsets.UTF_8.name())
+            }
+        }.getOrNull()
+
+    /**
      * Reads the picked external subtitle file off the main thread and routes
      * it to the renderer it belongs to: an ASS/SSA script goes to libass (see
      * the ASS section below) when this build has it, everything else is parsed
@@ -8080,11 +8144,7 @@ class NativePlayerActivity : ComponentActivity() {
      */
     private fun loadExternalSubtitleCues(uri: Uri) {
         lifecycleScope.launch(Dispatchers.IO) {
-            val text = runCatching {
-                contentResolver.openInputStream(uri)
-                    ?.bufferedReader(Charsets.UTF_8)
-                    ?.use { it.readText() }
-            }.getOrNull()
+            val text = readSubtitleText(uri)
             // Sniffed from the content, not the URI: an OpenSubtitles download
             // is a numeric file id with no extension at all.
             val assScript = text?.takeIf {
@@ -8256,16 +8316,32 @@ class NativePlayerActivity : ComponentActivity() {
         if (assOverlaySource == AssOverlaySource.ADDON && assOverlayAddonUrl == url) return
         lifecycleScope.launch(Dispatchers.IO) {
             val uri = AddonSubtitleSource.download(this@NativePlayerActivity, url) ?: return@launch
-            val text = runCatching {
-                contentResolver.openInputStream(uri)
-                    ?.bufferedReader(Charsets.UTF_8)
-                    ?.use { it.readText() }
-            }.getOrNull() ?: return@launch
+            val text = readSubtitleText(uri) ?: return@launch
             if (!AssSubtitleSource.isAssContent(text)) return@launch
             withContext(Dispatchers.Main) {
+                // The download is async: if the viewer switched tracks (or
+                // turned subtitles off) while it was in flight, attaching now
+                // would paint the wrong track's typesetting, or subtitles after
+                // OFF. Only attach while this URL is still the selected track.
+                if (selectedAddonAssUrl() != url) return@withContext
                 attachAssSubtitle(text, AssOverlaySource.ADDON, url)
             }
         }
+    }
+
+    /** The ASS source URL of the currently SELECTED text track, or null. */
+    private fun selectedAddonAssUrl(): String? {
+        val tracks = exoPlayer?.currentTracks ?: return null
+        for (group in tracks.groups) {
+            if (group.type != C.TRACK_TYPE_TEXT) continue
+            for (i in 0 until group.length) {
+                if (!group.isSelected) continue
+                addonSubtitleController.assSourceFor(group.getTrackFormat(i))?.let {
+                    return it
+                }
+            }
+        }
+        return null
     }
 
     /**
@@ -8289,6 +8365,13 @@ class NativePlayerActivity : ComponentActivity() {
                     addonUrl = url
                     break
                 }
+                // The user's own sidecar is ALSO an SSA track, and it is
+                // rendered whole-script under the SIDECAR overlay. Without this
+                // skip it fell into the embedded branch below, which nulls the
+                // loaded script and flips to the streaming path - a fansub
+                // sidecar lost its typesetting the moment its track was
+                // selected. The config is tagged at its construction site.
+                if (fmt.id == SIDECAR_TRACK_ID) continue
                 if (fmt.sampleMimeType == MimeTypes.TEXT_SSA) embeddedAss = true
             }
             if (addonUrl != null) break
@@ -8314,11 +8397,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun restoreAssSubtitle(uri: Uri) {
         if (!AssSubtitleRenderer.available) return
         lifecycleScope.launch(Dispatchers.IO) {
-            val text = runCatching {
-                contentResolver.openInputStream(uri)
-                    ?.bufferedReader(Charsets.UTF_8)
-                    ?.use { it.readText() }
-            }.getOrNull() ?: return@launch
+            val text = readSubtitleText(uri) ?: return@launch
             if (!AssSubtitleSource.isAssContent(text)) return@launch
             withContext(Dispatchers.Main) { attachAssSubtitle(text, AssOverlaySource.SIDECAR) }
         }
@@ -8931,11 +9010,13 @@ class NativePlayerActivity : ComponentActivity() {
             Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: probing with raw extractor")
         }
 
-        handler.postDelayed({
-            retryAttempt++
-            errorMessageStr = null
-            recreatePlayer()
-        }, RETRY_BACKOFF_MS.getOrElse(retryAttempt) { RETRY_BACKOFF_MS.last() })
+        // One pending rebuild at a time: a second error while a retry is
+        // already queued must not stack a second recreatePlayer().
+        handler.removeCallbacks(retryRunnable)
+        handler.postDelayed(
+            retryRunnable,
+            RETRY_BACKOFF_MS.getOrElse(retryAttempt) { RETRY_BACKOFF_MS.last() }
+        )
     }
 
     // --- Playback Ended ---
@@ -10126,6 +10207,13 @@ class NativePlayerActivity : ComponentActivity() {
                 EXTRA_HEADERS,
                 streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
             )
+            // Pin the successor to THIS session's profile. Otherwise the MPV
+            // session re-resolves whichever profile is active by the time it
+            // starts, so a mid-session switch would file history and scrobble to
+            // the wrong profile. External->Native forwards this the same way.
+            sessionProfileId?.let {
+                putExtra(PlaybackHistoryWriter.EXTRA_SESSION_PROFILE_ID, it)
+            }
             putExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK, true)
             putExtra(MpvPlayerActivity.EXTRA_MPV_FALLBACK_REASON, reason)
             // Only when it has already been resolved: otherwise the MPV
@@ -10373,20 +10461,36 @@ class NativePlayerActivity : ComponentActivity() {
         }
         simklScrobbleJob?.cancel()
         simklScrobbleJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            var departed = false
             val ok = runCatchingCancellable {
-                val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
+                val simkl = SimklRepository.getInstance(applicationContext)
                 val tmdbId = resolveParentTmdbId()
-                simkl.scrobble(
-                    action = action,
-                    parentId = parentId,
-                    parentType = parentType,
-                    season = season,
-                    episode = episode,
-                    title = itemName,
-                    progress = progress,
-                    tmdbId = tmdbId
-                )
+                // TOCTOU re-check: the guard above ran before this coroutine's
+                // first suspension, and every tracker call resolves the ACTIVE
+                // profile's token at CALL time. resolveParentTmdbId() can
+                // suspend across a profile switch, so re-check before firing.
+                if (!PlaybackHistoryWriter.sessionStillActive(applicationContext, sessionProfileId)) {
+                    departed = true
+                    false
+                } else {
+                    simkl.scrobble(
+                        action = action,
+                        parentId = parentId,
+                        parentType = parentType,
+                        season = season,
+                        episode = episode,
+                        title = itemName,
+                        progress = progress,
+                        tmdbId = tmdbId
+                    )
+                }
             }.getOrDefault(false)
+            if (departed) {
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "tracker $action skipped after suspend: session profile departed"
+                )
+                return@launch
+            }
             // Independent MDBList scrobble — same session events, separate
             // tracker. Mirrors Simkl only when a key is set.
             runCatchingCancellable { scrobbleMdbList(action, progress) }
@@ -10409,22 +10513,37 @@ class NativePlayerActivity : ComponentActivity() {
         simklScrobbleSent = true
         simklSyncJob?.cancel()
         simklSyncJob = CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            var departed = false
             val ok = runCatchingCancellable {
-                val simkl = SimklRepository.getInstance(this@NativePlayerActivity)
+                val simkl = SimklRepository.getInstance(applicationContext)
                 val tmdbId = resolveParentTmdbId()
-                when (parentType.lowercase()) {
-                    "movie" -> simkl.pushWatchedMovie(imdbId = parentId, title = itemName, tmdbId = tmdbId)
-                    "series", "show", "tv" -> {
-                        val s = season; val e = episode
-                        if (s != null && e != null) {
-                            simkl.pushWatchedEpisode(showImdbId = parentId, season = s, episode = e, title = itemName, tmdbId = tmdbId)
-                        } else {
-                            false
+                // Same TOCTOU re-check as the scrobble path: the guard above ran
+                // before this coroutine's first suspension, and the tracker
+                // resolves the ACTIVE profile's token at CALL time.
+                if (!PlaybackHistoryWriter.sessionStillActive(applicationContext, sessionProfileId)) {
+                    departed = true
+                    false
+                } else {
+                    when (parentType.lowercase()) {
+                        "movie" -> simkl.pushWatchedMovie(imdbId = parentId, title = itemName, tmdbId = tmdbId)
+                        "series", "show", "tv" -> {
+                            val s = season; val e = episode
+                            if (s != null && e != null) {
+                                simkl.pushWatchedEpisode(showImdbId = parentId, season = s, episode = e, title = itemName, tmdbId = tmdbId)
+                            } else {
+                                false
+                            }
                         }
+                        else -> false
                     }
-                    else -> false
                 }
             }.getOrDefault(false)
+            if (departed) {
+                com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                    "tracker completion skipped after suspend: session profile departed"
+                )
+                return@launch
+            }
             // Mirror the completion to MDBList (POST /sync/watched) so both
             // trackers record finished movies/episodes.
             runCatchingCancellable {
@@ -10676,6 +10795,11 @@ class NativePlayerActivity : ComponentActivity() {
         clockHandler.removeCallbacks(clockRunnable)
         scrubHandler.removeCallbacksAndMessages(null)
         zapHandler.removeCallbacksAndMessages(null)
+        // The guide's long-press timer lives on its own handler too: a hold
+        // that outlasted the screen would otherwise fire showChannelGuide()
+        // against a stopped activity.
+        channelGuideHandler.removeCallbacks(guideLongPressRunnable)
+        guideLongPressArmed = false
         // A guide prefetch still sitting on its debounce has no business firing
         // from a screen that is leaving (see LiveChannelPrefetch).
         liveChannelPrefetch.cancel()
@@ -10685,7 +10809,10 @@ class NativePlayerActivity : ComponentActivity() {
         stopTrickplay()
         // Remember where playback actually was: onSaveInstanceState() can run
         // after this method (API 28+) and the player is released by then.
-        if (!isLiveChannel) {
+        if (!isLiveChannel && firstFrameRendered) {
+            // Gated on the frame: before the first frame the player clock is
+            // still on the launch position, so this would overwrite a real carry
+            // with the frozen start (see the other carry writes).
             carryPositionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs
         }
         // Save progress BEFORE canceling scope: saveProgress writes via
@@ -10724,6 +10851,11 @@ class NativePlayerActivity : ComponentActivity() {
             saveProgress(reason = "stop", forceCompleted = completedOnExit)
             scrobbleSimkl("stop")
         }
+        // A guide left open when the player is backgrounded had its scope
+        // cancelled underneath it but the overlay stayed up, so on return it
+        // showed stale program rows with a dead watcher (a permanent "…").
+        // Dismiss it as part of leaving this screen, before the scope goes.
+        dismissChannelGuide()
         scope?.cancel()
         subtitleCueHandler?.cancelPending()
         subtitleCueHandler = null
@@ -10803,7 +10935,11 @@ class NativePlayerActivity : ComponentActivity() {
         } else if (firstFrameRendered) {
             exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
         } else {
-            startPositionMs.coerceAtLeast(0L)
+            // No frame yet on the source being left, so its clock cannot be
+            // trusted - but the last KNOWN carry can (usually the previous
+            // source's real position). `startPositionMs` is frozen at launch,
+            // so falling back to it restarted a multi-source fallback at 0.
+            carryPositionMs.coerceAtLeast(0L)
         }
         currentSourceLabel = stream.displayLabel()
         currentBadges = stream.badges
@@ -10904,11 +11040,19 @@ class NativePlayerActivity : ComponentActivity() {
         playerGeneration++
         // The outgoing channel's watchdogs are stale the moment it is left.
         // (The startup and stall watchdogs only arm on VOD; the live watchdog
-        // is the one that can be pending here.) The black-video watchdog's
-        // armed tick needs no bump: [firstFrameRendered] stays true across a
-        // channel change, which is what it checks first.
+        // is the one that can be pending here.)
         stallWatchdogToken++
         liveWatchdogToken++
+        // [armBlackVideoWatchdog] early-returns while [firstFrameRendered] is
+        // true, and the Dolby Vision re-route gate checks the same flag. A zapped
+        // channel therefore re-armed neither: a channel that came up with audio
+        // but no video stayed permanently black with no recovery ladder. Reset
+        // both so this channel's READY re-arms the watchdog and its first frame
+        // re-sets the flag (see [markFirstFrameRendered]) and its video track is
+        // re-reported (see the onTracksChanged handler that sets
+        // [videoTrackPresent]).
+        firstFrameRendered = false
+        videoTrackPresent = false
         // The scrub preview decodes the source being replaced; hand it back
         // before the new channel asks for a decoder - one 4K decode at a time
         // on this class of box (same reason recreatePlayer does it).

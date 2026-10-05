@@ -368,9 +368,14 @@ fun SearchScreen(
                         ) {
                             items(
                                 items = results,
-                                key = { result: SearchTitleResult -> result.id }
+                                // Type-qualified: a movie and a series can share
+                                // a TMDB id, and a bare id key then collides -
+                                // LazyRow throws on duplicate keys and the two
+                                // tiles fight over one slot.
+                                key = { result: SearchTitleResult -> "${result.type}:${result.id}" }
                             ) { result: SearchTitleResult ->
                                 val requester = remember(
+                                    result.type,
                                     result.id
                                 ) {
                                     FocusRequester()
@@ -410,7 +415,13 @@ fun SearchScreen(
 
             if (!isLoading && query.isNotBlank() && addonResultGroups.isNotEmpty()) {
                 addonResultGroups.forEachIndexed { index, group ->
-                    item(key = "addons_rail_$index") {
+                    // Identity-first key (index kept as a tiebreaker): a rail
+                    // keyed by position alone loses its remembered scroll and
+                    // focus whenever the results reorder.
+                    item(
+                        key = "addons_rail:${group.addonName}:" +
+                            "${group.railLabel}:${group.catalogType ?: ""}:$index"
+                    ) {
                         SearchRail(
                             title = searchRailTitle(
                                 addonName = group.addonName,

@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.kennyb1201.kbstream.data.security.SecureTokenStore
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import kotlin.math.abs
 
@@ -1209,49 +1210,85 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    /**
+     * The MDBList / OpenSubtitles / TorBox keys are credentials, not display
+     * preferences: each one is a live bearer token for a service, so it lives
+     * in the encrypted [SecureTokenStore] rather than the plaintext, cloud-
+     * synced pref file. The store is profile-scoped like [prefs], so each
+     * profile keeps its own keys.
+     */
+    private fun apiKeyPrefs(context: Context): SharedPreferences =
+        SecureTokenStore.prefs(
+            context,
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                context,
+                "kbstream_api_keys"
+            )
+        )
+
+    /**
+     * Moves a key out of the old plaintext pref file and into [apiKeyPrefs], the
+     * first time a getter runs after the upgrade. The plaintext copy is dropped
+     * either way, so no credential is left in the clear or in the cloud blob.
+     */
+    private fun migrateApiKey(context: Context, keyName: String): String {
+        val legacy = prefs(context).getString(keyName, "")?.trim().orEmpty()
+        if (legacy.isBlank()) return ""
+        apiKeyPrefs(context).edit().putString(keyName, legacy).apply()
+        prefs(context).edit().remove(keyName).apply()
+        return legacy
+    }
+
     // ── MDBList API key (critic ratings: IMDb / RT / Metacritic / more) ─
     // Stored here so the user can paste their mdblist.com key without
     // rebuilding. The build-time BuildConfig key (local.properties / env)
     // takes precedence when present. A key left over in the old OMDb slot
     // migrates once so nobody silently loses their ratings row.
     fun getMdbListApiKey(context: Context): String {
-        val current = prefs(context).getString(KEY_MDBLIST_API_KEY, "")?.trim().orEmpty()
-        if (current.isNotBlank()) return current
+        val secure = apiKeyPrefs(context)
+        val stored = secure.getString(KEY_MDBLIST_API_KEY, "")?.trim().orEmpty()
+        if (stored.isNotBlank()) return stored
 
-        val legacyOmdb = prefs(context).getString(KEY_OMDB_API_KEY, "")?.trim().orEmpty()
-        if (legacyOmdb.isNotBlank()) {
-            prefs(context).edit().putString(KEY_MDBLIST_API_KEY, legacyOmdb).apply()
-            return legacyOmdb
-        }
+        val legacy = migrateApiKey(context, KEY_MDBLIST_API_KEY)
+            .ifBlank { migrateApiKey(context, KEY_OMDB_API_KEY) }
+        if (legacy.isNotBlank()) return legacy
         return ""
     }
 
     fun setMdbListApiKey(context: Context, key: String) {
-        prefs(context).edit().putString(KEY_MDBLIST_API_KEY, key.trim()).apply()
-        syncDisplayPrefsBlob(context)
+        apiKeyPrefs(context).edit().putString(KEY_MDBLIST_API_KEY, key.trim()).apply()
+        // Never leave a plaintext copy behind.
+        prefs(context).edit().remove(KEY_MDBLIST_API_KEY).apply()
     }
 
     // ── OpenSubtitles API key (in-player online subtitle search) ─────
-    // Free key from opensubtitles.com; synced like the OMDb key so every
-    // device gets the player's SEARCH SUBTITLES entry.
-    fun getOpensubtitlesApiKey(context: Context): String =
-        prefs(context).getString(KEY_OPENSUBTITLES_API_KEY, "")?.trim().orEmpty()
+    // Free key from opensubtitles.com. Device-local now: a credential must not
+    // travel in the synced pref blob (or sit in the plaintext file).
+    fun getOpensubtitlesApiKey(context: Context): String {
+        val secure = apiKeyPrefs(context)
+        val stored = secure.getString(KEY_OPENSUBTITLES_API_KEY, "")?.trim().orEmpty()
+        if (stored.isNotBlank()) return stored
+        return migrateApiKey(context, KEY_OPENSUBTITLES_API_KEY)
+    }
 
     fun setOpensubtitlesApiKey(context: Context, key: String) {
-        prefs(context).edit().putString(KEY_OPENSUBTITLES_API_KEY, key.trim()).apply()
-        syncDisplayPrefsBlob(context)
+        apiKeyPrefs(context).edit().putString(KEY_OPENSUBTITLES_API_KEY, key.trim()).apply()
+        prefs(context).edit().remove(KEY_OPENSUBTITLES_API_KEY).apply()
     }
 
     // ── TorBox API key (cached-status badges in the stream picker) ────
     // Optional. With no key the picker is exactly as before, with no "Cached"
-    // chips (see TorBoxClient). Synced like the other service keys so every
-    // device badges the same copies.
-    fun getTorboxApiKey(context: Context): String =
-        prefs(context).getString(KEY_TORBOX_API_KEY, "")?.trim().orEmpty()
+    // chips (see TorBoxClient). Device-local now, like the other credentials.
+    fun getTorboxApiKey(context: Context): String {
+        val secure = apiKeyPrefs(context)
+        val stored = secure.getString(KEY_TORBOX_API_KEY, "")?.trim().orEmpty()
+        if (stored.isNotBlank()) return stored
+        return migrateApiKey(context, KEY_TORBOX_API_KEY)
+    }
 
     fun setTorboxApiKey(context: Context, key: String) {
-        prefs(context).edit().putString(KEY_TORBOX_API_KEY, key.trim()).apply()
-        syncDisplayPrefsBlob(context)
+        apiKeyPrefs(context).edit().putString(KEY_TORBOX_API_KEY, key.trim()).apply()
+        prefs(context).edit().remove(KEY_TORBOX_API_KEY).apply()
     }
 
     // ── Add TorBox cloud files to the Library ────────────────────────

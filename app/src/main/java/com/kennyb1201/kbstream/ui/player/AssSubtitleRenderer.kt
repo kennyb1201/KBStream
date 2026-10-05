@@ -9,14 +9,23 @@ import java.io.File
  * Owns one libass instance for the ExoPlayer session: creates it, feeds it a
  * normalised.ass script, and renders a frame per playback tick.
  *
- * Deliberately tiny and single-threaded. It is created, driven and released
- * from the player's main thread only, which is what lets the native side get
- * away with one mutex, and it reports failure by returning null/false rather
- * than throwing so a missing or broken library can never take down playback.
+ * Two threads reach this instance: the main thread renders a frame per tick
+ * ([render]), while ExoPlayer's playback thread feeds embedded-track data
+ * through [LibassStreamingSink] ([create] / [processCodecPrivate] /
+ * [processChunk] / [flushEvents]). libass is not thread-safe, and a seek on the
+ * playback thread can `release()` and re-create the instance underneath a main
+ * thread that is mid-`render`, so every native call is serialised under this
+ * object's monitor. [handle] and [loaded] are volatile as well, so the
+ * lockless [active] read never sees a torn or stale instance. It reports
+ * failure by returning null/false rather than throwing so a missing or broken
+ * library can never take down playback.
  */
 internal class AssSubtitleRenderer {
 
+    @Volatile
     private var handle = 0L
+
+    @Volatile
     private var loaded = false
 
     /**
@@ -40,6 +49,7 @@ internal class AssSubtitleRenderer {
      * attached to libass by hand (fontconfig cannot see app-private storage);
      * the system fonts are found by fontconfig through [configPath] instead.
      */
+    @Synchronized
     fun load(content: String, fonts: List<File>, configPath: String?, cacheDir: String?): Boolean {
         if (!AssNative.available) return false
         val normalized = AssSubtitleSource.normalize(content)
@@ -66,6 +76,7 @@ internal class AssSubtitleRenderer {
      * on success so the overlay tick runs from here, before the first events
      * have arrived — the frames it draws are simply empty until they do.
      */
+    @Synchronized
     fun create(fonts: List<File>, configPath: String?, cacheDir: String?): Boolean {
         if (!createInstance(fonts, configPath, cacheDir)) return false
         loaded = true
@@ -99,11 +110,13 @@ internal class AssSubtitleRenderer {
      * Feeds the header block of a streaming track. Returns whether libass took
      * it; the empty track is created on the native side by this first call.
      */
+    @Synchronized
     fun processCodecPrivate(data: ByteArray): Boolean =
         active && runCatching { AssNative.nativeProcessCodecPrivate(handle, data) }
             .getOrDefault(false)
 
     /** Appends one event block to a streaming track. No-op when inactive. */
+    @Synchronized
     fun processChunk(data: ByteArray, timeMs: Long, durationMs: Long) {
         if (!active || data.isEmpty()) return
         runCatching { AssNative.nativeProcessChunk(handle, data, timeMs, durationMs) }
@@ -111,6 +124,7 @@ internal class AssSubtitleRenderer {
     }
 
     /** Drops every accumulated event (for a seek). Styles are unaffected. */
+    @Synchronized
     fun flushEvents() {
         if (handle == 0L) return
         runCatching { AssNative.nativeFlushEvents(handle) }
@@ -122,6 +136,7 @@ internal class AssSubtitleRenderer {
      * buffer when the size actually changes, so a 4K title does not render
      * every subtitle frame at 4K.
      */
+    @Synchronized
     fun setViewport(width: Int, height: Int) {
         if (handle == 0L || width <= 0 || height <= 0) return
         if (this.width == width && this.height == height) return
@@ -137,6 +152,7 @@ internal class AssSubtitleRenderer {
      * so a tick with no active subtitle returns a fully transparent image
      * rather than leaving the previous line on screen.
      */
+    @Synchronized
     fun render(timeMs: Long): Bitmap? {
         if (!active || width <= 0 || height <= 0) return null
         val buffer = frame ?: Bitmap
@@ -156,6 +172,7 @@ internal class AssSubtitleRenderer {
      * recycled: the ImageView may still be holding it, and drawing a recycled
      * bitmap throws.
      */
+    @Synchronized
     fun release() {
         if (handle != 0L && AssNative.available) {
             runCatching { AssNative.nativeDestroy(handle) }

@@ -140,6 +140,10 @@ class MpvPlayerView @JvmOverloads constructor(
      * refused connection, and the only place it says so is its log. Kept so the
      * notice a viewer sees can name the actual reason instead of guessing.
      */
+    // Volatile: written from the mpv event thread (logMessage) and the main
+    // thread (startPendingLoad), read on the main thread when a failure notice
+    // is built.
+    @Volatile
     private var lastErrorLine: String? = null
 
     /**
@@ -158,6 +162,14 @@ class MpvPlayerView @JvmOverloads constructor(
      * the tail is ever read.
      */
     private val recentErrorLines = ArrayDeque<String>()
+
+    /**
+     * Serialises [recentErrorLines]: mpv's log callback APPENDS on the event
+     * thread while [startPendingLoad] CLEARS on the main thread, and a
+     * concurrent head/tail mutation corrupts the deque — an
+     * ArrayIndexOutOfBoundsException on mpv's event thread kills the process.
+     */
+    private val recentErrorLinesLock = Any()
 
     private var durationSec: Double? = null
     private var pauseState = false
@@ -241,11 +253,17 @@ class MpvPlayerView @JvmOverloads constructor(
             return false
         }
 
-        applyOptions()
+        // applyOptions() and init() run together: create() above has already
+        // handed us a native handle, and if EITHER throws we must free it -
+        // otherwise every retry leaks another native instance, and the box runs
+        // out of them.
         try {
+            applyOptions()
             mpv.init()
         } catch (t: Throwable) {
             Log.e(TAG, "libmpv could not initialize", t)
+            runCatching { mpv.destroy() }
+            mpvInstance = null
             onEngineFailed?.invoke("The MPV engine could not start on this device.")
             return false
         }
@@ -786,16 +804,21 @@ class MpvPlayerView @JvmOverloads constructor(
      * path. The copy is refreshed when the asset's size differs, so a newer
      * build's bundle replaces a stale copy on disk.
      */
-    private fun prepareTlsCaFile(): String? = runCatching {
-        val dest = File(context.filesDir, CA_FILE_NAME)
-        val assetBytes = context.assets.open(CA_ASSET_NAME).use { it.readBytes() }
-        if (!dest.isFile || dest.length() != assetBytes.size.toLong()) {
-            dest.writeBytes(assetBytes)
-        }
-        dest.absolutePath.takeIf { dest.isFile && dest.length() > 0L }
-    }.onFailure {
-        Log.w(TAG, "CA roots could not be staged from assets", it)
-    }.getOrNull()
+    private fun prepareTlsCaFile(): String? {
+        // Already staged this process: reuse it rather than re-reading the
+        // asset on the main thread for every view that initializes.
+        stagedCaPath?.let { path -> if (File(path).isFile) return path }
+        return runCatching {
+            val dest = File(context.filesDir, CA_FILE_NAME)
+            val assetBytes = context.assets.open(CA_ASSET_NAME).use { it.readBytes() }
+            if (!dest.isFile || dest.length() != assetBytes.size.toLong()) {
+                dest.writeBytes(assetBytes)
+            }
+            dest.absolutePath.takeIf { dest.isFile && dest.length() > 0L }
+        }.onFailure {
+            Log.w(TAG, "CA roots could not be staged from assets", it)
+        }.getOrNull()?.also { stagedCaPath = it }
+    }
 
     private fun applyOptions() {
         // No user config: this is a fallback engine, and an mpv.conf picked up
@@ -1059,7 +1082,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // The previous load's mpv errors say nothing about this one, and
         // leaving one behind would name the wrong reason for a later failure.
         lastErrorLine = null
-        recentErrorLines.clear()
+        synchronized(recentErrorLinesLock) { recentErrorLines.clear() }
         // The playhead is published from mpv itself from here on.
         lastPositionMs = 0L
         lastDurationMs = 0L
@@ -1183,15 +1206,18 @@ class MpvPlayerView @JvmOverloads constructor(
         val line = MpvErrorReason.format(prefix, text)
         if (line.isEmpty()) return
 
-        recentErrorLines.addLast(line)
-        while (recentErrorLines.size > MpvErrorReason.MAX_KEPT) {
-            recentErrorLines.removeFirst()
+        // The deque is shared with the main thread (a load clears it in
+        // [startPendingLoad]), so append + trim + read happen under the lock.
+        lastErrorLine = synchronized(recentErrorLinesLock) {
+            recentErrorLines.addLast(line)
+            while (recentErrorLines.size > MpvErrorReason.MAX_KEPT) {
+                recentErrorLines.removeFirst()
+            }
+            // Resolved across the whole burst, not from this line: FFmpeg logs
+            // the cause first and its generic "Failed to open" second (see
+            // MpvErrorReason), so the last line on its own is the useless one.
+            MpvErrorReason.pick(recentErrorLines)
         }
-
-        // Resolved across the whole burst, not from this line: FFmpeg logs the
-        // cause first and its generic "Failed to open" second (see
-        // MpvErrorReason), so the last line on its own is the useless one.
-        lastErrorLine = MpvErrorReason.pick(recentErrorLines)
 
         Log.w(TAG, "mpv: $line")
     }
@@ -1359,6 +1385,14 @@ class MpvPlayerView @JvmOverloads constructor(
          */
         const val CA_ASSET_NAME = "cacert.pem"
         const val CA_FILE_NAME = "cacert.pem"
+
+        /**
+         * The staged path once the roots have been written, so a later view in
+         * the same process reuses the file instead of re-reading the ~190 KB
+         * asset off the main thread on every init.
+         */
+        @Volatile
+        private var stagedCaPath: String? = null
 
         /** MediaCodec first, copy-back second, then software decoding. */
         const val HWDEC_HW = "mediacodec,mediacodec-copy,no"
