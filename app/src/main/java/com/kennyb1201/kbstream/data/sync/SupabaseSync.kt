@@ -1991,11 +1991,17 @@ object SupabaseSync {
 
     private suspend fun applyHistoryRow(row: SyncRowDto) {
         val context = appContextRef?.get() ?: return
-        val db = WatchHistoryDatabase.getInstanceScoped(context)
         val remote = row.payload
         val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
         val storedId = row.itemId ?: return
-        if (!storedKeyMatchesActiveProfile(storedId)) return
+        // Pin the profile for the whole apply: filter the row against THIS
+        // profile, resolve the DB, then drop the row if a switch landed in
+        // between. Resolving the DB first and filtering after could file the
+        // departing profile's row under the new profile's database.
+        val pid = currentProfileId()
+        if (!storedKeyMatchesProfile(storedId, pid)) return
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
+        if (currentProfileId() != pid) return
         val id = unscopedKey(storedId)
 
         val local = db.watchHistoryDao().getById(id)
@@ -2052,11 +2058,15 @@ object SupabaseSync {
 
     private suspend fun applyWatchedRow(row: SyncRowDto) {
         val context = appContextRef?.get() ?: return
-        val db = WatchHistoryDatabase.getInstanceScoped(context)
         val remote = row.payload
         val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
         val storedKey = row.itemKey ?: return
-        if (!storedKeyMatchesActiveProfile(storedKey)) return
+        // Same pin as applyHistoryRow: filter first, resolve the DB, then
+        // re-check the profile so a switch cannot file the row under it.
+        val pid = currentProfileId()
+        if (!storedKeyMatchesProfile(storedKey, pid)) return
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
+        if (currentProfileId() != pid) return
         val key = unscopedKey(storedKey)
 
         val local = db.watchedStatusDao().getByKeys(listOf(key)).firstOrNull()
