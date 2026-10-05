@@ -7,6 +7,7 @@ import java.util.Locale
 import java.util.TimeZone
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Test
@@ -373,5 +374,29 @@ class GuideRulesTest {
             emptySet<String>(),
             GuideRequestQueue.clearAnswered(setOf("a", "b"), resolved = setOf("a", "b"))
         )
+    }
+
+    @Test
+    fun `focusing a chip selects it even mid move-to-list transit`() {
+        // Down sets moveFocusToChannelList=true, then Left/Right lands on an
+        // adjacent chip before focus leaves the row. selectedGroup must follow
+        // the focused chip (the old guard swallowed it) and the pending transit
+        // must be cancelled by the same update.
+        val state = chipFocusState(
+            focusedGroup = "Sports",
+            moveFocusToChannelList = true
+        )
+        assertEquals("Sports", state.selectedGroup)
+        assertFalse(state.moveFocusToChannelList)
+    }
+
+    @Test
+    fun `a chip focus walk with no pending transit still follows focus`() {
+        val state = chipFocusState(
+            focusedGroup = "News",
+            moveFocusToChannelList = false
+        )
+        assertEquals("News", state.selectedGroup)
+        assertFalse(state.moveFocusToChannelList)
     }
 }

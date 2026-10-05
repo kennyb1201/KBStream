@@ -167,6 +167,37 @@ internal object GuideRequestQueue {
         pending - resolved
 }
 
+/**
+ * State produced when a group chip gains focus.
+ */
+internal data class ChipFocusState(
+    val selectedGroup: String,
+    val moveFocusToChannelList: Boolean,
+)
+
+/**
+ * The group selection a chip's focus event must produce.
+ *
+ * Focus always wins: `selectedGroup` follows the focused chip, and a focus
+ * event cancels any pending move-to-list transit that was waiting a frame to
+ * pull focus into the list. The old `if (!moveFocusToChannelList)` guard
+ * swallowed the update when Left/Right landed in that transit window, leaving
+ * the focused chip and `selectedGroup` diverged: the chips row sat scrolled to
+ * the focused chip while the selected group's chip was off-screen, and the
+ * channel list's Up path could not reach it. Because a focus event also clears
+ * the flag, the transit is cancelled by the same update.
+ *
+ * Pure so [GuideRulesTest] can pin the divergence fix without a Compose test
+ * harness, which this module does not carry.
+ */
+internal fun chipFocusState(
+    focusedGroup: String,
+    moveFocusToChannelList: Boolean,
+): ChipFocusState = ChipFocusState(
+    selectedGroup = focusedGroup,
+    moveFocusToChannelList = false,
+)
+
 internal fun buildSetupDiagnosticsText(
     playlistUrl: String,
     epgUrl: String,

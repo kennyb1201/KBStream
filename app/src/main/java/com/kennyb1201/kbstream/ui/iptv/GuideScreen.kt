@@ -572,25 +572,22 @@ LaunchedEffect(groupedChannels) {
     }
 }
 
-// Keep the selected group chip FULLY in view on every group change
-// (left/right from the channel list, focus walks along the chips row,
-// restores). "Fully" matters: visibleItemsInfo also reports chips clipped
-// to a sliver at the row edge, so the old any-index check let a
-// highlighted chip sit mostly offscreen with an unreadable selection --
-// it only self-corrected once the target was completely off the row.
-// Now: a chip clipped by the end edge scrolls in by exactly the overflow
-// (so chips walks still slide minimally), a chip truly clipped by the
-// start edge (or not composed at all) snaps flush, and a fully visible
-// chip leaves the row alone. scrollToItem (not animateScrollToItem): an
-// animated scroll is slow enough that the whole rail visibly flashes past
-// intermediate chips on every group change, and during the animation the
-// target chip is not yet composed, which the Up-from-list focus flow
-// below depends on (an uncomposed chip has no FocusRequester and default
-// spatial focus then lands on whichever chip IS visible, silently
-// switching the group).
-LaunchedEffect(selectedGroup, groups) {
-    val chipIndex = groups.indexOf(selectedGroup)
-    if (chipIndex < 0) return@LaunchedEffect
+// Scroll the chips row so `group`'s chip is fully on screen. Shared by the
+// keep-in-view effect below and the Up-from-list focus effect: Up must not
+// depend on a group change having scrolled the chip earlier.
+// "Fully" matters: visibleItemsInfo also reports chips clipped to a sliver
+// at the row edge, so an any-index check lets a highlighted chip sit mostly
+// offscreen with an unreadable selection. A chip clipped by the end edge
+// scrolls in by exactly the overflow (chip walks still slide minimally), a
+// chip truly clipped by the start edge (or not composed at all) snaps flush,
+// and a fully visible chip leaves the row alone. scrollToItem (not
+// animateScrollToItem): an animated scroll is slow enough that the whole
+// rail visibly flashes past intermediate chips on every group change, and
+// during the animation the target chip is not yet composed, which the
+// Up-from-list focus flow depends on.
+suspend fun ensureGroupChipVisible(group: String) {
+    val chipIndex = groups.indexOf(group)
+    if (chipIndex < 0) return
 
     val layout = groupRowState.layoutInfo
     val info = layout.visibleItemsInfo.firstOrNull { it.index == chipIndex }
@@ -608,16 +605,24 @@ LaunchedEffect(selectedGroup, groups) {
     }
 }
 
-// Up from the channel list's top row: after the snap effect above has
-// scrolled the selected group's chip into the viewport (making its
-// FocusRequester exist), grab focus on it. Retries across a few frames
-// because scrollToItem + composition of the newly visible chip complete
-// asynchronously. Consumes the flag whether or not it succeeds so a
-// missing chip (group removed mid-flight) can't wedge the row.
+// Keep the selected group chip FULLY in view on every group change
+// (left/right from the channel list, focus walks along the chips row,
+// restores). See ensureGroupChipVisible for the clipping rules.
+LaunchedEffect(selectedGroup, groups) {
+    ensureGroupChipVisible(selectedGroup)
+}
+
+// Up from the channel list's top row: make sure the selected group's chip
+// is on screen first (it may have been left off-screen without a group
+// change -- see the onFocus note below), which also guarantees the chip is
+// composed and its FocusRequester is live. Then grab focus, retrying across
+// a few frames because scrollToItem + composition of the newly visible chip
+// complete asynchronously. Consumes the flag whether or not it succeeds so
+// a missing chip (group removed mid-flight) can't wedge the row.
 LaunchedEffect(pendingGroupChipFocus) {
     if (!pendingGroupChipFocus) return@LaunchedEffect
-    val chipIndex = groups.indexOf(selectedGroup)
-    if (chipIndex < 0) {
+    ensureGroupChipVisible(selectedGroup)
+    if (groups.indexOf(selectedGroup) < 0) {
         pendingGroupChipFocus = false
         return@LaunchedEffect
     }
@@ -960,7 +965,21 @@ LaunchedEffect(channelListState, groupedChannelIds) {
             name = group,
             selected = group == selectedGroup,
             onClick = { selectedGroup = group },
-            onFocus = { if (!moveFocusToChannelList) selectedGroup = group },
+            // Focus always wins. If the user steers back onto the chips while a
+            // move-to-list transit is still in flight (Down, then Left/Right before
+            // focus leaves the row), the pending transit is cancelled and the group
+            // follows the newly focused chip. The old `if (!moveFocusToChannelList)`
+            // guard swallowed this update, leaving the focused chip and
+            // selectedGroup diverged: the row sat scrolled to the focused chip while
+            // selectedGroup's chip was off-screen, and Up-from-list couldn't reach
+            // it. (Programmatic chip focus -- the pending-Up effect, the All-tab
+            // restore fallback -- targets the already-selected group or runs with
+            // the flag clear, so this changes nothing for those paths.)
+            onFocus = {
+                val next = chipFocusState(group, moveFocusToChannelList)
+                selectedGroup = next.selectedGroup
+                moveFocusToChannelList = next.moveFocusToChannelList
+            },
             onLongClick = {
                 // Quick-hide straight from the chips row (same storage the
                 // hidden-items manager uses). If the current group hides
