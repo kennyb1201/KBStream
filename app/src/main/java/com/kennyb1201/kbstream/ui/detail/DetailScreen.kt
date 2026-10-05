@@ -1517,7 +1517,10 @@ fun DetailScreen(
                 val hasResume = resumeInfo?.positionMs?.let { it > 0 } == true
 
                 playLabel =
-                    if (hasResume) "RESUME" else "PLAY"
+                    // Asking to play from the beginning means the button will
+                    // NOT resume, so it must not claim to: the label follows
+                    // what the press actually does.
+                    if (hasResume && !wantsBeginning) "RESUME" else "PLAY"
 
                 playTarget = remember(
                     resumeInfo,
@@ -1590,7 +1593,14 @@ fun DetailScreen(
                         "PLAY S${targetSeason} E${targetEpisode}"
 
                     resolvedTargetEpisode != null ->
-                        vmPlayButtonText
+                        // The ViewModel labels a paused episode "Resume S..E..",
+                        // but a Play-from-Beginning request means this press
+                        // will not resume, so the label follows the press.
+                        if (wantsBeginning && vmPlayButtonText.startsWith("Resume")) {
+                            "Play" + vmPlayButtonText.removePrefix("Resume")
+                        } else {
+                            vmPlayButtonText
+                        }
 
                     else ->
                         "PLAY"

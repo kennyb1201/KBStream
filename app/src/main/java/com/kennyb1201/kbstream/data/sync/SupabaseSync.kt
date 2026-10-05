@@ -486,12 +486,18 @@ object SupabaseSync {
         // sign-in cycle left the app silently without realtime/flush loops —
         // reported changes only synced when the user manually hit Sync now).
         backgroundPullStarted = false
+        // Flip the state and drop the session SYNCHRONOUSLY, before the network
+        // sign-out runs: the app must stop treating the account as signed-in
+        // - and stop stamping writes for it - the instant the user asks, not
+        // whenever the server round-trip happens to finish. Doing this inside
+        // the coroutine left a window where a queued write could be stamped
+        // for the account being left and pushed under the next sign-in.
+        syncPrefs(context).edit().clear().apply()
+        _authState.value = AuthState.SignedOut
+        _syncEnabled.value = false
         scope.launch {
             runCatching { c.auth.signOut() }
-            syncPrefs(context).edit().clear().apply()
             stopRealtime()
-            _authState.value = AuthState.SignedOut
-            _syncEnabled.value = false
         }
     }
 
