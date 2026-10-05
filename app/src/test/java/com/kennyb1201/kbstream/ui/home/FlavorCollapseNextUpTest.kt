@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.home
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -106,5 +107,99 @@ class FlavorCollapseNextUpTest {
 
         assertEquals(1, rail.size)
         assertEquals("nextup:tt123", rail.single().id)
+    }
+
+    // ── the returning pass re-keys by resolved TMDB id ─────────────────
+
+    @Test
+    fun `two id flavors of one show collapse to one returning candidate`() {
+        val rows = listOf(
+            completedRow("tmdb:456:1:1", "tmdb:456", 1, 1),
+            completedRow("tt123:1:2", "tt123", 1, 2)
+        )
+
+        val groups = collapseReturningShowCandidates(
+            completedRows = rows,
+            excludedParentIds = emptySet(),
+            tmdbIdFor = { pid -> if (pid == "tt123" || pid == "tmdb:456") 456 else null }
+        )
+
+        assertEquals(1, groups.size)
+        val group = groups.single()
+        assertEquals("tmdb:456", group.key)
+        // Furthest-watched is now computed over the UNION of both flavors.
+        assertEquals(
+            setOf("tmdb:456:1:1", "tt123:1:2"),
+            group.rows.map { it.id }.toSet()
+        )
+        // The player canonicalizes to the IMDb flavor, so the card keeps it.
+        assertEquals("tt123", group.parentId)
+    }
+
+    @Test
+    fun `a flavor whose detail does not resolve stays its own raw group`() {
+        val rows = listOf(
+            completedRow("a", "tt123", 1, 1),
+            completedRow("b", "tmdb:456", 1, 1)
+        )
+
+        val groups = collapseReturningShowCandidates(
+            completedRows = rows,
+            excludedParentIds = emptySet(),
+            tmdbIdFor = { pid -> if (pid == "tt123") 456 else null }
+        )
+
+        assertEquals(setOf("tmdb:456", "raw:tmdb:456"), groups.map { it.key }.toSet())
+        assertEquals("tt123", groups.first { it.key == "tmdb:456" }.parentId)
+        assertEquals("tmdb:456", groups.first { it.key == "raw:tmdb:456" }.parentId)
+    }
+
+    @Test
+    fun `the regular candidate excludes its twin by resolved key`() {
+        // The regular 25 holds tt123; the returning pass holds tmdb:456. Same
+        // show, so the second flavor must not become a second card.
+        val groups = collapseReturningShowCandidates(
+            completedRows = listOf(completedRow("x", "tmdb:456", 1, 1)),
+            excludedParentIds = setOf("tt123"),
+            tmdbIdFor = { pid -> if (pid == "tt123" || pid == "tmdb:456") 456 else null }
+        )
+
+        assertTrue(groups.isEmpty())
+    }
+
+    @Test
+    fun `two shows with distinct detail ids never merge`() {
+        val groups = collapseReturningShowCandidates(
+            completedRows = listOf(
+                completedRow("a", "tt111", 1, 1),
+                completedRow("b", "tmdb:222", 1, 1)
+            ),
+            excludedParentIds = emptySet(),
+            tmdbIdFor = { pid ->
+                when (pid) {
+                    "tt111" -> 111
+                    "tmdb:222" -> 222
+                    else -> null
+                }
+            }
+        )
+
+        assertEquals(2, groups.size)
+        assertEquals(setOf("tmdb:111", "tmdb:222"), groups.map { it.key }.toSet())
+    }
+
+    @Test
+    fun `without a tt flavor the newest row's flavor survives`() {
+        val groups = collapseReturningShowCandidates(
+            completedRows = listOf(
+                completedRow("old", "tmdb:456", 1, 1).copy(completedAt = 1L, updatedAt = 1L),
+                completedRow("new", "tvdb:456", 1, 2).copy(completedAt = 9L, updatedAt = 9L)
+            ),
+            excludedParentIds = emptySet(),
+            tmdbIdFor = { 456 }
+        )
+
+        assertEquals(1, groups.size)
+        assertEquals("tvdb:456", groups.single().parentId)
     }
 }

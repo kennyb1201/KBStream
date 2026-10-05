@@ -48,6 +48,82 @@ internal fun selectLocalNextUpCandidates(
         .take(max)
 
 /**
+ * One returning-show candidate after the id-flavor collapse: the row list of
+ * every raw parent-id group that resolved to the same show, and the single
+ * parent id the card will be built from.
+ */
+internal data class ReturningShowGroup(
+    /** Re-key: `tmdb:<id>` when the detail resolved, else `raw:<parentId>`. */
+    val key: String,
+    /** The flavor [HomeViewModel.buildLocalNextUpItem] should be called with. */
+    val parentId: String,
+    /** Union of the completed rows across every merged flavor. */
+    val rows: List<WatchHistoryEntity>
+)
+
+/**
+ * Re-key completed rows by resolved TMDB id before the returning-show pass
+ * picks its candidates, so a show whose history landed under two id flavors
+ * (`tt...` and `tmdb:<n>`) yields ONE candidate instead of a good card plus a
+ * degraded twin.
+ *
+ * [selectLocalNextUpCandidates] deliberately stays on the RAW parent id: within
+ * the regular 25 a show cannot twin with itself (one candidate per raw group,
+ * and same-flavor rows already collapse). The twin only ever appeared through
+ * the newer returning pass, whose exclusion compared raw strings -
+ * `tmdb:456 != tt123` - so the other flavor slipped through to a second card.
+ *
+ * Here each raw group's key is resolved through [tmdbIdFor]. Two raw groups
+ * that resolve to the same TMDB id merge into one group, so the furthest
+ * watched episode is computed over the union of flavors (strictly more correct
+ * than either alone); a group whose detail does not resolve keeps today's
+ * exact behavior under a `raw:` key, so nothing is fabricated.
+ *
+ * @param completedRows every completed-episode row from the watch history.
+ * @param excludedParentIds the regular 25's parent ids; each is mapped through
+ *   the SAME [tmdbIdFor] so a `tt123` candidate excludes its `tmdb:456` twin.
+ * @param tmdbIdFor resolves a raw parent id to its TMDB series id (null when
+ *   the detail is unknown).
+ * @return one [ReturningShowGroup] per surviving show. The surviving `parentId`
+ *   prefers a `tt...` flavor when the merged group has one (matching the
+ *   player's canonicalization), else the newest row's flavor.
+ */
+internal fun collapseReturningShowCandidates(
+    completedRows: List<WatchHistoryEntity>,
+    excludedParentIds: Set<String>,
+    tmdbIdFor: (String) -> Int?
+): List<ReturningShowGroup> {
+    fun rawKey(row: WatchHistoryEntity): String =
+        row.parentId.trim().ifBlank { row.id.trim() }
+
+    fun keyFor(parentId: String): String =
+        tmdbIdFor(parentId)?.let { "tmdb:$it" } ?: "raw:$parentId"
+
+    val excludedKeys = excludedParentIds.mapTo(mutableSetOf(), ::keyFor)
+
+    return completedRows
+        .groupBy(::rawKey)
+        .map { (parentId, rows) -> Triple(keyFor(parentId), parentId, rows) }
+        .filterNot { (key, _, _) -> key in excludedKeys }
+        .groupBy { (key, _, _) -> key }
+        .map { (key, members) ->
+            val rows = members.flatMap { (_, _, rows) -> rows }
+            val ttFlavor =
+                members.firstOrNull { (_, parentId, _) ->
+                    parentId.startsWith("tt", ignoreCase = true)
+                }?.second
+            val newestFlavor =
+                rows.maxByOrNull { it.completedAt ?: it.updatedAt }
+                    ?.let(::rawKey)
+            ReturningShowGroup(
+                key = key,
+                parentId = ttFlavor ?: newestFlavor ?: members.first().second,
+                rows = rows
+            )
+        }
+}
+
+/**
  * Returning-show gate: does TMDB know of an AIRED episode later than the
  * furthest episode watched locally? Season-major comparison. Null on either
  * side means "cannot prove it" -> false (honest-unknown; never fabricate).

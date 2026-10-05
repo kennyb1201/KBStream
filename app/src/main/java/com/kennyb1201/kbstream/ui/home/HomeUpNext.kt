@@ -275,11 +275,17 @@ internal fun looksLikeRawMediaId(
         return true
     }
 
-    // tmdb:12345 / imdb:tt0111161 / simkl:123 / tvdb:456
+    // tmdb:12345 / imdb:tt0111161 / simkl:123 / tvdb:456, and multi-segment
+    // ids like tmdb:12345:3:17 (each colon-segment must itself be numeric, so
+    // the colons cannot slip past the check).
     val prefix = trimmed.substringBefore(":", missingDelimiterValue = "")
     if (prefix.lowercase() in RAW_ID_PREFIXES) {
         val rest = trimmed.substringAfter(":", missingDelimiterValue = "")
-        if (rest.isNotEmpty() && rest.substringAfter("tt").all { it.isDigit() }) {
+        if (
+            rest.isNotEmpty() && rest.split(":").all { seg ->
+                seg.isNotEmpty() && seg.substringAfter("tt").all { it.isDigit() }
+            }
+        ) {
             return true
         }
     }

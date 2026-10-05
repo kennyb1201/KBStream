@@ -2258,6 +2258,12 @@ Log.d(
      * Invariants:
      * - [excludedParentIds] (the regular 25) and [representedIdentifiers] (shows
      *   already on the rail) are both skipped, so one show still gets one card.
+     *   The exclusion is by RESOLVED key, not raw string: a regular `tt123`
+     *   candidate also excludes its `tmdb:<n>` twin (see
+     *   [collapseReturningShowCandidates]).
+     * - Id flavors collapse first: two raw parent ids that resolve to the same
+     *   TMDB series merge into one candidate, so a show filed under `tt...` and
+     *   `tmdb:<n>` cannot twin into a second, degraded card here.
      * - A row with no season/episode, or a detail TMDB has no
      *   `last_episode_to_air` for, is skipped: re-qualification is only ever
      *   proved by aired episodes, never assumed.
@@ -2271,20 +2277,36 @@ Log.d(
         representedIdentifiers: Set<String>,
         max: Int
     ): List<Pair<String, WatchHistoryEntity>> {
-        val grouped =
-            completedRows.groupBy { row ->
-                row.parentId.trim().ifBlank { row.id.trim() }
-            }
+        // Resolve the cached detail once per raw id flavor. The regular 25's
+        // own parent ids are raw flavors too, so this fills the same cache
+        // entries their re-keying needs below - the exclusion map costs no
+        // extra lookup.
+        val details = HashMap<String, TmdbDetail?>()
+        for (parentId in completedRows.map { row ->
+            row.parentId.trim().ifBlank { row.id.trim() }
+        }.toSet()) {
+            details[parentId] = seriesDetailFor(parentId)
+        }
+
+        // Collapse the raw id flavors (tt123 / tmdb:456) of one show into one
+        // candidate, and drop any group the regular 25 already represents by
+        // KEY rather than by raw string (see collapseReturningShowCandidates).
+        val groups =
+            collapseReturningShowCandidates(
+                completedRows = completedRows,
+                excludedParentIds = excludedParentIds,
+                tmdbIdFor = { parentId -> details[parentId]?.id }
+            )
         val checked =
             mutableListOf<Triple<String, WatchHistoryEntity, String?>>()
-        for ((parentId, rows) in grouped) {
-            if (parentId in excludedParentIds) continue
-            val id = upNextIdentifier(parentId)
+        for (group in groups) {
+            val id = upNextIdentifier(group.parentId)
             if (id != null && id in representedIdentifiers) continue
-            // Furthest watched episode with a known position. Rows without a
-            // season/episode cannot prove anything -> skip (honest-unknown).
+            // Furthest watched episode with a known position, over the UNION
+            // of the merged flavors. Rows without a season/episode cannot
+            // prove anything -> skip (honest-unknown).
             val furthest =
-                rows.mapNotNull { row ->
+                group.rows.mapNotNull { row ->
                     val s = row.season
                     val e = row.episode
                     if (s != null && e != null) s to e else null
@@ -2292,11 +2314,11 @@ Log.d(
                     compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second }
                 ) ?: continue
             val latestRow =
-                rows.maxByOrNull { row -> row.completedAt ?: row.updatedAt }
+                group.rows.maxByOrNull { row -> row.completedAt ?: row.updatedAt }
                     ?: continue
             // seriesDetailFor is the cached, semaphore-guarded lookup; a miss
             // or a null detail simply skips the show (same as today).
-            val detail = seriesDetailFor(parentId) ?: continue
+            val detail = details[group.parentId] ?: continue
             val lastAired = detail.lastEpisodeToAir ?: continue
             if (
                 hasUnwatchedAiredEpisodes(
@@ -2306,7 +2328,7 @@ Log.d(
                     lastAiredEpisode = lastAired.episodeNumber
                 )
             ) {
-                checked += Triple(parentId, latestRow, lastAired.airDate)
+                checked += Triple(group.parentId, latestRow, lastAired.airDate)
             }
         }
         // Newest newly-aired episode first; returning cards sit after the

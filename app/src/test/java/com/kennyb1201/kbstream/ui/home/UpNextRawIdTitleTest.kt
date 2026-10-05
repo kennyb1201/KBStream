@@ -28,6 +28,15 @@ class UpNextRawIdTitleTest {
     }
 
     @Test
+    fun `multi-segment ids are still ids`() {
+        // tmdb:12345:3:17 leaked through the old single-segment check: the
+        // substringAfter("tt") test was false on the colons.
+        assertTrue(looksLikeRawMediaId("tmdb:12345:3:17"))
+        // A real title that merely starts with a prefix is untouched.
+        assertFalse(looksLikeRawMediaId("tmdb: the movie"))
+    }
+
+    @Test
     fun `bare imdb ids are ids`() {
         assertTrue(looksLikeRawMediaId("tt0111161"))
         assertTrue(looksLikeRawMediaId("TT0111161"))
