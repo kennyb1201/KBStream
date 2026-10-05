@@ -1281,6 +1281,12 @@ object SupabaseSync {
                 .associateBy { it.id }
             var applied = 0
             var removed = 0
+            // Batched like pullWatched below: one upsertAll / deleteByIds for
+            // the whole pull instead of a transaction per remote row. Both
+            // lists are dropped if the profile switched mid-pull (the new
+            // profile's own pull re-runs).
+            val pendingUpdates = mutableListOf<WatchHistoryEntity>()
+            val pendingDeletes = mutableListOf<String>()
             for (row in rows) {
                 // Bail on a mid-pull profile switch: remaining rows belong
                 // to a filter/DB pair that no longer matches.
@@ -1302,7 +1308,7 @@ object SupabaseSync {
                     if (localRow != null &&
                         HistoryTombstoneRules.tombstoneWins(deletedAt, localRow.updatedAt)
                     ) {
-                        db.watchHistoryDao().deleteById(id)
+                        pendingDeletes.add(id)
                         removed++
                     }
                     continue
@@ -1317,7 +1323,7 @@ object SupabaseSync {
                         localToken = localRow?.let { HistoryTombstoneRules.mergeToken(HistoryRowRules.payload(it)) }
                     )
                 ) {
-                    db.watchHistoryDao().upsert(
+                    pendingUpdates.add(
                         WatchHistoryEntity(
                             id = id,
                             parentId = remote.str("parentId") ?: "",
@@ -1342,6 +1348,13 @@ object SupabaseSync {
                     )
                     applied++
                 }
+            }
+            if ((pendingUpdates.isNotEmpty() || pendingDeletes.isNotEmpty()) &&
+                currentProfileId() == pid
+            ) {
+                val dao = db.watchHistoryDao()
+                if (pendingDeletes.isNotEmpty()) dao.deleteByIds(pendingDeletes)
+                if (pendingUpdates.isNotEmpty()) dao.upsertAll(pendingUpdates)
             }
             if (applied > 0 || removed > 0) {
                 Log.i(TAG, "history pull applied $applied rows, removed $removed (tombstones)")

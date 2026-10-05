@@ -388,6 +388,11 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     @Query("DELETE FROM watch_history WHERE id = :id")
     suspend fun deleteById(id: String)
 
+    /** Bulk form of [deleteById], so a pull applies all its tombstones in one
+     *  transaction instead of one per removed row. */
+    @Query("DELETE FROM watch_history WHERE id IN (:ids)")
+    suspend fun deleteByIds(ids: List<String>)
+
     @Query(
         """
         DELETE FROM watch_history
