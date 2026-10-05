@@ -2297,7 +2297,7 @@ class MpvPlayerActivity : ComponentActivity() {
         currentAddonName = addon?.displayName ?: name
     }
 
-    private fun switchToSource(stream: Stream) {
+    private fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {
         val newUrl = stream.url ?: return
         if (newUrl == currentUrl) return
 
@@ -2344,7 +2344,18 @@ class MpvPlayerActivity : ComponentActivity() {
         Log.w(TAG, "source switch -> ${stream.sourceLabel()} at ${resumeAt}ms")
         // The note reads out which source is playing, so it has to follow.
         updateControlsInfo()
-        showLoading("Switching source…")
+        // A MANUAL source switch is a fresh load: raise the full load splash
+        // (backdrop + clear logo) so the viewer sees the new source coming up.
+        // An AUTOMATIC switch mid-show (the rebuffer downshift, see
+        // [onMpvBufferingChanged]) is not a fresh load - the viewer is already
+        // watching, so keep the small buffering spinner and never cover the
+        // picture with the splash until the new file reports ready.
+        if (isAutoRecovery) {
+            loadingContainer?.visibility = View.GONE
+            bufferingView?.visibility = View.VISIBLE
+        } else {
+            showLoading("Switching source…")
+        }
         surface?.load(
             MpvPlayerView.LoadRequest(
                 url = newUrl,
@@ -3251,7 +3262,7 @@ class MpvPlayerActivity : ComponentActivity() {
             rebufferDownshiftGivenUp = true
             return
         }
-        switchToSource(next)
+        switchToSource(next, isAutoRecovery = true)
     }
 
     /**

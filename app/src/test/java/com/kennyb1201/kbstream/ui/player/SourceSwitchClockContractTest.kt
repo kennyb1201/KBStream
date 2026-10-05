@@ -134,7 +134,7 @@ class SourceSwitchClockContractTest {
 
     @Test
     fun `mpv already falls back to the session start`() {
-        val body = functionBody(MPV, "private fun switchToSource(stream: Stream) {")
+        val body = functionBody(MPV, "private fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {")
         assertTrue(
             "mpv keeps its startPositionMs fallback when the clock never advanced",
             body.contains("if (positionMs > 0L) positionMs else startPositionMs")
