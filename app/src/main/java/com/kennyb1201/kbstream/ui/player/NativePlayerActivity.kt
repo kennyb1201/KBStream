@@ -7337,6 +7337,13 @@ class NativePlayerActivity : ComponentActivity() {
     /** True while an automatic fetch is in flight, so a re-read cannot start a second. */
     private var autoSubtitleFetchInFlight = false
 
+    /**
+     * Set once the NEXT episode's subtitle has been asked for. The end panels
+     * are raised from more than one place (the credits trigger and the real
+     * end), so without this each of them would start its own fetch.
+     */
+    private var subtitlePrefetchStarted = false
+
     private fun autoSelectPreferredLanguages() {
         val player = exoPlayer ?: return
         if (languagesAutoSelected) return
@@ -7481,6 +7488,38 @@ class NativePlayerActivity : ComponentActivity() {
      * the same one the manual search uses, so an auto-fetched track lands in the
      * language the viewer configured.
      */
+    /**
+     * Asks for the next episode's subtitle now, so its own session's auto-fetch
+     * starts with the file on disk instead of paying for the search and the
+     * download at playback start (see [SubtitlePrefetch]).
+     *
+     * Gated on this session's auto-fetch having RUN at all, which is what
+     * establishes that the viewer wants fetched subtitles for this show
+     * (auto-fetch on, a preferred language, an OpenSubtitles key) and that this
+     * episode carried no usable track of its own. Without that gate every
+     * series with embedded subtitles would have a subtitle downloaded and cached
+     * for every episode that nobody is ever going to attach. Best-effort: a
+     * failure just leaves the auto-fetch to do exactly what it did before.
+     */
+    private fun prefetchNextEpisodeSubtitle(nextSeason: Int, nextEpisode: Int) {
+        if (subtitlePrefetchStarted || !autoSubtitleFetchTried) return
+        if (isLiveChannel) return
+        val queryTitle = itemName
+        if (queryTitle.isBlank()) return
+        val lang = AppPreferences.getPreferredSubtitleLanguage(this)
+        if (lang.isBlank()) return
+        subtitlePrefetchStarted = true
+        lifecycleScope.launch {
+            SubtitlePrefetch.prefetchFor(
+                this@NativePlayerActivity,
+                title = queryTitle,
+                season = nextSeason,
+                episode = nextEpisode,
+                language = lang
+            )
+        }
+    }
+
     private fun maybeAutoFetchSubtitle() {
         if (autoSubtitleFetchTried || autoSubtitleFetchInFlight) return
         if (!AppPreferences.getAutoFetchSubtitles(this)) return
@@ -7492,6 +7531,27 @@ class NativePlayerActivity : ComponentActivity() {
         val lang = AppPreferences.getPreferredSubtitleLanguage(this)
         lifecycleScope.launch {
             try {
+                // Fetched while the PREVIOUS episode's credits rolled: the
+                // search and the download are already done, so attach what is
+                // on disk and never touch the network. Every guard the rest of
+                // this function applies has already been applied by the caller
+                // that decided there is no usable track here.
+                SubtitlePrefetch.get(
+                    this@NativePlayerActivity,
+                    title = queryTitle,
+                    season = season,
+                    episode = episode,
+                    language = lang
+                )?.let { hit ->
+                    Log.i("PLAYER_LANG", "auto subtitle fetch: using prefetched ${hit.fileName}")
+                    attachExternalSubtitle(hit.uri)
+                    Toast.makeText(
+                        this@NativePlayerActivity,
+                        "Subtitles: ${hit.fileName.take(48)}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    return@launch
+                }
                 val results = SubtitleSearchHelper.search(
                     this@NativePlayerActivity,
                     title = queryTitle,
@@ -9280,6 +9340,12 @@ class NativePlayerActivity : ComponentActivity() {
                 // out. endPanelsShown stays set, so the file's own end does not
                 // try the same decision again.
             }
+
+            // The next episode's subtitle, fetched while the viewer is still on
+            // this one: the search and the download happen during the credits,
+            // so that episode's auto-fetch starts with the file already on disk
+            // instead of finding nothing and rebuilding the player for it.
+            if (target != null) prefetchNextEpisodeSubtitle(target.first, target.second)
         }
     }
 

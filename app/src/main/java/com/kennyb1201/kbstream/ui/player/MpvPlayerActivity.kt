@@ -451,6 +451,13 @@ class MpvPlayerActivity : ComponentActivity() {
     private var autoSubtitleFetchInFlight = false
 
     /**
+     * Set once the NEXT episode's subtitle has been asked for. The end panels
+     * are raised from more than one place (the credits trigger and the real end
+     * of file), so without this each of them would start its own fetch.
+     */
+    private var subtitlePrefetchStarted = false
+
+    /**
      * The device's own file picker, for a subtitle mpv has no way to know
      * about. The picked document is copied into the app cache before mpv sees
      * it, so what mpv is handed is always a plain file path rather than a
@@ -2221,8 +2228,17 @@ class MpvPlayerActivity : ComponentActivity() {
 
     /** Hands a downloaded subtitle to mpv and remembers it for this video. */
     private fun applyDownloadedSubtitle(hit: SubtitleSearchResult, uri: Uri) {
+        applyDownloadedSubtitle(hit.fileName, uri)
+    }
+
+    /**
+     * The same attach, for a track whose pick is no longer in hand - a
+     * prefetched file, which the PREVIOUS episode's session chose (see
+     * [SubtitlePrefetch]). The name is all the pick was used for.
+     */
+    private fun applyDownloadedSubtitle(fileName: String, uri: Uri) {
         externalSubtitleUri = uri
-        externalSubtitleName = hit.fileName
+        externalSubtitleName = fileName
         surface?.addExternalSubtitle(uri.toString())
         PlayerTrackMemory.rememberSubtitle(
             context = this@MpvPlayerActivity,
@@ -2243,6 +2259,37 @@ class MpvPlayerActivity : ComponentActivity() {
      * file is handed to mpv the same way a hand-picked hit is (see
      * [applyDownloadedSubtitle]), so it renders and is remembered identically.
      */
+    /**
+     * Asks for the next episode's subtitle now, so its own session's auto-fetch
+     * starts with the file on disk instead of paying for the search and the
+     * download at playback start (see [SubtitlePrefetch]).
+     *
+     * Gated on this session's auto-fetch having RUN at all, which is what
+     * establishes that the viewer wants fetched subtitles for this show
+     * (auto-fetch on, a preferred language, an OpenSubtitles key) and that this
+     * episode carried no usable track of its own. Without that gate every
+     * series with embedded subtitles would have a subtitle downloaded and cached
+     * for every episode that nobody is ever going to attach. Best-effort: a
+     * failure just leaves the auto-fetch to do exactly what it did before.
+     */
+    private fun prefetchNextEpisodeSubtitle(nextSeason: Int, nextEpisode: Int) {
+        if (subtitlePrefetchStarted || !autoSubtitleFetchTried) return
+        val queryTitle = itemName
+        if (queryTitle.isBlank()) return
+        val lang = AppPreferences.getPreferredSubtitleLanguage(this)
+        if (lang.isBlank()) return
+        subtitlePrefetchStarted = true
+        lifecycleScope.launch {
+            SubtitlePrefetch.prefetchFor(
+                this@MpvPlayerActivity,
+                title = queryTitle,
+                season = nextSeason,
+                episode = nextEpisode,
+                language = lang
+            )
+        }
+    }
+
     private fun maybeAutoFetchSubtitle() {
         if (autoSubtitleFetchTried || autoSubtitleFetchInFlight) return
         if (!AppPreferences.getAutoFetchSubtitles(this)) return
@@ -2263,6 +2310,21 @@ class MpvPlayerActivity : ComponentActivity() {
         autoSubtitleFetchInFlight = true
         lifecycleScope.launch {
             try {
+                // Fetched while the PREVIOUS episode's credits rolled: the
+                // search and the download are already done, so attach what is
+                // on disk and never touch the network.
+                SubtitlePrefetch.get(
+                    this@MpvPlayerActivity,
+                    title = queryTitle,
+                    season = season,
+                    episode = episode,
+                    language = lang
+                )?.let { hit ->
+                    Log.i(TAG, "auto subtitle fetch: using prefetched ${hit.fileName}")
+                    applyDownloadedSubtitle(hit.fileName, hit.uri)
+                    showToast("Subtitles: ${hit.fileName.take(48)}")
+                    return@launch
+                }
                 val results = SubtitleSearchHelper.search(
                     this@MpvPlayerActivity,
                     title = queryTitle,
@@ -2841,6 +2903,12 @@ class MpvPlayerActivity : ComponentActivity() {
                 // Otherwise that panel is switched off, or there is nothing to
                 // suggest: nothing is raised, and the credits play out.
             }
+
+            // The next episode's subtitle, fetched while the viewer is still on
+            // this one, so that episode's auto-fetch starts with the file
+            // already on disk instead of paying for the search and the download
+            // at playback start.
+            if (target != null) prefetchNextEpisodeSubtitle(target.first, target.second)
         }
     }
 

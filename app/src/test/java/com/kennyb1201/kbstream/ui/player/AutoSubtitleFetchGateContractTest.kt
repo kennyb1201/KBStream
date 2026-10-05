@@ -135,11 +135,16 @@ class AutoSubtitleFetchGateContractTest {
         assertFalse("a rejected body must not raise a toast", reject.contains("Toast"))
 
         // mpv: same, ahead of the attach and the "Subtitles:" announcement.
+        // The LAST announcement, not the first: a prefetched subtitle (fetched
+        // during the previous episode's credits, and validated by the prefetch)
+        // announces itself before the search even starts, and it is not what
+        // this gate is about - the file THIS route downloaded is the one whose
+        // announcement has to come after the check.
         val mpvCheck = mpvAuto.indexOf(gate)
         val mpvAttach = mpvAuto.indexOf("applyDownloadedSubtitle(pick, uri)")
-        val mpvToast = mpvAuto.indexOf("\"Subtitles: ")
+        val mpvToast = mpvAuto.lastIndexOf("\"Subtitles: ")
         assertTrue("mpv must gate before attaching", mpvCheck in 0 until mpvAttach)
-        assertTrue("mpv must gate before announcing", mpvCheck in 0 until mpvToast)
+        assertTrue("mpv must gate before announcing its own download", mpvCheck in 0 until mpvToast)
         val mpvReject = mpvAuto.substring(mpvCheck, mpvAttach)
         assertTrue("mpv must leave the coroutine", mpvReject.contains("return@launch"))
         assertFalse("a rejected body must not raise a toast", mpvReject.contains("showToast"))
