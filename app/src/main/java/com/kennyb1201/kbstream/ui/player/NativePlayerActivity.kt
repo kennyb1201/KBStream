@@ -8701,7 +8701,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun dismissChannelGuide() {
         if (!isGuideShowing) return
         isGuideShowing = false
-        liveChannelPrefetch.cancel()
+        liveChannelPrefetch.release()
         channelGuideJob?.cancel()
         channelGuideJob = null
         channelGuideWatchJob?.cancel()
@@ -10800,9 +10800,10 @@ class NativePlayerActivity : ComponentActivity() {
         // against a stopped activity.
         channelGuideHandler.removeCallbacks(guideLongPressRunnable)
         guideLongPressArmed = false
-        // A guide prefetch still sitting on its debounce has no business firing
-        // from a screen that is leaving (see LiveChannelPrefetch).
-        liveChannelPrefetch.cancel()
+        // A guide prefetch still sitting on its debounce -- or already on the
+        // wire -- has no business firing from a screen that is leaving (see
+        // LiveChannelPrefetch).
+        liveChannelPrefetch.release()
         scrubDirection = 0
         // The preview decoder goes with them: the session is leaving the screen,
         // and a second decoder held behind a backgrounded player helps nobody.

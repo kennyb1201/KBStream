@@ -407,6 +407,11 @@ fun GuideScreen(
         val live = groupedChannels.mapTo(HashSet()) { item -> channelKey(item) }
         channelRowFocusRequesters.keys.retainAll(live)
     }
+    // The group-chip requesters leak the same way: one remember(group) entry
+    // per name the playlist ever carried. Keep only the browsable groups.
+    LaunchedEffect(groups) {
+        groupChipFocusRequesters.keys.retainAll(groups.toHashSet())
+    }
     var selectedChannelId by remember { mutableStateOf<String?>(null) }
     val selectedChannelIndex = groupedChannels.indexOfFirst { item ->
         item.channel.id == selectedChannelId

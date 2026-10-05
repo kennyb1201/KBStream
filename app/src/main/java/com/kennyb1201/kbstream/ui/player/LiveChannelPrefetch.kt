@@ -6,6 +6,8 @@ import android.util.Log
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -106,32 +108,53 @@ internal fun interface PrefetchTransport {
      * thread (null when the request failed). Never throws.
      */
     fun get(url: String, headers: Map<String, String>, onBody: (String?) -> Unit)
+
+    /**
+     * Aborts the request [get] most recently started, if it is still in flight.
+     * Called when the guide closes, where its warm-up is no longer worth a
+     * socket. Best-effort; a no-op for transports without cancellable requests.
+     */
+    fun cancelInFlight() {}
 }
 
 /** [PrefetchTransport] backed by [client], reading a bounded body and closing. */
-internal fun okHttpPrefetchTransport(client: OkHttpClient): PrefetchTransport =
-    PrefetchTransport { url, headers, onBody ->
-        val request = Request.Builder().url(url).get().apply {
-            headers.forEach { (key, value) -> header(key, value) }
-        }.build()
-        runCatching {
-            client.newCall(request).enqueue(
-                object : Callback {
-                    override fun onFailure(call: Call, e: IOException) {
-                        Log.d(TAG, "prefetch missed $url: ${e.message}")
-                        onBody(null)
-                    }
+internal fun okHttpPrefetchTransport(client: OkHttpClient): PrefetchTransport {
+    // The call the last [get] started, so a dismiss can abort it instead of
+    // letting a warm-up the viewer has left finish against a closed guide. Held
+    // in an atomic because [get] runs on the main thread while the cancel may
+    // not.
+    val inFlight = AtomicReference<Call?>(null)
+    return object : PrefetchTransport {
+        override fun get(url: String, headers: Map<String, String>, onBody: (String?) -> Unit) {
+            val request = Request.Builder().url(url).get().apply {
+                headers.forEach { (key, value) -> header(key, value) }
+            }.build()
+            runCatching {
+                val call = client.newCall(request)
+                inFlight.set(call)
+                call.enqueue(
+                    object : Callback {
+                        override fun onFailure(call: Call, e: IOException) {
+                            Log.d(TAG, "prefetch missed $url: ${e.message}")
+                            onBody(null)
+                        }
 
-                    override fun onResponse(call: Call, response: Response) {
-                        response.use { res -> onBody(readBoundedBody(res)) }
+                        override fun onResponse(call: Call, response: Response) {
+                            response.use { res -> onBody(readBoundedBody(res)) }
+                        }
                     }
-                }
-            )
-        }.onFailure {
-            Log.d(TAG, "prefetch failed: ${it.message}")
-            onBody(null)
+                )
+            }.onFailure {
+                Log.d(TAG, "prefetch failed: ${it.message}")
+                onBody(null)
+            }
+        }
+
+        override fun cancelInFlight() {
+            inFlight.getAndSet(null)?.cancel()
         }
     }
+}
 
 /**
  * Reads no further than the cap: a direct-`.ts` URL must not be pulled down in
@@ -186,7 +209,9 @@ internal class LiveChannelPrefetch(
     )
 
     private var pending: Runnable? = null
-    private val lastFiredAt = HashMap<String, Long>()
+    // Written off the main thread now that a warm is stamped only once its
+    // request connects, and read on the main thread by [recentlyWarmed].
+    private val lastFiredAt = ConcurrentHashMap<String, Long>()
 
     /**
      * The guide row that just took focus.
@@ -215,6 +240,16 @@ internal class LiveChannelPrefetch(
         pending = null
     }
 
+    /**
+     * The guide closed: drop the pending fire and abort a warm-up already on the
+     * wire, so a request for a row the viewer has left cannot resolve later and
+     * hold a connection open for nothing.
+     */
+    fun release() {
+        cancel()
+        transport.cancelInFlight()
+    }
+
     /** True when [channelId] was warmed within [LiveChannelPrefetchRules.TTL_MS]. */
     fun recentlyWarmed(channelId: String?): Boolean {
         if (channelId.isNullOrBlank()) return false
@@ -227,9 +262,13 @@ internal class LiveChannelPrefetch(
         // Sitting on a row re-fires focus; a second warm inside the TTL is pure
         // waste, because Media3 fetches the playlist itself either way.
         if (LiveChannelPrefetchRules.isWarm(lastFiredAt[channel.channelId], now)) return
-        lastFiredAt[channel.channelId] = now
         val headers = resolveHeaders(channel)
-        warm(channel.streamUrl, headers, deriveMediaPlaylist = true)
+        // Stamp the warmth only once the request actually connects. Stamping it
+        // up front marked a failed warm as done, so the row was skipped for the
+        // whole TTL and the connection it was meant to pay for never happened.
+        warm(channel.streamUrl, headers, deriveMediaPlaylist = true) {
+            lastFiredAt[channel.channelId] = now
+        }
     }
 
     /**
@@ -237,10 +276,17 @@ internal class LiveChannelPrefetch(
      * its first media playlist too, which is the request the tune's own manifest
      * load will repeat. Best-effort: any parse failure leaves the single warm.
      */
-    private fun warm(url: String, headers: Map<String, String>, deriveMediaPlaylist: Boolean) {
+    private fun warm(
+        url: String,
+        headers: Map<String, String>,
+        deriveMediaPlaylist: Boolean,
+        onConnected: () -> Unit = {}
+    ) {
         if (!LiveChannelPrefetchRules.isHttpUrl(url)) return
         transport.get(url, headers) { body ->
-            if (body == null || !deriveMediaPlaylist) return@get
+            if (body == null) return@get
+            onConnected()
+            if (!deriveMediaPlaylist) return@get
             val media = LiveChannelPrefetchRules.mediaPlaylistUri(body, url) ?: return@get
             if (media == url) return@get
             warm(media, headers, deriveMediaPlaylist = false)

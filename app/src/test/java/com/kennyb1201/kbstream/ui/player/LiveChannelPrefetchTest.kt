@@ -27,11 +27,18 @@ class LiveChannelPrefetchTest {
         val scheduled = mutableListOf<Pair<Long, Runnable>>()
         val cancelled = mutableListOf<Runnable>()
         val requests = mutableListOf<Pair<String, Map<String, String>>>()
+        var inFlightCancels = 0
 
         val prefetch = LiveChannelPrefetch(
-            transport = PrefetchTransport { url, headers, onBody ->
-                requests += url to headers
-                onBody(body)
+            transport = object : PrefetchTransport {
+                override fun get(url: String, headers: Map<String, String>, onBody: (String?) -> Unit) {
+                    requests += url to headers
+                    onBody(body)
+                }
+
+                override fun cancelInFlight() {
+                    inFlightCancels++
+                }
             },
             resolveHeaders = { mapOf("User-Agent" to "ua") },
             currentChannelId = { currentId },
@@ -109,6 +116,40 @@ class LiveChannelPrefetchTest {
         val pending = h.lastBlock()
         h.prefetch.cancel()
         assertTrue(h.cancelled.contains(pending))
+    }
+
+    @Test
+    fun `release drops the pending fire and aborts the in-flight request`() {
+        val h = Harness()
+        h.prefetch.onChannelFocused(channel())
+        val pending = h.lastBlock()
+        h.prefetch.release()
+        assertTrue(h.cancelled.contains(pending))
+        assertEquals(1, h.inFlightCancels)
+    }
+
+    @Test
+    fun `a plain cancel leaves the in-flight request alone`() {
+        val h = Harness()
+        h.prefetch.onChannelFocused(channel())
+        h.prefetch.cancel()
+        assertEquals(0, h.inFlightCancels)
+    }
+
+    @Test
+    fun `a failed warm does not mark the row warm`() {
+        val h = Harness()
+        h.body = null
+        h.prefetch.onChannelFocused(channel())
+        h.lastBlock().run()
+        assertEquals(1, h.requests.size)
+        // Nothing connected, so the row is still cold: the next focus retries
+        // instead of being skipped as already warmed for the whole TTL.
+        assertFalse(h.prefetch.recentlyWarmed("c1"))
+        h.now += 1_000L
+        h.prefetch.onChannelFocused(channel())
+        h.lastBlock().run()
+        assertEquals(2, h.requests.size)
     }
 
     @Test

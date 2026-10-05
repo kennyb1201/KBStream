@@ -116,6 +116,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:resizeableActivity="false"
             android:screenOrientation="landscape"
             android:windowSoftInputMode="stateHidden|adjustResize">
