@@ -213,6 +213,7 @@ fun GuideScreen(
     // from the ViewModel (empty until the provider answers).
     var catchupChannel by remember { mutableStateOf<IptvChannelWithEpg?>(null) }
     val catchupPrograms by viewModel.catchupPrograms.collectAsStateWithLifecycle()
+    val catchupLoading by viewModel.catchupLoading.collectAsStateWithLifecycle()
 
     // Program reminders: set from the channel menu ("REMIND ME: <next>").
     // A poller fires an in-guide banner when a reminder's program starts;
@@ -1388,6 +1389,7 @@ Spacer(modifier = Modifier.height(14.dp))
                     CatchupDialog(
                         channelName = catchupItem.channel.displayName.ifBlank { "Live Channel" },
                         programs = catchupPrograms,
+                        loading = catchupLoading,
                         onDismiss = { catchupChannel = null },
                         onPlay = { program ->
                             catchupChannel = null
@@ -2602,6 +2604,7 @@ private fun ChannelActionsDialog(
 private fun CatchupDialog(
     channelName: String,
     programs: List<CatchupProgram>,
+    loading: Boolean,
     onDismiss: () -> Unit,
     onPlay: (CatchupProgram) -> Unit
 ) {
@@ -2628,7 +2631,24 @@ private fun CatchupDialog(
                 overflow = TextOverflow.Ellipsis
             )
 
-            if (programs.isEmpty()) {
+            if (loading) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 12.dp)
+                ) {
+                    CircularProgressIndicator(
+                        color = KBAccent,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Loading catch-up programs\u2026",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            } else if (programs.isEmpty()) {
                 Text(
                     text = "No recent programs available. The channel advertises catch-up, " +
                         "but the guide has no aired program history for it yet \u2014 try again " +

@@ -177,6 +177,11 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     val catchupPrograms: StateFlow<List<com.kennyb1201.kbstream.data.iptv.CatchupProgram>> =
         _catchupPrograms.asStateFlow()
 
+    /** True while a catch-up list is loading, so the dialog does not read the
+     *  empty (cleared) list as "this channel has no catch-up". */
+    private val _catchupLoading = MutableStateFlow(false)
+    val catchupLoading: StateFlow<Boolean> = _catchupLoading.asStateFlow()
+
     private var catchupJob: Job? = null
 
     /**
@@ -186,8 +191,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     fun loadCatchupPrograms(channel: IptvChannel) {
         catchupJob?.cancel()
+        // Drop the previous channel's list and flag the load: the dialog reads
+        // this state the instant it opens, and leaving it populated flashed the
+        // last channel's programs before the new ones landed.
+        _catchupPrograms.value = emptyList()
+        _catchupLoading.value = true
         catchupJob = viewModelScope.launch {
-            _catchupPrograms.value = try {
+            try {
                 // Guide data may live under any of the configured EPG
                 // sources; the first one that yields programs wins.
                 var found: List<com.kennyb1201.kbstream.data.iptv.CatchupProgram> = emptyList()
@@ -201,11 +211,13 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                         break
                     }
                 }
-                found
+                _catchupPrograms.value = found
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 Log.w(TAG, "CATCHUP LOAD FAILED channel=${channel.id}: ${t.message}")
-                emptyList()
+                _catchupPrograms.value = emptyList()
+            } finally {
+                _catchupLoading.value = false
             }
         }
     }
