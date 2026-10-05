@@ -45,8 +45,14 @@ object EpgRefreshScheduler {
     private const val REFRESH_INTERVAL_HOURS = EpgWindow.REFRESH_INTERVAL_HOURS
 
     fun schedule(context: Context) {
+        // Network is not the only thing a multi-minute download + parse needs:
+        // running it on a nearly-flat battery or with storage about to fill is
+        // how an import fails halfway and leaves a windowed guide short. Both
+        // gates defer the run (WorkManager retries) rather than failing it.
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(true)
+            .setRequiresStorageNotLow(true)
             .build()
 
         val request = PeriodicWorkRequestBuilder<EpgRefreshWorker>(
