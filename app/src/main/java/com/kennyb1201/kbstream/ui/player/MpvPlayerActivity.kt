@@ -3024,9 +3024,32 @@ class MpvPlayerActivity : ComponentActivity() {
             if (nextUpPanel?.visibility != View.VISIBLE) return@launch
             pendingNextEpisodeName = nextEp.name
             pendingNextEpisodeOverview = nextEp.overview?.takeIf { it.isNotBlank() }
-            nextUpEpisodeTitle?.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
-            nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
-                runCatching { nextUpThumb?.load(still) }
+            // Spoiler-free mode. The panel offers the episode the viewer has NOT
+            // reached, so the name just resolved and a frame from it are what
+            // the mode hides; the panel keeps the show's artwork (loaded when it
+            // was raised) and the S#E# line, so it still says which episode is
+            // coming without saying which one it is. The handoff values above
+            // stay whole - they are what that episode's own session opens with,
+            // not what is drawn here.
+            val hideNextEpisode = com.kennyb1201.kbstream.data.spoiler.SpoilerFree
+                .hidesIdentity(
+                    enabled = AppPreferences.getSpoilerFree(this@MpvPlayerActivity),
+                    // Not watched, not started: the viewer is at the end of the
+                    // episode before it. A rewatch is the only case where they
+                    // have seen it, and there the cost is a number.
+                    watched = false,
+                    started = false
+                )
+            nextUpEpisodeTitle?.text =
+                if (hideNextEpisode) {
+                    "S${targetSeason}E$targetEpisode"
+                } else {
+                    nextEp.name ?: "S${targetSeason}E$targetEpisode"
+                }
+            if (!hideNextEpisode) {
+                nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
+                    runCatching { nextUpThumb?.load(still) }
+                }
             }
         }
     }

@@ -17,6 +17,13 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
  *  - [pinned]: rail keys pinned to the top (right after Continue Watching),
  *    in pin order.
  *  - [hidden]: rail keys removed from Home.
+ *  - [renames]: per-rail title overrides (key -> the name the viewer gave it).
+ *
+ * The whole order spans THREE families, not two: addon catalogs, KB
+ * collections, and the built-in rails this app draws itself (Continue
+ * Watching, Upcoming Schedule). The built-ins are the last family to join, and
+ * they join through exactly this structure rather than through a mechanism of
+ * their own - one arrangement governs every rail on Home.
  *
  * A Browse rail (a group of browse-menu chips mirrored to Home: genres and
  * tags, services and networks, studios, decades, collections) is a rail in
@@ -29,7 +36,20 @@ import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 data class KBHomeOrder(
     val order: List<String> = emptyList(),
     val pinned: List<String> = emptyList(),
-    val hidden: List<String> = emptyList()
+    val hidden: List<String> = emptyList(),
+    /**
+     * Per-rail title overrides: arrangement key -> the name the viewer gave it.
+     *
+     * A map on the arrangement rather than a field on each rail's own model,
+     * because the rails this must cover share no model: a built-in rail has no
+     * configuration object at all, a catalog already keeps its name elsewhere,
+     * and the arrangement is the one thing every rail on Home has in common.
+     *
+     * Absent (or blank) means "no override" - a cleared name is removed from
+     * the map, never stored as an empty string, so "is this rail renamed?" is
+     * just a lookup.
+     */
+    val renames: Map<String, String> = emptyMap()
 ) {
     val hiddenSet: Set<String> get() = hidden.toSet()
 }
@@ -41,6 +61,18 @@ data class KBHomeOrder(
  * block, below any pinned collections.
  */
 internal const val KB_COLLECTION_KEY_PREFIX = "kb:"
+
+/**
+ * Built-in rails: the rows this app draws itself instead of fetching them from
+ * an addon manifest or importing them from a collection profile, so nothing
+ * else could name them.
+ *
+ * They are arranged like every other rail - orderable and hideable - and their
+ * keys are stable strings, which is why they need none of the migration and
+ * alias handling collections carry: a built-in key never changes, so an
+ * arrangement that names one keeps naming it.
+ */
+internal const val KB_BUILTIN_KEY_PREFIX = "builtin:"
 
 /**
  * Top/bottom moves on the merged arrangement.
@@ -323,6 +355,55 @@ object KBHomeOrderPrefs {
     /** True for a collection arrangement key (catalog keys are "addon:..."). */
     fun isCollectionKey(key: String): Boolean =
         key.startsWith(KB_COLLECTION_KEY_PREFIX)
+
+    /** Stable arrangement key for a built-in rail (see [KB_BUILTIN_KEY_PREFIX]). */
+    fun builtinKey(id: String): String = KB_BUILTIN_KEY_PREFIX + id
+
+    /** True for a built-in rail's arrangement key. */
+    fun isBuiltinKey(key: String?): Boolean =
+        key?.startsWith(KB_BUILTIN_KEY_PREFIX) == true
+
+    /**
+     * Every built-in rail key, in the order they have always been drawn.
+     *
+     * That order IS their default position: an arrangement that never mentions
+     * them falls them back here (see [mergedHomeRailKeys]), which is what keeps
+     * the default Home - Continue Watching first, then Upcoming - byte-
+     * identical for a user who never opens the home manager.
+     */
+    val BUILTIN_KEYS: List<String> = listOf(
+        builtinKey("continue_watching"),
+        builtinKey("upcoming_schedule")
+    )
+
+    val BUILTIN_CONTINUE_WATCHING: String = BUILTIN_KEYS[0]
+    val BUILTIN_UPCOMING_SCHEDULE: String = BUILTIN_KEYS[1]
+
+    /** The section title a built-in rail draws when the viewer has not renamed it. */
+    fun builtinDefaultTitle(key: String): String? = when (key) {
+        BUILTIN_CONTINUE_WATCHING -> "Continue Watching"
+        BUILTIN_UPCOMING_SCHEDULE -> "Upcoming"
+        else -> null
+    }
+
+    /** The title a rail draws: the viewer's override, else [defaultTitle]. */
+    fun railTitle(order: KBHomeOrder, key: String, defaultTitle: String): String =
+        order.renames[key]?.takeIf { it.isNotBlank() } ?: defaultTitle
+
+    /**
+     * Sets (or clears) one rail's title override. A blank name clears it rather
+     * than storing blank, so an override is always a name.
+     */
+    fun withRename(value: KBHomeOrder, key: String, name: String?): KBHomeOrder {
+        val clean = name?.trim().orEmpty()
+        val renames = value.renames.toMutableMap()
+        if (clean.isEmpty()) {
+            renames.remove(key)
+        } else {
+            renames[key] = clean
+        }
+        return value.copy(renames = renames)
+    }
 
     /**
      * True for a rail the manager can PIN: a collection, or a Browse rail.

@@ -127,6 +127,9 @@ internal fun CatalogManagerDialog(
     onCollectionPin: (String) -> Unit,
     onCollectionHide: (String) -> Unit,
     onCollectionMove: (String, Int) -> Unit,
+    onBuiltinHide: (String) -> Unit,
+    onBuiltinMove: (String, Int) -> Unit,
+    onBuiltinRename: (String) -> Unit,
     onRename: (CatalogConfiguration) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -199,7 +202,11 @@ internal fun CatalogManagerDialog(
         // into a slot that does not exist.
         val prefs = KBHomeOrderPrefs.readOrder()
         val fixedKeys = addonByKey.keys.filter { KBHomeOrderPrefs.isPositionFixedKey(it) }
-        val movableDefaults = browseRailByKey.keys.toList() +
+        // Built-ins lead, exactly as they do in the ViewModel's copy of this
+        // list and on Home itself: the manager draws and moves the same merged
+        // list Home renders (see mergedHomeRailKeys).
+        val movableDefaults = KBHomeOrderPrefs.BUILTIN_KEYS +
+            browseRailByKey.keys.toList() +
             addonByKey.keys.filterNot { KBHomeOrderPrefs.isPositionFixedKey(it) } +
             collectionsState.collections.map { it.key }
         val orderedKeys = fixedKeys + mergedHomeRailKeys(prefs, movableDefaults)
@@ -227,6 +234,31 @@ internal fun CatalogManagerDialog(
                     isPinned = key in prefs.pinned,
                     isHidden = key in prefs.hiddenSet,
                     isBrowseRail = true
+                )
+            } else if (KBHomeOrderPrefs.isBuiltinKey(key)) {
+                // A built-in rail (Continue Watching, Upcoming Schedule):
+                // orderable and hideable, never pinnable - which is why
+                // isCollection stays false, and with it the pin control the
+                // row would otherwise draw. Rename still applies, and its
+                // title is the arrangement's override when there is one.
+                CatalogManagerDialogRow(
+                    key = key,
+                    isCollection = false,
+                    config = null,
+                    collectionKey = null,
+                    title = KBHomeOrderPrefs.railTitle(
+                        prefs,
+                        key,
+                        KBHomeOrderPrefs.builtinDefaultTitle(key).orEmpty()
+                    ),
+                    // The default name stays on the row under a rename, so a
+                    // renamed rail is still recognizable as the one the
+                    // viewer renamed.
+                    subtitle = "Built-in · " +
+                        KBHomeOrderPrefs.builtinDefaultTitle(key).orEmpty(),
+                    isPinned = false,
+                    isHidden = key in prefs.hiddenSet,
+                    isBuiltinRail = true
                 )
             } else if (key.startsWith("kb:")) {
                 val collection = collectionByKey[key] ?: return@mapNotNull null
@@ -291,10 +323,10 @@ internal fun CatalogManagerDialog(
         // list. Restore targets the moved row itself (it lands at a new
         // index; the key-based restore finds it there).
         pendingFocus = row.key to slot
-        if (row.isCollection) {
-            onCollectionMove(row.key, delta)
-        } else {
-            row.config?.let { onCatalogMove(it, delta) }
+        when {
+            row.isBuiltinRail -> onBuiltinMove(row.key, delta)
+            row.isCollection -> onCollectionMove(row.key, delta)
+            else -> row.config?.let { onCatalogMove(it, delta) }
         }
     }
 
@@ -328,10 +360,10 @@ internal fun CatalogManagerDialog(
             }
         }
         pendingFocus = neighborKey?.let { it to CatalogRowFocus.Slot.TOGGLE }
-        if (row.isCollection) {
-            onCollectionHide(row.collectionKey.orEmpty())
-        } else {
-            row.config?.let { onToggle(it, !it.catalog.showOnHome) }
+        when {
+            row.isBuiltinRail -> onBuiltinHide(row.key)
+            row.isCollection -> onCollectionHide(row.collectionKey.orEmpty())
+            else -> row.config?.let { onToggle(it, !it.catalog.showOnHome) }
         }
     }
 
@@ -365,10 +397,10 @@ internal fun CatalogManagerDialog(
             }
         }
         pendingFocus = neighborKey?.let { it to CatalogRowFocus.Slot.TOGGLE }
-        if (row.isCollection) {
-            onCollectionHide(row.collectionKey.orEmpty())
-        } else {
-            row.config?.let { onToggle(it, !it.catalog.showOnHome) }
+        when {
+            row.isBuiltinRail -> onBuiltinHide(row.key)
+            row.isCollection -> onCollectionHide(row.collectionKey.orEmpty())
+            else -> row.config?.let { onToggle(it, !it.catalog.showOnHome) }
         }
     }
 
@@ -588,7 +620,10 @@ internal fun CatalogManagerDialog(
                         },
                         onMove = { slot, delta -> moveRow(row, slot, delta) },
                         onRename = {
-                            if (!row.isCollection) row.config?.let { onRename(it) }
+                            when {
+                                row.isBuiltinRail -> onBuiltinRename(row.key)
+                                !row.isCollection -> row.config?.let { onRename(it) }
+                            }
                         },
                         // A move re-orders this item inside the LazyColumn; the
                         // row animates to its new slot instead of teleporting,
@@ -726,7 +761,8 @@ private fun UnifiedManagerRow(
             )
             RailKindChip(
                 isCollection = row.isCollection,
-                isBrowseRow = row.isBrowseRail
+                isBrowseRow = row.isBrowseRail,
+                isBuiltinRow = row.isBuiltinRail
             )
             if (row.isPinned) {
                 Icon(
@@ -893,6 +929,12 @@ private data class CatalogManagerDialogRow(
      */
     val isBrowseRail: Boolean = false,
     /**
+     * A built-in rail this app draws itself (Continue Watching, Upcoming
+     * Schedule): no configuration object, no pin control, but it does get the
+     * reorder arrows and the rename button.
+     */
+    val isBuiltinRail: Boolean = false,
+    /**
      * The loader fixes this rail's position on Home (the Top Today rows), so it
      * has no slot to arrange: the row shows no reorder controls at all, and
      * [canMoveTop] and friends are false. Hide and rename still apply.
@@ -912,7 +954,8 @@ private data class CatalogManagerDialogRow(
 @Composable
 private fun RailKindChip(
     isCollection: Boolean,
-    isBrowseRow: Boolean = false
+    isBrowseRow: Boolean = false,
+    isBuiltinRow: Boolean = false
 ) {
     Surface(
         shape = KBShapeSmall,
@@ -927,6 +970,7 @@ private fun RailKindChip(
     ) {
         Text(
             text = when {
+                isBuiltinRow -> "BUILT-IN"
                 isBrowseRow -> "BROWSE"
                 isCollection -> "COLLECTION"
                 else -> "CATALOG"
@@ -1045,7 +1089,10 @@ internal fun RenameCatalogDialog(
     onNameChange: (String) -> Unit,
     onDismiss: () -> Unit,
     onSave: () -> Unit,
-    onReset: () -> Unit
+    onReset: () -> Unit,
+    // The one line a built-in rename changes: the dialog is otherwise the same
+    // name-entry form, so it is reused rather than copied.
+    heading: String = "RENAME CATALOG"
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -1068,7 +1115,7 @@ internal fun RenameCatalogDialog(
                 .padding(22.dp)
         ) {
             Text(
-                text = "RENAME CATALOG",
+                text = heading,
                 color = KBAccent,
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold

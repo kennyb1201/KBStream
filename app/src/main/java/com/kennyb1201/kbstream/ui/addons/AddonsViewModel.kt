@@ -412,6 +412,55 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
+     * Move a BUILT-IN rail (Continue Watching, Upcoming Schedule).
+     *
+     * Same transform and same merged visible list as a collection or a
+     * catalog: a built-in is arranged, not special-cased. It is not pinnable
+     * (see [KBHomeOrderPrefs.isPinnableKey]), so Very Top lands it at the head
+     * of the order block - the highest a non-pinnable rail can sit - exactly
+     * as it does for a catalog.
+     */
+    fun moveBuiltinRail(key: String, delta: Int) {
+        moveRailInArrangement(key, delta)
+    }
+
+    /**
+     * Hide or show a BUILT-IN rail.
+     *
+     * Deliberately NOT [toggleCollectionHidden]: that one derives the current
+     * state from the collections snapshot, which holds no built-in rows at all,
+     * and its "never arranged counts as hidden" default is the opposite of a
+     * built-in's (a built-in is visible until it is hidden). This reads the
+     * stored flag alone, and SHOW only has to clear it - a built-in is already
+     * known to the merged order, so it does not need to be added to `order` to
+     * become arranged the way a collection does.
+     */
+    fun toggleBuiltinRailHidden(key: String) {
+        persistHomeOrder { prefs ->
+            if (key in prefs.hiddenSet) {
+                prefs.copy(hidden = prefs.hidden - key)
+            } else {
+                prefs.copy(
+                    hidden = prefs.hidden + key,
+                    pinned = prefs.pinned - key,
+                    order = prefs.order - key
+                )
+            }
+        }
+    }
+
+    /**
+     * Rename a rail as drawn on Home: an empty name clears the override and
+     * the default title comes back.
+     *
+     * A title override and not a rename of the underlying thing: nothing about
+     * the rail itself changes - only what Home (and the manager) calls it.
+     */
+    fun renameRail(key: String, name: String) {
+        persistHomeOrder { prefs -> KBHomeOrderPrefs.withRename(prefs, key, name) }
+    }
+
+    /**
      * Move one ADDON catalog rail inside the merged home arrangement — the
      * same visible list (collections + catalogs interleaved) the manager
      * dialog shows and Home renders. Writes KBHomeOrderPrefs, NOT the
@@ -459,8 +508,13 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     /**
-     * Every ARRANGEABLE rail key in its default order: the Browse rails, then
-     * the catalog rails, then the collections.
+     * Every ARRANGEABLE rail key in its default order: the built-in rails,
+     * then the Browse rails, then the catalog rails, then the collections.
+     *
+     * The built-ins lead because that is where Home has always drawn them
+     * (Continue Watching first, then Upcoming); adding them to this list is
+     * what gives them a position to be moved FROM and TO, rather than a
+     * hardcoded slot in the rail column.
      *
      * The order is the contract [mergedHomeRailKeys] documents, and it is the
      * one Home falls back to for a rail nothing has arranged (see KBHomeSlots).
@@ -489,7 +543,12 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
             }
             .filterNot { KBHomeOrderPrefs.isPositionFixedKey(it) }
         val collectionKeys = _collections.value.collections.map { it.key }
-        return browseKeys + addonKeys + collectionKeys
+        // Hidden built-ins stay in the list on purpose: like a collection,
+        // the key has to remain KNOWN so the merged order can still place it
+        // (and so a show/hide leaves the arrangement otherwise untouched).
+        // A hidden rail is filtered out by the hidden set, not by omission.
+        return KBHomeOrderPrefs.BUILTIN_KEYS +
+            browseKeys + addonKeys + collectionKeys
     }
 
     private fun persistHomeOrder(

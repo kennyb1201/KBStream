@@ -28,6 +28,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -901,9 +902,33 @@ class ExternalPlayerActivity : ComponentActivity() {
             } ?: return@launch
             if (nextUpPanel?.visibility != View.VISIBLE) return@launch
             pendingNextEpisodeName = nextEp.name
-            nextUpEpisodeTitle?.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
-            nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
-                runCatching { nextUpThumb?.load(still) }
+            // Spoiler-free mode, the same rule and the same reasoning as the
+            // other two engines (see NativePlayerActivity.showNextUpPanel).
+            // This panel offers the episode the viewer has NOT reached, so the
+            // name just resolved and a frame from that episode are exactly what
+            // the mode hides. The S#E# line set when the panel was raised and
+            // the show's own artwork stay, so it still says which episode is
+            // coming without saying which one it is - and the handoff value
+            // above stays whole, since it is what that episode's own session
+            // opens with rather than what is drawn here.
+            val hideNextEpisode = SpoilerFree.hidesIdentity(
+                enabled = AppPreferences.getSpoilerFree(this@ExternalPlayerActivity),
+                // The viewer is at the end of the episode before it: not
+                // watched and not started. A rewatch is the only case where
+                // they have seen it, and there the cost is a number.
+                watched = false,
+                started = false
+            )
+            nextUpEpisodeTitle?.text =
+                if (hideNextEpisode) {
+                    "S${targetSeason}E$targetEpisode"
+                } else {
+                    nextEp.name ?: "S${targetSeason}E$targetEpisode"
+                }
+            if (!hideNextEpisode) {
+                nextEp.thumbnail?.takeIf { it.isNotBlank() }?.let { still ->
+                    runCatching { nextUpThumb?.load(still) }
+                }
             }
         }
     }

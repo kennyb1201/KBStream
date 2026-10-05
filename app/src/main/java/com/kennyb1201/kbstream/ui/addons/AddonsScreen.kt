@@ -111,6 +111,12 @@ fun AddonsScreen(
     var showCopyDialog by remember { mutableStateOf(false) }
     var renameCatalogTarget by remember { mutableStateOf<CatalogConfiguration?>(null) }
     var renameCatalogDraft by remember { mutableStateOf("") }
+    // A BUILT-IN rail being renamed (Continue Watching, Upcoming). Kept apart
+    // from the catalog target above because a built-in has no catalog to write
+    // to - its name lives in the arrangement's rename map.
+    var renameBuiltinKey by remember { mutableStateOf<String?>(null) }
+    var renameBuiltinDraft by remember { mutableStateOf("") }
+    var renameBuiltinHasOverride by remember { mutableStateOf(false) }
 
     val selectedAddon = addons.firstOrNull { it.id == selectedId }
 
@@ -500,6 +506,19 @@ fun AddonsScreen(
             onCollectionPin = { key -> viewModel.toggleCollectionPinned(key) },
             onCollectionHide = { key -> viewModel.toggleCollectionHidden(key) },
             onCollectionMove = { key, delta -> viewModel.moveCollection(key, delta) },
+            onBuiltinHide = { key -> viewModel.toggleBuiltinRailHidden(key) },
+            onBuiltinMove = { key, delta -> viewModel.moveBuiltinRail(key, delta) },
+            onBuiltinRename = { key ->
+                val order = com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                    .get(context)
+                renameBuiltinKey = key
+                // Seed the field with what the viewer sees now, so renaming a
+                // renamed rail edits the name instead of starting blank.
+                renameBuiltinDraft = order.renames[key]
+                    ?: com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                        .builtinDefaultTitle(key).orEmpty()
+                renameBuiltinHasOverride = order.renames[key] != null
+            },
             onRename = { config ->
                 renameCatalogDraft = config.catalog.displayName
                 renameCatalogTarget = config
@@ -526,6 +545,28 @@ fun AddonsScreen(
                 showCopyDialog = false
             },
             onDismiss = { showCopyDialog = false }
+        )
+    }
+
+    renameBuiltinKey?.let { builtinKey ->
+        RenameCatalogDialog(
+            currentName = renameBuiltinDraft,
+            hasCustomName = renameBuiltinHasOverride,
+            heading = "RENAME RAIL",
+            onNameChange = { renameBuiltinDraft = it },
+            onDismiss = { renameBuiltinKey = null },
+            onSave = {
+                if (renameBuiltinDraft.trim().isNotEmpty()) {
+                    viewModel.renameRail(builtinKey, renameBuiltinDraft)
+                }
+                renameBuiltinKey = null
+            },
+            onReset = {
+                // Clearing the override; an empty name is how the store spells
+                // "no custom title" and the default comes straight back.
+                viewModel.renameRail(builtinKey, "")
+                renameBuiltinKey = null
+            }
         )
     }
 

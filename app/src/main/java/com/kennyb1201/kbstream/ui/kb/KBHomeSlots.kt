@@ -62,6 +62,22 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
+ * Which built-in rails are emitted, in default order.
+ *
+ * Pure, and unit tested, because the rule is a rule and not glue: a hidden
+ * built-in is gone, and so is one with nothing to show (an empty Continue
+ * Watching was never drawn - the inline version tested `upNext.isNotEmpty()`
+ * before emitting it, and this is that test). The order is [keys]'s, which the
+ * caller passes as the built-in registry's own order - the default position an
+ * arrangement falls back to.
+ */
+internal fun visibleBuiltinRailKeys(
+    hidden: Set<String>,
+    withContent: Set<String>,
+    keys: List<String> = KBHomeOrderPrefs.BUILTIN_KEYS
+): List<String> = keys.filter { key -> key !in hidden && key in withContent }
+
+/**
  * Placement of imported KB collections among the addon catalog rails on
  * Home. A collection anchors to the addon rail it precedes in the stored
  * merged order (from the Collections manager), pinned collections lead
@@ -71,10 +87,19 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  */
 object KBHomeSlots {
 
+    /**
+     * @param builtinWithContent the built-in rail keys that have something to
+     *        show right now. A built-in rail carries no content of its own -
+     *        HomeScreen renders it - so the entry is only emitted when the
+     *        caller says there is content for it, which is exactly the rule
+     *        Home applied when the same two rails were written inline (an empty
+     *        Continue Watching was simply not drawn).
+     */
     fun buildMergedEntries(
         context: android.content.Context,
         rails: List<Rail>,
-        state: KBHomeViewModel.UiState
+        state: KBHomeViewModel.UiState,
+        builtinWithContent: Set<String> = emptySet()
     ): List<HomeEntry> {
         val addonEntries = rails.mapIndexed { index, rail ->
             HomeEntry.AddonRail(rail, index)
@@ -114,6 +139,19 @@ object KBHomeSlots {
         // on its own. An arrangement that still names the single shared row
         // this replaced applies to every rail that has no arrangement of its
         // own - see browseRailArrangementOf.
+        // Built-in rails (Continue Watching, Upcoming Schedule). Rows this app
+        // draws itself, so like the hardcoded kid rails they key against no
+        // manifest - but unlike those they ARE arrangeable: the arrangement
+        // names them, so they take a position from the stored order, and an
+        // arrangement that says nothing about them leaves them at the front.
+        // A hidden one, or one with nothing to show, is not emitted at all.
+        val builtinKeys = KBHomeOrderPrefs.BUILTIN_KEYS
+        val builtinSet = builtinKeys.toSet()
+        val builtinsVisible = visibleBuiltinRailKeys(
+            hidden = hidden,
+            withContent = builtinWithContent
+        )
+
         val legacyBrowseKey = BrowseHomeShortcuts.LEGACY_ROW_KEY
         val placedBrowse = browseHomeRails(state.browseShortcuts)
             .mapNotNull { rail ->
@@ -235,6 +273,10 @@ object KBHomeSlots {
                 middle += browseEntriesFor(key)
                 continue
             }
+            if (key in builtinSet) {
+                if (key in builtinsVisible) middle += HomeEntry.BuiltinRail(key)
+                continue
+            }
             val collection = collectionByKey[key]
             if (collection != null) {
                 if (key !in hidden) {
@@ -292,7 +334,16 @@ object KBHomeSlots {
             .filter { (_, placement) -> placement == BrowseRowPlacement.BELOW_TOP_TODAY }
             .map { (entry, _) -> entry }
 
-        return topTodayRails + hardcodedRails + pinned + middle + defaultBrowse + tail
+        // Built-in rails that have never been arranged: Home's long-standing
+        // layout, above everything else. One that IS arranged took its slot in
+        // the walk above instead, like any other rail in the stored order -
+        // which is also why it is excluded here (never twice).
+        val defaultBuiltins = builtinsVisible
+            .filter { key -> key !in arrangement.order && key !in pinnedKeys }
+            .map { key -> HomeEntry.BuiltinRail(key) }
+
+        return defaultBuiltins + topTodayRails + hardcodedRails +
+            pinned + middle + defaultBrowse + tail
     }
 
     /**
@@ -326,6 +377,13 @@ sealed class HomeEntry {
     // ever share addon/catalog/type still get unique LazyColumn keys.
     data class AddonRail(val rail: Rail, val sourceIndex: Int) : HomeEntry()
     data class Collection(val collection: KBCollectionProfile) : HomeEntry()
+
+    /**
+     * A built-in rail (Continue Watching, Upcoming Schedule). It carries only
+     * its arrangement key; HomeScreen renders the content, because the content
+     * is this app's own rows rather than anything the loader fetched.
+     */
+    data class BuiltinRail(val key: String) : HomeEntry()
 
     /**
      * One rail of browse chips the viewer mirrored to Home.

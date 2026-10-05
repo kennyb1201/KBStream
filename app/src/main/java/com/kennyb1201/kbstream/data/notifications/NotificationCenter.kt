@@ -12,6 +12,8 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import com.kennyb1201.kbstream.MainActivity
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 
 /**
@@ -98,6 +100,11 @@ internal object NotificationCenter {
      * from the live playlist), and the guide is where a dead channel can still
      * fall back to something sensible. MainActivity hands the channel id over
      * and the guide plays it as soon as its lineup is loaded.
+     *
+     * Spoiler-free mode deliberately does not reach this alert: a live program
+     * on a channel has no watch state to weigh and no "next" episode to give
+     * away, and the viewer asked to be reminded of this exact program. The
+     * episode-name rule is on [newEpisode] below.
      */
     // notify() is the call lint's MissingPermission is about. POST_NOTIFICATIONS
     // can be revoked between canPost() and the call, and the runCatching around
@@ -181,6 +188,9 @@ internal object NotificationCenter {
      * Posts (or replaces) the new-episode alert for one show and deep-links
      * its tap to that show's detail screen. Returns true when the system took
      * the notification.
+     *
+     * Under spoiler-free mode the episode's own name is dropped while the S#E#
+     * key stays - see the body built below.
      */
     // See programReminder: canPost() gates this, and the runCatching below
     // catches the SecurityException of a grant revoked in the gap.
@@ -198,9 +208,29 @@ internal object NotificationCenter {
             return false
         }
 
+        // Spoiler-free mode. This alert exists because an episode has AIRED and
+        // the viewer has not been through it - that is the whole signal (TMDB's
+        // newest aired episode, once per episode) - so the name resolved for it
+        // is exactly the reveal. The S#E# key stays: it is a number, the same
+        // line the player's Up Next panel keeps, so the alert still says
+        // something new is waiting without saying what it is.
+        //
+        // Not watched, not started, for the reason the panels give: the only
+        // case where the viewer has already seen this episode is a rewatch, and
+        // there the cost is a number rather than a name. A viewer who is
+        // mid-episode when it airs is the one case this hides a name they are
+        // already watching, and the alert is redundant to them either way.
+        val hideEpisodeName = SpoilerFree.hidesIdentity(
+            enabled = AppPreferences.getSpoilerFree(context),
+            watched = false,
+            started = false
+        )
+
         val body = buildString {
             append(episodeKey)
-            episodeName?.takeIf { it.isNotBlank() }?.let { append(" • $it") }
+            if (!hideEpisodeName) {
+                episodeName?.takeIf { it.isNotBlank() }?.let { append(" • $it") }
+            }
             append(" is ready to watch")
         }
 

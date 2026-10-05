@@ -125,6 +125,7 @@ import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -1476,20 +1477,25 @@ private fun HomeHero(
             // Episode title FIRST, above the "Resume  •  S02 · E05" line and
             // the progress bar: the name of what is about to play is the
             // headline, and the resume state is the detail under it.
-            continueWatchingItem
-                ?.episodeTitle
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?.let { episodeTitle ->
-                    Text(
-                        text = episodeTitle,
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 10.dp)
-                    )
-                }
+            val hidesHeroEpisodeTitle = rememberHidesEpisodeTitle(
+                inProgress = continueWatchingItem?.badge == UpNextBadge.CONTINUE_WATCHING
+            )
+            if (!hidesHeroEpisodeTitle) {
+                continueWatchingItem
+                    ?.episodeTitle
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { episodeTitle ->
+                        Text(
+                            text = episodeTitle,
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 10.dp)
+                        )
+                    }
+            }
 
             continueEpisodeLabel?.let { label ->
                 Text(
@@ -1650,6 +1656,34 @@ private fun homeRailTitle(
     return parts.joinToString(" · ")
 }
 
+/**
+ * Whether Home must hide an episode's own title on a card, under spoiler-free
+ * mode.
+ *
+ * A Home card knows exactly one thing about where the viewer is: its badge.
+ * `CONTINUE_WATCHING` is the episode they left off INSIDE, so its title is the
+ * thing they are resuming and hiding it would make the row harder to use for no
+ * gain. Every other badge (`NEXT_UP`, `NEW_EPISODE`, `NEW_SEASON`) offers an
+ * episode they have not started, which is precisely what the mode exists to
+ * keep off the screen. The rule itself lives once, in
+ * [com.kennyb1201.kbstream.data.spoiler.SpoilerFree].
+ */
+@Composable
+private fun rememberHidesEpisodeTitle(inProgress: Boolean): Boolean {
+    val context = LocalContext.current
+    val spoilerFree = remember(context) {
+        AppPreferences.getSpoilerFree(context)
+    }
+    return SpoilerFree.hidesIdentity(
+        enabled = spoilerFree,
+        // Every card this is asked about is offering an episode the viewer has
+        // not watched - that is the whole point of the card - so the guard is
+        // entirely the progress.
+        watched = false,
+        started = inProgress
+    )
+}
+
 @Composable
 private fun UpcomingEpisodeCard(
     upcoming: UpcomingEpisode,
@@ -1798,23 +1832,28 @@ private fun UpcomingEpisodeCard(
                     modifier = Modifier.padding(top = 2.dp)
                 )
 
-                upcoming.episodeTitle
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                    ?.let { episodeTitle ->
-                        Text(
-                            text = episodeTitle,
-                            color = if (focused) {
-                                KBTextHi.copy(alpha = 0.88f)
-                            } else {
-                                KBTextLo
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 1.dp)
-                        )
-                    }
+                // A card in the Upcoming rail is by definition an episode that
+                // has not aired, so it has not been reached: nothing to weigh.
+                val hidesUpcomingTitle = rememberHidesEpisodeTitle(inProgress = false)
+                if (!hidesUpcomingTitle) {
+                    upcoming.episodeTitle
+                        ?.trim()
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { episodeTitle ->
+                            Text(
+                                text = episodeTitle,
+                                color = if (focused) {
+                                    KBTextHi.copy(alpha = 0.88f)
+                                } else {
+                                    KBTextLo
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 1.dp)
+                            )
+                        }
+                }
             }
         }
     }
@@ -1994,6 +2033,189 @@ private fun HomeHeroHost(
             // it sits in the middle of the panel rather than at the bottom.
             centerLogo = heroBrowse != null
         )
+    }
+}
+
+/**
+ * Continue Watching, as a rail whose POSITION the home manager owns.
+ *
+ * A composable of its own rather than an `item` in the rail column, because
+ * where it sits is no longer the column's to decide: the merged arrangement is
+ * (see KBHomeSlots.buildMergedEntries), which is what lets it be moved below a
+ * catalog or hidden outright. The content is unchanged - the same cards, the
+ * same hero hand-off, the same up-to-the-topbar hook - so nothing about how the
+ * rail behaves on screen moved with it.
+ *
+ * Its callbacks are the enclosing screen's own local functions passed down:
+ * they touch focus, the hero and the menus, which all live up there.
+ */
+// LocalBringIntoViewSpec is still experimental; the enclosing rail column opts
+// in the same way.
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun BuiltinContinueWatchingRail(
+    cards: List<UpNextItem>,
+    title: String,
+    bringIntoViewSpec: BringIntoViewSpec,
+    onTitleHeight: (Int) -> Unit,
+    onCardFocusRequester: (FocusRequester) -> Unit,
+    onOpenUpNext: (UpNextItem) -> Unit,
+    onLongPress: (UpNextItem) -> Unit,
+    onSelectHero: (MetaPreview, UpNextItem) -> Unit,
+    onUpPressed: (FocusRequester) -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(
+            start = TvSafeAreaHorizontal,
+            top = 0.dp,
+            bottom = 0.dp
+        )
+    ) {
+        SectionTitle(title, onHeight = onTitleHeight)
+
+        CompositionLocalProvider(
+            LocalBringIntoViewSpec provides bringIntoViewSpec
+        ) {
+            LazyRow(
+                contentPadding = PaddingValues(
+                    start = RailHorizontalStartPadding,
+                    end = TvSafeAreaHorizontal,
+                    top = 10.dp,
+                    bottom = 12.dp
+                ),
+                horizontalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                items(
+                    items = cards,
+                    key = { it.id }
+                ) { item ->
+                    val requester = remember { FocusRequester() }
+
+                    // Carry the row's own backdrop + clearLogo into the hero
+                    // preview: while TMDB resolution is pending the hero renders
+                    // THESE instead of falling back to the poster (which showed
+                    // as an ugly zoomed backdrop with a plain-text title).
+                    val hero = MetaPreview(
+                        id = item.parentId ?: item.id,
+                        type = item.parentType ?: "movie",
+                        name = item.title,
+                        poster = item.poster,
+                        background = item.backdrop,
+                        logo = item.clearLogo
+                    )
+
+                    CompactUpNextCard(
+                        item = item,
+                        onClick = { onOpenUpNext(item) },
+                        onLongClick = {
+                            // Remember this card's requester so dismissing the
+                            // menu restores focus to the card that opened it.
+                            onCardFocusRequester(requester)
+                            onLongPress(item)
+                        },
+                        onFocus = { onSelectHero(hero, item) },
+                        onUpPressed = { onUpPressed(requester) },
+                        focusRequester = requester,
+                        badgeColor = when {
+                            item.isSeriesFinale -> KBDanger
+                            item.isSeasonFinale -> KBRust
+                            else -> when (item.badge) {
+                                UpNextBadge.CONTINUE_WATCHING -> KBAccent
+                                UpNextBadge.NEXT_UP -> KBSteel
+                                UpNextBadge.NEW_EPISODE -> KBSuccess
+                                UpNextBadge.NEW_SEASON -> KBPlum
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The Upcoming Schedule rail, arranged the same way and for the same reason as
+ * [BuiltinContinueWatchingRail]. A card here opens the title's details rather
+ * than playing anything - an episode that has not aired has nothing to play.
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun BuiltinUpcomingRail(
+    episodes: List<UpcomingEpisode>,
+    title: String,
+    bringIntoViewSpec: BringIntoViewSpec,
+    onTitleHeight: (Int) -> Unit,
+    onOpenDetails: (UpNextItem) -> Unit,
+    onSelectHero: (MetaPreview, UpNextItem) -> Unit
+) {
+    Column(
+        modifier = Modifier.padding(
+            start = TvSafeAreaHorizontal,
+            top = 0.dp,
+            bottom = 0.dp
+        )
+    ) {
+        SectionTitle(title, onHeight = onTitleHeight)
+
+        CompositionLocalProvider(
+            LocalBringIntoViewSpec provides bringIntoViewSpec
+        ) {
+            LazyRow(
+                contentPadding = PaddingValues(
+                    start = RailHorizontalStartPadding,
+                    end = TvSafeAreaHorizontal,
+                    top = 10.dp,
+                    bottom = 12.dp
+                ),
+                horizontalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                items(
+                    items = episodes,
+                    key = { it.id }
+                ) { upcoming ->
+                    val heroItem = UpNextItem(
+                        id = upcoming.id,
+                        title = upcoming.title,
+                        poster = upcoming.poster,
+                        badge = UpNextBadge.NEXT_UP,
+                        backdrop = upcoming.backdrop,
+                        parentId = upcoming.parentId,
+                        parentType = upcoming.parentType,
+                        // Hero renders "Airs <label>" + the calendar date.
+                        airDateLabel = upcoming.airDateLabel,
+                        airDateFull = upcoming.airDateFull,
+                        season = upcoming.season,
+                        episode = upcoming.episode,
+                        episodeTitle = upcoming.episodeTitle
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .width(224.dp)
+                            .height(146.dp + PosterFocusHeadroom)
+                            .padding(end = HomeRailGap),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        UpcomingEpisodeCard(
+                            upcoming = upcoming,
+                            onClick = { onOpenDetails(heroItem) },
+                            onFocus = {
+                                onSelectHero(
+                                    MetaPreview(
+                                        id = upcoming.parentId,
+                                        type = upcoming.parentType,
+                                        name = upcoming.title,
+                                        poster = upcoming.poster,
+                                        background = upcoming.backdrop
+                                    ),
+                                    heroItem
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -2205,26 +2427,31 @@ private fun CompactUpNextCard(
                     )
                 }
 
-                item.episodeTitle
-                    ?.trim()
-                    ?.takeIf {
-                        it.isNotBlank()
-                    }
-                    ?.let { episodeTitle ->
-                        Text(
-                            text = episodeTitle,
-                            color = if (focused) {
-                                KBTextHi.copy(alpha = 0.88f)
-                            } else {
-                                KBTextLo
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(top = 2.dp)
-                        )
-                    }
+                val hidesCardEpisodeTitle = rememberHidesEpisodeTitle(
+                    inProgress = item.badge == UpNextBadge.CONTINUE_WATCHING
+                )
+                if (!hidesCardEpisodeTitle) {
+                    item.episodeTitle
+                        ?.trim()
+                        ?.takeIf {
+                            it.isNotBlank()
+                        }
+                        ?.let { episodeTitle ->
+                            Text(
+                                text = episodeTitle,
+                                color = if (focused) {
+                                    KBTextHi.copy(alpha = 0.88f)
+                                } else {
+                                    KBTextLo
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
+                }
             }
 
             item.episodesRemaining
@@ -2429,10 +2656,36 @@ fun HomeScreen(
     // context — the LazyColumn builder lambda below is LazyListScope, not
     // composable, so it must receive only finished values.
     val kbState by kbViewModel.state.collectAsStateWithLifecycle()
-    val mergedEntries = remember(rails, kbState) {
-        com.kennyb1201.kbstream.ui.kb.KBHomeSlots
-            .buildMergedEntries(context, rails, kbState)
+    // Which built-in rails have something to show right now. A built-in entry
+    // carries no content of its own - the composables below render it - so the
+    // merge is told, exactly as the inline version tested `upNext.isNotEmpty()`
+    // and `upcomingSchedule.isNotEmpty()` before drawing each one.
+    val builtinWithContent = remember(upNext, upcomingSchedule) {
+        buildSet {
+            if (upNext.isNotEmpty()) {
+                add(
+                    com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                        .BUILTIN_CONTINUE_WATCHING
+                )
+            }
+            if (upcomingSchedule.isNotEmpty()) {
+                add(
+                    com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                        .BUILTIN_UPCOMING_SCHEDULE
+                )
+            }
+        }
     }
+    val mergedEntries = remember(rails, kbState, builtinWithContent) {
+        com.kennyb1201.kbstream.ui.kb.KBHomeSlots
+            .buildMergedEntries(context, rails, kbState, builtinWithContent)
+    }
+
+    // A rail's section title honors a rename from the home manager; an
+    // unrenamed rail keeps the title it has always drawn.
+    val homeRailRenames = kbState.arrangement.renames
+    fun builtinRailTitle(key: String, default: String): String =
+        homeRailRenames[key]?.takeIf { it.isNotBlank() } ?: default
 
     // The up-onto-topbar hook belongs to the first rail in DISPLAY order,
     // which a pinned collection can push away from rails[0].
@@ -2916,231 +3169,7 @@ fun HomeScreen(
                         )
                     }
 
-                    if (upNext.isNotEmpty()) {
-                        item(
-                            key = "continue_watching"
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(
-                                    start = TvSafeAreaHorizontal,
-                                    top = 0.dp,
-                                    bottom = 0.dp
-                                )
-                            ) {
-                                SectionTitle(
-                                    "Continue Watching",
-                                    onHeight = {
-                                        railTitleHeightPx = it.toFloat()
-                                    }
-                                )
 
-                                CompositionLocalProvider(
-                                    LocalBringIntoViewSpec provides railCardsBringIntoViewSpec
-                                ) {
-                                    LazyRow(
-                                        contentPadding =
-                                            PaddingValues(
-                                                start =
-                                                    RailHorizontalStartPadding,
-                                                end =
-                                                    TvSafeAreaHorizontal,
-                                                top = 10.dp,
-                                                bottom = 12.dp
-                                            ),
-                                        horizontalArrangement =
-                                            Arrangement.spacedBy(
-                                                0.dp
-                                            )
-                                    ) {
-                                        items(
-                                            items = upNext,
-                                            key = { it.id }
-                                        ) { item ->
-                                            val requester =
-                                                remember {
-                                                    FocusRequester()
-                                                }
-
-                                            // Carry the row's own backdrop + clearLogo
-                                            // into the hero preview: while TMDB
-                                            // resolution is pending the hero renders
-                                            // THESE instead of falling back to the
-                                            // poster (which showed as an ugly zoomed
-                                            // backdrop with a plain-text title).
-                                            val hero =
-                                                MetaPreview(
-                                                    id =
-                                                        item.parentId
-                                                            ?: item.id,
-                                                    type =
-                                                        item.parentType
-                                                            ?: "movie",
-                                                    name =
-                                                        item.title,
-                                                    poster =
-                                                        item.poster,
-                                                    background =
-                                                        item.backdrop,
-                                                    logo =
-                                                        item.clearLogo
-                                                )
-
-                                            CompactUpNextCard(
-                                                item = item,
-                                                onClick = {
-                                                    openUpNext(
-                                                        item
-                                                    )
-                                                },
-                                                onLongClick = {
-                                                    // Remember this card's requester so
-                                                    // dismissing the menu restores focus
-                                                    // to the exact card that opened it.
-                                                    lastPosterFocusRequester =
-                                                        requester
-                                                    openContinueWatchingMenu(
-                                                        item
-                                                    )
-                                                },
-                                                onFocus = {
-                                                    selectContinueWatchingHero(
-                                                        hero,
-                                                        item
-                                                    )
-                                                },
-                                                onUpPressed = {
-                                                    openTopBar(
-                                                        requester
-                                                    )
-                                                },
-                                                focusRequester =
-                                                    requester,
-                                                badgeColor =
-                                                    when {
-                                                        item.isSeriesFinale ->
-                                                            KBDanger
-
-                                                        item.isSeasonFinale ->
-                                                            KBRust
-
-                                                        else ->
-                                                            when (
-                                                                item.badge
-                                                            ) {
-                                                                UpNextBadge.CONTINUE_WATCHING ->
-                                                                    KBAccent
-
-                                                                UpNextBadge.NEXT_UP ->
-                                                                    KBSteel
-
-                                                                UpNextBadge.NEW_EPISODE ->
-                                                                    KBSuccess
-
-                                                                UpNextBadge.NEW_SEASON ->
-                                                                    KBPlum
-                                                            }
-                                                    },
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (upcomingSchedule.isNotEmpty()) {
-                        item(
-                            key = "upcoming_schedule"
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(
-                                    start = TvSafeAreaHorizontal,
-                                    top = 0.dp,
-                                    bottom = 0.dp
-                                )
-                            ) {
-                                SectionTitle(
-                                    "Upcoming",
-                                    onHeight = {
-                                        railTitleHeightPx = it.toFloat()
-                                    }
-                                )
-
-                                CompositionLocalProvider(
-                                    LocalBringIntoViewSpec provides railCardsBringIntoViewSpec
-                                ) {
-                                    LazyRow(
-                                        contentPadding =
-                                            PaddingValues(
-                                                start =
-                                                    RailHorizontalStartPadding,
-                                                end =
-                                                    TvSafeAreaHorizontal,
-                                                top = 10.dp,
-                                                bottom = 12.dp
-                                            ),
-                                        horizontalArrangement =
-                                            Arrangement.spacedBy(
-                                                0.dp
-                                            )
-                                    ) {
-                                        items(
-                                            items = upcomingSchedule,
-                                            key = { it.id }
-                                        ) { upcoming ->
-                                            val heroItem =
-                                                UpNextItem(
-                                                    id = upcoming.id,
-                                                    title = upcoming.title,
-                                                    poster = upcoming.poster,
-                                                    badge = UpNextBadge.NEXT_UP,
-                                                    backdrop = upcoming.backdrop,
-                                                    parentId = upcoming.parentId,
-                                                    parentType = upcoming.parentType,
-                                                    // Hero renders "Airs <label>" +
-                                                    // the calendar date for these.
-                                                    airDateLabel = upcoming.airDateLabel,
-                                                    airDateFull = upcoming.airDateFull,
-                                                    season = upcoming.season,
-                                                    episode = upcoming.episode,
-                                                    episodeTitle = upcoming.episodeTitle
-                                                )
-
-                                            Box(
-                                                modifier = Modifier
-                                                    .width(224.dp)
-                                                    .height(146.dp + PosterFocusHeadroom)
-                                                    .padding(end = HomeRailGap),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                UpcomingEpisodeCard(
-                                                    upcoming = upcoming,
-                                                    onClick = {
-                                                        openUpNext(
-                                                            heroItem,
-                                                            openDetailsOnly = true
-                                                        )
-                                                    },
-                                                    onFocus = {
-                                                        selectContinueWatchingHero(
-                                                            MetaPreview(
-                                                                id = upcoming.parentId,
-                                                                type = upcoming.parentType,
-                                                                name = upcoming.title,
-                                                                poster = upcoming.poster,
-                                                                background = upcoming.backdrop
-                                                            ),
-                                                            heroItem
-                                                        )
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
 
                     when {
                         // Full-screen spinner only when there is nothing to show
@@ -3230,10 +3259,80 @@ fun HomeScreen(
                                         // key, so it can move on its own.
                                         is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRail ->
                                             "browse|" + entry.key
+                                        // One key per built-in rail, matching the
+                                        // "<family>|<id>" shape the rest use.
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail ->
+                                            "builtin|" + entry.key.removePrefix(
+                                                "builtin:"
+                                            )
                                     }
                                 }
                             ) { _, entry ->
                                 when (val e = entry) {
+                                    // A built-in rail: this app's own rows, drawn
+                                    // where the arrangement put them rather than
+                                    // in a hardcoded slot above the catalogs.
+                                    is com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail ->
+                                        when (e.key) {
+                                            com.kennyb1201.kbstream.data.kb
+                                                .KBHomeOrderPrefs
+                                                .BUILTIN_CONTINUE_WATCHING ->
+                                                BuiltinContinueWatchingRail(
+                                                    cards = upNext,
+                                                    title = builtinRailTitle(
+                                                        com.kennyb1201.kbstream.data.kb
+                                                            .KBHomeOrderPrefs
+                                                            .BUILTIN_CONTINUE_WATCHING,
+                                                        "Continue Watching"
+                                                    ),
+                                                    bringIntoViewSpec =
+                                                        railCardsBringIntoViewSpec,
+                                                    onTitleHeight = {
+                                                        railTitleHeightPx = it.toFloat()
+                                                    },
+                                                    onCardFocusRequester = { requester ->
+                                                        lastPosterFocusRequester = requester
+                                                    },
+                                                    onOpenUpNext = { item ->
+                                                        openUpNext(item)
+                                                    },
+                                                    onLongPress = { item ->
+                                                        openContinueWatchingMenu(item)
+                                                    },
+                                                    onSelectHero = { hero, item ->
+                                                        selectContinueWatchingHero(hero, item)
+                                                    },
+                                                    onUpPressed = { requester ->
+                                                        openTopBar(requester)
+                                                    }
+                                                )
+
+                                            else ->
+                                                BuiltinUpcomingRail(
+                                                    episodes = upcomingSchedule,
+                                                    title = builtinRailTitle(
+                                                        com.kennyb1201.kbstream.data.kb
+                                                            .KBHomeOrderPrefs
+                                                            .BUILTIN_UPCOMING_SCHEDULE,
+                                                        "Upcoming"
+                                                    ),
+                                                    bringIntoViewSpec =
+                                                        railCardsBringIntoViewSpec,
+                                                    onTitleHeight = {
+                                                        railTitleHeightPx = it.toFloat()
+                                                    },
+                                                    onOpenDetails = { item ->
+                                                        openUpNext(
+                                                            item,
+                                                            openDetailsOnly = true
+                                                        )
+                                                    },
+                                                    onSelectHero = { meta, item ->
+                                                        selectContinueWatchingHero(meta, item)
+                                                    }
+                                                )
+                                        }
+
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRail ->
                                         com.kennyb1201.kbstream.ui.kb.KBHomeBrowseRail(
                                             shortcuts = e.rail.shortcuts,

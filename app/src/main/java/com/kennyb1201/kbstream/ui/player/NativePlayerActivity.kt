@@ -9870,11 +9870,39 @@ class NativePlayerActivity : ComponentActivity() {
             }
             if (nextEp != null && nextUpPanel.visibility == View.VISIBLE) {
                 pendingNextEpisodeName = nextEp.name
-                nextUpEpisodeTitle.text = nextEp.name ?: "S${targetSeason}E$targetEpisode"
+                // Spoiler-free mode. This panel offers the episode the viewer
+                // has NOT reached - the credits are still rolling over the one
+                // before it - so the name it just resolved and the frame from
+                // it are precisely what the mode hides. The panel keeps the
+                // show's own artwork (loaded above) and its S#E# line, so it
+                // still says which episode is coming without saying which one
+                // it is.
+                //
+                // The handoff values set here stay whole: they are what the
+                // next episode's own session opens with, not what is drawn on
+                // this panel, and that session is playing the episode rather
+                // than offering it.
+                val hideNextEpisode = com.kennyb1201.kbstream.data.spoiler.SpoilerFree
+                    .hidesIdentity(
+                        enabled =
+                            AppPreferences.getSpoilerFree(this@NativePlayerActivity),
+                        // Not watched, and not started: the viewer is at the end
+                        // of the episode before it. A rewatch is the only case
+                        // where they have seen it, and there the cost is a
+                        // number, not a reveal.
+                        watched = false,
+                        started = false
+                    )
+                nextUpEpisodeTitle.text =
+                    if (hideNextEpisode) {
+                        "S${targetSeason}E$targetEpisode"
+                    } else {
+                        nextEp.name ?: "S${targetSeason}E$targetEpisode"
+                    }
                 nextEp.runtimeMinutes?.takeIf { it > 0 }?.let { pendingNextEpisodeRuntime = it }
                 pendingNextEpisodeOverview = nextEp.overview?.takeIf { it.isNotBlank() }
                 val still = nextEp.thumbnail
-                if (!still.isNullOrBlank()) {
+                if (!hideNextEpisode && !still.isNullOrBlank()) {
                     try {
                         nextUpThumb.load(still)
                     } catch (_: Exception) {
