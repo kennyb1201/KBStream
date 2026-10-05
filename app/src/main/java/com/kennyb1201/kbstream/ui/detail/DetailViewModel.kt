@@ -1338,8 +1338,8 @@ for ((metaAddon, response, error) in probeResults) {
      * to the external_ids lookup.
      */
     /** MDBList ratings + the full review list (see [DetailRatingEnrichment]). */
-    private fun fetchMdbListRatings(normalizedType: String, retryOnResolve: Boolean = true) =
-        DetailRatingEnrichment.ratings(this, normalizedType, retryOnResolve)
+    private fun fetchMdbListRatings(normalizedType: String) =
+        DetailRatingEnrichment.ratings(this, normalizedType)
 
     private fun fetchExtraReviews(normalizedType: String) =
         DetailRatingEnrichment.extraReviews(this, normalizedType)

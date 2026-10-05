@@ -1032,6 +1032,10 @@ object SupabaseSync {
         if (batch.isEmpty()) return 0
 
         var removed = 0
+        // True once any chunk uploaded. Distinguishes a real sync from a run
+        // where every chunk threw, so the health timestamps are not stamped
+        // over an all-failed attempt (see below).
+        var anyChunkOk = false
 
         // Max one in-flight flush at a time: two flushOutbox() runs racing
         // (scheduled + periodic) would both upload the same rows — harmless
@@ -1073,6 +1077,7 @@ object SupabaseSync {
                     // silently drop a write that never reached the cloud
                     // (lost update).
                     chunk.forEach { row -> if (outbox.remove(row)) removed++ }
+                    anyChunkOk = true
                     clearSyncError()
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
@@ -1091,8 +1096,14 @@ object SupabaseSync {
         }
         } // flushMutex
         val flushedAt = System.currentTimeMillis()
-        _lastSyncAtMs.value = flushedAt
-        _lastPushAtMs.value = flushedAt
+        // A flush in which EVERY upload failed is not a successful sync: leave
+        // the health timestamps at the last real one, so the UI cannot report a
+        // fresh sync over an all-failed run. The failure itself is already
+        // surfaced by recordSyncError, and the batch is non-empty here.
+        if (anyChunkOk) {
+            _lastSyncAtMs.value = flushedAt
+            _lastPushAtMs.value = flushedAt
+        }
 
         // Rows still pending means we were offline (or a chunk failed): hand
         // the retry to WorkManager, whose request survives process death, so

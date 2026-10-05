@@ -114,6 +114,21 @@ object SecureTokenStore {
     }
 
     /**
+     * Drops every cached store belonging to [profileId] (its resolved names are
+     * `"<profileId>.<base>"`). Called when a profile is deleted: the cached
+     * instance would otherwise keep serving that profile's secrets from memory,
+     * and a profile later recreated with the same id would get the stale store
+     * instead of a fresh one.
+     */
+    fun evictProfile(profileId: String) {
+        if (profileId.isBlank()) return
+        val prefix = "$profileId."
+        cache.keys.toList().forEach { key ->
+            if (key.startsWith(prefix)) cache.remove(key)
+        }
+    }
+
+    /**
      * Renames a pre-encryption plaintext file for [name] to
      * `<name>.legacy.xml`, freeing the original name for the encrypted store.
      *

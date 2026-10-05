@@ -465,6 +465,11 @@ object ProfileManager {
         ProfileStorage.namespaces(context).filter { it.startsWith("$profileId.") }.forEach { ns ->
             context.getSharedPreferences(ns, Context.MODE_PRIVATE).edit().clear().apply()
         }
+        // ...and drop the cached ENCRYPTED stores for that namespace. The files
+        // above are cleared, but the decrypted instances are held in
+        // SecureTokenStore's process cache; a profile recreated with the same id
+        // would otherwise inherit the deleted profile's secrets.
+        com.kennyb1201.kbstream.data.security.SecureTokenStore.evictProfile(profileId)
         context.deleteDatabase(ProfileStorage.dbName(profileId, "kbstream_watch_history"))
         context.deleteDatabase(ProfileStorage.dbName(profileId, "iptv_epg.db"))
 

@@ -357,6 +357,32 @@ class RailShowIdentityTest {
     }
 
     @Test
+    fun `on equal recency the furthest-progressed flavor survives the seed`() {
+        // Same show, same touch time, two id flavors. The card that records
+        // more of the episode is the one worth resuming, so it must survive;
+        // the old descending tie-break kept the barely-started flavor instead.
+        val barely = card(
+            parentId = "tt0898266",
+            season = 1,
+            episode = 5,
+            startPositionMs = 30_000L,
+            recencyTimestamp = 2_000L
+        )
+        val further = card(
+            parentId = "tmdb:97546",
+            season = 3,
+            episode = 15,
+            startPositionMs = 900_000L,
+            recencyTimestamp = 2_000L
+        )
+
+        val collapsed = collapseInstantSnapshotItems(listOf(barely, further))
+
+        assertEquals(1, collapsed.size)
+        assertEquals(further.parentId, collapsed.single().parentId)
+    }
+
+    @Test
     fun `a same-named movie and series stay separate in the seed`() {
         val series = card(
             parentId = "tmdb:1",

@@ -646,7 +646,16 @@ internal fun upNextShowKey(item: UpNextItem): String {
  * dismissal key, and changing its shape would orphan every dismissal already
  * stored on the device and in the cloud.
  */
-internal fun upNextIdentityKeys(item: UpNextItem): Set<String> {
+internal fun upNextIdentityKeys(item: UpNextItem): Set<String> =
+    upNextStrongIdentityKeys(item) + upNextTitleKey(item)
+
+/**
+ * The id-based identity keys only - [upNextIdentityKeys] without the title
+ * fallback. A card with one of these can be compared exactly; the title exists
+ * only for a card that has none (see [upNextGroupingKeys] and the duplicate
+ * collapse's refusal to hide a differently-identified namesake).
+ */
+internal fun upNextStrongIdentityKeys(item: UpNextItem): Set<String> {
     val mediaType =
         upNextMediaType(item.parentType)
 
@@ -656,8 +665,6 @@ internal fun upNextIdentityKeys(item: UpNextItem): Set<String> {
         item.tmdbId
             ?.takeIf { it > 0 }
             ?.let { add("parent:$mediaType:$it") }
-
-        add(upNextTitleKey(item))
     }
 }
 
@@ -776,7 +783,11 @@ internal fun collapseInstantSnapshotItems(
         .mapNotNull { (_, group) ->
             group.maxWithOrNull(
                 compareBy<UpNextItem> { it.recencyTimestamp }
-                    .thenByDescending { it.startPositionMs }
+                    // Furthest progress wins a same-touch tie: the card that
+                    // records more of the episode is the one worth resuming.
+                    // `thenByDescending` under maxWith picked the SMALLER
+                    // position, i.e. the barely-started flavor.
+                    .thenBy { it.startPositionMs }
                     .thenBy { it.id }
             )
         }
@@ -798,18 +809,7 @@ internal fun collapseInstantSnapshotItems(
 internal fun upNextGroupingKeys(
     item: UpNextItem
 ): Set<String> {
-    val mediaType =
-        upNextMediaType(item.parentType)
-
-    val idKeys =
-        buildSet {
-            upNextIdentifier(item.parentId)
-                ?.let { add("parent:$mediaType:$it") }
-
-            item.tmdbId
-                ?.takeIf { it > 0 }
-                ?.let { add("parent:$mediaType:$it") }
-        }
+    val idKeys = upNextStrongIdentityKeys(item)
 
     return idKeys.ifEmpty { setOf(upNextTitleKey(item)) }
 }

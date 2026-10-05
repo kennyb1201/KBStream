@@ -31,7 +31,7 @@ internal object DetailRatingEnrichment {
         }.getOrDefault("")
     }
 
-    fun ratings(vm: DetailViewModel, normalizedType: String, retryOnResolve: Boolean = true) {
+    fun ratings(vm: DetailViewModel, normalizedType: String) {
         val key = mdbListApiKey(vm)
         if (key.isBlank()) {
             Log.i(

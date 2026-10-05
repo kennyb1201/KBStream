@@ -69,6 +69,15 @@ class WatchedStatusRepository(
     private val cacheMutex =
         Mutex()
 
+    /**
+     * Serialises the watched-override set's read-modify-write. Two marks
+     * landing together each read the set and the second write would drop the
+     * first; the pref set is shared state, so every add/remove goes through
+     * this lock.
+     */
+    private val overridesMutex =
+        Mutex()
+
     /*
      * Persistent local "Mark as Watched" overrides, stored as a
      * SharedPreferences string set of watched keys ("movie::tt123456").
@@ -1387,24 +1396,26 @@ class WatchedStatusRepository(
     ) {
         if (keys.isEmpty()) return
 
-        val updatedKeys =
-            (localWatchedOverrideKeys()
-                .toMutableSet()
-                .apply {
-                    if (watched) {
-                        addAll(keys)
-                    } else {
-                        removeAll(keys)
-                    }
-                })
+        overridesMutex.withLock {
+            val updatedKeys =
+                (localWatchedOverrideKeys()
+                    .toMutableSet()
+                    .apply {
+                        if (watched) {
+                            addAll(keys)
+                        } else {
+                            removeAll(keys)
+                        }
+                    })
 
-        overridesPrefs
-            .edit()
-            .putStringSet(
-                KEY_WATCHED_OVERRIDES,
-                updatedKeys
-            )
-            .apply()
+            overridesPrefs
+                .edit()
+                .putStringSet(
+                    KEY_WATCHED_OVERRIDES,
+                    updatedKeys
+                )
+                .apply()
+        }
 
         cacheMutex.withLock {
             keys.forEach { target ->

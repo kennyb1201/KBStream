@@ -398,6 +398,14 @@ fun GuideScreen(
     val groupedChannelIds = remember(groupedChannels) {
     groupedChannels.map { it.channel.id }
     }
+    // The per-row FocusRequester map only grows: every row the guide has ever
+    // composed leaves an entry, so a playlist reload / group change with new
+    // keys leaked the old ones for the whole session. Keep only the channels
+    // currently in the list being browsed.
+    LaunchedEffect(groupedChannels) {
+        val live = groupedChannels.mapTo(HashSet()) { item -> channelKey(item) }
+        channelRowFocusRequesters.keys.retainAll(live)
+    }
     var selectedChannelId by remember { mutableStateOf<String?>(null) }
     val selectedChannelIndex = groupedChannels.indexOfFirst { item ->
         item.channel.id == selectedChannelId
@@ -3179,9 +3187,13 @@ private fun HiddenChannelsTab(
             modifier = Modifier.fillMaxSize().focusGroup()
         ) {
             itemsIndexed(
-    hiddenChannelItems,
-    key = { index, item -> "channel-${channelKey(item)}#$index" }
-) { _, item ->
+                hiddenChannelItems,
+                // The channel key is the row's identity (it is what UNHIDE
+                // acts on); appending the list position made the key change
+                // whenever unhiding a row shifted the ones below it, so
+                // Compose discarded their state instead of moving it.
+                key = { _, item -> channelKey(item) }
+            ) { _, item ->
                 HiddenManagerRow(
                     title = item.channel.displayName,
                     subtitle = item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() } ?: "Channel",
