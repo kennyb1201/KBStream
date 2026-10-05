@@ -1277,8 +1277,15 @@ class MpvPlayerActivity : ComponentActivity() {
             },
             pendingIntent = { pendingIntentForSession() },
             onPlay = {
-                surface?.setPaused(false)
-                keepControlsVisible()
+                // A finished session stays finished: an external transport play
+                // (Bluetooth remote, headset, assistant, remote app) must not
+                // unpause a file mpv has already run to its end, which replays
+                // it from the top behind the end panel. Replay is an explicit
+                // seek or a fresh session, not a toggle.
+                if (!endedHandled) {
+                    surface?.setPaused(false)
+                    keepControlsVisible()
+                }
             },
             onPause = {
                 surface?.setPaused(true)
@@ -4203,6 +4210,11 @@ class MpvPlayerActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
                 KeyEvent.KEYCODE_MEDIA_PLAY,
                 KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    // A finished session stays finished: a play press after the
+                    // end (stray remote button, Bluetooth remote, assistant)
+                    // must not restart the episode from the top. Replay is an
+                    // explicit seek or a fresh session, not a toggle.
+                    if (endedHandled) return true
                     surface?.togglePause()
                     showControls()
                     return true

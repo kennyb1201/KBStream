@@ -4129,7 +4129,11 @@ class NativePlayerActivity : ComponentActivity() {
                     exoPlayer?.pause(); showControls(); true
                 }
                 KeyEvent.KEYCODE_MEDIA_PLAY -> {
-                    exoPlayer?.play(); hideControls(); true
+                    // Same guard as togglePlayPause(): a stray PLAY after the end
+                    // must not restart the episode from the top.
+                    if (playbackEndedHandled) true else {
+                        exoPlayer?.play(); hideControls(); true
+                    }
                 }
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                     togglePlayPause(); true
@@ -4296,7 +4300,12 @@ class NativePlayerActivity : ComponentActivity() {
             }
         }
         when (keyCode) {
-            KeyEvent.KEYCODE_MEDIA_PLAY -> { exoPlayer?.play(); hideControls(); return true }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                // Same guard as togglePlayPause(): a stray PLAY after the end
+                // must not restart the episode from the top.
+                if (playbackEndedHandled) return true
+                exoPlayer?.play(); hideControls(); return true
+            }
             KeyEvent.KEYCODE_MEDIA_PAUSE -> { exoPlayer?.pause(); showControls(); return true }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> { togglePlayPause(); return true }
             KeyEvent.KEYCODE_MEDIA_NEXT -> { advanceToNextEpisode(); return true }
@@ -5459,6 +5468,35 @@ class NativePlayerActivity : ComponentActivity() {
                     if (base.currentPosition > 5000) base.seekTo(0) else restartEpisode()
                 }
                 override fun seekToPreviousMediaItem() { seekToPrevious() }
+
+                // A finished session stays finished here too: the transport
+                // buttons a Bluetooth remote, a headset, or an assistant drives
+                // through this MediaSession must not restart the episode from
+                // the top. media3's own play-button handling makes that restart
+                // explicit - once the player reports STATE_ENDED it calls
+                // seekToDefaultPosition() and then play() - so both are refused
+                // while the ended session is on screen. Only the restart is
+                // blocked: an explicit seek still moves the playhead, and a
+                // fresh session (back out, play again) is untouched.
+                override fun play() {
+                    if (playbackEndedHandled) return
+                    super.play()
+                }
+
+                override fun setPlayWhenReady(playWhenReady: Boolean) {
+                    if (playWhenReady && playbackEndedHandled) return
+                    super.setPlayWhenReady(playWhenReady)
+                }
+
+                override fun seekToDefaultPosition() {
+                    if (playbackEndedHandled) return
+                    super.seekToDefaultPosition()
+                }
+
+                override fun seekToDefaultPosition(mediaItemIndex: Int) {
+                    if (playbackEndedHandled) return
+                    super.seekToDefaultPosition(mediaItemIndex)
+                }
             }
             mediaSession =
                 MediaSession.Builder(this, sessionPlayer)
@@ -8464,6 +8502,11 @@ class NativePlayerActivity : ComponentActivity() {
 
     private fun togglePlayPause() {
         exoPlayer?.let {
+            // A finished session stays finished: a play press after the end
+            // (stray remote button, Bluetooth remote, assistant) must not
+            // restart the episode from the top. Replay is an explicit seek or a
+            // fresh session, not a toggle.
+            if (playbackEndedHandled) return
             val wasPlaying = it.isPlaying
             it.playWhenReady = !wasPlaying
             if (wasPlaying) {
