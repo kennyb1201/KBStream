@@ -204,7 +204,14 @@ object Diagnostics {
         val firstFrame = PerfTrace.latestByPrefix("playback.first_frame").firstOrNull()?.second
         val stalls = PerfTrace.count("playback.stall")
         val rebuilds = PerfTrace.count("playback.rebuild")
-        if (ready == null && firstFrame == null && stalls == 0 && rebuilds == 0) return null
+        // Live zaps whose channel the guide prefetch had warmed, over all zaps
+        // (see LiveChannelPrefetch). `warm` counts the 1s; the total counts
+        // every zap that recorded one.
+        val zapWarm = PerfTrace.sumMs("live.prefetch_warm")
+        val zapCount = PerfTrace.count("live.prefetch_warm")
+        if (ready == null && firstFrame == null && stalls == 0 && rebuilds == 0 && zapCount == 0) {
+            return null
+        }
         return buildString {
             append("playback: source→ready=").append(ready?.let { "${it}ms" } ?: "—")
             append(" ready→firstFrame=").append(firstFrame?.let { "${it}ms" } ?: "—")
@@ -213,6 +220,7 @@ object Diagnostics {
                 append("/").append(PerfTrace.maxMs("playback.stall")).append("ms worst")
             }
             append(" rebuilds=").append(rebuilds)
+            if (zapCount > 0) append(" zaps-warm=").append(zapWarm).append("/").append(zapCount)
         }
     }
 

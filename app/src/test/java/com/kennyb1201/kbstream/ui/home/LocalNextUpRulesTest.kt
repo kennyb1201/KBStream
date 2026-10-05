@@ -2,6 +2,8 @@ package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -352,5 +354,111 @@ class LocalNextUpRulesTest {
         )
 
         assertEquals(emptySet<String>(), superseded)
+    }
+
+    // ── returning-show gate ─────────────────────────────────────────────
+
+    @Test
+    fun `a new season re-qualifies a finished show`() {
+        // Chad Powers: S1 finished, S2E6 has since aired.
+        assertTrue(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = 1,
+                furthestEpisode = 6,
+                lastAiredSeason = 2,
+                lastAiredEpisode = 6
+            )
+        )
+    }
+
+    @Test
+    fun `watching the last aired episode does not re-qualify`() {
+        assertFalse(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = 2,
+                furthestEpisode = 6,
+                lastAiredSeason = 2,
+                lastAiredEpisode = 6
+            )
+        )
+    }
+
+    @Test
+    fun `a later episode in the same season re-qualifies`() {
+        assertTrue(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = 2,
+                furthestEpisode = 3,
+                lastAiredSeason = 2,
+                lastAiredEpisode = 6
+            )
+        )
+    }
+
+    @Test
+    fun `a later season re-qualifies even at a lower episode number`() {
+        // Season-major: S2E1 is beyond S1E10.
+        assertTrue(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = 1,
+                furthestEpisode = 10,
+                lastAiredSeason = 2,
+                lastAiredEpisode = 1
+            )
+        )
+    }
+
+    @Test
+    fun `specials never re-qualify a show on their own`() {
+        // Season 0 is not "later than" any real season.
+        assertFalse(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = 2,
+                furthestEpisode = 6,
+                lastAiredSeason = 0,
+                lastAiredEpisode = 4
+            )
+        )
+    }
+
+    @Test
+    fun `an unknown local position cannot re-qualify`() {
+        assertFalse(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = null,
+                furthestEpisode = 6,
+                lastAiredSeason = 2,
+                lastAiredEpisode = 6
+            )
+        )
+        assertFalse(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = 1,
+                furthestEpisode = null,
+                lastAiredSeason = 2,
+                lastAiredEpisode = 6
+            )
+        )
+    }
+
+    @Test
+    fun `no aired episode on record cannot re-qualify`() {
+        // An announced season has no last_episode_to_air: never assumed.
+        assertFalse(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = 1,
+                furthestEpisode = 6,
+                lastAiredSeason = null,
+                lastAiredEpisode = null
+            )
+        )
+        assertFalse(
+            hasUnwatchedAiredEpisodes(
+                furthestSeason = 1,
+                furthestEpisode = 6,
+                lastAiredSeason = 2,
+                lastAiredEpisode = null
+            )
+        )
     }
 }

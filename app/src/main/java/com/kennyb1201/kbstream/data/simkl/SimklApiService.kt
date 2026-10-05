@@ -55,6 +55,20 @@ interface SimklApiService {
         @Query("page") page: Int = 1
     ): Response<SimklWatchingShowsDetailedResponse>
 
+    /**
+     * The completed list, slim: just the per-show tallies Continue Watching
+     * gates on. Deliberately NOT the detailed variant below - that one carries
+     * every episode (`include_all_episodes=yes`), which is a lot of payload to
+     * download just to learn whether a finished show has aired episodes left.
+     */
+    @GET("sync/all-items/shows/completed")
+    suspend fun getCompletedShows(
+        @Header("Authorization") authorization: String,
+        @Query("date_from") dateFrom: String? = null,
+        @Query("extended") extended: String? = "full",
+        @Query("page") page: Int = 1
+    ): SimklWatchingShowsResponse
+
     @GET("sync/all-items/shows/completed")
     suspend fun getCompletedShowsDetailed(
         @Header("Authorization") authorization: String,

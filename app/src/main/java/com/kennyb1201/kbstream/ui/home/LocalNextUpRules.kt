@@ -48,6 +48,38 @@ internal fun selectLocalNextUpCandidates(
         .take(max)
 
 /**
+ * Returning-show gate: does TMDB know of an AIRED episode later than the
+ * furthest episode watched locally? Season-major comparison. Null on either
+ * side means "cannot prove it" -> false (honest-unknown; never fabricate).
+ * A season-0 (specials) last-aired never re-qualifies a show on its own:
+ * (0, N) is not greater than any real season.
+ *
+ * This is what notices a show whose whole first season was finished long ago
+ * and whose SECOND season has since aired: the normal candidate set is capped
+ * on recency (a show completed a year ago never makes it in), so without this
+ * gate its seasons are never re-walked and the new season stays invisible.
+ *
+ * @param furthestSeason the highest season number with a locally completed
+ *   episode, or null when nothing about the show's position is known.
+ * @param furthestEpisode the highest episode number within [furthestSeason].
+ * @param lastAiredSeason TMDB's `last_episode_to_air` season number.
+ * @param lastAiredEpisode TMDB's `last_episode_to_air` episode number.
+ * @return true only when an aired episode lies strictly beyond what was
+ *   watched - the re-qualification is provable, not assumed.
+ */
+internal fun hasUnwatchedAiredEpisodes(
+    furthestSeason: Int?,
+    furthestEpisode: Int?,
+    lastAiredSeason: Int?,
+    lastAiredEpisode: Int?
+): Boolean {
+    if (furthestSeason == null || furthestEpisode == null) return false
+    if (lastAiredSeason == null || lastAiredEpisode == null) return false
+    return lastAiredSeason > furthestSeason ||
+        (lastAiredSeason == furthestSeason && lastAiredEpisode > furthestEpisode)
+}
+
+/**
  * Ids of in-progress (resume) rows a LATER completed episode has already
  * overtaken — the "Continue S1E5 while the user is actually on S3E15" report.
  *

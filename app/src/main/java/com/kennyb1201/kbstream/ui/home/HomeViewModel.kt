@@ -2203,11 +2203,30 @@ Log.d(
                 max = MAX_LOCAL_NEXT_UP_ITEMS
             )
 
+        // Returning shows: completed long ago (outside the 25-cap) but with
+        // aired episodes beyond what was watched. Cheap gate (cached detail
+        // only); only re-qualifiers pay for the full season walk in
+        // buildLocalNextUpItem.
+        val returningCandidates =
+            selectReturningShowCandidates(
+                completedRows = completedRows,
+                excludedParentIds =
+                    candidates.map { (parentId, _) -> parentId }.toSet(),
+                representedIdentifiers = representedIds,
+                max = MAX_RETURNING_SHOW_ITEMS
+            )
+
+        // Appended AFTER the regular set, so the existing order and selection
+        // are untouched (see the returning-pass invariants on
+        // selectReturningShowCandidates).
+        val allCandidates =
+            candidates + returningCandidates
+
         val semaphore =
             Semaphore(LOCAL_NEXT_UP_CONCURRENCY)
 
         return coroutineScope {
-            candidates
+            allCandidates
                 .map { (parentId, row) ->
                     async {
                         semaphore.withPermit {
@@ -2225,6 +2244,77 @@ Log.d(
                 .awaitAll()
                 .filterNotNull()
         }
+    }
+
+    /**
+     * Shows from [completedRows] that are NOT in the normal candidate set but
+     * have provably unwatched AIRED episodes (a new season dropped since the
+     * show was finished). Uses only the cached series detail (the same
+     * semaphore-guarded lookup the cards themselves use) - no per-season walks
+     * here, so the pass stays cheap even over a long history. Re-qualifiers go
+     * through the normal [buildLocalNextUpItem] path, so resolution, badges and
+     * the caught-up recording behave exactly as for regular candidates.
+     *
+     * Invariants:
+     * - [excludedParentIds] (the regular 25) and [representedIdentifiers] (shows
+     *   already on the rail) are both skipped, so one show still gets one card.
+     * - A row with no season/episode, or a detail TMDB has no
+     *   `last_episode_to_air` for, is skipped: re-qualification is only ever
+     *   proved by aired episodes, never assumed.
+     * - `number_of_seasons` is never consulted, so an ANNOUNCED season with no
+     *   aired episode cannot re-qualify a show on its own.
+     * - Newest newly-aired episode first, then capped at [max].
+     */
+    private suspend fun selectReturningShowCandidates(
+        completedRows: List<WatchHistoryEntity>,
+        excludedParentIds: Set<String>,
+        representedIdentifiers: Set<String>,
+        max: Int
+    ): List<Pair<String, WatchHistoryEntity>> {
+        val grouped =
+            completedRows.groupBy { row ->
+                row.parentId.trim().ifBlank { row.id.trim() }
+            }
+        val checked =
+            mutableListOf<Triple<String, WatchHistoryEntity, String?>>()
+        for ((parentId, rows) in grouped) {
+            if (parentId in excludedParentIds) continue
+            val id = upNextIdentifier(parentId)
+            if (id != null && id in representedIdentifiers) continue
+            // Furthest watched episode with a known position. Rows without a
+            // season/episode cannot prove anything -> skip (honest-unknown).
+            val furthest =
+                rows.mapNotNull { row ->
+                    val s = row.season
+                    val e = row.episode
+                    if (s != null && e != null) s to e else null
+                }.maxWithOrNull(
+                    compareBy<Pair<Int, Int>> { it.first }.thenBy { it.second }
+                ) ?: continue
+            val latestRow =
+                rows.maxByOrNull { row -> row.completedAt ?: row.updatedAt }
+                    ?: continue
+            // seriesDetailFor is the cached, semaphore-guarded lookup; a miss
+            // or a null detail simply skips the show (same as today).
+            val detail = seriesDetailFor(parentId) ?: continue
+            val lastAired = detail.lastEpisodeToAir ?: continue
+            if (
+                hasUnwatchedAiredEpisodes(
+                    furthestSeason = furthest.first,
+                    furthestEpisode = furthest.second,
+                    lastAiredSeason = lastAired.seasonNumber,
+                    lastAiredEpisode = lastAired.episodeNumber
+                )
+            ) {
+                checked += Triple(parentId, latestRow, lastAired.airDate)
+            }
+        }
+        // Newest newly-aired episode first; returning cards sit after the
+        // regular 25 so the existing order is untouched.
+        return checked
+            .sortedByDescending { (_, _, airDate) -> airDate ?: "" }
+            .take(max)
+            .map { (parentId, row, _) -> parentId to row }
     }
 
     /**
@@ -6745,6 +6835,29 @@ private suspend fun calculateEpisodesRemaining(
                                     hideUpcoming,
                                     landscapeCards
                                 )
+                            } else if (
+                                com.kennyb1201.kbstream.data.sync.ProfileManager
+                                    .activeIsGuest()
+                            ) {
+                                // Guest profile: the EXACT same two "Top ...
+                                // Today" rails every other profile leads with
+                                // (the add-on feed, fetched directly - it does
+                                // not have to be installed), then a fixed set
+                                // of built-in TMDB rails behind them (see
+                                // loadPinnedGuestRails) so a profile with no
+                                // add-ons still opens onto a full screen. Kids
+                                // Mode wins above - a profile that is both gets
+                                // the ceiling-filtered kids rails.
+                                loadPinnedTopTodayRails(
+                                    rails,
+                                    hideUpcoming,
+                                    landscapeCards
+                                )
+                                loadPinnedGuestRails(
+                                    rails,
+                                    hideUpcoming,
+                                    landscapeCards
+                                )
                             } else {
                                 loadPinnedTopTodayRails(
                                     rails,
@@ -7323,6 +7436,219 @@ private suspend fun calculateEpisodesRemaining(
                         rail
                     } catch (e: Exception) {
                         Log.e("HOME_RAILS", "kids pinned rail load failed tv=$tv: " + e.message, e)
+                        null
+                    }
+                }
+            }
+                .awaitAll()
+                .filterNotNull()
+                .forEach { rail -> result += rail }
+        }
+    }
+
+    /** Item source of a guest-profile rail (see [loadPinnedGuestRails]). */
+    private enum class GuestRailSource { DISCOVER, ON_THE_AIR, TRENDING }
+
+    /**
+     * Guest-profile replacement for the pinned "Top ... Today" rails: a fixed
+     * set of built-in, TMDB-backed rows so a profile with no add-ons installed
+     * still opens onto a full screen.
+     *
+     * The two "Top ... Today" rails are NOT built here: the caller runs
+     * [loadPinnedTopTodayRails] first, so a guest leads with the exact same
+     * ranked rows every other profile does. This builds what follows them, in
+     * order:
+     *   Latest Digital Releases
+     *   Airing Now
+     *   Trending This Week
+     *   Popular Movies / Popular Shows
+     *   Top Rated
+     * "Continue Watching" leads them all and is NOT built here either - it comes
+     * from the profile's own history, like every other profile.
+     *
+     * Every row is the app's own /discover query through [TmdbRepository], so
+     * there is no add-on to install and nothing to keep in sync. Each still runs
+     * the app-wide digital-release filter and the kids ceiling before it lands,
+     * exactly as the add-on rails do.
+     *
+     * Source notes: "Airing Now" and "Trending This Week" are TMDB's real
+     * feeds (/tv/on_the_air and /trending/{movie,tv}/week) rather than discover
+     * windows, so both stay distinct from the evergreen "Popular" rows.
+     */
+    private suspend fun loadPinnedGuestRails(
+        result: MutableList<Rail>,
+        hideUpcoming: Boolean,
+        landscapeCards: Boolean
+    ) {
+        val todayIso = java.time.LocalDate.now().toString()
+
+        // One row's query. No built-in row is ranked - the ranked rows a guest
+        // leads with are the shared Top Today ones from
+        // [loadPinnedTopTodayRails]. A row either runs a discover query
+        // ([sortBy] + [filters]) or comes from one of the dedicated feeds
+        // ([GuestRailSource.ON_THE_AIR] / [GuestRailSource.TRENDING]).
+        data class Spec(
+            val catalogId: String,
+            val title: String,
+            val mediaType: String,  // discover: "movie" | "tv"
+            val railType: String,   // rail: "movie" | "series"
+            val source: GuestRailSource = GuestRailSource.DISCOVER,
+            val sortBy: String = "popularity.desc",
+            val filters: com.kennyb1201.kbstream.data.kb.KBFilters? = null,
+            val ranked: Boolean = false,
+            val limit: Int = 20
+        )
+
+        fun filters(
+            voteCountGte: Int,
+            releaseDateGte: String? = null,
+            releaseDateLte: String? = null
+        ) = com.kennyb1201.kbstream.data.kb.KBFilters(
+            voteCountGte = voteCountGte,
+            releaseDateGte = releaseDateGte,
+            releaseDateLte = releaseDateLte
+        )
+
+        val specs = listOf(
+            Spec(
+                catalogId = "guest_latest_digital",
+                title = "Latest Digital Releases",
+                mediaType = "movie",
+                railType = "movie",
+                sortBy = "primary_release_date.desc",
+                filters = filters(voteCountGte = 5, releaseDateLte = todayIso)
+            ),
+            // The two real feeds: TMDB's on-the-air and weekly-trending
+            // endpoints, not discover windows (see TmdbRepository.onTheAir /
+            // trendingWeek).
+            Spec(
+                catalogId = "guest_airing_now",
+                title = "Airing Now",
+                mediaType = "tv",
+                railType = "series",
+                source = GuestRailSource.ON_THE_AIR
+            ),
+            Spec(
+                catalogId = "guest_trending_week",
+                title = "Trending This Week",
+                mediaType = "movie",
+                railType = "movie",
+                source = GuestRailSource.TRENDING
+            ),
+            Spec(
+                catalogId = "guest_popular_movies",
+                title = "Popular Movies",
+                mediaType = "movie",
+                railType = "movie",
+                sortBy = "popularity.desc",
+                filters = filters(voteCountGte = 50)
+            ),
+            Spec(
+                catalogId = "guest_popular_shows",
+                title = "Popular Shows",
+                mediaType = "tv",
+                railType = "series",
+                sortBy = "popularity.desc",
+                filters = filters(voteCountGte = 20)
+            ),
+            Spec(
+                catalogId = "guest_top_rated",
+                title = "Top Rated",
+                mediaType = "movie",
+                railType = "movie",
+                sortBy = "vote_average.desc",
+                filters = filters(voteCountGte = 500)
+            )
+        )
+
+        coroutineScope {
+            specs.map { spec ->
+                async {
+                    try {
+                        val items = when (spec.source) {
+                            GuestRailSource.ON_THE_AIR -> tmdbRepository.onTheAir(page = 1)
+                            GuestRailSource.TRENDING ->
+                                tmdbRepository.trendingWeek(spec.mediaType, page = 1)
+                            GuestRailSource.DISCOVER -> tmdbRepository.discoverKB(
+                                mediaType = spec.mediaType,
+                                page = 1,
+                                sortBy = spec.sortBy,
+                                filters = spec.filters
+                            )
+                        }.orEmpty().take(spec.limit)
+
+                        if (items.isEmpty()) return@async null
+
+                        val metas = items.map { item ->
+                            MetaPreview(
+                                id = "tmdb:" + item.id,
+                                type = spec.railType,
+                                name = item.name ?: item.title.orEmpty(),
+                                poster = item.posterPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { TmdbRepository.POSTER_BASE + it },
+                                background = item.backdropPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { TmdbRepository.BACKDROP_BASE + it },
+                                releaseInfo = (item.firstAirDate ?: item.releaseDate)
+                                    ?.takeIf { it.length >= 4 }
+                                    ?.take(4)
+                            )
+                        }
+
+                        // Same two filters the add-on rails run: the app-wide
+                        // digital-release filter (when "hide upcoming" is on)
+                        // and the kids ceiling (a no-op unless the profile is
+                        // also a kids profile).
+                        val filtered =
+                            if (hideUpcoming) {
+                                tmdbRepository.kidsFilterMetas(
+                                    applyDigitalAvailabilityFilter(filterUpcoming(metas))
+                                )
+                            } else {
+                                tmdbRepository.kidsFilterMetas(metas)
+                            }
+
+                        if (filtered.isEmpty()) return@async null
+
+                        val rail = Rail(
+                            addonName = GUEST_ADDON_NAME,
+                            catalogName = spec.title,
+                            type = spec.railType,
+                            items = filtered,
+                            catalogId = spec.catalogId,
+                            // Null base URL = a row this app builds itself, so
+                            // it has no manifest to key against and can never be
+                            // arranged (exactly like the kids rails). See
+                            // KBHomeSlots.buildMergedEntries.
+                            baseUrl = null,
+                            landscapeArt = previousLandscapeArt[
+                                railKeyOf(GUEST_ADDON_NAME, spec.catalogId, spec.railType)
+                            ] ?: emptyMap(),
+                            ranked = spec.ranked
+                        )
+
+                        railInfo[railKeyOf(rail)] = RailInfo(
+                            addonName = GUEST_ADDON_NAME,
+                            catalogId = spec.catalogId,
+                            catalogType = spec.railType,
+                            catalogRawName = spec.title,
+                            baseUrl = "",
+                            hideUpcoming = hideUpcoming,
+                            landscapeCards = landscapeCards,
+                            pinned = true
+                        )
+
+                        // One fixed TMDB page - no pagination.
+                        exhaustedRails.add(railKeyOf(rail))
+
+                        rail
+                    } catch (e: Exception) {
+                        Log.e(
+                            "HOME_RAILS",
+                            "guest rail ${spec.catalogId} load failed: " + e.message,
+                            e
+                        )
                         null
                     }
                 }
@@ -7944,6 +8270,14 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val KIDS_ADDON_NAME =
             "KBStream Kids Picks"
+
+        /**
+         * Identity of the guest profile's built-in rows (see
+         * [loadPinnedGuestRails]). A null base URL on their [Rail]s is what
+         * marks them as app-built rather than add-on catalogs.
+         */
+        private const val GUEST_ADDON_NAME =
+            "KBStream Guest Picks"
 
         private const val TOP_TODAY_ADDON_NAME =
             "TMDB Top Today"

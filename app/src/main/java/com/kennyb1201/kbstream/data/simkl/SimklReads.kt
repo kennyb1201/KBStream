@@ -72,6 +72,46 @@ suspend fun SimklRepository.getWatchingShowsImpl(
 }
 
 /**
+ * The account's COMPLETED shows, slim: the per-show tallies Continue Watching
+ * gates on. Mirrors [getWatchingShowsImpl] (one page at a time - the caller
+ * pages until an empty page, see SimklRepository.getContinueWatching).
+ *
+ * Continue Watching needs this list because Simkl does NOT reliably move a
+ * show back to "watching" when a new season airs: finishing a season sets the
+ * status to "completed", and it can stay there while episodes air. Reading
+ * only the watching list therefore hid exactly the returning show this fix is
+ * about - see the candidate rule, which was already written for it.
+ */
+suspend fun SimklRepository.getCompletedShowsImpl(
+    accessToken: String =
+        trackedAccessToken(),
+    page: Int = 1
+): SimklWatchingShowsResponse {
+
+    require(
+        clientId.isNotBlank()
+    ) {
+        "SIMKL_CLIENT_ID is missing"
+    }
+
+    return api.getCompletedShows(
+        authorization =
+            trackedAuthHeaderFor(
+                accessToken
+            ),
+
+        dateFrom =
+            null,
+
+        extended =
+            "full",
+
+        page =
+            page
+    )
+}
+
+/**
  * Library totals for the connect screen: how many distinct shows and
  * movies the Simkl account has any watch history for. Shows come from
  * the cached all-shows library (the same source Continue Watching
@@ -351,12 +391,17 @@ object ShowCompletionRules {
      * The show statuses a caught-up Upcoming card may come from.
      *
      * "completed" has to be one of them. A show the user has finished
-     * everything aired of reads as COMPLETED on the tracker, and Simkl only
-     * moves it back to "watching" once the new season's first episode AIRS - so
-     * a watching-only rule hides exactly the case the rail exists for: a show
-     * whose new season is announced. A finished-and-staying-finished show is
-     * still kept out - by TMDB, which has no dated next episode for it - and
-     * the statuses that mean "not following" stay out below this list.
+     * everything aired of reads as COMPLETED on the tracker, and that status
+     * does NOT reliably flip back to "watching" when a new season starts
+     * airing: observed on Chad Powers (S2 first aired 2026-09-03, the show
+     * still read COMPLETED over a month later). The assumption this comment
+     * used to record - that Simkl moves it back to "watching" once the new
+     * season's first episode AIRS - is disproved by that case, which is why
+     * Continue Watching reads the `completed` list directly (see
+     * SimklRepository.getContinueWatching) instead of waiting on the watching
+     * feed. A finished-and-staying-finished show is still kept out - by TMDB,
+     * which has no dated next episode for it - and the statuses that mean "not
+     * following" stay out below this list.
      */
     private val UPCOMING_FOLLOWED_STATUSES =
         setOf("watching", "completed")

@@ -427,4 +427,73 @@ class ShowCompletionRulesTest {
             )
         }
     }
+
+    // ── the completed list is a Continue Watching source too ────────────
+
+    /**
+     * Reported bug: Chad Powers - S1 finished, S2 (6 episodes) aired since,
+     * and Simkl never flipped the show from "completed" back to "watching",
+     * so it never reached this rule at all. Read from the completed list, the
+     * same rule has to call it a card: 6 watched of 12, nothing unaired.
+     */
+    @Test
+    fun `a completed show with unwatched aired episodes is a card`() {
+        assertTrue(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "completed",
+                watchedEpisodesCount = 6,
+                totalEpisodesCount = 12,
+                notAiredEpisodesCount = 0,
+                nextToWatch = "S02E01",
+                lastWatched = null
+            )
+        )
+    }
+
+    @Test
+    fun `a completed show with everything aired watched is not a card`() {
+        // 12 of 12 aired, 0 left to air: the show is genuinely finished and
+        // stays off Continue Watching even now that the list is read.
+        assertFalse(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "completed",
+                watchedEpisodesCount = 12,
+                totalEpisodesCount = 12,
+                notAiredEpisodesCount = 0,
+                nextToWatch = null,
+                lastWatched = null
+            )
+        )
+    }
+
+    @Test
+    fun `a completed show still airing is a card when episodes are unwatched`() {
+        // 6 watched of 12, with 2 of those 12 still to air: 10 aired, 6 watched.
+        assertTrue(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "completed",
+                watchedEpisodesCount = 6,
+                totalEpisodesCount = 12,
+                notAiredEpisodesCount = 2,
+                nextToWatch = "S02E03",
+                lastWatched = null
+            )
+        )
+    }
+
+    @Test
+    fun `a dropped show is not a card even with unwatched episodes`() {
+        // Unconditional, and unchanged by reading the completed list: the
+        // user took it off the list on purpose.
+        assertFalse(
+            ShowCompletionRules.isContinueWatchingCandidate(
+                status = "dropped",
+                watchedEpisodesCount = 6,
+                totalEpisodesCount = 12,
+                notAiredEpisodesCount = 0,
+                nextToWatch = "S02E01",
+                lastWatched = null
+            )
+        )
+    }
 }

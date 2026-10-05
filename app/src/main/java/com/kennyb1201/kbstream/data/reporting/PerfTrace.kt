@@ -203,6 +203,17 @@ internal object PerfTrace {
     }
 
     /**
+     * The sum of every sample recorded under [prefix], or 0 when there is none.
+     *
+     * Unlike [latestByPrefix] (the newest duration) this adds a flag that is
+     * recorded as a bare 0/1 per event, which is how a hit rate is read out of
+     * a label like `live.prefetch_warm`.
+     */
+    fun sumMs(prefix: String): Long = synchronized(lock) {
+        samples.filter { it.label.startsWith(prefix) }.sumOf { it.ms }
+    }
+
+    /**
      * Multi-line summary for the diagnostics dump. Empty string when nothing
      * was recorded, so a quiet session adds no noise.
      */

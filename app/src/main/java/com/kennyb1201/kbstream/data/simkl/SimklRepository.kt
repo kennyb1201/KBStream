@@ -1111,6 +1111,23 @@ class SimklRepository(
     ): SimklWatchingShowsResponse = getWatchingShowsImpl(accessToken)
 
     /**
+     * One page of the account's COMPLETED shows, slim (tallies only). Body
+     * lives in SimklReads.kt. Continue Watching reads this list as well as the
+     * watching one: Simkl does not reliably move a show back to "watching"
+     * when a new season airs, so a returning show can sit on `completed`
+     * forever while still having aired episodes left to watch.
+     */
+    suspend fun getCompletedShows(
+        accessToken: String =
+            trackedAccessToken(),
+        page: Int = 1
+    ): SimklWatchingShowsResponse =
+        getCompletedShowsImpl(
+            accessToken = accessToken,
+            page = page
+        )
+
+    /**
      * Shows the account is caught up on - nothing aired left to watch - so the
      * Upcoming rail is the only place their next episode can surface, whether
      * that is a new season or the next episode of one already airing. Body
@@ -2173,6 +2190,33 @@ class SimklRepository(
                     accessToken
                 ).shows
 
+            // Simkl does not reliably move a show back to "watching" when a
+            // new season airs, so the completed list is read too: a show that
+            // was finished long ago but has aired episodes left belongs on the
+            // rail, and the SAME candidate rule decides that (see
+            // isContinueWatchingCandidate). Paged because a completed library
+            // is large; an empty page ends the walk.
+            val completedShows =
+                buildList {
+                    var page = 1
+                    while (
+                        page <= MAX_COMPLETED_SHOW_PAGES
+                    ) {
+                        val paged =
+                            getCompletedShows(
+                                accessToken,
+                                page
+                            ).shows
+                        if (
+                            paged.isEmpty()
+                        ) {
+                            break
+                        }
+                        addAll(paged)
+                        page++
+                    }
+                }
+
             val watchingBySimklId:
                 Map<String, SimklWatchingShowItem> =
                 watchingShows
@@ -2551,156 +2595,47 @@ class SimklRepository(
             val watchingMapped =
                 watchingShows
                     .asSequence()
-                    .filter { item ->
-
-                        // One shared rule: dropped shows never appear, a show
-                        // the user still has aired episodes to watch does -
-                        // even when Simkl's list status still says
-                        // "completed" (whole-show mark, then a season
-                        // unmarked), and a caught-up show does not.
-                        val candidate =
-                            isContinueWatchingCandidate(
-                                item
-                            )
-
-                        // A caught-up show leaves this rail BY DESIGN (there
-                        // is nothing to resume), so the reason is worth
-                        // logging: the usual one is a perfectly healthy show
-                        // whose card now comes from the Upcoming rail instead.
-                        // See UPCOMING_DIAGNOSTICS.
-                        if (
-                            !candidate &&
-                            UPCOMING_DIAGNOSTICS
-                        ) {
-
-                            val total =
-                                item.totalEpisodesCount ?: 0
-
-                            val notAired =
-                                item.notAiredEpisodesCount ?: 0
-
-                            Log.d(
-                                "UPCOMING_DIAG",
-                                "cw skip title='${item.show?.title}' " +
-                                    "status=${item.status} " +
-                                    "watched=${item.watchedEpisodesCount ?: 0} " +
-                                    "aired=${if (total > 0) total - notAired else 0} " +
-                                    "nextToWatch=${item.nextToWatch}"
-                            )
-                        }
-
-                        candidate
-                    }
                     .mapNotNull { item ->
+                        continueWatchingFromTrackerItem(
+                            item = item,
+                            playbackIds = playbackIds,
+                            alreadyEmittedIds = emptySet(),
+                            allowLastWatchedFallback = true
+                        )
+                    }
+                    .toList()
 
-                        val show =
-                            item.show
-                                ?: return@mapNotNull null
+            // The completed leg: shows Simkl still lists as COMPLETED even
+            // though a new season has begun airing (see getCompletedShowsImpl),
+            // so they reach the SAME candidate rule and the SAME mapping. A
+            // card here therefore scores and badges exactly like a watching-leg
+            // one. `last_watched` is not part of this payload, so `next_to_watch`
+            // is the only target source.
+            val trackerEmittedIds =
+                watchingMapped
+                    .map {
+                        it.id
+                    }
+                    .toSet()
 
-                        val simklId =
-                            show.ids
-                                ?.simkl
-                                ?.toString()
-                                ?: return@mapNotNull null
-
-                        val mergedId =
-                            "show-$simklId"
-
-                        if (
-                            mergedId in playbackIds
-                        ) {
-                            return@mapNotNull null
-                        }
-
-                        val imdbId =
-                            show.ids
-                                ?.imdb
-                                ?.takeIf {
-                                    it.isNotBlank()
-                                }
-
-                        val parsedNext =
-                            parseNextTarget(
-                                item.nextToWatch
-                            )
-                                ?: parseNextTarget(
-                                    item.lastWatched
-                                )
-
-                        val nextSeason =
-                            parsedNext?.first
-
-                        val nextEpisode =
-                            namedEpisodeNumber(
-                                parsedNext?.second
-                            )
-
-                        SimklContinueWatchingItem(
-                            id =
-                                mergedId,
-
-                            imdbId =
-                                imdbId,
-
-                            tmdbId =
-                                show.ids
-                                    ?.tmdb,
-
-                            simklId =
-                                show.ids
-                                    ?.simkl,
-
-                            title =
-                                show.title
-                                    ?: "Untitled show",
-
-                            year =
-                                show.year,
-
-                            posterUrl =
-                                normalizePosterUrl(
-                                    show.poster
-                                ),
-
-                            lastWatchedAt =
-                                item.lastWatchedAt
-                                    ?: item.addedToWatchlistAt,
-
-                            progress =
-                                null,
-
-                            upNextText =
-                                buildWatchingUpNextText(
-                                    nextToWatch =
-                                        item.nextToWatch,
-
-                                    lastWatched =
-                                        item.lastWatched,
-
-                                    status =
-                                        item.status
-                                ),
-
-                            mediaType =
-                                "series",
-
-                            source =
-                                "watching",
-
-                            season =
-                                nextSeason,
-
-                            episode =
-                                nextEpisode
+            val completedMapped =
+                completedShows
+                    .asSequence()
+                    .mapNotNull { item ->
+                        continueWatchingFromTrackerItem(
+                            item = item,
+                            playbackIds = playbackIds,
+                            alreadyEmittedIds = trackerEmittedIds,
+                            allowLastWatchedFallback = false
                         )
                     }
                     .toList()
 
             val result =
-                (
-                    playbackMapped +
-                        watchingMapped
-                    )
+                (                    playbackMapped +
+                        watchingMapped +
+                        completedMapped
+                )
                     .sortedWith(
                         compareByDescending<
                             SimklContinueWatchingItem
@@ -3047,6 +2982,182 @@ class SimklRepository(
         }
     }
 
+    /**
+     * One tracker show as a Continue Watching card, or null when it is not a
+     * candidate or cannot be identified.
+     *
+     * Shared by the watching leg and the completed leg so both produce cards
+     * that score and badge identically: the inclusion rule, the merged id
+     * ("show-<simklId>"), the next-episode target and the "Up next" text are
+     * all decided here, once.
+     *
+     * @param playbackIds ids already claimed by a paused playback session.
+     * @param alreadyEmittedIds ids an earlier leg already produced. A show has
+     *   one list status, but a returning show can briefly appear on both the
+     *   watching and completed feeds while Simkl moves it, so the dedupe is
+     *   not theoretical.
+     * @param allowLastWatchedFallback the watching feed carries `last_watched`,
+     *   so a show with no queued next episode can still point at the episode
+     *   after the last one watched. The completed feed does not, so that leg
+     *   passes false and relies on `next_to_watch` alone.
+     */
+    private fun continueWatchingFromTrackerItem(
+        item: SimklWatchingShowItem,
+        playbackIds: Set<String>,
+        alreadyEmittedIds: Set<String>,
+        allowLastWatchedFallback: Boolean
+    ): SimklContinueWatchingItem? {
+
+        // One shared rule: dropped shows never appear, a show the user still
+        // has aired episodes to watch does - even when Simkl's list status
+        // still says "completed" (whole-show mark, then a season unmarked),
+        // and a caught-up show does not.
+        val candidate =
+            isContinueWatchingCandidate(
+                item
+            )
+
+        // A caught-up show leaves this rail BY DESIGN (there is nothing to
+        // resume), so the reason is worth logging: the usual one is a
+        // perfectly healthy show whose card now comes from the Upcoming rail
+        // instead. See UPCOMING_DIAGNOSTICS. Runs for both legs.
+        if (
+            !candidate &&
+            UPCOMING_DIAGNOSTICS
+        ) {
+
+            val total =
+                item.totalEpisodesCount ?: 0
+
+            val notAired =
+                item.notAiredEpisodesCount ?: 0
+
+            Log.d(
+                "UPCOMING_DIAG",
+                "cw skip title='${item.show?.title}' " +
+                    "status=${item.status} " +
+                    "watched=${item.watchedEpisodesCount ?: 0} " +
+                    "aired=${if (total > 0) total - notAired else 0} " +
+                    "nextToWatch=${item.nextToWatch}"
+            )
+        }
+
+        if (
+            !candidate
+        ) {
+            return null
+        }
+
+        val show =
+            item.show
+                ?: return null
+
+        val simklId =
+            show.ids
+                ?.simkl
+                ?.toString()
+                ?: return null
+
+        val mergedId =
+            "show-$simklId"
+
+        if (
+            mergedId in playbackIds ||
+            mergedId in alreadyEmittedIds
+        ) {
+            return null
+        }
+
+        val imdbId =
+            show.ids
+                ?.imdb
+                ?.takeIf {
+                    it.isNotBlank()
+                }
+
+        val lastWatched =
+            if (allowLastWatchedFallback) {
+                item.lastWatched
+            } else {
+                null
+            }
+
+        val parsedNext =
+            parseNextTarget(
+                item.nextToWatch
+            )
+                ?: parseNextTarget(
+                    lastWatched
+                )
+
+        val nextSeason =
+            parsedNext?.first
+
+        val nextEpisode =
+            namedEpisodeNumber(
+                parsedNext?.second
+            )
+
+        return SimklContinueWatchingItem(
+            id =
+                mergedId,
+
+            imdbId =
+                imdbId,
+
+            tmdbId =
+                show.ids
+                    ?.tmdb,
+
+            simklId =
+                show.ids
+                    ?.simkl,
+
+            title =
+                show.title
+                    ?: "Untitled show",
+
+            year =
+                show.year,
+
+            posterUrl =
+                normalizePosterUrl(
+                    show.poster
+                ),
+
+            lastWatchedAt =
+                item.lastWatchedAt
+                    ?: item.addedToWatchlistAt,
+
+            progress =
+                null,
+
+            upNextText =
+                buildWatchingUpNextText(
+                    nextToWatch =
+                        item.nextToWatch,
+
+                    lastWatched =
+                        lastWatched,
+
+                    status =
+                        item.status
+                ),
+
+            mediaType =
+                "series",
+
+            source =
+                "watching",
+
+            season =
+                nextSeason,
+
+            episode =
+                nextEpisode
+        )
+    }
+
     private fun buildWatchingUpNextText(
         nextToWatch: String?,
         lastWatched: String?,
@@ -3276,6 +3387,16 @@ class SimklRepository(
 
         private const val CONTINUE_WATCHING_DISK_TTL_MS =
             6L * 60L * 60L * 1000L
+
+        /*
+         * Cap on how many pages of the COMPLETED shows list Continue Watching
+         * walks. Simkl pages this list and a long-lived account's completed
+         * library is large, so the walk stops at an empty page OR here - a
+         * safety net, not a limit anyone should hit (each page is a slim
+         * tally payload).
+         */
+        private const val MAX_COMPLETED_SHOW_PAGES =
+            10
 
         // Disk-cache keys are PROFILE-SCOPED at use time (see diskKey()):
         // the underlying tmdb_json_cache table is a shared DB, and these

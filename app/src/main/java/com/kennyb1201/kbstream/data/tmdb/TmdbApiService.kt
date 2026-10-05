@@ -112,6 +112,33 @@ interface TmdbApiService {
         @Query("api_key") apiKey: String
     ): TmdbDiscoverResponse
 
+    /**
+     * Shows airing in the next seven days - the real "airing now" feed, as
+     * opposed to a discover window. Item shape matches a discover response.
+     */
+    @GET("tv/on_the_air")
+    suspend fun getTvOnTheAir(
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    /**
+     * The weekly trending feed. Named apart from [getTrendingMovies] /
+     * [getTrendingTv] because those return the search-shaped model; these return
+     * the discover shape the rail builders already consume.
+     */
+    @GET("trending/movie/week")
+    suspend fun getTrendingMoviesDiscover(
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
+    @GET("trending/tv/week")
+    suspend fun getTrendingTvDiscover(
+        @Query("api_key") apiKey: String,
+        @Query("page") page: Int = 1
+    ): TmdbDiscoverResponse
+
     @GET("discover/movie")
     suspend fun discoverMovieByCompany(
         @Query("with_companies") companyId: Int,

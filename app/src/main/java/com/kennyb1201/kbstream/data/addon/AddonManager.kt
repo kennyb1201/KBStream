@@ -379,6 +379,39 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         }
     }
 
+    /**
+     * Another profile's effective add-on list, for the copy flow.
+     *
+     * Reads that profile's OWN scoped store - never the active one - and falls
+     * back to the built-in defaults exactly as a normal load does, so a profile
+     * that never customized its list still offers something to copy.
+     */
+    fun installedAddonsFor(profileId: String): List<InstalledAddon> {
+        synchronized(stateLock) {
+            return loadFromPreferencesOrDefaults(profileId)
+        }
+    }
+
+    /**
+     * Merges [incoming] into the active profile's add-ons, skipping any whose
+     * manifest URL is already installed (same manifest = same add-on). Returns
+     * how many were actually added.
+     *
+     * The copied entries carry the source profile's cached manifest (catalogs,
+     * resources, custom names), so no network round-trip is needed to make them
+     * usable; the ordinary background manifest refresh updates them afterwards.
+     */
+    fun importAddons(incoming: List<InstalledAddon>): Int {
+        var added = 0
+        updateInstalled { current ->
+            val have = current.mapTo(mutableSetOf()) { it.manifestUrl }
+            val fresh = incoming.filterNot { it.manifestUrl in have }
+            added = fresh.size
+            if (fresh.isEmpty()) null else current + fresh
+        }
+        return added
+    }
+
     fun saveInstalledAddons(
         addons: List<InstalledAddon>,
         // True for a user-visible change (rename/reorder/hide/install). The

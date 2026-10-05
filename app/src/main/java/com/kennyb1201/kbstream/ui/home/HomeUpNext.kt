@@ -47,7 +47,19 @@ internal const val DISMISSALS_SYNCED_AT = "dismissals_synced_at"
  * season walk (see HomeViewModel's local next-up builder); the list is ordered
  * newest completion first, so the cap only trims the tail of a long history.
  */
-internal const val MAX_LOCAL_NEXT_UP_ITEMS = 25/** Parallel TMDB resolutions while building the local next-up cards. */
+internal const val MAX_LOCAL_NEXT_UP_ITEMS = 25
+
+/**
+ * Ceiling on the RETURNING-show pass that runs after the 25-cap above: shows
+ * whose whole watched run is old enough to have been trimmed off the tail, but
+ * which TMDB says now have aired episodes beyond what was watched (a new season
+ * dropped). Kept small and separate so the [MAX_LOCAL_NEXT_UP_ITEMS] ordering
+ * for active shows is never disturbed - these cards are appended after those.
+ */
+internal const val MAX_RETURNING_SHOW_ITEMS =
+    10
+
+/** Parallel TMDB resolutions while building the local next-up cards. */
 internal const val LOCAL_NEXT_UP_CONCURRENCY =
     4
 

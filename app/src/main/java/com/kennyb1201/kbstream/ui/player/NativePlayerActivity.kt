@@ -839,6 +839,38 @@ class NativePlayerActivity : ComponentActivity() {
 
     // State
     private val handler = Handler(Looper.getMainLooper())
+
+    /**
+     * The OkHttp client every playback source and the guide prefetcher share.
+     *
+     * Hoisted out of [createPlayer] so the warm connection pool (DNS + TLS +
+     * TCP) survives a source switch or a rebuild instead of being thrown away
+     * with each player. OkHttpClient is built to be shared and nothing here is
+     * per-source - the timeouts are static - so one instance is both correct
+     * and the point.
+     */
+    private val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(30L, TimeUnit.SECONDS)
+            .readTimeout(60L, TimeUnit.SECONDS)
+            .build()
+    }
+
+    /**
+     * Warms the channel under the guide's focus so the next tune opens on a live
+     * socket instead of a cold handshake (see [LiveChannelPrefetch]). Shares
+     * [httpClient], so the warm also carries into the player the tune builds.
+     */
+    private val liveChannelPrefetch: LiveChannelPrefetch by lazy {
+        LiveChannelPrefetch(
+            client = httpClient,
+            resolveHeaders = { channel -> LiveChannelPrefetchRules.headersFor(channel) },
+            currentChannelId = { currentZapChannel()?.channelId },
+            // Only meaningful while the guide is up on a live session: a row
+            // focus anywhere else is not a tune waiting to happen.
+            canFire = { isGuideShowing && isLiveChannel }
+        )
+    }
     // Discovers Stremio-addon subtitles and merges them into the player as
     // sidecar text tracks (see AddonSubtitleController).
     private lateinit var addonSubtitleController: AddonSubtitleController
@@ -1122,6 +1154,14 @@ class NativePlayerActivity : ComponentActivity() {
     // policy change for heavy 4K sources has to be based on that split.
     private var startupTraceStartMs = 0L
     private var firstReadyAtMs = 0L
+
+    // Live-zap trace: set when a channel change starts (see [tuneToChannel]) and
+    // consumed on the next STATE_READY, so the user-perceived zap - banner to
+    // picture - is measured separately from [startupTraceStartMs]. That one is
+    // anchored at createPlayer(), which says nothing after a light zap like the
+    // one in [lightSwitchLiveChannel], because it never rebuilds the player and
+    // so never re-enters the source-ready block.
+    private var zapTraceStartMs = 0L
 
     // Black-video watchdog: some files reach READY with audio playing but the
     // video decoder never produces a frame (silent black screen, no error).
@@ -1426,6 +1466,19 @@ class NativePlayerActivity : ComponentActivity() {
     private fun tuneToChannel(index: Int, channel: LiveChannelZapRegistry.ZapChannel) {
         zapChannelIndex = index
 
+        // Diagnostics: was this channel warmed by the guide prefetch? The hit
+        // rate (warm zaps / all zaps) is the whole point of tracking it - see
+        // LiveChannelPrefetch and Diagnostics.playbackLine.
+        com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
+            "live.prefetch_warm",
+            if (liveChannelPrefetch.recentlyWarmed(channel.channelId)) 1L else 0L
+        )
+
+        // The zap clock starts here, before the banner paints, so the span
+        // covers everything the viewer waits through. Consumed on the next
+        // STATE_READY (see createPlayerListener).
+        zapTraceStartMs = System.currentTimeMillis()
+
         // Every live channel change comes through here, so this is where the
         // previous-channel pair is kept: the channel being left becomes the
         // recall target and this one becomes the channel playing now.
@@ -1466,6 +1519,11 @@ class NativePlayerActivity : ComponentActivity() {
             hasPlayedOnce = true
             hideSplash()
             bufferingSpinner.visibility = View.VISIBLE
+        } else {
+            // Re-tuned to the channel already playing: no load, so no READY to
+            // measure. Drop the clock rather than leave it to time some later,
+            // unrelated READY.
+            zapTraceStartMs = 0L
         }
     }
 
@@ -4583,6 +4641,55 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Player Creation ---
+    /**
+     * The [MediaItem.Builder] for the current source, exactly as [createPlayer]
+     * assembles it: the URL, its resolved mime type, the now-playing metadata
+     * surfaced to system/external controllers, and any Widevine DRM config.
+     *
+     * Extracted so the live-zap light path hands the running player the same
+     * shape a full rebuild would have produced - a channel change cannot drift
+     * from a fresh load. [createPlayer] still owns everything past this point
+     * (subtitles, media sources, renderers, session).
+     */
+    private fun newMediaItemBuilder(mimeType: String?): MediaItem.Builder {
+        val builder = MediaItem.Builder().setUri(currentUrl)
+        if (mimeType != null) builder.setMimeType(mimeType)
+
+        // Surface now-playing info to system/external media controllers
+        // (Android TV launcher, phone remote apps, BT headset displays).
+        val mdBuilder = MediaMetadata.Builder()
+        val episodeLabel = if (season != null && episode != null) {
+            buildString {
+                append("S").append(season).append("E").append(episode)
+                if (!episodeTitle.isNullOrBlank()) append(" \u2022 ").append(episodeTitle)
+            }
+        } else null
+        mdBuilder.setTitle(if (!episodeLabel.isNullOrBlank()) episodeLabel else itemName)
+            .setArtist(itemName.takeIf { episodeLabel != null })
+            .setAlbumTitle(itemName.takeIf { it.isNotBlank() })
+        itemPoster?.let { mdBuilder.setArtworkUri(Uri.parse(it)) }
+        overview?.let { if (it.isNotBlank()) mdBuilder.setDescription(it) }
+        builder.setMediaMetadata(mdBuilder.build())
+
+        // DRM: set license URL and headers on the MediaItem so ExoPlayer's
+        // built-in DRM negotiation handles Widevine playback.
+        if (!drmLicenseUrl.isNullOrBlank()) {
+            val drmHeaders = drmHeaders
+            builder.setDrmConfiguration(
+                MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
+                    .setLicenseUri(drmLicenseUrl)
+                    .apply {
+                        if (drmHeaders.isNotEmpty()) {
+                            setLicenseRequestHeaders(drmHeaders)
+                        }
+                    }
+                    .build()
+            )
+            Log.i("PLAYER_DRM", "Widevine DRM configured: $drmLicenseUrl")
+        }
+        return builder
+    }
+
     // DefaultTrackSelector.Parameters.Builder(Context) is deprecated in media3
     // 1.9; the no-arg Builder() is not a drop-in for the context-derived
     // defaults, so this waits for the media3 upgrade.
@@ -4618,12 +4725,9 @@ class NativePlayerActivity : ComponentActivity() {
         // a slow-but-valid source does not get killed before the retry
         // ladder can act. The startup / stall / black-video watchdogs still
         // bound total wait time.
-        val okHttpClient = OkHttpClient.Builder()
-            .connectTimeout(30L, TimeUnit.SECONDS)
-            .readTimeout(60L, TimeUnit.SECONDS)
-            .build()
-        val httpFactory = androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(okHttpClient)
-            .setUserAgent(agent)
+        val httpFactory =
+            androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(httpClient)
+                .setUserAgent(agent)
 
         // Trailer playback from TrailerPlayerLauncher hands us googlevideo
         // signed URLs. Those 403 on open-ended/unbounded requests unless the
@@ -4901,41 +5005,7 @@ class NativePlayerActivity : ComponentActivity() {
 
         val mimeType =
             if (retryAttempt < RAW_EXTRACTOR_PROBE_ATTEMPT) resolveMimeType(currentUrl) else null
-        val mediaItemBuilder = MediaItem.Builder().setUri(currentUrl)
-        if (mimeType != null) mediaItemBuilder.setMimeType(mimeType)
-
-        // Surface now-playing info to system/external media controllers
-        // (Android TV launcher, phone remote apps, BT headset displays).
-        val mdBuilder = MediaMetadata.Builder()
-        val episodeLabel = if (season != null && episode != null) {
-            buildString {
-                append("S").append(season).append("E").append(episode)
-                if (!episodeTitle.isNullOrBlank()) append(" \u2022 ").append(episodeTitle)
-            }
-        } else null
-        mdBuilder.setTitle(if (!episodeLabel.isNullOrBlank()) episodeLabel else itemName)
-            .setArtist(itemName.takeIf { episodeLabel != null })
-            .setAlbumTitle(itemName.takeIf { it.isNotBlank() })
-        itemPoster?.let { mdBuilder.setArtworkUri(Uri.parse(it)) }
-        overview?.let { if (it.isNotBlank()) mdBuilder.setDescription(it) }
-        mediaItemBuilder.setMediaMetadata(mdBuilder.build())
-
-        // DRM: set license URL and headers on the MediaItem so ExoPlayer's
-        // built-in DRM negotiation handles Widevine playback.
-        if (!drmLicenseUrl.isNullOrBlank()) {
-            val drmHeaders = drmHeaders
-            mediaItemBuilder.setDrmConfiguration(
-                MediaItem.DrmConfiguration.Builder(C.WIDEVINE_UUID)
-                    .setLicenseUri(drmLicenseUrl)
-                    .apply {
-                        if (drmHeaders.isNotEmpty()) {
-                            setLicenseRequestHeaders(drmHeaders)
-                        }
-                    }
-                    .build()
-            )
-            Log.i("PLAYER_DRM", "Widevine DRM configured: $drmLicenseUrl")
-        }
+        val mediaItemBuilder = newMediaItemBuilder(mimeType)
 
         val resolvedBufferMode = if (bufferMode == 2) {
             // Auto: live IPTV channels and HLS manifests take the low-latency
@@ -5424,6 +5494,18 @@ class NativePlayerActivity : ComponentActivity() {
                     updateUIBuffering()
                 }
                 Player.STATE_READY -> {
+                    // A channel change reaches its first READY here: the zap is
+                    // over for the viewer. Recorded before the source-ready
+                    // block below because the light path never rebuilt the
+                    // player, so firstReadyAtMs is already spent and that block
+                    // is skipped.
+                    if (zapTraceStartMs > 0L) {
+                        com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
+                            "playback.zap_ready",
+                            System.currentTimeMillis() - zapTraceStartMs
+                        )
+                        zapTraceStartMs = 0L
+                    }
                     // First READY of this attempt: the point that splits
                     // "source loaded" from "decoder painted".
                     if (firstReadyAtMs == 0L) {
@@ -8533,6 +8615,7 @@ class NativePlayerActivity : ComponentActivity() {
     private fun dismissChannelGuide() {
         if (!isGuideShowing) return
         isGuideShowing = false
+        liveChannelPrefetch.cancel()
         channelGuideJob?.cancel()
         channelGuideJob = null
         channelGuideWatchJob?.cancel()
@@ -8601,7 +8684,14 @@ class NativePlayerActivity : ComponentActivity() {
         }
         val adapter = list.adapter as? ChannelGuideAdapter
         if (adapter == null) {
-            list.adapter = ChannelGuideAdapter().also { it.submit(rows) }
+            list.adapter = ChannelGuideAdapter().also {
+                // Focus the viewer rests on warms that channel's playlist before
+                // the press lands (see LiveChannelPrefetch).
+                it.onRowFocused = { index ->
+                    liveChannelPrefetch.onChannelFocused(lineupChannels().getOrNull(index))
+                }
+                it.submit(rows)
+            }
         } else {
             // The EPG pass repaints the rows the viewer is already browsing. A
             // full rebind can hand the D-pad back to the list, so the row that
@@ -10549,6 +10639,9 @@ class NativePlayerActivity : ComponentActivity() {
         clockHandler.removeCallbacks(clockRunnable)
         scrubHandler.removeCallbacksAndMessages(null)
         zapHandler.removeCallbacksAndMessages(null)
+        // A guide prefetch still sitting on its debounce has no business firing
+        // from a screen that is leaving (see LiveChannelPrefetch).
+        liveChannelPrefetch.cancel()
         scrubDirection = 0
         // The preview decoder goes with them: the session is leaving the screen,
         // and a second decoder held behind a backgrounded player helps nobody.
@@ -10717,7 +10810,72 @@ class NativePlayerActivity : ComponentActivity() {
             showSplash()
         }
         dismissPicker()
-        recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)
+        // A live channel change does not need a new player: the running
+        // ExoPlayer, already bound to this Surface, can take the next channel's
+        // MediaItem and re-init its single video renderer in place - the path
+        // it runs for any playlist advance. [recreatePlayer] and its
+        // [SOURCE_SWITCH_SETTLE_MS] wait exist only because a SECOND player
+        // configuring onto a Surface the outgoing decoder still holds comes
+        // back OMX_ErrorInsufficientResources on the Realtek/TCL stack; with no
+        // second player there is nothing to wait out. VOD switches and the
+        // error ladders still rebuild.
+        if (isLiveChannel && exoPlayer != null) {
+            lightSwitchLiveChannel()
+        } else {
+            recreatePlayer(settleMs = SOURCE_SWITCH_SETTLE_MS)
+        }
+    }
+
+    /**
+     * Hands the running player the current source without rebuilding it - the
+     * live-zap fast path (see [switchToSource]).
+     *
+     * The Surface is deliberately left attached ([androidx.media3.ui.PlayerView.player]
+     * is not touched): the point is that nothing is torn down. The one video
+     * renderer releases its codec and re-initialises on the playback thread in
+     * sequence, which is ExoPlayer's ordinary playlist path and what the rest of
+     * the TV ecosystem does on these boxes. If a box ever does refuse the
+     * in-place re-init, the existing decoder-failure ladder
+     * ([decoderResourceFallbackDone], [decoderFailureRetried], and the
+     * black-video watchdog's own rebuild) recovers it into the very rebuild a
+     * zap used to always pay for - not a dead card.
+     *
+     * [tuneToChannel]'s banner, spinner and recall logic are left exactly as
+     * they are; this only changes what happens to the player underneath them.
+     */
+    private fun lightSwitchLiveChannel() {
+        val player = exoPlayer ?: return
+        // A rebuild queued by an earlier recreatePlayer must not run on top of
+        // this switch: bumping the generation makes it a no-op, exactly as
+        // recreatePlayer's own bump does.
+        playerGeneration++
+        // The outgoing channel's watchdogs are stale the moment it is left.
+        // (The startup and stall watchdogs only arm on VOD; the live watchdog
+        // is the one that can be pending here.) The black-video watchdog's
+        // armed tick needs no bump: [firstFrameRendered] stays true across a
+        // channel change, which is what it checks first.
+        stallWatchdogToken++
+        liveWatchdogToken++
+        // The scrub preview decodes the source being replaced; hand it back
+        // before the new channel asks for a decoder - one 4K decode at a time
+        // on this class of box (same reason recreatePlayer does it).
+        stopTrickplay()
+        // The cue handler holds cues from the channel being left and is a
+        // listener on the player that survives here (it does not on a rebuild).
+        // Detach it and add a fresh one to the same player, mirroring how
+        // createPlayer wires it.
+        subtitleCueHandler?.let { cueHandler ->
+            cueHandler.cancelPending()
+            player.removeListener(cueHandler)
+        }
+        subtitleCueHandler = SubtitleCueHandler().also { player.addListener(it) }
+        // The same MediaItem createPlayer() would have built for this URL,
+        // handed to the running player. prepare() restarts the load; the Surface
+        // is already attached, so there is no re-attach and no settle.
+        val mimeType = resolveMimeType(currentUrl)
+        player.setMediaItem(newMediaItemBuilder(mimeType).build(), 0L)
+        player.prepare()
+        player.playWhenReady = true
     }
 
     /**

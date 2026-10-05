@@ -1209,6 +1209,31 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * TMDB /tv/on_the_air: shows airing in the next seven days. The real
+     * "airing now" feed - discover has no equivalent, which is why the built-in
+     * guest rails leaned on a premiere-date window before this existed.
+     */
+    suspend fun onTheAir(page: Int = 1): List<TmdbDiscoverItem>? {
+        if (apiKey.isBlank()) return null
+        return runCatchingCancellable {
+            api.getTvOnTheAir(apiKey, page).results
+        }.getOrNull()
+    }
+
+    /**
+     * TMDB /trending/{movie,tv}/week. [mediaType] is "movie" or "tv"; the
+     * response carries the same item shape as a discover page.
+     */
+    suspend fun trendingWeek(mediaType: String, page: Int = 1): List<TmdbDiscoverItem>? {
+        if (apiKey.isBlank()) return null
+        val isTv = mediaType.lowercase() == "tv"
+        return runCatchingCancellable {
+            if (isTv) api.getTrendingTvDiscover(apiKey, page).results
+            else api.getTrendingMoviesDiscover(apiKey, page).results
+        }.getOrNull()
+    }
+
+    /**
      * TMDB "LIST" source: items of a hosted TMDB list id. Kids Mode note:
      * /list items are heterogeneous (movies + series mixed), so the ceiling
      * check keys off each item's own media type — inferred the same way the

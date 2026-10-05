@@ -55,6 +55,14 @@ object ProfileManager {
         // Bedtime as minutes after midnight (e.g. 1260 = 9:00 PM);
         // 0 = no bedtime. Locks the app from bedtime until 4:00 AM.
         val kidsBedtimeMinutes: Int = 0,
+        // ── Guest profile ───────────────────────────────────────────
+        // A profile whose Home leads with a fixed set of built-in, TMDB-backed
+        // rails (the two Top 10s, Latest Digital Releases, Airing Now,
+        // Trending, Popular, Top Rated) instead of the pinned add-on rows - so
+        // a profile with no add-ons installed still opens onto a full screen.
+        // Add-ons can still be installed on top; this only decides what leads
+        // when there are none. Independent of Kids Mode.
+        val guest: Boolean = false,
         val createdAt: Long = System.currentTimeMillis()
     )
 
@@ -308,6 +316,26 @@ object ProfileManager {
         return true
     }
 
+    /**
+     * Turns a profile into (or out of) a guest profile - see [Profile.guest].
+     * Purely a Home-presentation flag: it grants no access and hides nothing.
+     */
+    fun setGuest(context: Context, profileId: String, guest: Boolean): Boolean {
+        val updated = loadProfiles(context).map { p ->
+            if (p.id != profileId) p else p.copy(guest = guest)
+        }
+        saveProfiles(context, updated)
+        _profiles.value = updated
+        pushProfilesBlob(context, updated)
+        if (_activeProfile.value?.id == profileId) {
+            _activeProfile.value = updated.firstOrNull { it.id == profileId }
+        }
+        return true
+    }
+
+    /** True when the active profile is a guest profile (see [Profile.guest]). */
+    fun activeIsGuest(): Boolean = _activeProfile.value?.guest == true
+
     fun hasPin(profile: Profile): Boolean = !profile.pinHash.isNullOrBlank()
 
     fun verifyPin(profile: Profile, pin: String): Boolean =
@@ -551,6 +579,7 @@ object ProfileManager {
                             put("kidsRequirePinToExit", p.kidsRequirePinToExit)
                             put("kidsDailyLimitMinutes", p.kidsDailyLimitMinutes)
                             put("kidsBedtimeMinutes", p.kidsBedtimeMinutes)
+                            put("guest", p.guest)
                             put("createdAt", p.createdAt)
                         }
                     )
@@ -680,6 +709,7 @@ object ProfileManager {
                 kidsBedtimeMinutes =
                     (str("kidsBedtimeMinutes")?.toIntOrNull() ?: 0)
                         .coerceIn(0, 24 * 60 - 1),
+                guest = bool("guest", default = false),
                 createdAt = lng("createdAt") ?: 0L
             )
         }

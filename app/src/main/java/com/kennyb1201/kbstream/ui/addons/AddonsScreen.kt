@@ -88,6 +88,12 @@ fun AddonsScreen(
     val health by viewModel.health.collectAsStateWithLifecycle()
     val checkingHealth by viewModel.checkingHealth.collectAsStateWithLifecycle()
     val catalogConfigurations by viewModel.catalogConfigurations.collectAsStateWithLifecycle()
+    // Other profiles, for the copy flow (this profile's own add-ons are the list
+    // on screen; there is nothing to copy from itself).
+    val profiles by com.kennyb1201.kbstream.data.sync.ProfileManager.profiles
+        .collectAsStateWithLifecycle()
+    val activeProfile by com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+        .collectAsStateWithLifecycle()
 
     var urlInput by remember { mutableStateOf("") }
     var selectedId by remember { mutableStateOf<String?>(null) }
@@ -102,6 +108,7 @@ fun AddonsScreen(
     var showFilterDialog by remember { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf("") }
     var showCatalogManager by remember { mutableStateOf(false) }
+    var showCopyDialog by remember { mutableStateOf(false) }
     var renameCatalogTarget by remember { mutableStateOf<CatalogConfiguration?>(null) }
     var renameCatalogDraft by remember { mutableStateOf("") }
 
@@ -175,6 +182,13 @@ fun AddonsScreen(
                     label = "HOME / COLLECTIONS",
                     icon = Icons.AutoMirrored.Filled.List,
                     onClick = { showCatalogManager = true }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                ActionButton(
+                    label = "COPY FROM PROFILE",
+                    icon = Icons.AutoMirrored.Filled.List,
+                    enabled = profiles.any { it.id != activeProfile?.id },
+                    onClick = { showCopyDialog = true }
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 ActionButton(label = "BACK", onClick = onBack)
@@ -491,6 +505,27 @@ fun AddonsScreen(
                 renameCatalogTarget = config
             },
             onDismiss = { showCatalogManager = false }
+        )
+    }
+
+    if (showCopyDialog) {
+        CopyAddonsDialog(
+            profiles = profiles.filter { it.id != activeProfile?.id },
+            loadAddons = { profileId ->
+                com.kennyb1201.kbstream.data.addon.AddonManager
+                    .getInstance(context)
+                    .installedAddonsFor(profileId)
+            },
+            onImport = { picked ->
+                com.kennyb1201.kbstream.data.addon.AddonManager
+                    .getInstance(context)
+                    .importAddons(picked)
+                // The list on screen is the active profile's; re-read it so the
+                // copied add-ons appear immediately.
+                viewModel.refresh()
+                showCopyDialog = false
+            },
+            onDismiss = { showCopyDialog = false }
         )
     }
 

@@ -122,6 +122,12 @@ fun ProfileEditScreen(
                 ?: ProfileManager.KIDS_DEFAULT_MAX_AGE
         )
     }
+    // Guest profile: Home leads with a fixed set of built-in TMDB rails so
+    // the profile needs no add-ons. Independent of Kids Mode (a profile can
+    // be a kids profile, a guest profile, both, or neither).
+    var guestProfile by remember(effectiveEditId) {
+        mutableStateOf(editing?.guest ?: false)
+    }
     // Kids Mode option toggles (each only read when kids mode is on).
     var kidsHideAddons by remember(effectiveEditId) {
         mutableStateOf(editing?.kidsHideAddons ?: true)
@@ -306,6 +312,43 @@ fun ProfileEditScreen(
                 keyboardType = KeyboardType.NumberPassword,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.weight(1f)
+            )
+        }
+
+        // ── Guest profile ──────────────────────────────────────────
+        Text(
+            text = "Guest profile",
+            style = MaterialTheme.typography.titleMedium,
+            color = KBTextHi,
+            modifier = Modifier.padding(top = 24.dp)
+        )
+        Text(
+            text = if (guestProfile)
+                "Home leads with a fixed set of built-in rails - the two Top 10 " +
+                    "rows, new releases, airing now, trending, popular and top " +
+                    "rated - so this profile needs no add-ons."
+            else
+                "Turn on for a profile that needs no add-ons: Home leads with " +
+                    "built-in TMDB rails for movies and shows.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 2.dp)
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .padding(top = 10.dp)
+                .focusGroup()
+        ) {
+            ProfileChip(
+                label = "Off",
+                selected = !guestProfile,
+                onClick = { guestProfile = false }
+            )
+            ProfileChip(
+                label = "On",
+                selected = guestProfile,
+                onClick = { guestProfile = true }
             )
         }
 
@@ -647,6 +690,10 @@ fun ProfileEditScreen(
                             (editing.customAvatarUrl != null || editing.avatarData != null) ->
                             ProfileManager.setCustomAvatar(context, editing.id, null)
                     }
+                }
+                // Apply the guest flag after the profile itself is saved.
+                kidsTargetId?.let { id ->
+                    ProfileManager.setGuest(context, id, guestProfile)
                 }
                 // Apply Kids Mode after the profile itself is saved.
                 kidsTargetId?.let { id ->

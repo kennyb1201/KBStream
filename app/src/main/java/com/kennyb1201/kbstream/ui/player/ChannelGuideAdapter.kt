@@ -43,6 +43,13 @@ internal class ChannelGuideAdapter : RecyclerView.Adapter<ChannelGuideAdapter.Vi
 
     private var rows: List<ChannelGuideRow> = emptyList()
 
+    /**
+     * Reports the adapter position of a row as it takes focus. The player uses
+     * it to warm the channel's playlist before the press lands (see
+     * LiveChannelPrefetch). Null until the activity wires it up.
+     */
+    var onRowFocused: ((Int) -> Unit)? = null
+
     internal class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
         val number: TextView = view.findViewById(R.id.channel_guide_item_number)
         val name: TextView = view.findViewById(R.id.channel_guide_item_name)
@@ -113,6 +120,11 @@ internal class ChannelGuideAdapter : RecyclerView.Adapter<ChannelGuideAdapter.Vi
 
         holder.itemView.isSelected = row.isCurrent
         holder.itemView.setOnClickListener { row.onClick() }
+        holder.itemView.setOnFocusChangeListener { _, focused ->
+            if (!focused) return@setOnFocusChangeListener
+            val position = holder.bindingAdapterPosition
+            if (position != RecyclerView.NO_POSITION) onRowFocused?.invoke(position)
+        }
     }
 
     override fun getItemCount() = rows.size
