@@ -10918,7 +10918,7 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     // --- Source Switching ---
-    fun switchToSource(stream: Stream) {
+    fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {
         val newUrl = stream.url ?: return
         if (newUrl == currentUrl) return
         // Carry the playhead only when the old source actually rendered
@@ -10991,13 +10991,20 @@ class NativePlayerActivity : ComponentActivity() {
         // playing like any other switch.
         fromActorReturn = false
         actorReturnOverlayShown = true
-        // A source switch is a fresh load, not a mid-playback rebuffer: reset
-        // the first-play latch so the full splash (backdrop + pulsing
-        // clearlogo) shows during the load instead of the small spinner. The
-        // actor-return gate still wins — those sessions keep the spinner.
-        hasPlayedOnce = false
-        if (!fromActorReturn) {
-            showSplash()
+        // A MANUAL source switch is a fresh load, not a mid-playback
+        // rebuffer: reset the first-play latch so the full splash (backdrop
+        // + pulsing clearlogo) shows during the load instead of the small
+        // spinner. The actor-return gate still wins — those sessions keep
+        // the spinner. An AUTOMATIC switch mid-show (error ladder, rebuffer
+        // downshift) is not a fresh load: the viewer is already watching, so
+        // keep the latch and let the small spinner + the reconnecting banner
+        // tryNextSource raised carry the switch instead of covering the video
+        // with the splash.
+        if (!isAutoRecovery || !hasPlayedOnce) {
+            hasPlayedOnce = false
+            if (!fromActorReturn) {
+                showSplash()
+            }
         }
         dismissPicker()
         // A live channel change does not need a new player: the running
@@ -11147,10 +11154,10 @@ class NativePlayerActivity : ComponentActivity() {
         if (delayMs > 0L) {
             handler.postDelayed({
                 errorMessageStr = null
-                switchToSource(nextStream)
+                switchToSource(nextStream, isAutoRecovery = true)
             }, delayMs)
         } else {
-            switchToSource(nextStream)
+            switchToSource(nextStream, isAutoRecovery = true)
         }
         return true
     }

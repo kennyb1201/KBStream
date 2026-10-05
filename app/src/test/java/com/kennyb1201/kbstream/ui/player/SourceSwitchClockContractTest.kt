@@ -68,7 +68,7 @@ class SourceSwitchClockContractTest {
     }
 
     private val nativeSwitch: String by lazy {
-        functionBody(NATIVE, "fun switchToSource(stream: Stream) {")
+        functionBody(NATIVE, "fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {")
     }
 
     @Test

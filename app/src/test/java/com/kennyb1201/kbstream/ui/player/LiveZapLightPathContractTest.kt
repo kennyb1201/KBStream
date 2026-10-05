@@ -62,7 +62,7 @@ class LiveZapLightPathContractTest {
 
     @Test
     fun `a live switch with a player takes the light path, not a rebuild`() {
-        val body = functionBody("fun switchToSource(stream: Stream) {")
+        val body = functionBody("fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {")
         assertTrue(
             "a live channel change must not tear the player down",
             body.contains("if (isLiveChannel && exoPlayer != null) {")

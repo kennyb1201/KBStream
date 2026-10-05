@@ -157,7 +157,7 @@ class RebufferDownshiftTest {
     @Test
     fun `a source switch resets the rebuffer window`() {
         val block = activitySource
-            .substringAfter("fun switchToSource(stream: Stream)")
+            .substringAfter("fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false)")
             .substringBefore("private fun maybeDownshiftOnRebuffer(")
         assertTrue(
             "a fresh source must not inherit the previous source's stalls",
