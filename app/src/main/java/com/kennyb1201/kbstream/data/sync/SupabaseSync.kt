@@ -879,12 +879,21 @@ object SupabaseSync {
      * [OutboxQueue.removeProfileScoped]); a queued progress write would
      * otherwise flush after the wipe and resurrect the row. Then the cloud
      * rows are deleted by their profile-scoped key, so only this profile's
-     * state is touched. Fire-and-forget, and a no-op when signed out - with
-     * no cloud copy there is nothing that can resurrect the rows.
+     * state is touched.
+     *
+     * Signed out: the cloud rows still exist but cannot be enumerated (that
+     * needs a session), so the wipe is STAGED from the local rows instead,
+     * tagged with the last account, and replayed on that account's next
+     * sign-in exactly like a single-row signed-out delete (see
+     * [stageSignedOutClear]). Without this the reset looked like it worked and
+     * then every resume row and marker came straight back on the next sync.
      */
     suspend fun clearWatchStateForActiveProfile() {
         val pid = currentProfileId()
-        if (!isSignedIn()) return
+        if (!isSignedIn()) {
+            stageSignedOutClear(pid)
+            return
+        }
 
         // Drop the queued writes BEFORE the tombstones: a queued progress
         // write would otherwise flush after the wipe and resurrect the row.
@@ -2191,6 +2200,73 @@ object SupabaseSync {
             )
         }
         Log.i(TAG, "staged ${cleanIds.size} signed-out delete(s) for $accountId")
+    }
+
+    /**
+     * Stages the Settings "Clear Continue Watching" wipe made while SIGNED OUT.
+     *
+     * The signed-in path enumerates the account's CLOUD rows and tombstones
+     * each. Signed out there is no session to enumerate with, but the local
+     * rows this reset is about to clear are the device's own record of what the
+     * account holds: every local history row becomes a history tombstone, and
+     * every local watched row that actually carries a marker (see
+     * [WatchedMarkerRules.shouldPublish]) becomes a cleared marker - the
+     * derived "nothing watched here" negatives are skipped, since they were
+     * never published and clearing them would only push noise to the account.
+     * All of it is filed under the last account and replayed on that account's
+     * next sign-in.
+     */
+    private suspend fun stageSignedOutClear(profileId: String?) {
+        val context = appContextRef?.get() ?: return
+        val accountId = SyncDeferredDeletes.lastAccountId(context) ?: return
+        val now = System.currentTimeMillis()
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
+
+        val history = runCatchingCancellable { db.watchHistoryDao().getAll() }
+            .getOrNull().orEmpty()
+        history.forEach { row ->
+            SyncDeferredDeletes.stage(
+                context,
+                SyncDeferredDeletes.Staged(
+                    accountId = accountId,
+                    table = TABLE_HISTORY,
+                    keyColumn = "item_id",
+                    key = scopedKey(row.id, profileId),
+                    payloadJson = HistoryTombstoneRules.tombstone(row.id, now).toString(),
+                    enqueuedAtMs = now
+                )
+            )
+        }
+
+        val watched = runCatchingCancellable { db.watchedStatusDao().getAll() }
+            .getOrNull().orEmpty()
+        val markers = watched
+            .filter { WatchedMarkerRules.shouldPublish(it.isWatched, it.isPartiallyWatched) }
+        markers.forEach { row ->
+            SyncDeferredDeletes.stage(
+                context,
+                SyncDeferredDeletes.Staged(
+                    accountId = accountId,
+                    table = TABLE_WATCHED,
+                    keyColumn = "item_key",
+                    key = scopedKey(row.key, profileId),
+                    payloadJson = WatchedMarkerRules.payload(
+                        key = row.key,
+                        imdbId = row.imdbId,
+                        mediaType = row.mediaType,
+                        isWatched = false,
+                        isPartiallyWatched = false,
+                        updatedAt = now
+                    ).toString(),
+                    enqueuedAtMs = now
+                )
+            )
+        }
+        Log.i(
+            TAG,
+            "staged signed-out clear for $accountId " +
+                "(${history.size} history, ${markers.size} watched)"
+        )
     }
 
     /**

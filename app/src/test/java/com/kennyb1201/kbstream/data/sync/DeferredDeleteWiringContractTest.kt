@@ -116,6 +116,28 @@ class DeferredDeleteWiringContractTest {
     }
 
     @Test
+    fun `a signed-out clear continues watching is staged, not dropped`() {
+        val body = functionBody("suspend fun clearWatchStateForActiveProfile(")
+        assertTrue(
+            "the signed-out branch must stage the wipe from the local rows",
+            body.contains("stageSignedOutClear(pid)")
+        )
+        val signedOut = body.indexOf("if (!isSignedIn()) {")
+        val staging = body.indexOf("stageSignedOutClear(pid)")
+        assertTrue("staging must be the signed-out branch", signedOut in 0 until staging)
+
+        val stagingBody = functionBody("private suspend fun stageSignedOutClear(")
+        assertTrue(
+            "local history rows must become tombstones",
+            stagingBody.contains("HistoryTombstoneRules.tombstone(row.id, now)")
+        )
+        assertTrue(
+            "only marker-bearing watched rows are cleared",
+            stagingBody.contains("WatchedMarkerRules.shouldPublish(it.isWatched, it.isPartiallyWatched)")
+        )
+    }
+
+    @Test
     fun `the account id lives in a store of its own`() {
         val store = readSource(SOURCE_STORE)
         assertTrue(
