@@ -96,6 +96,8 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
+import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
@@ -1510,6 +1512,17 @@ fun DetailScreen(
                 startOver = PlayFromBeginningSelection.consume()
             }
 
+            // Long press on the hero Play button opens this menu instead of
+            // jumping straight into the picker. The two rows are the same two
+            // a poster's long press offers (see PosterContextMenu's derived
+            // rows), because the button's long press means the same thing as
+            // every other long press in the app; the difference is that this
+            // screen already holds the target, so each row drives the press
+            // itself rather than navigating somewhere that would.
+            var playButtonMenu by remember {
+                mutableStateOf(false)
+            }
+
             val wantsBeginning =
                 initialTarget?.startFromBeginning == true || startOver
 
@@ -1984,15 +1997,12 @@ fun DetailScreen(
 
                         KBCard(
                             onClick = openStreams,
-                            // Long press = Play Manually: the same episode the
-                            // button would play, but the streams picker opens
-                            // instead of a source being auto-selected for it.
-                            // The marker below is what MainActivity reads to
-                            // skip auto-select; it consumes it on the way in.
-                            onLongClick = {
-                                ManualSourceSelection.request()
-                                openStreams()
-                            },
+                            // Long press opens the play menu (Play Manually /
+                            // Play from Beginning) rather than going straight
+                            // into the picker: with only the manual route there
+                            // was no way to ask this button to start the title
+                            // over.
+                            onLongClick = { playButtonMenu = true },
                             modifier = Modifier
                                 .padding(end = 8.dp)
                                 .focusRequester(
@@ -4084,6 +4094,39 @@ fun DetailScreen(
                     )
                 }
 
+                // The hero Play button's long-press menu. Both rows hand the
+                // press back to the auto-play effect above (which owns the one
+                // navigation into the picker) rather than building a second
+                // copy of it here: the flag each row sets is what that effect
+                // reads, and clearing `autoPlayed` lets it run again for a
+                // title whose screen has already auto-played once.
+                if (playButtonMenu) {
+                    PosterContextMenu(
+                        title = displayName.ifBlank { "Play" },
+                        subtitle = playLabel,
+                        actions = listOf(
+                            PosterContextAction(
+                                label = "Play from Beginning",
+                                description =
+                                    "Start this title over, ignoring saved progress"
+                            ) {
+                                playButtonMenu = false
+                                startOver = true
+                                autoPlayed = false
+                            },
+                            PosterContextAction(
+                                label = "Play Manually",
+                                description = "Pick a source instead of auto-selecting"
+                            ) {
+                                playButtonMenu = false
+                                manualPick = true
+                                autoPlayed = false
+                            }
+                        ),
+                        onDismiss = { playButtonMenu = false }
+                    )
+                }
+
                 episodeMenu?.let { target ->
                     val seasonWatchedSet =
                         WatchedEpisodeState
@@ -4803,9 +4846,40 @@ private fun EpisodeCard(
         airDatesTrusted && isEpisodeUnavailable(ep.airDate)
     }
 
+    // Spoiler-free mode. An episode the viewer has not started is listed
+    // without its own identity - no name, no synopsis, no frame from it - so
+    // browsing a season cannot hand them a plot they have not reached. Watched
+    // episodes and the one they are part-way through keep everything: the
+    // first is behind them, the second is where they left off. Read once per
+    // card; the mode is a preference and re-entering the screen re-reads it.
+    val spoilerFreeContext = LocalContext.current
+    val spoilerFree = remember(spoilerFreeContext) {
+        AppPreferences.getSpoilerFree(spoilerFreeContext)
+    }
+    val hidesSpoiler = SpoilerFree.hidesIdentity(
+        enabled = spoilerFree,
+        watched = isWatched,
+        started = progressFraction > 0f
+    )
+    val listedTitle = if (hidesSpoiler) {
+        SpoilerFree.episodeLabel(
+            hidden = true,
+            episodeNumber = ep.episodeNumber,
+            realTitle = ep.name
+        )
+    } else {
+        ep.name ?: ""
+    }
+
     PosterCard(
         posterUrl = posterUrl,
-        contentDescription = ep.name ?: "",
+        // Never the real name when hidden: a screen reader announcing "The
+        // Funeral" is the same spoiler the visible title is.
+        contentDescription = listedTitle,
+        // Blur is a RenderEffect and a no-op below API 31, so the cover drawn
+        // over the artwork in the content below is what actually holds on a
+        // Fire OS 7 box; this softens it on the boxes that can.
+        posterBlurRadius = if (hidesSpoiler) 18.dp else 0.dp,
         isWatched = isWatched,
         // An unaired episode still draws the UNAVAILABLE badge; it must not
         // also be playable. Clicking it used to launch source resolution for an
@@ -4820,6 +4894,40 @@ private fun EpisodeCard(
         Box(
             modifier = Modifier.fillMaxSize()
         ) {
+            if (hidesSpoiler) {
+                // The guarantee, on every API level, that no frame of an
+                // unwatched episode is legible - blurred artwork above it
+                // notwithstanding, since the blur is a platform no-op below
+                // API 31.
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(KBVoid.copy(alpha = 0.94f))
+                )
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    colors = SurfaceDefaults.colors(
+                        containerColor = KBVoid.copy(alpha = 0.85f)
+                    ),
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(10.dp)
+                ) {
+                    Box(
+                        modifier = Modifier.padding(
+                            horizontal = 5.dp,
+                            vertical = 1.dp
+                        )
+                    ) {
+                        Text(
+                            text = SpoilerFree.HIDDEN_STILL_LABEL,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = KBTextLo
+                        )
+                    }
+                }
+            }
+
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -4911,7 +5019,7 @@ private fun EpisodeCard(
                         }
                     }
 
-                    ep.name?.let { episodeName ->
+                    (if (hidesSpoiler) listedTitle else ep.name)?.let { episodeName ->
                         Text(
                             text = episodeName,
                             color = KBTextHi,
@@ -4924,8 +5032,11 @@ private fun EpisodeCard(
                     }
                 }
 
-                ep.overview
-                    ?.takeIf { it.isNotBlank() }
+                (if (hidesSpoiler) {
+                    SpoilerFree.HIDDEN_SYNOPSIS
+                } else {
+                    ep.overview?.takeIf { it.isNotBlank() }
+                })
                     ?.let { overviewText ->
                         Text(
                             text = overviewText,

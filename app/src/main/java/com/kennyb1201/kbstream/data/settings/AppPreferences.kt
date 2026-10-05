@@ -96,6 +96,11 @@ object AppPreferences {
     private const val KEY_TORBOX_API_KEY = "torbox_api_key"
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
     private const val KEY_AUTO_FETCH_SUBTITLES = "auto_fetch_subtitles"
+    // Spoiler-free browsing: an episode the viewer has not started is listed
+    // without its own title, still or synopsis (see data/spoiler/SpoilerFree).
+    // Synced: a viewing preference, and the two people sharing a TV are
+    // exactly the two who disagree about it.
+    private const val KEY_SPOILER_FREE = "spoiler_free"
     private const val KEY_HIDE_UPCOMING = "home_rail_hide_upcoming"
     private const val KEY_BROWSE_ENGLISH_ONLY = "browse_english_only"
     private const val KEY_LANDSCAPE_CARDS = "home_landscape_cards"
@@ -988,6 +993,17 @@ object AppPreferences {
 
     fun setAutoFetchSubtitles(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_FETCH_SUBTITLES, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Spoiler-free browsing ────────────────────────────────────────
+    // Off by default: whether an episode name is a spoiler depends on how the
+    // viewer watches, and the whole point is that they opt in.
+    fun getSpoilerFree(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SPOILER_FREE, false)
+
+    fun setSpoilerFree(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SPOILER_FREE, enabled).apply()
         syncDisplayPrefsBlob(context)
     }
 

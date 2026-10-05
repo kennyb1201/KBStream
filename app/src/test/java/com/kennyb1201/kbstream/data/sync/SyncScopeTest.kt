@@ -34,6 +34,18 @@ class SyncScopeTest {
     }
 
     @Test
+    fun `spoiler-free browsing syncs`() {
+        // How much of a show's own episode list a viewer wants to see is a
+        // viewing preference, so it follows the profile onto the other TV - and
+        // a key missing from the allow-list is the silent no-op push this class
+        // exists to catch.
+        assertTrue(
+            "spoiler_free must sync",
+            "spoiler_free" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        )
+    }
+
+    @Test
     fun `decoder and playback prefs stay per-device`() {
         // A Fire TV Stick and a projector need different decoders: not one of
         // these may ride the sync payload. The list lives beside the allow-list

@@ -348,6 +348,7 @@ fun SettingsScreen(
     var torboxKeyInput by remember { mutableStateOf(AppPreferences.getTorboxApiKey(context)) }
     var torboxKeySaved by remember { mutableStateOf(false) }
     var autoFetchSubtitles by remember { mutableStateOf(AppPreferences.getAutoFetchSubtitles(context)) }
+    var spoilerFree by remember { mutableStateOf(AppPreferences.getSpoilerFree(context)) }
     var torboxLibrarySync by remember { mutableStateOf(AppPreferences.getTorboxLibrarySync(context)) }
 
     // Reopen on the pane last read (device-local, deliberately not synced):
@@ -1881,6 +1882,21 @@ fun SettingsScreen(
                     onToggle = {
                         captionRating = it
                         AppPreferences.setPosterCaptionRating(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                ToggleRow(
+                    label = "Spoiler-free Episodes",
+                    description = "In a series' episode list, hide the title, still and " +
+                        "synopsis of episodes you have not started yet, so browsing a " +
+                        "season cannot give away a plot you have not reached. Watched " +
+                        "episodes and the one you are part-way through are unaffected.",
+                    checked = spoilerFree,
+                    onToggle = {
+                        spoilerFree = it
+                        AppPreferences.setSpoilerFree(context, it)
                     }
                 )
 

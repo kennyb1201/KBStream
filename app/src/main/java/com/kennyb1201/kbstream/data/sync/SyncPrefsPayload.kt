@@ -172,7 +172,9 @@ object PrefsPayloadBuilder {
         "auto_skip_credits",
         "preferred_audio_language",          // preferred track languages: same on every device
         "preferred_subtitle_language",
-        "auto_fetch_subtitles"               // subtitle auto-fetch: a viewing preference
+        "auto_fetch_subtitles",              // subtitle auto-fetch: a viewing preference
+        "spoiler_free"                       // spoiler-free browsing: how much of a show's
+                                             // own episode list the viewer wants to see
     )
 
     /**
