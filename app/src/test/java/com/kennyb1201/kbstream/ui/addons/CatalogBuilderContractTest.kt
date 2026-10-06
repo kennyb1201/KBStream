@@ -64,6 +64,8 @@ class CatalogBuilderContractTest {
         const val ADDONS_VM = "com/kennyb1201/kbstream/ui/addons/AddonsViewModel.kt"
         const val MANAGER = "com/kennyb1201/kbstream/ui/addons/AddonsHomeManagerDialog.kt"
         const val ADDONS_SCREEN = "com/kennyb1201/kbstream/ui/addons/AddonsScreen.kt"
+        const val SETTINGS_SCREEN =
+            "com/kennyb1201/kbstream/ui/settings/SettingsScreen.kt"
         const val MAIN = "com/kennyb1201/kbstream/MainActivity.kt"
         const val NAV = "com/kennyb1201/kbstream/NavStateSerialization.kt"
         const val SYNC_PAYLOAD = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
@@ -106,7 +108,8 @@ class CatalogBuilderContractTest {
         "certification",
         "withStatus",
         "withType",
-        "withoutNetworks"
+        "withoutNetworks",
+        "withReleaseType"
     )
 
     @Test
@@ -151,7 +154,8 @@ class CatalogBuilderContractTest {
             "withCast" to "Cast",
             "certification" to "Age rating",
             "withStatus" to "Status",
-            "withType" to "Show type"
+            "withType" to "Show type",
+            "withReleaseType" to "Release type"
         ).forEach { (_, label) ->
             assertTrue("the editor has no \"$label\" section", screen.contains("title = \"$label\""))
         }
@@ -307,6 +311,116 @@ class CatalogBuilderContractTest {
         )
     }
 
+    @Test
+    fun `the release-type filter reaches discover as with_release_type and a region`() {
+        // Movie-only in TMDB, and resolved against a REGION - so the chain is
+        // field -> query param -> named argument on the MOVIE discover only,
+        // and the region has to ride with it or the filter means nothing.
+        val discover = squash(source(TMDB_REPO))
+        val loader = between(discover, "suspend fun discoverKB(", "}.results")
+        assertTrue(
+            "discoverKB never forwards with_release_type",
+            loader.contains("withReleaseType = filters?.withReleaseType")
+        )
+        assertTrue(
+            "the release type has to be read against the viewer's country",
+            loader.contains("region = releaseRegion")
+        )
+        assertTrue(
+            "and the region is only sent when there is a release type to read",
+            discover.contains(
+                "val releaseRegion = filters?.withReleaseType?.let { filters.watchRegion }"
+            )
+        )
+        val api = squash(source(TMDB_API))
+        assertTrue(
+            "the movie discover has no with_release_type query",
+            api.contains("@Query(\"with_release_type\") withReleaseType: String? = null")
+        )
+        assertTrue(
+            "the movie discover has no region query",
+            api.contains("@Query(\"region\") region: String? = null")
+        )
+        assertFalse(
+            "a release type on the TV discover is a param TMDB ignores",
+            between(api, "suspend fun discoverTvGeneric(", "): TmdbDiscoverResponse")
+                .contains("with_release_type")
+        )
+        assertTrue(
+            "a media-type switch must drop the movie-only release filter",
+            source(BUILDER_MODELS)
+                .contains("withReleaseType = pruned.withReleaseType?.takeIf { !isTv }")
+        )
+        assertTrue(
+            "and the row is only drawn for movies",
+            squash(builder()).contains("if (!isTv) { EditorSection(title = \"Release type\")")
+        )
+    }
+
+    // ------------------------------------------------------ focus and custom --
+
+    @Test
+    fun `a focused chip is drawn with a ring, not just a tint`() {
+        // The whole builder is rows of same-shaped capsules and the D-pad is the
+        // only pointer. Focus used to change a surface tint and grow the capsule
+        // 4%, which is what "I cannot see what I am focused on" was about.
+        val chip = between(builder(), "private fun BuilderChip(", "private fun PickedFilterRow(")
+        assertTrue("no focused ring", chip.contains("focusedBorder ="))
+        assertTrue("no focus glow", chip.contains("focusedGlow ="))
+        assertTrue(
+            "no focus growth",
+            squash(chip).contains("focusedScale = KBFocusChip")
+        )
+        assertTrue(
+            "the ring must be the accent the rest of the app rings focus with",
+            squash(chip).contains("BorderStroke(2.dp, KBAccent)")
+        )
+    }
+
+    @Test
+    fun `every id row offers a way to enter an id its list does not carry`() {
+        val screen = squash(builder())
+        CatalogIdField.entries.forEach { field ->
+            assertTrue(
+                "${field.label} offers no way past its shipped chip list",
+                screen.contains("customField = CatalogIdField.${field.name}")
+            )
+        }
+        assertTrue("no id entry dialog", screen.contains("private fun CustomIdDialog("))
+        assertTrue(
+            "the dialog has to say what its ids are, or one is typed into the wrong row",
+            screen.contains("private fun customIdHint(")
+        )
+        assertTrue(
+            "the row's chip has to open that dialog",
+            screen.contains("onAddCustom = { customField = it }")
+        )
+        assertTrue(
+            "and what the viewer typed has to reach the view model",
+            screen.contains("onAddCustomIds(field, ids)")
+        )
+    }
+
+    @Test
+    fun `a hand-typed id lands on the same list the chips read`() {
+        // A second writer for the same list is how a typed id and a tapped chip
+        // drift apart; there is one, and it is the field's own merge.
+        val vm = squash(viewModel())
+        assertTrue(
+            "the typed ids must go through the field's merge",
+            vm.contains("field.withIds(filters, ids)")
+        )
+        val models = source(BUILDER_MODELS)
+        assertTrue(
+            "the merge keeps order and drops duplicates",
+            models.contains("val merged = (read(filters) + ids).distinct()")
+        )
+        assertTrue(
+            "and the movie-only id rows are the fields the screen passes",
+            models.contains("enum class CatalogIdField(")
+        )
+    }
+
     // ---------------------------------------------------------- arrangement --
 
     @Test
@@ -419,19 +533,29 @@ class CatalogBuilderContractTest {
     // -------------------------------------------------------------- routing --
 
     @Test
-    fun `the builder is reachable and back out of it lands on add-ons`() {
+    fun `the builder is reachable from settings and back out of it lands there`() {
         val main = source(MAIN)
         assertTrue(main.contains("data class CatalogBuilder(val returnTo: Screen = Home) : Screen()"))
         assertTrue(
             "the screen has to be rendered",
             main.contains("com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen(")
         )
+        val branch = between(main, "is Screen.CatalogBuilder ->", "is Screen.Search ->")
         assertTrue(
-            "and Back must return to Add-ons, keeping its own return path",
-            main.contains("screen = Screen.Addons(returnTo = current.returnTo)")
+            "and Back must return to whatever opened the builder, keeping its return path",
+            branch.contains("onBack = { screen = stableBackDestination(current.returnTo) }")
         )
         assertTrue(
-            "the Add-ons screen has to offer the door",
+            "Settings has to offer the door now that the Add-ons header does not",
+            main.contains("screen = Screen.CatalogBuilder(returnTo = Screen.Settings)")
+        )
+        assertTrue(
+            "and the settings pane is where the row lives",
+            source(SETTINGS_SCREEN).contains("label = \"Catalogs\"")
+        )
+        assertFalse(
+            "the door must have MOVED: a leftover Add-ons button is a second entry " +
+                "point that can drift from this one",
             source(ADDONS_SCREEN).contains("label = \"CATALOGS\"")
         )
         assertTrue(

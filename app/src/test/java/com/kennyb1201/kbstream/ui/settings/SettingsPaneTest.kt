@@ -59,7 +59,7 @@ class SettingsPaneTest {
     fun `the rail reads top to bottom the way it is declared`() {
         assertEquals(
             listOf(
-                "INTEGRATIONS", "HIDDEN",
+                "INTEGRATIONS", "COLLECTIONS", "HIDDEN",
                 "PLAYBACK", "VIDEO", "LANGUAGE", "SUBTITLES",
                 "INTERFACE", "DATA", "SYNC", "ABOUT"
             ),

@@ -545,6 +545,34 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
     }
 
     /**
+     * Release type (TMDB `with_release_type`), movie-only.
+     *
+     * A blank code is "any release", and tapping the chip that is already on
+     * clears the rule - the same single-select toggle the Type, Sort and TV
+     * shape rows use.
+     */
+    fun setReleaseType(value: String) {
+        setFilters { filters ->
+            val next = value.takeIf { it.isNotBlank() && it != filters.withReleaseType }
+            filters.copy(withReleaseType = next)
+        }
+    }
+
+    /**
+     * Adds ids the viewer typed themselves to one id-list filter.
+     *
+     * The chip rows are a fixed vocabulary; this is each row's way past it - a
+     * regional service, a niche studio, a network this build does not ship. The
+     * ids land on the same CSV the chips read and write, so a typed id is a
+     * rule like any other: visible as a chip, removable, and pruned by a
+     * media-type switch that cannot answer it.
+     */
+    internal fun addCustomIds(field: CatalogIdField, ids: List<Int>) {
+        if (ids.isEmpty()) return
+        setFilters { filters -> field.withIds(filters, ids) }
+    }
+
+    /**
      * Single-select decade -> the "1990-1999" year range the loader understands.
      *
      * Clearing the explicit release window is deliberate: `discoverKB` prefers

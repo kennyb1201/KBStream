@@ -237,9 +237,34 @@ class KBHomeViewModel(application: Application) : AndroidViewModel(application) 
                     val id = profile?.id
                     if (id == appliedProfileId) return@collect
                     appliedProfileId = id
-                    _state.value = UiState()
+                    resetForProfileSwitch()
                     load()
                 }
         }
+    }
+
+    /**
+     * Drops the outgoing profile's rail content the moment the profile changes.
+     *
+     * The COLLECTIONS go immediately. They come out of the profile's own blob,
+     * so leaving them up interleaves the outgoing profile's rows with the
+     * incoming one's until the reload lands - the "old rails flash" this handler
+     * exists for.
+     *
+     * The arrangement and the browse chips are NOT dropped: they are the
+     * INCOMING profile's own, read synchronously from its profile-scoped prefs
+     * (see [KBHomeOrderPrefs.get] / [BrowseHomeShortcuts.list]), and this is the
+     * layout Home is meant to be drawing. Emptying them for the length of a
+     * collection read left Home with no order to lay anything out in for the
+     * first frames after a switch, so the rails that did arrive early - the
+     * locally-known browse rows - sat at their default slots and then moved as
+     * the rest landed.
+     */
+    private fun resetForProfileSwitch() {
+        val context = getApplication<Application>()
+        _state.value = UiState(
+            arrangement = KBHomeOrderPrefs.get(context),
+            browseShortcuts = BrowseHomeShortcuts.list(context)
+        )
     }
 }

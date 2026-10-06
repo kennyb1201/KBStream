@@ -6,9 +6,9 @@ import androidx.compose.runtime.compositionLocalOf
 /**
  * The settings screen's search index.
  *
- * The rail is a list of ten panes; this is the list underneath it, of the
+ * The rail is a list of eleven panes; this is the list underneath it, of the
  * individual ROWS, so "where is the frame-rate switch" is answerable without
- * remembering which of ten panes it lives in. A result is navigation only: it
+ * remembering which of eleven panes it lives in. A result is navigation only: it
  * switches to the row's pane, scrolls the row into view and flashes it. It can
  * never change a setting.
  *
@@ -145,6 +145,26 @@ internal object SettingsSearchIndex {
             SettingsPane.INTEGRATIONS,
             "Badges above the file name",
             "badge badges position above below source picker file name"
+        ),
+
+        // ── Collections & Catalogs ────────────────────────────────────────────
+        // Both rows moved here from the Add-ons screen's header, which is now
+        // add-on management only. The manager dialog itself is still hosted by
+        // Add-ons (it is wired to that screen's view model), but the door is a
+        // settings row like any other, so it belongs in the index.
+        SettingSearchEntry(
+            "collections.home-manager",
+            SettingsPane.COLLECTIONS,
+            "Home / Collections",
+            "collection collections profile import arrange pin hide reorder home rail " +
+                "rails manager"
+        ),
+        SettingSearchEntry(
+            "collections.catalog-builder",
+            SettingsPane.COLLECTIONS,
+            "Catalogs",
+            "catalog catalogs build builder rule rules filter filters sort smart custom rail " +
+                "create"
         ),
 
         // ── Playback ──────────────────────────────────────────────────────────

@@ -177,7 +177,8 @@ internal fun normalizedFilters(filters: KBFilters?): KBFilters {
         certification = clean(source.certification),
         withStatus = clean(source.withStatus),
         withType = clean(source.withType),
-        withoutNetworks = clean(source.withoutNetworks)
+        withoutNetworks = clean(source.withoutNetworks),
+        withReleaseType = clean(source.withReleaseType)
     )
 }
 

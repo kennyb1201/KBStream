@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ClosedCaption
 import androidx.compose.material.icons.filled.Extension
@@ -151,6 +152,12 @@ internal enum class SettingsPane(
         "Profiles, add-ons, accounts and API keys",
         Icons.Filled.Extension
     ),
+    COLLECTIONS(
+        "Collections & Catalogs",
+        SettingsGroup.LIBRARY,
+        "Import collections and build your own catalog rails",
+        Icons.AutoMirrored.Filled.List
+    ),
     HIDDEN(
         "Hidden Titles",
         SettingsGroup.LIBRARY,
@@ -224,7 +231,15 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenAddons: () -> Unit = {},
     onOpenSimkl: () -> Unit = {},
-    onOpenProfiles: () -> Unit = {}
+    onOpenProfiles: () -> Unit = {},
+    /**
+     * Opens the Home rail manager. The manager is the Add-ons screen's dialog
+     * - it is wired to that screen's view model - so this navigates to the
+     * screen that hosts it rather than drawing a second one here.
+     */
+    onOpenCatalogManager: () -> Unit = {},
+    /** Opens the Catalog Builder: the rule-based "smart catalog" editor. */
+    onOpenCatalogBuilder: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -1025,6 +1040,26 @@ fun SettingsScreen(
                         badgesAboveFile = it
                         AppPreferences.setBadgesAboveFile(context, it)
                     }
+                )
+                }
+
+                if (selectedPane == SettingsPane.COLLECTIONS) {
+                SettingsSectionHeader("Collections", first = true)
+
+                NavigationRow(
+                    label = "Home / Collections",
+                    description = "Import a collections profile and arrange, pin or hide " +
+                        "the rails Home draws",
+                    onClick = onOpenCatalogManager
+                )
+
+                SettingsSectionHeader("Rule-based Catalogs")
+
+                NavigationRow(
+                    label = "Catalogs",
+                    description = "Build a catalog from filters and sort order, and Home " +
+                        "draws it as its own rail",
+                    onClick = onOpenCatalogBuilder
                 )
                 }
 

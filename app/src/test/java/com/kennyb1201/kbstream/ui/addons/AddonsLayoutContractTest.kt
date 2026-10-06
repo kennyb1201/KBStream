@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.addons
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -10,14 +11,20 @@ import org.junit.Test
  *
  * Reported from the field, on a set that reports 960dp: the page title rendered
  * as "ADD-O…" and the buttons at the end of the header row ("COPY FROM PROFILE",
- * "BACK") were off the right edge, unreachable; and the copy dialog's heading and
- * its COPY SELECTED / CANCEL row were clipped, because a Dialog clips content
- * taller than the screen instead of scrolling it.
+ * and "BACK" before it was removed) were off the right edge, unreachable; and the
+ * copy dialog's heading and its COPY SELECTED / CANCEL row were clipped, because
+ * a Dialog clips content taller than the screen instead of scrolling it.
+ *
+ * The header is add-on management only now: its own BACK is gone (the remote's
+ * Back follows the screen's return path, and two BACKs used to answer
+ * differently), and HOME / COLLECTIONS and CATALOGS are rows in Settings'
+ * "Collections & Catalogs" pane. The layout rules below are what those buttons
+ * taught, so they still apply to what is left.
  *
  * The three rules that keep those from coming back:
  *
  *  - the header TITLE keeps its own width - it was the weighted cell that
- *    absorbed whatever the six action buttons left, which on a narrow set is
+ *    absorbed whatever the action buttons left, which on a narrow set is
  *    nothing;
  *  - the action buttons WRAP (FlowRow) rather than being laid out past the end
  *    of the row. There is no sideways scroll on a TV remote, so nothing may be
@@ -96,13 +103,15 @@ class AddonsLayoutContractTest {
             "the action buttons must be laid out in a wrapping row",
             header.contains("FlowRow(")
         )
-        // Every button is inside the FlowRow: the last one closes it.
+        // Every button is inside the FlowRow: the row's block has to close
+        // after the last one, not swallow the ones that did not fit.
         val flowStart = header.indexOf("FlowRow(")
-        val backButton = header.indexOf("ActionButton(label = \"BACK\", onClick = onBack)")
-        assertTrue("BACK must exist", backButton > flowStart)
-        assertTrue(
-            "the wrapping row must close after BACK",
-            header.indexOf('}', backButton) < header.length
+        val buttons = Regex("ActionButton\\(").findAll(header).count()
+        assertTrue("the header must still draw its action buttons", buttons > 0)
+        assertEquals(
+            "a button outside the wrapping row is one laid out off the end of it",
+            buttons,
+            Regex("ActionButton\\(").findAll(header.substring(flowStart)).count()
         )
         assertTrue(
             "the wrapping row is why ExperimentalLayoutApi is opted into",
@@ -111,6 +120,27 @@ class AddonsLayoutContractTest {
         assertTrue(
             "the buttons stay right-aligned while they fit",
             header.contains("Spacer(modifier = Modifier.weight(1f))")
+        )
+    }
+
+    @Test
+    fun `the header is add-on management only`() {
+        // The screen's own BACK answered differently from the hardware BACK
+        // (Home vs wherever the viewer came from), and the two rail doors now
+        // live in Settings - so none of the three may come back here, where a
+        // second entry point would drift from the settings row.
+        val header = header()
+        assertFalse(
+            "Back is the remote's: the screen's own button was a second answer",
+            header.contains("label = \"BACK\"")
+        )
+        assertFalse(
+            "HOME / COLLECTIONS moved to Settings' Collections & Catalogs pane",
+            header.contains("HOME / COLLECTIONS")
+        )
+        assertFalse(
+            "CATALOGS moved to Settings' Collections & Catalogs pane",
+            header.contains("label = \"CATALOGS\"")
         )
     }
 

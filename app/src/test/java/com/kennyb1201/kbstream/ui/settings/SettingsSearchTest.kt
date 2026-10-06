@@ -131,6 +131,24 @@ class SettingsSearchTest {
     }
 
     @Test
+    fun `the two rail doors moved to their own pane are findable there`() {
+        // HOME / COLLECTIONS and CATALOGS left the Add-ons header for Settings'
+        // "Collections & Catalogs" pane. Moving a row is exactly the shape of
+        // change that leaves the search index pointing at a row no longer drawn
+        // - or at the wrong pane - and both fail silently from a couch.
+        listOf("Home / Collections" to "collections", "Catalogs" to "builder")
+            .forEach { (label, term) ->
+                val entry = SettingsSearchIndex.entryForLabel(label)
+                assertNotNull("$label is not indexed", entry)
+                assertEquals(SettingsPane.COLLECTIONS, entry?.pane)
+                assertTrue(
+                    "searching \"$term\" does not find $label",
+                    SettingsSearchIndex.search(term).any { it.label == label }
+                )
+            }
+    }
+
+    @Test
     fun `the pane sections resolve by key and keep their old names out`() {
         assertEquals(
             SettingsPane.SYNC,
@@ -181,6 +199,7 @@ class SettingsSearchTest {
         assertEquals(
             setOf(
                 SettingsPane.INTEGRATIONS,
+                SettingsPane.COLLECTIONS,
                 SettingsPane.PLAYBACK,
                 SettingsPane.INTERFACE,
                 SettingsPane.DATA,

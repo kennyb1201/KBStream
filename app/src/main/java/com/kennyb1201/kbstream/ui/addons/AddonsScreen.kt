@@ -76,13 +76,17 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 // collection+catalog rail list with its reorder, pin and hide controls —
 // lives in AddonsHomeManagerDialog.kt; the screen reaches it through the
 // three `internal` composables that file exports.
+//
+// The header row holds no BACK and no HOME / COLLECTIONS or CATALOGS buttons:
+// Back is the remote's own, and both rail doors moved to Settings' own
+// "Collections & Catalogs" pane. The manager dialog stays HOSTED here - it is
+// wired to this screen's view model - so Settings reaches it the same way
+// Home's "Manage rails" card does, by leaving HomeRailManagerRequest behind
+// and navigating here.
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AddonsScreen(
-    onBack: () -> Unit,
-    /** Opens the Catalog Builder: the app's rule-based "smart catalog" editor. */
-    onOpenCatalogBuilder: () -> Unit,
     viewModel: AddonsViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -114,10 +118,11 @@ fun AddonsScreen(
     var showFilterDialog by remember { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf("") }
     var showCatalogManager by remember { mutableStateOf(false) }
-    // Home's "all rails are hidden" card asks for this dialog and then
-    // navigates here (HD-P2-5). Consume the one-shot request as the screen
-    // appears: the flag is cleared either way, so it can never re-open the
-    // manager on a later, unrelated visit to Add-ons.
+    // Two callers ask for this dialog and then navigate here: Home's "all
+    // rails are hidden" card (HD-P2-5) and Settings' "Home / Collections"
+    // row. Consume the one-shot request as the screen appears: the flag is
+    // cleared either way, so it can never re-open the manager on a later,
+    // unrelated visit to Add-ons.
     LaunchedEffect(Unit) {
         if (HomeRailManagerRequest.consume()) showCatalogManager = true
     }
@@ -218,22 +223,11 @@ fun AddonsScreen(
                         onClick = { showAddPanel = true }
                     )
                     ActionButton(
-                        label = "HOME / COLLECTIONS",
-                        icon = Icons.AutoMirrored.Filled.List,
-                        onClick = { showCatalogManager = true }
-                    )
-                    ActionButton(
-                        label = "CATALOGS",
-                        icon = Icons.Filled.Add,
-                        onClick = onOpenCatalogBuilder
-                    )
-                    ActionButton(
                         label = "COPY FROM PROFILE",
                         icon = Icons.AutoMirrored.Filled.List,
                         enabled = profiles.any { it.id != activeProfile?.id },
                         onClick = { showCopyDialog = true }
                     )
-                    ActionButton(label = "BACK", onClick = onBack)
                 }
             }
 

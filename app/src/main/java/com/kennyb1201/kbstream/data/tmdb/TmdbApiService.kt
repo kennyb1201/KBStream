@@ -315,7 +315,12 @@ suspend fun searchCollection(
         @Query("with_runtime.lte") withRuntimeLte: Int? = null,
         @Query("with_cast") withCast: String? = null,
         @Query("certification_country") certificationCountry: String? = null,
-        @Query("certification") certification: String? = null
+        @Query("certification") certification: String? = null,
+        // Release types (4 = digital, 5 = physical, 2,3 = theatrical) and the
+        // REGION they are read against: TMDB resolves a release type per
+        // country, so the two are one rule. Movie-only, like with_cast above.
+        @Query("with_release_type") withReleaseType: String? = null,
+        @Query("region") region: String? = null
     ): TmdbDiscoverResponse
 
     // TV twin of the generic discover: TV date filters (first_air_date.*)

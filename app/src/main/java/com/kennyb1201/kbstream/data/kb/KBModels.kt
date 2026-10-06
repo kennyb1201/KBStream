@@ -171,7 +171,18 @@ data class KBFilters(
     val withStatus: String? = null,
     val withType: String? = null,
     /** Networks to EXCLUDE (TV), as comma-separated network ids. */
-    val withoutNetworks: String? = null
+    val withoutNetworks: String? = null,
+    /**
+     * Release types to require (TMDB `with_release_type`), comma-separated.
+     *
+     * "4" is a DIGITAL release - the type that means a title is watchable at
+     * home rather than only in cinemas - and "2,3" is theatrical (limited |
+     * wide). Movie-only: /discover/tv has no release-type filter, so a series
+     * catalog must not carry one (the builder prunes it on the switch rather
+     * than shipping a rule the endpoint ignores). The filter is resolved
+     * against a REGION, so the catalog sends its watch region with it.
+     */
+    val withReleaseType: String? = null
 ) {
     /** "1990-1999" range support; null when no year filter is set. */
     fun yearRange(): Pair<String, String>? {

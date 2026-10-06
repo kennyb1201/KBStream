@@ -71,9 +71,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
@@ -397,60 +395,92 @@ class HomeViewModel(
      *
      * Re-published whenever [upNext] changes, which is also when the watch
      * state behind those sources is freshest.
+     *
+     * Published through a flow of its own rather than DERIVED with `stateIn`,
+     * for the same reason [upNext] is a mutable flow: a profile switch has to be
+     * able to EMPTY it in the same breath as every other rail. A derived flow
+     * keeps its last built list until a new one lands, and the new one has to
+     * read Simkl, this profile's history and one next-air-date lookup per show -
+     * so the profile being left stayed on screen for seconds and then "corrected
+     * itself". [upcomingBuildEpoch] is the second half of that: a build that
+     * started before the switch cannot publish into the cleared state.
      */
-    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private val _upcomingSchedule =
+        MutableStateFlow<List<UpcomingEpisode>>(emptyList())
+
     val upcomingSchedule: StateFlow<List<UpcomingEpisode>> =
-        _upNext
-            .asStateFlow()
-            // Collapse a profile switch's burst of upNext emissions into one
-            // rebuild; see UPCOMING_REBUILD_DEBOUNCE_MS.
-            .debounce(UPCOMING_REBUILD_DEBOUNCE_MS)
-            .map { items ->
-                // Only a show the viewer is caught up on advertises its next
-                // unaired episode; a show with aired episodes still waiting is
-                // announcing something the viewer cannot use yet (see
-                // isCaughtUpForUpcoming). Continue Watching keeps the show
-                // either way - the NEW SEASON / NEW EPISODE badge there is the
-                // alert that there is something to catch up on.
-                val caughtUp = items.filter(::isCaughtUpForUpcoming)
+        _upcomingSchedule.asStateFlow()
 
-                if (UPCOMING_DIAGNOSTICS && caughtUp.size != items.size) {
-                    Log.d(
-                        "UPCOMING_DIAG",
-                        "kept off Upcoming (not caught up): " +
-                            items.filterNot(::isCaughtUpForUpcoming)
-                                .joinToString { "'${it.title}'" }
-                    )
-                }
+    /**
+     * Bumped by a profile switch; a build from before it must not publish.
+     *
+     * Cleared state is the point of the switch, and the build that was running
+     * for the profile just left would otherwise land on top of it a moment
+     * later with that profile's shows.
+     */
+    private var upcomingBuildEpoch = 0L
 
-                // runCatchingCancellable, not a bare call: an exception thrown
-                // here would TERMINATE this shared flow, and with it the only
-                // publisher of the Upcoming rail, which then never emits again
-                // for the rest of the ViewModel's life - the shape of "the
-                // rail sometimes never appears" after a profile switch. A
-                // failed read degrades to an empty rail here instead of
-                // killing the publisher. Cancellation is rethrown, so a
-                // superseding emission still cancels this build as intended.
-                runCatchingCancellable {
-                    buildUpcomingSchedule(
-                        caughtUp +
-                            loadCaughtUpUpcomingItems() +
-                            loadLocalCaughtUpUpcomingItems()
-                    )
-                }.getOrElse { error ->
-                    Log.e(
-                        "UPCOMING_DIAG",
-                        "upcoming schedule build failed",
-                        error
-                    )
-                    emptyList()
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun observeUpcomingSchedule() {
+        viewModelScope.launch {
+            _upNext
+                .asStateFlow()
+                // Collapse a profile switch's burst of upNext emissions into
+                // one rebuild; see UPCOMING_REBUILD_DEBOUNCE_MS.
+                .debounce(UPCOMING_REBUILD_DEBOUNCE_MS)
+                .collectLatest { items ->
+                    val epochAtStart = upcomingBuildEpoch
+                    // Only a show the viewer is caught up on advertises its
+                    // next unaired episode; a show with aired episodes still
+                    // waiting is announcing something the viewer cannot use yet
+                    // (see isCaughtUpForUpcoming). Continue Watching keeps the
+                    // show either way - the NEW SEASON / NEW EPISODE badge on it
+                    // is the alert that there is something to catch up on.
+                    val caughtUp = items.filter(::isCaughtUpForUpcoming)
+
+                    if (UPCOMING_DIAGNOSTICS && caughtUp.size != items.size) {
+                        Log.d(
+                            "UPCOMING_DIAG",
+                            "kept off Upcoming (not caught up): " +
+                                items.filterNot(::isCaughtUpForUpcoming)
+                                    .joinToString { "'${it.title}'" }
+                        )
+                    }
+
+                    // runCatchingCancellable, not a bare call: an exception
+                    // thrown here would TERMINATE this collector, and with it
+                    // the only publisher of the Upcoming rail, which then never
+                    // emits again for the rest of the ViewModel's life - the
+                    // shape of "the rail sometimes never appears" after a
+                    // profile switch. A failed read degrades to an empty rail
+                    // here instead of killing the publisher. Cancellation is
+                    // rethrown, so a superseding emission still cancels this
+                    // build as intended.
+                    val built = runCatchingCancellable {
+                        buildUpcomingSchedule(
+                            caughtUp +
+                                loadCaughtUpUpcomingItems() +
+                                loadLocalCaughtUpUpcomingItems()
+                        )
+                    }.getOrElse { error ->
+                        Log.e(
+                            "UPCOMING_DIAG",
+                            "upcoming schedule build failed",
+                            error
+                        )
+                        emptyList()
+                    }
+
+                    // A switch that landed while this build was running owns
+                    // the rail now: publishing here would put the outgoing
+                    // profile's shows back on screen after it had been cleared
+                    // for the incoming one.
+                    if (epochAtStart == upcomingBuildEpoch) {
+                        _upcomingSchedule.value = built
+                    }
                 }
-            }
-            .stateIn(
-                scope = viewModelScope,
-                started = SharingStarted.Eagerly,
-                initialValue = emptyList()
-            )
+        }
+    }
 
     private val _isLoading =
         MutableStateFlow(true)
@@ -1073,6 +1103,12 @@ Log.d(
                     // streaming from the profile we just left is now stale
                     // and must not republish its rows (loadRailsInternal).
                     railBuildEpoch += 1
+                    // Same for the Upcoming publisher, which is a flow of its
+                    // own rather than a derived one (see upcomingBuildEpoch):
+                    // clearing it is only half the job, because the build that
+                    // was already running for the profile being left would
+                    // otherwise land on top of the cleared state.
+                    upcomingBuildEpoch += 1
 
                     // A previous profile's error message must not sit under
                     // the new profile's rails while its build is in flight.
@@ -1093,6 +1129,16 @@ Log.d(
                     // the enriched pipeline replaces it when it lands.
                     _upNext.value = emptyList()
                     publishInstantUpNextSnapshot()
+
+                    // Upcoming is BUILT from upNext but published through its
+                    // own flow, so emptying upNext does not empty it: every rail
+                    // family has to be dropped here, in the switch turn, or it
+                    // stays on screen showing the profile being left until its
+                    // rebuild lands - and that rebuild reads Simkl, this
+                    // profile's history and one next-air-date lookup per show,
+                    // which is the couple of seconds of "the previous profile's
+                    // Upcoming, then it corrects itself".
+                    _upcomingSchedule.value = emptyList()
 
                     // Same for the caught-up Upcoming cards: they come from
                     // the account-wide Simkl feed and are only kids-filtered
@@ -1124,13 +1170,12 @@ Log.d(
                     heroResolveJob?.cancel()
 
                     // Hard-drop the watched-state caches, including the
-                    // resume-suppression tracker snapshot, before the refresh
+                    // resume-suppression tracker snapshot, before the rebuild
                     // below: the tracker marks belong to the profile being
-                    // left, and refreshAllHomeData()/refreshUpNext() only
-                    // soft-clear.
+                    // left, and the rail/Upcoming rebuilds only soft-clear.
                     clearWatchedStateCaches(hard = true)
 
-                    refreshAllHomeData()
+                    rebuildRailsForActiveProfile()
                     refreshUpNext()
                 }
         }
@@ -2733,6 +2778,42 @@ Log.d(
             PerfTrace.record(
                 "home.refreshAll",
                 android.os.SystemClock.elapsedRealtime() - startedAt
+            )
+        }
+    }
+
+    /**
+     * Rebuilds the rails for the profile that just became active, from the WARM
+     * addon catalog cache.
+     *
+     * A switch used to go through [refreshAllHomeData], whose
+     * `clearCatalogCache = true` threw away every cached catalog page and
+     * refetched them all: seconds in which Home held nothing but the rails it
+     * knows LOCALLY (the browse rows read from prefs), with the rest trickling
+     * in around them and the arrangement appearing to shuffle as each one
+     * landed.
+     *
+     * Keeping the cache is exact, not a shortcut. It holds the addon's own
+     * catalog rows, keyed by catalog PAGE and never by profile (see
+     * `AddonRepository.getCatalog`), and every profile-specific rule - the kids
+     * ceiling, hidden titles, watched marks, the digital-release filter and the
+     * arrangement itself - is applied when the rails are BUILT, after this call
+     * returns. So the incoming profile gets its own rails, in the order it has
+     * them, in one pass; pages past their TTL are served stale and refreshed in
+     * the background by the same call.
+     *
+     * The rails are still rebuilt (`forceRefresh = true`) and the rail list was
+     * already emptied by the caller: only the catalog bytes are reused, never
+     * the rows of the profile being left.
+     */
+    private fun rebuildRailsForActiveProfile() {
+        viewModelScope.launch {
+            // Re-resolve the Continue Watching subscription against the new
+            // profile (see observeUpNext), exactly as refreshAllHomeData did.
+            _refreshTrigger.value += 1
+            loadRailsInternal(
+                forceRefresh = true,
+                clearCatalogCache = false
             )
         }
     }
@@ -8352,6 +8433,8 @@ private suspend fun calculateEpisodesRemaining(
         loadRails()
 
         observeUpNext()
+
+        observeUpcomingSchedule()
 
         // A finished title leaves the rail only when the tracker feeds are
         // read again after the completion has been pushed (see

@@ -175,20 +175,82 @@ class CatalogBuilderModelsTest {
     }
 
     @Test
-    fun `network chips are the entries with no provider id`() {
-        assertTrue(CATALOG_NETWORK_OPTIONS.isNotEmpty())
+    fun `network chips are every plain network entry, keyed by its own id`() {
+        // The bug this replaces: the row read `networkOrCompanyId`, which is
+        // null on a plain network page (those keep their TMDB network id in
+        // `id`), so it matched only the SERVICE entries with no watch-provider
+        // id and offered a single chip while Browse listed 77 networks.
+        val plainNetworks = com.kennyb1201.kbstream.ui.search.BROWSE_PROVIDER_ENTRIES
+            .filter { it.providerId == null && !it.networkIsCompany && it.id > 0 }
+        assertTrue(
+            "the row has to offer the networks the browse catalog carries, not one",
+            plainNetworks.size > 30
+        )
         assertEquals(
+            "one chip per network, no repeats",
             CATALOG_NETWORK_OPTIONS.size,
             CATALOG_NETWORK_OPTIONS.map { it.id }.toSet().size
         )
         assertEquals(
-            "networks are the entries with no provider id, one chip per network",
-            CATALOG_NETWORK_OPTIONS.size,
-            com.kennyb1201.kbstream.ui.search.BROWSE_PROVIDER_ENTRIES
-                .filter { it.providerId == null && !it.networkIsCompany }
-                .mapNotNull { it.networkOrCompanyId }
-                .toSet()
-                .size
+            "networks are the entries with no provider id, keyed by their own id",
+            plainNetworks.map { it.id }.toSet(),
+            CATALOG_NETWORK_OPTIONS.map { it.id }.toSet()
+        )
+        assertEquals(
+            "ABC is one of them",
+            "ABC",
+            CATALOG_NETWORK_OPTIONS.firstOrNull { it.id == 2 }?.label
+        )
+    }
+
+    @Test
+    fun `the release-type chips are tmdb's own codes`() {
+        assertEquals("", CATALOG_RELEASE_TYPE_OPTIONS.first().code)
+        assertEquals("Any release", CATALOG_RELEASE_TYPE_OPTIONS.first().label)
+        assertEquals(
+            CATALOG_RELEASE_TYPE_OPTIONS.size,
+            CATALOG_RELEASE_TYPE_OPTIONS.map { it.code }.toSet().size
+        )
+        assertEquals(
+            "the digital release is TMDB's type 4",
+            "Digital release",
+            CATALOG_RELEASE_TYPE_OPTIONS.first { it.code == "4" }.label
+        )
+        CATALOG_RELEASE_TYPE_OPTIONS.forEach { option ->
+            assertTrue("${option.label} has no code at all", option.label.isNotBlank())
+            assertTrue(
+                "${option.code} is not a release type TMDB knows (1-6)",
+                option.code.isEmpty() ||
+                    option.code.split(',').all { it.trim().toIntOrNull() in 1..6 }
+            )
+        }
+    }
+
+    @Test
+    fun `a series catalog cannot keep a release type`() {
+        // with_release_type is movie-only, like with_cast: /discover/tv has no
+        // such filter, so a series catalog that kept one would ask for a rule
+        // the endpoint silently ignores.
+        val movie = CustomCatalog(
+            id = "c",
+            name = "Digital",
+            mediaType = CATALOG_MEDIA_MOVIE,
+            filters = KBFilters(withReleaseType = "4", withCast = "31")
+        )
+        val series = withCatalogMediaType(movie, CATALOG_MEDIA_TV)
+        assertNull("the release type is a movie rule", series.filters.withReleaseType)
+        assertNull("and so is the cast", series.filters.withCast)
+
+        val back = withCatalogMediaType(series, CATALOG_MEDIA_MOVIE)
+        assertNull("a pruned rule does not come back", back.filters.withReleaseType)
+    }
+
+    @Test
+    fun `the release filter is one more thing the rule count sees`() {
+        assertEquals(1, catalogRuleCount(KBFilters(withReleaseType = "4")))
+        assertEquals(
+            2,
+            catalogRuleCount(KBFilters(withReleaseType = "4", withWatchProviders = "8"))
         )
     }
 
@@ -457,6 +519,105 @@ class CatalogBuilderModelsTest {
                     filters = KBFilters(withRuntimeLte = 90, certification = "PG")
                 )
             )
+        )
+    }
+
+    // ------------------------------------------------------- hand-typed ids --
+
+    @Test
+    fun `a typed id is read out of whatever shape it was pasted in`() {
+        // The ids a viewer has to hand are the ones printed on a TMDB page or
+        // sitting in its URL, so all of these have to mean the same thing.
+        assertEquals(listOf(8), parseCustomIds("8"))
+        assertEquals(listOf(8), parseCustomIds("  #8  "))
+        assertEquals(listOf(8), parseCustomIds("tmdb:8"))
+        assertEquals(listOf(8), parseCustomIds("https://www.themoviedb.org/movie/8"))
+        assertEquals(listOf(8, 337, 9), parseCustomIds("8, 337\n9"))
+        assertEquals(
+            "a repeated id is one chip",
+            listOf(8, 9),
+            parseCustomIds("8, 9, 8")
+        )
+        assertEquals(listOf(213), parseCustomIds("id=213"))
+    }
+
+    @Test
+    fun `a token with no id in it is dropped rather than read as zero`() {
+        assertTrue(parseCustomIds("netflix").isEmpty())
+        assertTrue(parseCustomIds("").isEmpty())
+        assertTrue(parseCustomIds("   ").isEmpty())
+        assertTrue(parseCustomIds(",,,").isEmpty())
+        assertEquals(
+            "0 is not a TMDB id",
+            emptyList<Int>(),
+            parseCustomIds("0")
+        )
+        assertEquals(
+            "the words around an id do not stop it being read",
+            listOf(8),
+            parseCustomIds("Netflix 8")
+        )
+    }
+
+    @Test
+    fun `every id field reads and writes its own filter`() {
+        // One field per id-list chip row, and each one has to land on the field
+        // its row renders - an id written into the wrong list is a rule that
+        // silently matches nothing.
+        CatalogIdField.entries.forEach { field ->
+            val written = field.withIds(KBFilters(), listOf(7, 9))
+            assertEquals(
+                "${field.label} did not write its ids back",
+                listOf(7, 9),
+                field.read(written)
+            )
+            assertEquals(
+                "${field.label} wrote into another field's list",
+                1,
+                CatalogIdField.entries.count { other -> other.read(written).isNotEmpty() }
+            )
+        }
+        assertEquals(CatalogIdField.entries.size, CatalogIdField.entries.map { it.label }.toSet().size)
+        assertEquals(CatalogIdField.entries.size, CatalogIdField.entries.map { it.name }.toSet().size)
+    }
+
+    @Test
+    fun `adding ids keeps the order, drops duplicates and stays reversible`() {
+        val after = CatalogIdField.SERVICES.withIds(
+            KBFilters(withWatchProviders = "8"),
+            listOf(337, 8)
+        )
+        assertEquals(listOf(8, 337), CatalogIdField.SERVICES.read(after))
+        assertEquals("8,337", after.withWatchProviders)
+        // A typed id joins the same CSV a tapped chip does, so the chip rule
+        // that takes an id off again works on it unchanged.
+        assertEquals(
+            "a typed id is removable like a tapped one",
+            "337",
+            com.kennyb1201.kbstream.data.catalogs.csvToggle(after.withWatchProviders, 8)
+        )
+        // Emptying the field is a real state, not an empty string.
+        val cleared = CatalogIdField.NETWORKS.withIds(KBFilters(), emptyList())
+        assertNull(cleared.withNetworks)
+    }
+
+    @Test
+    fun `an id the shipped list does not have is drawn as its own chip`() {
+        val options = listOf(CatalogFilterOption(8, "Netflix"))
+        assertEquals(
+            "a known id keeps the name the list gives it",
+            listOf(CatalogFilterOption(8, "Netflix")),
+            catalogOptionsWithCustom(options, listOf(8))
+        )
+        assertEquals(
+            "an unknown id still has to be visible and removable",
+            listOf(CatalogFilterOption(8, "Netflix"), CatalogFilterOption(9999, "#9999")),
+            catalogOptionsWithCustom(options, listOf(9999, 8))
+        )
+        assertEquals(
+            "and it is not drawn twice",
+            2,
+            catalogOptionsWithCustom(options, listOf(9999, 9999)).size
         )
     }
 }

@@ -143,20 +143,22 @@ sealed class Screen {
 
     /**
      * Add-on management. [returnTo] is where Back lands, because this screen
-     * is reached from two different places: Settings (the app's normal route
-     * in) and onboarding's setup cards. Its own on-screen BACK button used to
-     * send everyone Home while the hardware BACK sent everyone to Settings —
-     * the same gesture landing on two different screens depending on which
-     * BACK the user pressed. Both now follow where the user actually came
-     * from.
+     * is reached from three places: Settings (the app's normal route in),
+     * onboarding's setup cards, and Settings' "Home / Collections" row, which
+     * leaves [com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest] behind so
+     * the rail manager opens on arrival. The header's own BACK button is gone:
+     * it used to send everyone Home while the hardware BACK sent everyone to
+     * Settings — the same gesture landing on two different screens depending
+     * on which BACK was pressed — so the remote's Back is now the only one, and
+     * it follows where the user actually came from.
      */
     data class Addons(val returnTo: Screen = Home) : Screen()
 
     /**
      * The Catalog Builder: compose a rule-based catalog (media type, sort and
      * the full filter set) that Home then draws as its own rail. Reached from
-     * the Add-ons screen, so its Back walks the same path Add-ons does -
-     * whichever screen the viewer came from.
+     * Settings' "Collections & Catalogs" pane, which carries its own return
+     * path, so Back lands on whichever screen opened it.
      */
     data class CatalogBuilder(val returnTo: Screen = Home) : Screen()
 
@@ -1468,6 +1470,19 @@ fun AppRoot(
                     // old wiring jumped straight into the editor, which can
                     // only rename/create profiles, never switch.
                     screen = Screen.ProfilePicker(returnTo = Screen.Settings)
+                },
+                // Both rail doors moved off the Add-ons header into Settings'
+                // own "Collections & Catalogs" pane. The manager is still
+                // Add-ons' dialog (it is wired to that screen's view model), so
+                // this leaves the same one-shot request Home's "Manage rails"
+                // card does and navigates to the screen that hosts it; the
+                // builder is a screen of its own and opens directly.
+                onOpenCatalogManager = {
+                    com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest.request()
+                    screen = Screen.Addons(returnTo = Screen.Settings)
+                },
+                onOpenCatalogBuilder = {
+                    screen = Screen.CatalogBuilder(returnTo = Screen.Settings)
                 }
             )
         }
@@ -1508,23 +1523,18 @@ fun AppRoot(
 
         is Screen.Addons -> {
 
-            AddonsScreen(
-                onBack = {
-                    screen = stableBackDestination(current.returnTo)
-                },
-                // The builder inherits Add-ons' own return destination, so
-                // Back out of it lands on Add-ons and Back again on whatever
-                // sent the viewer here (Settings, or onboarding).
-                onOpenCatalogBuilder = {
-                    screen = Screen.CatalogBuilder(returnTo = current.returnTo)
-                }
-            )
+            // Add-on management only: the header's own BACK is gone (the
+            // remote's Back is the single way out, and it follows returnTo),
+            // and HOME / COLLECTIONS + CATALOGS are rows in Settings now.
+            AddonsScreen()
         }
 
         is Screen.CatalogBuilder -> {
 
             com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen(
-                onBack = { screen = Screen.Addons(returnTo = current.returnTo) }
+                // Opened from Settings' "Collections & Catalogs" pane, whose
+                // returnTo this carries, so Back lands on whatever opened it.
+                onBack = { screen = stableBackDestination(current.returnTo) }
             )
         }
 

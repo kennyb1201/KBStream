@@ -31,10 +31,12 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,6 +68,8 @@ import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
@@ -203,7 +207,9 @@ fun CatalogBuilderScreen(
                 onCertification = viewModel::setCertification,
                 onTvStatus = viewModel::setTvStatus,
                 onTvType = viewModel::setTvType,
-                onExcludedNetwork = viewModel::toggleExcludedNetwork
+                onExcludedNetwork = viewModel::toggleExcludedNetwork,
+                onReleaseType = viewModel::setReleaseType,
+                onAddCustomIds = viewModel::addCustomIds
             )
         }
     }
@@ -506,11 +512,16 @@ private fun CatalogEditor(
     onCertification: (String) -> Unit,
     onTvStatus: (String) -> Unit,
     onTvType: (String) -> Unit,
-    onExcludedNetwork: (Int) -> Unit
+    onExcludedNetwork: (Int) -> Unit,
+    onReleaseType: (String) -> Unit,
+    onAddCustomIds: (CatalogIdField, List<Int>) -> Unit
 ) {
     val filters = catalog.filters
     var keywordQuery by remember(catalog.id) { mutableStateOf("") }
     var castQuery by remember(catalog.id) { mutableStateOf("") }
+    // Which row's "enter your own id" dialog is open, if any. Held here rather
+    // than per row so there is exactly one dialog in the tree.
+    var customField by remember(catalog.id) { mutableStateOf<CatalogIdField?>(null) }
     val isTv = catalog.mediaType == CATALOG_MEDIA_TV
 
     Column(
@@ -567,33 +578,53 @@ private fun CatalogEditor(
 
         EditorSection(title = "Genres") {
             ChipRow(
-                options = catalogGenreOptions(catalog.mediaType),
+                options = catalogOptionsWithCustom(
+                    catalogGenreOptions(catalog.mediaType),
+                    splitIds(filters.withGenres)
+                ),
                 isSelected = { splitIds(filters.withGenres).contains(it) },
-                onToggle = { onGenre(true, it) }
+                onToggle = { onGenre(true, it) },
+                customField = CatalogIdField.GENRES,
+                onAddCustom = { customField = it }
             )
         }
 
         EditorSection(title = "Exclude genres") {
             ChipRow(
-                options = catalogGenreOptions(catalog.mediaType),
+                options = catalogOptionsWithCustom(
+                    catalogGenreOptions(catalog.mediaType),
+                    splitIds(filters.withoutGenres)
+                ),
                 isSelected = { splitIds(filters.withoutGenres).contains(it) },
-                onToggle = { onGenre(false, it) }
+                onToggle = { onGenre(false, it) },
+                customField = CatalogIdField.EXCLUDE_GENRES,
+                onAddCustom = { customField = it }
             )
         }
 
         EditorSection(title = "Services") {
             ChipRow(
-                options = CATALOG_SERVICE_OPTIONS,
+                options = catalogOptionsWithCustom(
+                    CATALOG_SERVICE_OPTIONS,
+                    splitIds(filters.withWatchProviders)
+                ),
                 isSelected = { splitIds(filters.withWatchProviders).contains(it) },
-                onToggle = { onService(true, it) }
+                onToggle = { onService(true, it) },
+                customField = CatalogIdField.SERVICES,
+                onAddCustom = { customField = it }
             )
         }
 
         EditorSection(title = "Exclude services") {
             ChipRow(
-                options = CATALOG_SERVICE_OPTIONS,
+                options = catalogOptionsWithCustom(
+                    CATALOG_SERVICE_OPTIONS,
+                    splitIds(filters.withoutWatchProviders)
+                ),
                 isSelected = { splitIds(filters.withoutWatchProviders).contains(it) },
-                onToggle = { onService(false, it) }
+                onToggle = { onService(false, it) },
+                customField = CatalogIdField.EXCLUDE_SERVICES,
+                onAddCustom = { customField = it }
             )
         }
 
@@ -607,33 +638,53 @@ private fun CatalogEditor(
 
         EditorSection(title = "Studios") {
             ChipRow(
-                options = CATALOG_STUDIO_OPTIONS,
+                options = catalogOptionsWithCustom(
+                    CATALOG_STUDIO_OPTIONS,
+                    splitIds(filters.withCompanies)
+                ),
                 isSelected = { splitIds(filters.withCompanies).contains(it) },
-                onToggle = { onStudio(true, it) }
+                onToggle = { onStudio(true, it) },
+                customField = CatalogIdField.STUDIOS,
+                onAddCustom = { customField = it }
             )
         }
 
         EditorSection(title = "Exclude studios") {
             ChipRow(
-                options = CATALOG_STUDIO_OPTIONS,
+                options = catalogOptionsWithCustom(
+                    CATALOG_STUDIO_OPTIONS,
+                    splitIds(filters.withoutCompanies)
+                ),
                 isSelected = { splitIds(filters.withoutCompanies).contains(it) },
-                onToggle = { onStudio(false, it) }
+                onToggle = { onStudio(false, it) },
+                customField = CatalogIdField.EXCLUDE_STUDIOS,
+                onAddCustom = { customField = it }
             )
         }
 
         EditorSection(title = "Networks") {
             ChipRow(
-                options = CATALOG_NETWORK_OPTIONS,
+                options = catalogOptionsWithCustom(
+                    CATALOG_NETWORK_OPTIONS,
+                    splitIds(filters.withNetworks)
+                ),
                 isSelected = { splitIds(filters.withNetworks).contains(it) },
-                onToggle = onNetwork
+                onToggle = onNetwork,
+                customField = CatalogIdField.NETWORKS,
+                onAddCustom = { customField = it }
             )
         }
 
         EditorSection(title = "Exclude networks") {
             ChipRow(
-                options = CATALOG_NETWORK_OPTIONS,
+                options = catalogOptionsWithCustom(
+                    CATALOG_NETWORK_OPTIONS,
+                    splitIds(filters.withoutNetworks)
+                ),
                 isSelected = { splitIds(filters.withoutNetworks).contains(it) },
-                onToggle = onExcludedNetwork
+                onToggle = onExcludedNetwork,
+                customField = CatalogIdField.EXCLUDE_NETWORKS,
+                onAddCustom = { customField = it }
             )
         }
 
@@ -784,6 +835,27 @@ private fun CatalogEditor(
             )
         }
 
+        // Movie-only: `with_release_type` is not a filter on /discover/tv (see
+        // pruneMediaTypeFilters), and a chip that writes a rule the endpoint
+        // ignores is worse than no chip - the same reason Cast is hidden here.
+        if (!isTv) {
+            EditorSection(title = "Release type") {
+                ChoiceRow(
+                    options = CATALOG_RELEASE_TYPE_OPTIONS.map { it.code to it.label },
+                    selectedId = filters.withReleaseType.orEmpty(),
+                    onSelect = onReleaseType
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Digital release is the one that means a title is watchable " +
+                        "at home rather than only in cinemas. Read against the watch " +
+                        "region.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+
         EditorSection(title = "Original language") {
             CodeChipRow(
                 options = CATALOG_LANGUAGE_OPTIONS,
@@ -851,6 +923,17 @@ private fun CatalogEditor(
         }
 
         Spacer(modifier = Modifier.height(24.dp))
+
+        customField?.let { field ->
+            CustomIdDialog(
+                field = field,
+                onAdd = { ids ->
+                    onAddCustomIds(field, ids)
+                    customField = null
+                },
+                onDismiss = { customField = null }
+            )
+        }
     }
 }
 
@@ -877,12 +960,20 @@ private fun EditorSection(title: String, content: @Composable () -> Unit) {
     content()
 }
 
-/** A horizontally scrolling row of multi-select id chips. */
+/**
+ * A horizontally scrolling row of multi-select id chips.
+ *
+ * A row that passes [customField] ends with an "enter an id" chip, which is the
+ * only way to reach a service, studio, network or genre this build does not
+ * ship - the chip lists are a fixed vocabulary, TMDB ids are not.
+ */
 @Composable
 private fun ChipRow(
     options: List<CatalogFilterOption>,
     isSelected: (Int) -> Boolean,
-    onToggle: (Int) -> Unit
+    onToggle: (Int) -> Unit,
+    customField: CatalogIdField? = null,
+    onAddCustom: (CatalogIdField) -> Unit = {}
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -894,6 +985,15 @@ private fun ChipRow(
                 selected = isSelected(option.id),
                 onClick = { onToggle(option.id) }
             )
+        }
+        customField?.let { field ->
+            item(key = "custom-id") {
+                BuilderChip(
+                    label = "+ ENTER AN ID",
+                    selected = false,
+                    onClick = { onAddCustom(field) }
+                )
+            }
         }
     }
 }
@@ -968,6 +1068,12 @@ private fun NumberChipRow(
  * Selected state is drawn on the capsule itself (accent tint + accent border)
  * rather than only on focus, because a rule set is read at a glance: which
  * genres are on has to be visible while the D-pad is somewhere else.
+ *
+ * Focus draws the shared chip accent ring, glow and scale (see KBFocus* in the
+ * theme), on top of that: this screen is nothing but rows of same-shaped
+ * capsules and the D-pad is the only pointer, so a focused chip that only
+ * changed its surface tint was impossible to pick out of a row of six. The ring
+ * is what makes it findable.
  */
 @Composable
 private fun BuilderChip(
@@ -985,13 +1091,19 @@ private fun BuilderChip(
                 KBSurface.copy(alpha = 0.80f)
             },
             contentColor = if (selected) KBAccent else KBTextHi,
-            focusedContainerColor = KBSurfaceRaised,
+            focusedContainerColor = if (selected) {
+                KBAccent.copy(alpha = 0.32f)
+            } else {
+                KBSurfaceRaised
+            },
             focusedContentColor = KBAccent,
             pressedContainerColor = KBSurfaceRaised,
             pressedContentColor = KBAccent
         ),
         scale = ClickableSurfaceDefaults.scale(
-            focusedScale = 1.04f,
+            // The chip step of the shared focus scale: at 1.04 a capsule grew
+            // 4%, which on a row of capsules reads as nothing.
+            focusedScale = KBFocusChip,
             pressedScale = KBFocusPressed
         ),
         border = ClickableSurfaceDefaults.border(
@@ -1001,6 +1113,19 @@ private fun BuilderChip(
                     color = if (selected) KBAccent else Color.Transparent
                 ),
                 shape = KBShapeSmall
+            ),
+            // The border used to appear only when SELECTED, so the focused chip
+            // and its unselected neighbours were told apart by a surface tint
+            // alone.
+            focusedBorder = androidx.tv.material3.Border(
+                border = androidx.compose.foundation.BorderStroke(2.dp, KBAccent),
+                shape = KBShapeSmall
+            )
+        ),
+        glow = ClickableSurfaceDefaults.glow(
+            focusedGlow = androidx.tv.material3.Glow(
+                elevationColor = KBAccent,
+                elevation = KBFocusGlowSmall
             )
         )
     ) {
@@ -1175,6 +1300,112 @@ private fun CatalogIconButton(
                     tint = KBTextLo.copy(alpha = 0.55f),
                     modifier = Modifier.size(16.dp)
                 )
+            }
+        }
+    }
+}
+
+/**
+ * What an id looks like, said in the words of the row it lands in.
+ *
+ * The examples are read from the row's own chip list rather than written down
+ * here, so a hint can never quote an id this build does not actually use.
+ */
+private fun customIdHint(field: CatalogIdField): String = when (field) {
+    CatalogIdField.SERVICES, CatalogIdField.EXCLUDE_SERVICES -> {
+        val examples = CATALOG_SERVICE_OPTIONS.take(2)
+            .joinToString(", ") { option -> "${option.label} ${option.id}" }
+        "Watch-provider ids from themoviedb.org/watch/providers, comma separated " +
+            "($examples). Any provider on that page works, including ones this " +
+            "build does not list."
+    }
+
+    CatalogIdField.NETWORKS, CatalogIdField.EXCLUDE_NETWORKS -> {
+        val examples = CATALOG_NETWORK_OPTIONS.take(2)
+            .joinToString(", ") { option -> "${option.label} ${option.id}" }
+        "Network ids from a network's themoviedb.org page, comma separated " +
+            "($examples)."
+    }
+
+    else ->
+        "TMDB ids, comma separated. Open the thing on themoviedb.org and read " +
+            "the number at the end of its page address."
+}
+
+/**
+ * The escape hatch from the chip vocabulary: type the TMDB id yourself.
+ *
+ * Every other control on this screen is a fixed list, and what a viewer wants
+ * is often not on one - a regional streaming service, a studio from their own
+ * country, a network added to TMDB after this build shipped. TMDB identify all
+ * of them by a number, so the id is the honest way in; the dialog says which
+ * filter it writes and what that filter's ids look like, because an id typed
+ * into the wrong row is a rule that silently matches nothing.
+ */
+@Composable
+private fun CustomIdDialog(
+    field: CatalogIdField,
+    onAdd: (List<Int>) -> Unit,
+    onDismiss: () -> Unit
+) {
+    BackHandler(onBack = onDismiss)
+    var text by remember { mutableStateOf("") }
+    val ids = parseCustomIds(text)
+    val focusRequester = remember { FocusRequester() }
+
+    // The field is the whole dialog, so it takes focus as the dialog opens:
+    // there is no scrolling to do and the IME is the point.
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(640.dp)
+                .background(KBSurface, KBShapeCard)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapeCard)
+                .padding(20.dp)
+        ) {
+            Text(
+                text = "ENTER AN ID \u2014 ${field.label.uppercase()}",
+                color = KBAccent,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = customIdHint(field),
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            KBTextField(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = "e.g. 8, 337",
+                modifier = Modifier.fillMaxWidth(),
+                focusRequester = focusRequester,
+                onDone = { if (ids.isNotEmpty()) onAdd(ids) }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = if (ids.isEmpty()) {
+                    "No ids in that yet."
+                } else {
+                    "Adds: " + ids.joinToString(", ") { id -> "#$id" }
+                },
+                color = if (ids.isEmpty()) KBTextLo else KBAccent,
+                style = MaterialTheme.typography.labelSmall
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ActionButton(
+                    label = "ADD",
+                    enabled = ids.isNotEmpty(),
+                    onClick = { onAdd(ids) }
+                )
+                ActionButton(label = "CANCEL", onClick = onDismiss)
             }
         }
     }

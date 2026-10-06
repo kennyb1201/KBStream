@@ -1136,6 +1136,11 @@ class TmdbRepository private constructor(context: Context) :
         // when no year range is set, so decade/decade-style year filters win.
         val dateGte = yearRange?.first ?: filters?.releaseDateGte
         val dateLte = yearRange?.second ?: filters?.releaseDateLte
+        // with_release_type is read against a REGION, and the only country this
+        // app ever asks about is the viewer's own - the same one the
+        // watch-provider chips use. Sent only with a release type, so a catalog
+        // that has none keeps asking exactly what it asked before.
+        val releaseRegion = filters?.withReleaseType?.let { filters.watchRegion }
         return runCatchingCancellable {
             if (isTv) {
                 api.discoverTvGeneric(
@@ -1195,7 +1200,9 @@ class TmdbRepository private constructor(context: Context) :
                     withRuntimeLte = filters?.withRuntimeLte,
                     withCast = filters?.withCast,
                     certificationCountry = filters?.certificationCountry,
-                    certification = filters?.certification
+                    certification = filters?.certification,
+                    withReleaseType = filters?.withReleaseType,
+                    region = releaseRegion
                 )
             }.results
         }.getOrNull()
