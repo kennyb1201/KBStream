@@ -1763,6 +1763,18 @@ object SupabaseSync {
                     return@forEach
                 }
             }
+            // Built catalogs are a full-replace blob as well, and the most
+            // expensive state in the app to lose: a device that never opened
+            // the Catalog Builder publishes nothing rather than an empty list.
+            if (key == PrefsPayloadBuilder.KEY_CUSTOM_CATALOGS) {
+                val blob =
+                    (payload["catalogs_json"] as? kotlinx.serialization.json.JsonPrimitive)
+                        ?.content
+                        .orEmpty()
+                if (!HomeListBlobRules.shouldPublishCustomCatalogs(blob)) {
+                    return@forEach
+                }
+            }
             // The home order is a full-replace blob too: a device that never
             // arranged a rail must not publish its empty arrangement, or one
             // untouched TV erases every sibling's rail order (the "the order

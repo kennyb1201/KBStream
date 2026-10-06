@@ -137,7 +137,41 @@ data class KBFilters(
     val withOriginCountry: String? = null,
     val withWatchProviders: String? = null,
     val withOriginalLanguage: String? = null,
-    val withoutWatchProviders: String? = null
+    val withoutWatchProviders: String? = null,
+    /**
+     * Runtime window in MINUTES (`with_runtime.gte` / `.lte`). Null = any.
+     * On TV this is the EPISODE runtime, which is the only runtime TMDB
+     * reports for a series.
+     */
+    val withRuntimeGte: Int? = null,
+    val withRuntimeLte: Int? = null,
+    /**
+     * Actor ids (`with_cast`, comma-separated). Actors only, not crew.
+     *
+     * Movie-only in TMDB: /discover/tv documents no person filter, so a series
+     * catalog must not carry one (the builder clears it on the switch rather
+     * than shipping a rule the endpoint ignores).
+     */
+    val withCast: String? = null,
+    /**
+     * Age rating. [certificationCountry] names the scale (TMDB
+     * `certification_country`) and [certification] the value on it
+     * (`certification`) - a US movie "PG-13", a US series "TV-14".
+     *
+     * The two travel together: a certification without its country is a value
+     * TMDB cannot resolve, which is why the builder always writes both.
+     */
+    val certificationCountry: String? = null,
+    val certification: String? = null,
+    /**
+     * TV shape, TV-only. [withStatus] is TMDB's status code
+     * (0 returning, 1 planned, 2 in production, 3 ended, 4 canceled, 5 pilot)
+     * and [withType] its format code (0 documentary ... 4 scripted ...).
+     */
+    val withStatus: String? = null,
+    val withType: String? = null,
+    /** Networks to EXCLUDE (TV), as comma-separated network ids. */
+    val withoutNetworks: String? = null
 ) {
     /** "1990-1999" range support; null when no year filter is set. */
     fun yearRange(): Pair<String, String>? {

@@ -207,8 +207,15 @@ object KBHomeSlots {
                 collection
             )
         }
+        // A built catalog has no manifest to key against, so it keys by its own
+        // id in the `custom:` family and is arranged like any other rail.
+        // Everything else keys by its add-on URL exactly as before.
         val addonKeyByRail = rails.associate { rail ->
-            rail to KBHomeOrderPrefs.addonKey(rail.baseUrl, rail.type, rail.catalogId)
+            rail to (
+                rail.customCatalogId
+                    ?.let { KBHomeOrderPrefs.customCatalogKey(it) }
+                    ?: KBHomeOrderPrefs.addonKey(rail.baseUrl, rail.type, rail.catalogId)
+                )
         }
 
         // Top Today rails are hard-pinned by the home rail loader
@@ -234,8 +241,13 @@ object KBHomeSlots {
         // user — and without this they fell through to the tail, where a
         // PINNED collection displaced them from the top of Home. They belong
         // with the Top Today rows: hardcoded first, then whatever is pinned.
+        // A built catalog is app-built too (null base URL) but it IS
+        // arrangeable, so the hardcoded test has to exclude it by its custom id
+        // - otherwise every built catalog would be forced to the top like a
+        // hardcoded kids row.
         val hardcodedRails = addonEntries.filter { entry ->
-            (entry as HomeEntry.AddonRail).rail.baseUrl == null
+            val rail = (entry as HomeEntry.AddonRail).rail
+            rail.baseUrl == null && rail.customCatalogId == null
         }
         val hardcodedKeys = hardcodedRails
             .map { entry -> addonKeyByRail[(entry as HomeEntry.AddonRail).rail] }

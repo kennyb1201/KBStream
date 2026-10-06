@@ -183,6 +183,14 @@ internal fun CatalogManagerDialog(
         // rail that cannot be seen in the manager cannot be arranged.
         val browseRailByKey =
             collectionsState.browseRails.associateBy { rail -> rail.key }
+        // The viewer's own built catalogs (the Catalog Builder's rule sets).
+        // They join this list because that is what makes them arrangeable: the
+        // builder is where a catalog is composed, and here is where every rail
+        // on Home is pinned, moved and hidden - one place, one arrangement.
+        val customCatalogByKey =
+            collectionsState.customCatalogs.associateBy { catalog ->
+                KBHomeOrderPrefs.customCatalogKey(catalog.id)
+            }
         // Best-effort merged order read (same prefs the ViewModel writes), and
         // the same rule it moves a row with: one shared function, so the list
         // the user aims at is the list the move acts on. Deriving it here as
@@ -207,6 +215,7 @@ internal fun CatalogManagerDialog(
         // list Home renders (see mergedHomeRailKeys).
         val movableDefaults = KBHomeOrderPrefs.BUILTIN_KEYS +
             browseRailByKey.keys.toList() +
+            customCatalogByKey.keys.toList() +
             addonByKey.keys.filterNot { KBHomeOrderPrefs.isPositionFixedKey(it) } +
             collectionsState.collections.map { it.key }
         val orderedKeys = fixedKeys + mergedHomeRailKeys(prefs, movableDefaults)
@@ -259,6 +268,25 @@ internal fun CatalogManagerDialog(
                     isPinned = false,
                     isHidden = key in prefs.hiddenSet,
                     isBuiltinRail = true
+                )
+            } else if (KBHomeOrderPrefs.isCustomCatalogKey(key)) {
+                // A built catalog: no configuration object and no pin control
+                // (exactly like an add-on catalog), but it gets the reorder
+                // arrows and the rename button, which is why it is flagged as
+                // a "built-in" row - those callbacks are generic by key, and
+                // this rail lives in the same key space they write.
+                val catalog = customCatalogByKey[key] ?: return@mapNotNull null
+                CatalogManagerDialogRow(
+                    key = key,
+                    isCollection = false,
+                    config = null,
+                    collectionKey = null,
+                    title = KBHomeOrderPrefs.railTitle(prefs, key, catalog.name),
+                    subtitle = "Catalog \u00b7 " + catalogSummaryLine(catalog),
+                    isPinned = key in prefs.pinned,
+                    isHidden = key in prefs.hiddenSet,
+                    isBuiltinRail = true,
+                    isCustomCatalog = true
                 )
             } else if (key.startsWith("kb:")) {
                 val collection = collectionByKey[key] ?: return@mapNotNull null
@@ -762,7 +790,8 @@ private fun UnifiedManagerRow(
             RailKindChip(
                 isCollection = row.isCollection,
                 isBrowseRow = row.isBrowseRail,
-                isBuiltinRow = row.isBuiltinRail
+                isBuiltinRow = row.isBuiltinRail,
+                isCustomCatalogRow = row.isCustomCatalog
             )
             if (row.isPinned) {
                 Icon(
@@ -935,6 +964,14 @@ private data class CatalogManagerDialogRow(
      */
     val isBuiltinRail: Boolean = false,
     /**
+     * A built catalog (the Catalog Builder's rule sets). It is arranged through
+     * the same generic key-based callbacks a built-in row uses, so
+     * [isBuiltinRail] is true for it too - this flag exists for the KIND TAG
+     * and nothing else, because calling a hand-composed catalog "BUILT-IN"
+     * would name the wrong feature.
+     */
+    val isCustomCatalog: Boolean = false,
+    /**
      * The loader fixes this rail's position on Home (the Top Today rows), so it
      * has no slot to arrange: the row shows no reorder controls at all, and
      * [canMoveTop] and friends are false. Hide and rename still apply.
@@ -955,7 +992,8 @@ private data class CatalogManagerDialogRow(
 private fun RailKindChip(
     isCollection: Boolean,
     isBrowseRow: Boolean = false,
-    isBuiltinRow: Boolean = false
+    isBuiltinRow: Boolean = false,
+    isCustomCatalogRow: Boolean = false
 ) {
     Surface(
         shape = KBShapeSmall,
@@ -970,6 +1008,7 @@ private fun RailKindChip(
     ) {
         Text(
             text = when {
+                isCustomCatalogRow -> "CUSTOM"
                 isBuiltinRow -> "BUILT-IN"
                 isBrowseRow -> "BROWSE"
                 isCollection -> "COLLECTION"

@@ -43,6 +43,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -505,13 +506,76 @@ private const val HeroTrailerStartGraceMs = 8_000L
  */
 private const val HeroTrailerRebufferGraceMs = 30_000L
 
+/**
+ * How close to a trailer's END counts as "it finished".
+ *
+ * An error inside this window must not be retried: re-resolving a fresh signed
+ * URL, remounting the player and re-preparing the media to replay the last two
+ * seconds costs a visible blip and shows nothing new, when the hero can just
+ * crossfade to the backdrop the way a clean ending does.
+ */
+internal const val HeroTrailerNearEndMs = 3_000L
+
+/**
+ * Whether a hero trailer that just failed should be retried from
+ * [positionMs], or left ended.
+ *
+ * Pure, so the rule is unit tested without a player. A failure inside the last
+ * [HeroTrailerNearEndMs] of a KNOWN duration means the trailer effectively
+ * ended, so the hero falls back to the backdrop instead of replaying its tail.
+ *
+ * An UNKNOWN duration ([durationMs] <= 0, which is what ExoPlayer reports as
+ * `C.TIME_UNSET`) RETRIES, and that is deliberate. An unknown duration means the
+ * media never got far enough to report one, which is exactly the stale-signed-URL
+ * failure the retry exists for: googlevideo 403s on the first chunk, long before
+ * the container is read far enough to know how long the video is. Treating
+ * "unknown" as "near the end" would therefore disable the fresh-URL retry in
+ * the one case it was built for, and a once-playable trailer would stay dead
+ * until its 6 h cache entry aged out.
+ */
+internal fun shouldRetryHeroTrailerAfterError(
+    positionMs: Long,
+    durationMs: Long
+): Boolean {
+    if (durationMs <= 0L) return true
+    return durationMs - positionMs.coerceAtLeast(0L) >= HeroTrailerNearEndMs
+}
+
+/**
+ * A resolved trailer plus the position its playback must start at, as ONE
+ * value.
+ *
+ * The start position is only ever meaningful for the source it was resolved
+ * for, so holding it in a second piece of state is holding a value that can
+ * outlive its source - a foreground re-arm or an autoplay toggle would then seek
+ * a FRESH resolve to a position left over from a previous playback session.
+ * Swapping this object IS the consume: a new source arrives with its own start
+ * position, or with 0.
+ */
+internal data class HeroTrailerPlayback(
+    val source: PlayableSource,
+    val startPositionMs: Long = 0L
+)
+
 @Composable
 private fun HeroInlineTrailerPlayer(
     source: PlayableSource,
     muted: Boolean,
+    /**
+     * Where playback starts. 0 for every normal play - this is only non-zero
+     * for the one-shot retry after a mid-stream failure, where the trailer
+     * picks up where it died instead of restarting.
+     */
+    startPositionMs: Long = 0L,
     modifier: Modifier = Modifier,
     onEnded: () -> Unit = {},
-    onFailed: () -> Unit = {}
+    /**
+     * Playback failed; [positionMs] is where it failed, read while the player
+     * still had the media loaded (see the error handler). Never called for a
+     * failure in the last [HeroTrailerNearEndMs] of the trailer, because there
+     * is nothing worth resuming there.
+     */
+    onFailed: (positionMs: Long) -> Unit = {}
 ) {
     val context = LocalContext.current
     // One pooled player for every hero trailer: renderer initialization is
@@ -600,6 +664,13 @@ private fun HeroInlineTrailerPlayer(
         exoPlayer.playWhenReady = true
         exoPlayer.prepare()
 
+        // Resume point for the post-failure retry. After prepare(), so the seek
+        // applies to the media just set (a seek before prepare is dropped with
+        // the timeline), and only when there is one: a first play never seeks.
+        if (startPositionMs > 0L) {
+            exoPlayer.seekTo(startPositionMs)
+        }
+
         onDispose {
             // Intentionally empty: during a crossfade this instance can be
             // the OUTGOING content while the incoming one already prepared
@@ -682,14 +753,32 @@ private fun HeroInlineTrailerPlayer(
                     // fall back to the backdrop image immediately, then
                     // give the caller one shot at re-resolving a fresh
                     // signed URL (googlevideo URLs can go stale mid-stream).
+                    //
+                    // Read where it died FIRST. onEnded() drops the source,
+                    // which hands the pooled player back for reuse, and a
+                    // released player reports position 0 - so a position read
+                    // after the fallback would resume every retry from the
+                    // top, which is the whole bug this fixes.
+                    val positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+                    val durationMs = exoPlayer.duration
                     Log.e(
                         "HOME_HERO",
-                        "Inline trailer playback failed: ${error.errorCodeName}",
+                        "Inline trailer playback failed: ${error.errorCodeName} " +
+                            "at ${positionMs}ms of " +
+                            (if (durationMs > 0L) "${durationMs}ms" else "unknown length"),
                         error
                     )
                     handler.removeCallbacks(watchdog)
                     onEnded()
-                    onFailed()
+                    if (shouldRetryHeroTrailerAfterError(positionMs, durationMs)) {
+                        onFailed(positionMs)
+                    } else {
+                        Log.w(
+                            "HOME_HERO",
+                            "Trailer failed ${durationMs - positionMs}ms from the end; " +
+                                "letting it end instead of replaying its tail"
+                        )
+                    }
                 }
             }
 
@@ -903,9 +992,19 @@ private fun HomeHero(
     // the main player's proven stack (OkHttp + the youtube client UA +
     // bounded range requests via YoutubeChunkedDataSourceFactory), renders
     // no subtitles, and reports ENDED so the hero returns to the backdrop.
-    var resolvedTrailerSource by remember(trailerKey) {
-        mutableStateOf<PlayableSource?>(null)
+    // The resolved trailer AND the position its playback starts at, as one
+    // value (see HeroTrailerPlayback): the resume point travels with the source
+    // it belongs to, so a re-arm for any other reason cannot pick up a stale
+    // position from a previous session.
+    var resolvedTrailer by remember(trailerKey) {
+        mutableStateOf<HeroTrailerPlayback?>(null)
     }
+
+    // One-shot handoff from the failure below to the resolve that retries it:
+    // written when a retry is actually going to happen, read (and cleared) by
+    // that retry's resolve. Deliberately NOT kept as "where playback is": a
+    // value like that would follow the viewer into the next play.
+    var trailerResumeMs by remember(trailerKey) { mutableLongStateOf(0L) }
 
     // One-shot playback-failure retry: googlevideo signed URLs can go stale
     // mid-stream (403 on a later chunk). Re-resolving fetches a fresh URL —
@@ -931,8 +1030,8 @@ private fun HomeHero(
     // dispose can't do it -- during a crossfade the outgoing instance is
     // disposed AFTER the incoming one already prepared new media, and a stop
     // there would kill the new trailer.
-    LaunchedEffect(resolvedTrailerSource) {
-        if (resolvedTrailerSource == null) {
+    LaunchedEffect(resolvedTrailer) {
+        if (resolvedTrailer == null) {
             TrailerPlayerPool.releaseForReuse()
         }
     }
@@ -945,7 +1044,12 @@ private fun HomeHero(
     }
 
     LaunchedEffect(trailerPlaying, trailerKey, trailerAttempt, resumeEpoch) {
-        resolvedTrailerSource = null
+        resolvedTrailer = null
+        // Consume the resume position WITH this resolve: a retry seeks to it,
+        // and every other reason to re-run this effect (foreground re-arm,
+        // autoplay toggle) starts from the top because the value is gone.
+        val resumeFrom = trailerResumeMs
+        trailerResumeMs = 0L
 
         if (trailerPlaying && !trailerKey.isNullOrBlank()) {
             if (trailerAttempt > 0) {
@@ -965,7 +1069,10 @@ private fun HomeHero(
             TrailerPlayerLauncher
                 .resolvePlayableUrl(trailerKey)
                 .onSuccess { source ->
-                    resolvedTrailerSource = source
+                    resolvedTrailer = HeroTrailerPlayback(
+                        source = source,
+                        startPositionMs = resumeFrom
+                    )
                     Log.w(
                         "HOME_HERO",
                         "Hero trailer resolved: " +
@@ -1258,29 +1365,37 @@ private fun HomeHero(
             ) {
             
                 Crossfade(
-    targetState = resolvedTrailerSource,
+    targetState = resolvedTrailer,
     label = "hero_backdrop_crossfade"
-) { trailerSource ->
-    if (trailerSource != null) {
+) { trailerPlayback ->
+    if (trailerPlayback != null) {
         HeroInlineTrailerPlayer(
-            source = trailerSource,
+            source = trailerPlayback.source,
             muted = muted,
+            startPositionMs = trailerPlayback.startPositionMs,
             modifier = Modifier.fillMaxSize(),
             onEnded = {
                 // Video finished (or the watchdog gave up on a stuck
                 // player): drop the source so the hero crossfades back
                 // to the backdrop.
-                resolvedTrailerSource = null
+                resolvedTrailer = null
             },
-            onFailed = {
+            onFailed = { positionMs ->
                 // Playback error (e.g. the signed URL went stale and a
                 // chunk 403'd): drop the source and retry resolution once
-                // with a fresh URL. onEnded still fires first, so the
-                // backdrop shows immediately either way.
+                // with a fresh URL, resuming where it died. onEnded still
+                // fires first, so the backdrop shows immediately either
+                // way.
                 if (trailerAttempt < 1) {
+                    // Record the resume point ONLY when the retry is really
+                    // going to happen: a position written on the capped
+                    // second failure would sit there and be picked up by the
+                    // next re-arm (a foreground return), seeking a fresh
+                    // play to a dead position.
+                    trailerResumeMs = positionMs
                     trailerAttempt += 1
                 } else {
-                    resolvedTrailerSource = null
+                    resolvedTrailer = null
                 }
             }
         )
@@ -1331,7 +1446,7 @@ private fun HomeHero(
         // Bottom seam gradient: blends the backdrop into the rails below.
         // Skipped while an inline trailer is playing — otherwise its fully
         // opaque bottom edge paints a dark band across the video.
-        if (resolvedTrailerSource == null) {
+        if (resolvedTrailer == null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()

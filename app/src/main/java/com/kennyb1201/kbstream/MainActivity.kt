@@ -152,6 +152,14 @@ sealed class Screen {
      */
     data class Addons(val returnTo: Screen = Home) : Screen()
 
+    /**
+     * The Catalog Builder: compose a rule-based catalog (media type, sort and
+     * the full filter set) that Home then draws as its own rail. Reached from
+     * the Add-ons screen, so its Back walks the same path Add-ons does -
+     * whichever screen the viewer came from.
+     */
+    data class CatalogBuilder(val returnTo: Screen = Home) : Screen()
+
     object Search : Screen()
 
     object Simkl : Screen()
@@ -748,19 +756,21 @@ fun AppRoot(
     // and without a Saver the app would come back on Home instead of the
     // detail/streams screen the user was on. The Saver encodes the current
     // Screen as JSON; anything unparseable falls back to Home.
-    var screen by rememberSaveable(stateSaver = ScreenSaver) {
-        mutableStateOf<Screen>(Screen.Home)
+    //
+    // Profile gating rides in that same saver, so the entry screen is decided
+    // BEFORE anything composes: with profiles on the device the launch opens on
+    // Who's Watching (each session starts under a chosen identity), and only a
+    // profile-less install opens on Home. init() already ran in onCreate; this
+    // is just the "which screen do we open on" read. It used to be a
+    // LaunchedEffect beside this state, which runs a frame AFTER the first
+    // composition — so Home composed, its rail loaders started, and its empty
+    // placeholder rails flashed underneath the picker that then replaced it.
+    val profilesExist = remember {
+        com.kennyb1201.kbstream.data.sync.ProfileManager.hasProfiles(applicationContext)
     }
-
-    // Profile gating: with profiles set up, launch into the picker so each
-    // session starts under the right identity. Fresh installs (no profiles)
-    // skip it and stay optional-profile.
-    // init() already ran in onCreate (before first composition); here we
-    // only gate the entry screen on whether profiles exist.
-    LaunchedEffect(Unit) {
-        if (com.kennyb1201.kbstream.data.sync.ProfileManager.hasProfiles(applicationContext)) {
-            screen = Screen.ProfilePicker()
-        }
+    val entrySaver = remember(profilesExist) { launchScreenSaver(profilesExist) }
+    var screen by rememberSaveable(stateSaver = entrySaver) {
+        mutableStateOf<Screen>(launchScreen(profilesExist))
     }
 
     // Re-mirror the theme toggles on every active-profile change: AMOLED /
@@ -1501,7 +1511,20 @@ fun AppRoot(
             AddonsScreen(
                 onBack = {
                     screen = stableBackDestination(current.returnTo)
+                },
+                // The builder inherits Add-ons' own return destination, so
+                // Back out of it lands on Add-ons and Back again on whatever
+                // sent the viewer here (Settings, or onboarding).
+                onOpenCatalogBuilder = {
+                    screen = Screen.CatalogBuilder(returnTo = current.returnTo)
                 }
+            )
+        }
+
+        is Screen.CatalogBuilder -> {
+
+            com.kennyb1201.kbstream.ui.addons.CatalogBuilderScreen(
+                onBack = { screen = Screen.Addons(returnTo = current.returnTo) }
             )
         }
 

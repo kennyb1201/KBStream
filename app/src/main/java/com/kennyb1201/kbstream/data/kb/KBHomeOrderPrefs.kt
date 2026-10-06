@@ -75,6 +75,18 @@ internal const val KB_COLLECTION_KEY_PREFIX = "kb:"
 internal const val KB_BUILTIN_KEY_PREFIX = "builtin:"
 
 /**
+ * User-built catalog rails: rows composed in the Catalog Builder from the
+ * filter set (genre, service, studio, decade, language, rating, ...).
+ *
+ * Their key space is a family of its own rather than an "addon:" key with a
+ * sentinel base URL, because the distinction has to be readable: a rail in this
+ * family has no manifest to fall back on at all, and a check for
+ * "is this a built catalog?" that reads a fake URL would be a lie the manager,
+ * the loader and Home all had to keep telling.
+ */
+internal const val KB_CUSTOM_CATALOG_KEY_PREFIX = "custom:"
+
+/**
  * Top/bottom moves on the merged arrangement.
  *
  * TOP pins a PINNABLE rail (a collection or a Browse rail) to the head of the
@@ -359,6 +371,17 @@ object KBHomeOrderPrefs {
     /** Stable arrangement key for a built-in rail (see [KB_BUILTIN_KEY_PREFIX]). */
     fun builtinKey(id: String): String = KB_BUILTIN_KEY_PREFIX + id
 
+    /**
+     * Stable arrangement key for one user-built catalog rail (see
+     * [KB_CUSTOM_CATALOG_KEY_PREFIX]). Keyed by the catalog's own id, which the
+     * builder never reuses, so a renamed catalog keeps its Home position.
+     */
+    fun customCatalogKey(id: String): String = KB_CUSTOM_CATALOG_KEY_PREFIX + id
+
+    /** True for a user-built catalog rail's arrangement key. */
+    fun isCustomCatalogKey(key: String?): Boolean =
+        key?.startsWith(KB_CUSTOM_CATALOG_KEY_PREFIX) == true
+
     /** True for a built-in rail's arrangement key. */
     fun isBuiltinKey(key: String?): Boolean =
         key?.startsWith(KB_BUILTIN_KEY_PREFIX) == true
@@ -419,6 +442,22 @@ object KBHomeOrderPrefs {
      * pinnable - see [isPinnableKey] - so the pinned strip is defensive.)
      */
     fun toggleBuiltinHidden(value: KBHomeOrder, key: String): KBHomeOrder =
+        toggleRailHidden(value, key)
+
+    /**
+     * Hides a rail that is visible until it is hidden, or shows a hidden one.
+     * Pure, and shared by every rail whose default is VISIBLE: the built-in
+     * rows, and now the user-built catalogs composed in the Catalog Builder.
+     *
+     * SHOW only clears the flag: such a rail is already known to the merged
+     * order (its key is one of the caller's defaults), so unlike a collection it
+     * does not have to be added to `order` to count as arranged.
+     *
+     * HIDE also lifts the key out of `pinned` and `order`, so the hidden state
+     * is the only thing remembered about it and it comes back at its default
+     * slot rather than at an arrangement the viewer cannot see.
+     */
+    fun toggleRailHidden(value: KBHomeOrder, key: String): KBHomeOrder =
         if (key in value.hiddenSet) {
             value.copy(hidden = value.hidden - key)
         } else {

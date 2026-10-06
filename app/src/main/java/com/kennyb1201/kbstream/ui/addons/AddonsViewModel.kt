@@ -11,6 +11,8 @@ import com.kennyb1201.kbstream.data.addon.InstalledAddon
 import com.kennyb1201.kbstream.data.addon.ManifestCatalog
 import com.kennyb1201.kbstream.data.addon.mergeRefreshedCatalogs
 import com.kennyb1201.kbstream.data.addon.setAllCatalogsVisible
+import com.kennyb1201.kbstream.data.catalogs.CustomCatalog
+import com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore
 import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
 import com.kennyb1201.kbstream.data.kb.KBProfilePrefs
@@ -82,6 +84,13 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         val profileUrls: List<String> = emptyList(),
         val collections: List<ManagedCollection> = emptyList(),
         /**
+         * The viewer's own built catalogs (the Catalog Builder's rule sets), in
+         * builder order. The home manager lists one row each - `custom:` keys -
+         * so a hand-composed rail is moved and hidden beside every other rail
+         * rather than only from the builder.
+         */
+        val customCatalogs: List<CustomCatalog> = emptyList(),
+        /**
          * The browse rails that have chips in them, in the order Home draws
          * them (genres & tags, services & networks, studios, decades,
          * collections). The manager lists one row per rail - each is pinned,
@@ -136,6 +145,30 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         refresh()
         checkHealth()
         observeProfileSwitches()
+        observeCustomCatalogChanges()
+    }
+
+    /**
+     * Keeps the manager's copy of the built catalogs current.
+     *
+     * They are composed on a screen of their own, so without this the manager's
+     * row list would be whatever it read the last time the Add-ons screen was
+     * opened - a catalog just built would be missing from it (and one just
+     * deleted would still be listed) until the app restarted. The revision is
+     * the same signal Home rebuilds its rails from, so both surfaces see an edit
+     * in the same turn.
+     */
+    private fun observeCustomCatalogChanges() {
+        viewModelScope.launch {
+            var first = true
+            CustomCatalogStore.revision.collect {
+                if (first) {
+                    first = false
+                    return@collect
+                }
+                reloadCollections()
+            }
+        }
     }
 
     /**
@@ -243,6 +276,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 },
                 browseRails = browseHomeRails(BrowseHomeShortcuts.list(context)),
+                customCatalogs = CustomCatalogStore.list(context),
                 statusMessage = _collections.value.statusMessage
             )
         }
@@ -522,6 +556,9 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      */
     private fun homeRailDefaults(): List<String> {
         val browseKeys = _collections.value.browseRails.map { rail -> rail.key }
+        val customKeys = _collections.value.customCatalogs.map { catalog ->
+            KBHomeOrderPrefs.customCatalogKey(catalog.id)
+        }
         val urls = manifestUrlByAddonId
         val addonKeys = _catalogConfigurations.value
             .filter { it.catalog.showOnHome }
@@ -539,7 +576,7 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         // (and so a show/hide leaves the arrangement otherwise untouched).
         // A hidden rail is filtered out by the hidden set, not by omission.
         return KBHomeOrderPrefs.BUILTIN_KEYS +
-            browseKeys + addonKeys + collectionKeys
+            browseKeys + customKeys + addonKeys + collectionKeys
     }
 
     private fun persistHomeOrder(

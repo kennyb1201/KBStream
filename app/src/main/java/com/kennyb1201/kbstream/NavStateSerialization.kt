@@ -26,15 +26,67 @@ internal const val MAX_RETURN_DEPTH = 2
 
 internal object ScreenSaver : Saver<Screen, String> {
     override fun SaverScope.save(value: Screen): String =
-        encodeScreen(
-            if (value is Screen.Player) value.returnTo else value
-        ).toString()
+        encodeScreenJson(value)
 
     override fun restore(value: String): Screen? =
         decodeScreen(
             runCatching { JSONObject(value) }.getOrNull()
         )
 }
+
+/**
+ * A Screen as the JSON text [ScreenSaver] stores.
+ *
+ * Shared by both savers below, because `save` is a member OF the [Saver]
+ * interface (it is declared on [SaverScope]) and so cannot be delegated across
+ * two saver instances — the encoding itself is the part that can be.
+ */
+private fun encodeScreenJson(value: Screen): String =
+    encodeScreen(
+        // The Player screen runs in its own activity: persist what is under it
+        // rather than a dead playback URL that could never be relaunched.
+        if (value is Screen.Player) value.returnTo else value
+    ).toString()
+
+/**
+ * The screen a launch opens on.
+ *
+ * Who's Watching is the entry screen whenever the device holds profiles, so
+ * every session starts under a chosen identity; only a profile-less install —
+ * a fresh one, or one whose profiles were all deleted — falls through to Home,
+ * where first-run onboarding lives.
+ *
+ * A named function rather than a read inline at the state, because both halves
+ * of the gate have to agree: the value the state starts on ([launchScreenSaver]'s
+ * entry screen) and the value a restore is allowed to hand back.
+ */
+internal fun launchScreen(profilesExist: Boolean): Screen =
+    if (profilesExist) Screen.ProfilePicker() else Screen.Home
+
+/**
+ * [ScreenSaver] with the launch gate folded into the restore path.
+ *
+ * The picker used to be forced by a `LaunchedEffect(Unit)` sitting beside the
+ * screen state, and an effect runs a frame AFTER the first composition: a
+ * launch with profiles on the device therefore painted Home — its rail loaders
+ * and their placeholder posters included — underneath Who's Watching for a
+ * frame before the picker replaced it. Deciding it here removes that frame, so
+ * the first composition already IS the picker and Home never composes at all.
+ *
+ * With profiles on the device no restored screen is honoured, not even the
+ * Detail/Streams screen [ScreenSaver] exists to keep, because the effect this
+ * replaces overrode every one of them the same way. Without profiles this is
+ * [ScreenSaver] itself, so the restore behaves exactly as it always did.
+ */
+internal fun launchScreenSaver(profilesExist: Boolean): Saver<Screen, String> =
+    if (!profilesExist) {
+        ScreenSaver
+    } else {
+        Saver(
+            save = { encodeScreenJson(it) },
+            restore = { Screen.ProfilePicker() }
+        )
+    }
 
 internal fun encodeScreen(
     screen: Screen,
@@ -44,6 +96,11 @@ internal fun encodeScreen(
 
     when (screen) {
         is Screen.Addons -> {
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
+        is Screen.CatalogBuilder -> {
             if (depth < MAX_RETURN_DEPTH) {
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
@@ -176,6 +233,9 @@ internal fun decodeScreen(
         when (json.optString(SCREEN_TYPE_KEY)) {
             "home" -> Screen.Home
             "addons" -> Screen.Addons(
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
+            "catalogBuilder" -> Screen.CatalogBuilder(
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "search" -> Screen.Search
@@ -350,6 +410,11 @@ internal val Screen.navDepth: Int
         is Screen.CatalogGrid,
         is Screen.KBFolder,
         is Screen.Addons -> 1
+        // The Catalog Builder is the one screen reached THROUGH Add-ons, so it
+        // slides in from the trailing edge like any other move forward. A
+        // shallower depth here (Add-ons is 1) would have made it animate like
+        // a step BACK to the Add-ons screen it is sitting on top of.
+        is Screen.CatalogBuilder -> 2
         is Screen.ProfileEdit,
         is Screen.Actor,
         is Screen.Studio,
@@ -365,6 +430,7 @@ internal fun Screen.typeName(): String = when (this) {
     is Screen.ProfilePicker -> "profilePicker"
     is Screen.ProfileEdit -> "profileEdit"
     is Screen.Addons -> "addons"
+    is Screen.CatalogBuilder -> "catalogBuilder"
     is Screen.Search -> "search"
     is Screen.Simkl -> "simkl"
     is Screen.Guide -> "guide"

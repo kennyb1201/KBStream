@@ -214,6 +214,7 @@ object PrefsPayloadBuilder {
     const val KEY_WATCHED_OVERRIDES = "watched_overrides"
     const val KEY_HOME_ORDER = "kb_home_order"
     const val KEY_BROWSE_SHORTCUTS = "kb_browse_shortcuts"
+    const val KEY_CUSTOM_CATALOGS = "kb_custom_catalogs"
     const val KEY_COLLECTIONS = "kb_collections"
     const val KEY_BADGE_PACK = "badge_pack"
     const val KEY_LIBRARY = "library"
@@ -231,6 +232,7 @@ object PrefsPayloadBuilder {
         KEY_WATCHED_OVERRIDES to buildWatchedOverrides(context),
         KEY_HOME_ORDER to buildHomeOrder(context),
         KEY_BROWSE_SHORTCUTS to buildBrowseShortcuts(context),
+        KEY_CUSTOM_CATALOGS to buildCustomCatalogs(context),
         KEY_COLLECTIONS to buildCollections(context),
         KEY_BADGE_PACK to buildBadgePack(context),
         KEY_LIBRARY to buildLibrary(context),
@@ -343,6 +345,46 @@ object PrefsPayloadBuilder {
                 "shortcuts_json",
                 prefs.getString(
                     com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.SYNC_BLOB_KEY,
+                    null
+                ).orEmpty()
+            )
+        }
+    }
+
+    /**
+     * The user's built catalogs, as the store's own raw JSON blob plus the local
+     * edit stamp — opaque, exactly like the browse chips: the writer owns the
+     * encoding, so the applier hands the string straight back and this layer
+     * never has to know what a rule set is.
+     *
+     * Publishing the content's OWN change time (not the push's) is what keeps a
+     * device that merely opened the app from re-stamping its unchanged list and
+     * beating a sibling's freshly built catalog. See
+     * [CustomCatalogStore.SYNCED_AT_KEY].
+     */
+    fun buildCustomCatalogs(context: Context): JsonObject {
+        val prefs =
+            scopedPrefs(
+                context,
+                com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.SYNC_STORE
+            )
+        return buildJsonObject {
+            put(
+                "updatedAt",
+                HomeListBlobRules.publishStamp(
+                    prefs.getLong(
+                        com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore
+                            .SYNCED_AT_KEY,
+                        0L
+                    ),
+                    System.currentTimeMillis()
+                )
+            )
+            put(
+                "catalogs_json",
+                prefs.getString(
+                    com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore
+                        .SYNC_BLOB_KEY,
                     null
                 ).orEmpty()
             )
@@ -631,6 +673,7 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES -> applyWatchedOverrides(context, payload)
             PrefsPayloadBuilder.KEY_HOME_ORDER -> applyHomeOrder(context, payload)
             PrefsPayloadBuilder.KEY_BROWSE_SHORTCUTS -> applyBrowseShortcuts(context, payload)
+            PrefsPayloadBuilder.KEY_CUSTOM_CATALOGS -> applyCustomCatalogs(context, payload)
             PrefsPayloadBuilder.KEY_COLLECTIONS -> applyCollections(context, payload)
             PrefsPayloadBuilder.KEY_BADGE_PACK -> applyBadgePack(context, payload)
             PrefsPayloadBuilder.KEY_LIBRARY -> applyLibrary(context, payload)
@@ -751,6 +794,43 @@ object PrefsPayloadApplier {
             com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.SYNC_BLOB_KEY
         val syncedAtKey =
             com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.SYNCED_AT_KEY
+
+        val remoteUpdated = payloadUpdatedAt(payload)
+        if (!HomeListBlobRules.shouldApply(remoteUpdated, prefs.getLong(syncedAtKey, 0L))) {
+            return
+        }
+
+        if (blob == prefs.getString(blobKey, null).orEmpty()) return
+
+        prefs.edit()
+            .putString(blobKey, blob)
+            .putLong(syncedAtKey, remoteUpdated ?: System.currentTimeMillis())
+            .apply()
+    }
+
+    /**
+     * Built-catalog apply: the store's raw blob replaced wholesale, guarded by
+     * the local edit stamp so an older sibling-device copy cannot revert a
+     * catalog the user just built (the same rule the chips follow).
+     */
+    private fun applyCustomCatalogs(context: Context, payload: JsonObject) {
+        val blob =
+            (payload["catalogs_json"] as? kotlinx.serialization.json.JsonPrimitive)
+                ?.content
+                ?: return
+        // A blank blob is "none built here", not "delete them everywhere":
+        // adopting it would erase hand-composed rule sets from every device.
+        if (blob.isBlank()) return
+
+        val prefs =
+            scopedPrefs(
+                context,
+                com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.SYNC_STORE
+            )
+        val blobKey =
+            com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.SYNC_BLOB_KEY
+        val syncedAtKey =
+            com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.SYNCED_AT_KEY
 
         val remoteUpdated = payloadUpdatedAt(payload)
         if (!HomeListBlobRules.shouldApply(remoteUpdated, prefs.getLong(syncedAtKey, 0L))) {

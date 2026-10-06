@@ -307,7 +307,15 @@ suspend fun searchCollection(
         @Query("primary_release_date.gte") primaryReleaseDateGte: String? = null,
         @Query("primary_release_date.lte") primaryReleaseDateLte: String? = null,
         @Query("first_air_date.gte") firstAirDateGte: String? = null,
-        @Query("first_air_date.lte") firstAirDateLte: String? = null
+        @Query("first_air_date.lte") firstAirDateLte: String? = null,
+        // Runtime window in minutes; certification is a country + value pair
+        // ("US" + "PG-13"). with_cast is movie-only, so it is not sent to
+        // /discover/tv (see the TV twin below).
+        @Query("with_runtime.gte") withRuntimeGte: Int? = null,
+        @Query("with_runtime.lte") withRuntimeLte: Int? = null,
+        @Query("with_cast") withCast: String? = null,
+        @Query("certification_country") certificationCountry: String? = null,
+        @Query("certification") certification: String? = null
     ): TmdbDiscoverResponse
 
     // TV twin of the generic discover: TV date filters (first_air_date.*)
@@ -333,7 +341,16 @@ suspend fun searchCollection(
         @Query("vote_average.gte") voteAverageGte: Int? = null,
         @Query("vote_average.lte") voteAverageLte: Int? = null,
         @Query("first_air_date.gte") firstAirDateGte: String? = null,
-        @Query("first_air_date.lte") firstAirDateLte: String? = null
+        @Query("first_air_date.lte") firstAirDateLte: String? = null,
+        // Runtime window (episode runtime on TV), certification country +
+        // value, and the two TV shape filters.
+        @Query("with_runtime.gte") withRuntimeGte: Int? = null,
+        @Query("with_runtime.lte") withRuntimeLte: Int? = null,
+        @Query("certification_country") certificationCountry: String? = null,
+        @Query("certification") certification: String? = null,
+        @Query("with_status") withStatus: String? = null,
+        @Query("with_type") withType: String? = null,
+        @Query("without_networks") withoutNetworks: String? = null
     ): TmdbDiscoverResponse
 
     // KB "LIST" sources point at a TMDB list id (/list/{id} items).

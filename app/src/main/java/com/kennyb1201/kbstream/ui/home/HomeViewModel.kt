@@ -1166,6 +1166,36 @@ Log.d(
         }
     }
 
+    /**
+     * Rebuilds the rails when the viewer's OWN catalogs change.
+     *
+     * The Catalog Builder is a screen away from Home, so without this a rail
+     * built there showed up only after the stale-resume refetch (or a manual
+     * refresh). Deliberately the same shape as [observeAddonChanges]: skip the
+     * first emission ([CustomCatalogStore.revision] starts at 0 and init's
+     * loadRails already covers it), debounce bursts so a catalog edited field by
+     * field rebuilds once, and refetch without clearing the catalog cache so
+     * only the new/changed rules cost a round trip.
+     */
+    private fun observeCustomCatalogChanges() {
+        viewModelScope.launch {
+            var first = true
+            com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.revision
+                .debounce(300)
+                .collectLatest {
+                    if (first) {
+                        first = false
+                        return@collectLatest
+                    }
+                    loadRailsInternal(
+                        forceRefresh = true,
+                        clearCatalogCache = false,
+                        coalesce = true
+                    )
+                }
+        }
+    }
+
     fun refreshUpNext() {
 
         viewModelScope.launch {
@@ -7009,6 +7039,18 @@ private suspend fun calculateEpisodesRemaining(
                                 )
                             }
 
+                            // The viewer's own catalogs (the Catalog Builder's
+                            // rule sets) load with the pinned batch. They are
+                            // app-built TMDB rows like the guest rails above,
+                            // and KBHomeSlots places them by their own
+                            // arrangement key, so they are appended after the
+                            // branches rather than woven into one.
+                            loadCustomCatalogRails(
+                                rails,
+                                hideUpcoming,
+                                landscapeCards
+                            )
+
                             // When the pinned rails LANDED, measured from the
                             // build start. They now run beside the catalog
                             // fan-out, so this no longer includes it.
@@ -7843,6 +7885,166 @@ private suspend fun calculateEpisodesRemaining(
         }
     }
 
+    /**
+     * Rails for the viewer's own catalogs — the rule sets composed in the
+     * Catalog Builder.
+     *
+     * Every row is the app's own /discover query, re-run on each build, so a
+     * catalog of "Action + Netflix + 8.0+" is as fresh as the day it was saved
+     * and nothing has to be refreshed. They load with the pinned batch, beside
+     * the catalog fan-out, because they are the same kind of thing the guest
+     * rails are: app-built TMDB rows with no add-on behind them.
+     *
+     * A catalog the viewer hid is skipped here rather than filtered later, so a
+     * hidden row costs no TMDB request at all — the hide switch and this read
+     * are the same arrangement store, so the two cannot disagree.
+     *
+     * One discover page per catalog ([CUSTOM_CATALOG_RAIL_LIMIT] items) and the
+     * rail is marked exhausted: a built catalog is a browse shelf, not a
+     * paginated feed, and the grid falls back to what the rail already had.
+     */
+    private suspend fun loadCustomCatalogRails(
+        result: MutableList<Rail>,
+        hideUpcoming: Boolean,
+        landscapeCards: Boolean
+    ) {
+        val context = getApplication<Application>()
+        val hidden =
+            com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                .get(context)
+                .hiddenSet
+        val catalogs =
+            com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore
+                .list(context)
+                .filterNot { catalog ->
+                    com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                        .customCatalogKey(catalog.id) in hidden
+                }
+        if (catalogs.isEmpty()) return
+
+        // Same English-only browse filter the guest rows honour (null when the
+        // setting is off). /discover filters it server-side; this pass is what
+        // covers a title whose original_language the query could not exclude.
+        val language = tmdbRepository.browseLanguage()
+
+        coroutineScope {
+            catalogs.map { catalog ->
+                async {
+                    try {
+                        val items = tmdbRepository.discoverKB(
+                            mediaType = catalog.mediaType,
+                            page = 1,
+                            sortBy = catalog.tmdbSortKey(),
+                            filters = catalog.effectiveFilters()
+                        ).orEmpty()
+                            .let { list ->
+                                if (language == null) {
+                                    list
+                                } else {
+                                    list.filter { item ->
+                                        item.originalLanguage == null ||
+                                            item.originalLanguage.equals(
+                                                language,
+                                                ignoreCase = true
+                                            )
+                                    }
+                                }
+                            }
+                            .take(CUSTOM_CATALOG_RAIL_LIMIT)
+
+                        if (items.isEmpty()) return@async null
+
+                        val metas = items.map { item ->
+                            MetaPreview(
+                                id = "tmdb:" + item.id,
+                                type = catalog.railType,
+                                name = item.name ?: item.title.orEmpty(),
+                                poster = item.posterPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { TmdbRepository.POSTER_BASE + it },
+                                background = item.backdropPath
+                                    ?.takeIf { it.isNotBlank() }
+                                    ?.let { TmdbRepository.BACKDROP_BASE + it },
+                                releaseInfo = (item.firstAirDate ?: item.releaseDate)
+                                    ?.takeIf { it.length >= 4 }
+                                    ?.take(4)
+                            )
+                        }
+
+                        // Exactly the two filters the guest rails run: the
+                        // app-wide digital-release filter (when "hide upcoming"
+                        // is on) and the kids ceiling (discoverKB already ran its
+                        // own pass; this one covers the metas as drawn).
+                        val filtered =
+                            if (hideUpcoming) {
+                                tmdbRepository.kidsFilterMetas(
+                                    applyDigitalAvailabilityFilter(filterUpcoming(metas))
+                                )
+                            } else {
+                                tmdbRepository.kidsFilterMetas(metas)
+                            }
+
+                        if (filtered.isEmpty()) return@async null
+
+                        val rail = Rail(
+                            addonName =
+                            com.kennyb1201.kbstream.data.catalogs
+                                .CUSTOM_CATALOG_ADDON_NAME,
+                            catalogName = catalog.name,
+                            type = catalog.railType,
+                            items = filtered,
+                            catalogId = catalog.id,
+                            // Null base URL = a row this app builds itself, and
+                            // the custom id is what tells the merge apart from a
+                            // HARDCODED one (see KBHomeSlots).
+                            baseUrl = null,
+                            customCatalogId = catalog.id,
+                            landscapeArt = previousLandscapeArt[
+                                railKeyOf(
+                                    com.kennyb1201.kbstream.data.catalogs
+                                        .CUSTOM_CATALOG_ADDON_NAME,
+                                    catalog.id,
+                                    catalog.railType
+                                )
+                            ] ?: emptyMap()
+                        )
+
+                        railInfo[railKeyOf(rail)] = RailInfo(
+                            addonName =
+                            com.kennyb1201.kbstream.data.catalogs
+                                .CUSTOM_CATALOG_ADDON_NAME,
+                            catalogId = catalog.id,
+                            catalogType = catalog.railType,
+                            catalogRawName = catalog.name,
+                            baseUrl = "",
+                            hideUpcoming = hideUpcoming,
+                            landscapeCards = landscapeCards,
+                            // TMDB-art row: read by warmLandscapeArt as
+                            // "resolve this rail's landscape art from TMDB",
+                            // the same as the guest and kids rows.
+                            pinned = true
+                        )
+
+                        // One fixed TMDB page - no pagination.
+                        exhaustedRails.add(railKeyOf(rail))
+
+                        rail
+                    } catch (e: Exception) {
+                        Log.e(
+                            "HOME_RAILS",
+                            "custom catalog ${catalog.id} load failed: " + e.message,
+                            e
+                        )
+                        null
+                    }
+                }
+            }
+                .awaitAll()
+                .filterNotNull()
+                .forEach { rail -> result += rail }
+        }
+    }
+
     private suspend fun loadPinnedTopTodayRails(
         result: MutableList<Rail>,
         hideUpcoming: Boolean,
@@ -8144,6 +8346,8 @@ private suspend fun calculateEpisodesRemaining(
         )
 
         observeAddonChanges()
+
+        observeCustomCatalogChanges()
 
         loadRails()
 
@@ -8474,6 +8678,13 @@ private suspend fun calculateEpisodesRemaining(
 
         private const val TOP_TODAY_ADDON_NAME =
             "TMDB Top Today"
+
+        /**
+         * Items one built catalog rail draws. A single discover page, capped
+         * here so a catalog whose rules are deliberately broad ("anything
+         * popular") still draws a row of the same length as every other rail.
+         */
+        private const val CUSTOM_CATALOG_RAIL_LIMIT = 20
 
         private const val TOP_TODAY_MANIFEST_URL =
             "https://toptoday.llamayu.com/landscapeTags=true|landscapeLogos=true|landscapeRanked=false|portraitTags=true|portraitLogos=false|portraitRanked=true|posterLang=en|digitalOnly=true|listLang=en/manifest.json"

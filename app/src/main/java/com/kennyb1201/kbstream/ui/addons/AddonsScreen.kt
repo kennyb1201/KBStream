@@ -81,6 +81,8 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 @Composable
 fun AddonsScreen(
     onBack: () -> Unit,
+    /** Opens the Catalog Builder: the app's rule-based "smart catalog" editor. */
+    onOpenCatalogBuilder: () -> Unit,
     viewModel: AddonsViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -219,6 +221,11 @@ fun AddonsScreen(
                         label = "HOME / COLLECTIONS",
                         icon = Icons.AutoMirrored.Filled.List,
                         onClick = { showCatalogManager = true }
+                    )
+                    ActionButton(
+                        label = "CATALOGS",
+                        icon = Icons.Filled.Add,
+                        onClick = onOpenCatalogBuilder
                     )
                     ActionButton(
                         label = "COPY FROM PROFILE",
@@ -543,8 +550,17 @@ fun AddonsScreen(
                     .get(context)
                 renameBuiltinKey = key
                 // Seed the field with what the viewer sees now, so renaming a
-                // renamed rail edits the name instead of starting blank.
+                // renamed rail edits the name instead of starting blank. A built
+                // catalog's "default" title is the name it was given in the
+                // builder (it has no built-in registry entry to ask).
+                val customName = collectionsState.customCatalogs
+                    .firstOrNull { catalog ->
+                        com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                            .customCatalogKey(catalog.id) == key
+                    }
+                    ?.name
                 renameBuiltinDraft = order.renames[key]
+                    ?: customName
                     ?: com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
                         .builtinDefaultTitle(key).orEmpty()
                 renameBuiltinHasOverride = order.renames[key] != null

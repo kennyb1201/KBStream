@@ -1158,7 +1158,16 @@ class TmdbRepository private constructor(context: Context) :
                     voteAverageGte = filters?.voteAverageGte,
                     voteAverageLte = filters?.voteAverageLte,
                     firstAirDateGte = dateGte,
-                    firstAirDateLte = dateLte
+                    firstAirDateLte = dateLte,
+                    // TV shape + episode runtime + certification. with_cast is
+                    // deliberately absent: /discover/tv has no person filter.
+                    withRuntimeGte = filters?.withRuntimeGte,
+                    withRuntimeLte = filters?.withRuntimeLte,
+                    certificationCountry = filters?.certificationCountry,
+                    certification = filters?.certification,
+                    withStatus = filters?.withStatus,
+                    withType = filters?.withType,
+                    withoutNetworks = filters?.withoutNetworks
                 )
             } else {
                 api.discoverMovieGeneric(
@@ -1181,7 +1190,12 @@ class TmdbRepository private constructor(context: Context) :
                     voteAverageGte = filters?.voteAverageGte,
                     voteAverageLte = filters?.voteAverageLte,
                     primaryReleaseDateGte = dateGte,
-                    primaryReleaseDateLte = dateLte
+                    primaryReleaseDateLte = dateLte,
+                    withRuntimeGte = filters?.withRuntimeGte,
+                    withRuntimeLte = filters?.withRuntimeLte,
+                    withCast = filters?.withCast,
+                    certificationCountry = filters?.certificationCountry,
+                    certification = filters?.certification
                 )
             }.results
         }.getOrNull()
@@ -2221,6 +2235,7 @@ class TmdbRepository private constructor(context: Context) :
         return runCatchingCancellable { api.searchKeyword(query, apiKey).results }
             .getOrDefault(emptyList())
     }
+
 
     /**
      * One decade rail, single media type — movies and series stay separate

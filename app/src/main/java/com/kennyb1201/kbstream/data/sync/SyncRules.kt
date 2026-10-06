@@ -1121,6 +1121,16 @@ internal object HomeListBlobRules {
         shortcutsJson.isNotBlank()
 
     /**
+     * Built catalogs: publish only when this device actually has one built.
+     *
+     * Same full-replace reasoning as the chips above - and it matters more here,
+     * because a catalog is a hand-composed rule set rather than one tap: one TV
+     * that never opened the Catalog Builder must not erase the account's list.
+     */
+    fun shouldPublishCustomCatalogs(catalogsJson: String): Boolean =
+        catalogsJson.isNotBlank()
+
+    /**
      * Home order: publish only when this device has actually arranged a rail.
      *
      * Same reasoning as the other two full-replace blobs - the bulk push runs

@@ -107,7 +107,20 @@ data class Rail(
     // these rows TMDB-art rows in the first place (see
     // LandscapeArtRequest.tmdbOnly), and TMDB art has no number on it. So the
     // card draws it, or it is not shown at all.
-    val ranked: Boolean = false
+    val ranked: Boolean = false,
+    /**
+     * Id of the user-built catalog this rail was composed from, or null for a
+     * row that came from an add-on (or from one of the app's own hardcoded
+     * rails).
+     *
+     * Exactly the same role a manifest URL plays for an add-on rail: it is what
+     * the Home arrangement keys the rail by (see
+     * `KBHomeOrderPrefs.customCatalogKey`), so a built catalog is pinned, moved
+     * and hidden like every other rail. It is also the one thing that tells the
+     * merge apart from a HARDCODED row, which is otherwise the same shape (a
+     * null [baseUrl], no manifest to key against).
+     */
+    val customCatalogId: String? = null
 )
 
 enum class UpNextBadge {
