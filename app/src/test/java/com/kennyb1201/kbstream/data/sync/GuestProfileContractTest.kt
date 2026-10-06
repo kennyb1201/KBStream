@@ -48,6 +48,25 @@ class GuestProfileContractTest {
     }
 
     @Test
+    fun `the launch gate reads profiles from memory, not from disk`() {
+        // The one caller of hasProfiles runs during the first composition (the
+        // screen entry gate), so a SharedPreferences fetch plus a JSON parse
+        // there sits on the path to the first frame. init() has already loaded
+        // the list by then, so the answer is a field read; the blob stays the
+        // fallback for a caller that runs before init (a worker), which is the
+        // same shape profileIds() already uses.
+        val src = readSource(PROFILE_MANAGER)
+        val start = src.indexOf("fun hasProfiles(context: Context): Boolean {")
+        assertTrue("hasProfiles must have a body to inspect", start >= 0)
+        val body = src.substring(start, src.indexOf("}\n", start))
+        val memoryReadAt = body.indexOf("_profiles.value")
+        val diskReadAt = body.indexOf("loadProfiles(context)")
+
+        assertTrue("the in-memory list has to be consulted first", memoryReadAt >= 0)
+        assertTrue("the blob is still the fallback", diskReadAt > memoryReadAt)
+    }
+
+    @Test
     fun `the flag round-trips through the synced blob`() {
         val src = readSource(PROFILE_MANAGER)
         assertTrue(

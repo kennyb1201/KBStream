@@ -551,8 +551,22 @@ class MpvPlayerView @JvmOverloads constructor(
         runCatching {
             when (subtitleMode) {
                 SubtitleModeRules.OFF -> mpv.setPropertyString("sid", "no")
-                SubtitleModeRules.FORCED -> mpv.setPropertyString("sub-forced-only", "yes")
-                else -> mpv.setPropertyString("sub-forced-only", "no")
+                SubtitleModeRules.FORCED -> {
+                    // Both of the other modes have something to undo: OFF left
+                    // `sid` deselected, and a FORCED mode with no track selected
+                    // shows nothing. "auto" is mpv's own default selection.
+                    mpv.setPropertyString("sid", "auto")
+                    mpv.setPropertyString("sub-forced-only", "yes")
+                }
+                else -> {
+                    // ON has to undo BOTH: the forced-only flag AND OFF's
+                    // `sid=no`. Restoring only the flag left subtitles
+                    // deselected, so a runtime OFF -> ON came back silent while
+                    // the open-time option path looked identical - the same
+                    // mode, two behaviours. "auto" is mpv's default selection.
+                    mpv.setPropertyString("sub-forced-only", "no")
+                    mpv.setPropertyString("sid", "auto")
+                }
             }
         }
     }

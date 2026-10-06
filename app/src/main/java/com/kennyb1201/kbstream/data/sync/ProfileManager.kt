@@ -79,8 +79,21 @@ object ProfileManager {
     private val _activeProfile = MutableStateFlow<Profile?>(null)
     val activeProfile: StateFlow<Profile?> = _activeProfile.asStateFlow()
 
-    /** True once at least one profile exists — gates the first-launch picker. */
-    fun hasProfiles(context: Context): Boolean = loadProfiles(context).isNotEmpty()
+    /**
+     * True once at least one profile exists — gates the first-launch picker.
+     *
+     * Reads the in-memory list first, the way [profileIds] does, because the one
+     * caller runs during the first composition: with [init] already run in
+     * `onCreate`, this is then a field read instead of a SharedPreferences fetch
+     * plus a JSON parse sitting on the launch path to the first frame. The stored
+     * blob stays the fallback, so a caller that runs before [init] (a worker)
+     * still gets a real answer rather than a false "no profiles".
+     */
+    fun hasProfiles(context: Context): Boolean {
+        val loaded = _profiles.value
+        if (loaded.isNotEmpty()) return true
+        return loadProfiles(context).isNotEmpty()
+    }
 
     /**
      * The ids of every profile this device holds.

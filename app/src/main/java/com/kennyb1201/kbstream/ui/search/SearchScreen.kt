@@ -428,8 +428,16 @@ fun SearchScreen(
                     // remembered scroll and focus. The view model coalesces
                     // rails that share this identity, so it stays unique.
                     item(
-                        key = "addons_rail:${group.addonName}:" +
-                            "${group.railLabel}:${group.catalogType ?: ""}"
+                        // The view model's own identity, not a second spelling of
+                        // it: the key has to be injective, and a separator the
+                        // add-on name can contain (a colon) would let one rail
+                        // forge another's key - the duplicate-key crash this is
+                        // keyed by identity to avoid.
+                        key = "addons_rail:" + addonRailIdentity(
+                            addonName = group.addonName,
+                            railLabel = group.railLabel,
+                            catalogType = group.catalogType
+                        )
                     ) {
                         SearchRail(
                             title = searchRailTitle(

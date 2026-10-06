@@ -205,10 +205,6 @@ internal object SubtitlePrefetch {
                 // without libass an ASS body is NOT renderable, so a prefetch
                 // that accepts one caches a track the player will draw as 0
                 // cues (PB-P2-4).
-                // The engine's own answer, not a hardcoded true: on a build
-                // without libass an ASS body is NOT renderable, so a prefetch
-                // that accepts one caches a track the player will draw as 0
-                // cues (PB-P2-4).
                 if (!SubtitleSearchHelper.isUsableSubtitleBody(
                         result.body,
                         assRenderable = AssSubtitleRenderer.available

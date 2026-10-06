@@ -166,6 +166,16 @@ internal object SettingsSearchIndex {
             "Play Anime in MPV",
             "anime mpv engine player"
         ),
+        // Dolby Vision's Profile 5 rewrite: drawn in the Playback pane's
+        // "Dolby Vision & HDR" cluster, next to Strip HDR10+. The label keeps
+        // the row's own spelling, arrow written as an escape, so it stays
+        // verbatim with the row it points at.
+        SettingSearchEntry(
+            "playback.p5-hdr10",
+            SettingsPane.PLAYBACK,
+            "P5 \u2192 HDR10",
+            "dolby vision profile 5 p5 icctp hdr10 convert green purple"
+        ),
         SettingSearchEntry(
             "playback.strip-hdr10plus",
             SettingsPane.PLAYBACK,
@@ -427,6 +437,17 @@ internal const val SETTINGS_SEARCH_MAX_RESULTS = 30
 
 /** How long the jumped-to row stays highlighted after a search jump. */
 internal const val SETTINGS_SEARCH_FLASH_MS = 1_200L
+
+/**
+ * How long a jump keeps asking for its row to be scrolled into view.
+ *
+ * A fixed handful of frames was not enough on a cold pane: the freshly selected
+ * pane has not composed when the jump runs, and BringIntoViewRequester is a
+ * no-op until its node is attached, so a slow pane swallowed the whole budget,
+ * switched the pane and never scrolled. Time, not a frame count, is the honest
+ * bound - a frame is not a fixed amount of work.
+ */
+internal const val SETTINGS_SEARCH_SCROLL_BUDGET_MS = 250L
 
 /**
  * The entry currently being flashed after a search jump, or null.

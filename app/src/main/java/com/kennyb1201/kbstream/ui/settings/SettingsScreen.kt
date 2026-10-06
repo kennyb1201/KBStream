@@ -407,19 +407,32 @@ fun SettingsScreen(
     var settingsSearchQuery by remember { mutableStateOf("") }
     var flashingSetting by remember { mutableStateOf<SettingSearchEntry?>(null) }
     val settingsSearchScope = rememberCoroutineScope()
+    // Focus is parked on this field while a query is up, and the picked result
+    // card is what unmounts when the query clears - so this is the one node the
+    // jump can hand focus back to deterministically.
+    val settingsSearchFocus = remember { FocusRequester() }
     val jumpToSetting: (SettingSearchEntry) -> Unit = { entry ->
         selectedPane = entry.pane
         AppPreferences.setLastSettingsPane(context, entry.pane.name)
         settingsSearchQuery = ""
+        // Clear the query FIRST, then catch focus, or the card that just
+        // vanished takes the D-pad down with it: on a remote there is no
+        // pointer to press from, and focus left nowhere is an app the viewer
+        // cannot steer. Asking the field explicitly is what makes it
+        // deterministic instead of "whatever Compose picks next".
+        runCatching { settingsSearchFocus.requestFocus() }
         settingsSearchScope.launch {
-            // BringIntoViewRequester is a no-op until a node is attached, and
-            // the freshly selected pane has not composed yet when this runs,
-            // so the earliest asks land on nothing rather than failing. Ask
-            // once per frame: by the second or third the row exists and its
-            // anchor scrolls it in.
-            repeat(4) {
-                withFrameNanos { }
+            // BringIntoViewRequester is a no-op until its node is attached, and
+            // the freshly selected pane has not composed yet when this runs, so
+            // the earliest asks land on nothing rather than failing. Ask once
+            // per frame until a time budget is spent - a frame count is not a
+            // bound on anything (see SETTINGS_SEARCH_SCROLL_BUDGET_MS).
+            val startedAt = withFrameNanos { it }
+            while (true) {
                 runCatching { entry.anchor.bringIntoView() }
+                if (withFrameNanos { it } - startedAt >= SETTINGS_SEARCH_SCROLL_BUDGET_MS) {
+                    break
+                }
             }
             flashingSetting = entry
             delay(SETTINGS_SEARCH_FLASH_MS)
@@ -513,6 +526,7 @@ fun SettingsScreen(
                 },
                 searchQuery = settingsSearchQuery,
                 onSearchQueryChange = { settingsSearchQuery = it },
+                searchFocus = settingsSearchFocus,
                 onPickResult = jumpToSetting
             )
         }
@@ -2503,6 +2517,7 @@ private fun SettingsNavRail(
     onSelect: (SettingsPane) -> Unit,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
+    searchFocus: FocusRequester,
     onPickResult: (SettingSearchEntry) -> Unit
 ) {
     // TV entry point: focus lands on the first rail item once. Selecting a
@@ -2536,6 +2551,9 @@ private fun SettingsNavRail(
             onValueChange = onSearchQueryChange,
             placeholder = "Search settings",
             modifier = Modifier.fillMaxWidth(),
+            // A picked result hands focus back here (see the jump), so the
+            // field needs a requester of its own.
+            focusRequester = searchFocus,
             leading = {
                 Icon(
                     imageVector = Icons.Filled.Search,

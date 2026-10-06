@@ -110,6 +110,33 @@ class SubtitleModeContractTest {
     }
 
     @Test
+    fun `the runtime branch restores subtitle selection after off`() {
+        // The open-time options only cover the FIRST file; a mode changed while
+        // playing goes through setSubtitleMode's runtime branch, and OFF leaves
+        // mpv's sid at "no". Restoring only the forced-only flag (what it used to
+        // do) meant a runtime OFF -> ON stayed silent - the same mode, two
+        // behaviours, depending on whether it was set before or after open.
+        val view = readSource(MPV_VIEW)
+        val runtime = view
+            .substringAfter("fun setSubtitleMode(mode: Int)")
+            .substringBefore("fun setSpeed(")
+        val restored = "mpv.setPropertyString(\"sid\", \"auto\")"
+
+        assertTrue(
+            "off must still deselect at runtime",
+            runtime.contains("mpv.setPropertyString(\"sid\", \"no\")")
+        )
+        assertTrue(
+            "forced needs a selected track for its forced cues to appear",
+            runtime.contains(restored)
+        )
+        assertTrue(
+            "and ON must put subtitles back, not just drop the forced flag",
+            runtime.substringAfter("sub-forced-only\", \"no\")").contains(restored)
+        )
+    }
+
+    @Test
     fun `the settings pane offers the mode`() {
         val settings = readSource(SETTINGS)
         assertTrue(

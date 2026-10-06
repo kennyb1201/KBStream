@@ -58,6 +58,20 @@ class SettingsSearchContractTest {
     /** Whitespace-insensitive haystack, so indentation is not the test. */
     private fun squash(text: String): String = text.replace(Regex("\\s+"), " ")
 
+    /**
+     * Kotlin escapes resolved to the characters they draw.
+     *
+     * A row's label is a runtime string, but the screen spells a few of them
+     * with an escape - the Profile 5 row's arrow is written as an escape, not as
+     * the arrow - so the two spellings have to be reconciled before they can be
+     * compared. Resolving does not loosen the check: the escape and the
+     * character are the same label, and a row that draws neither still fails.
+     */
+    private fun resolveEscapes(text: String): String =
+        Regex("""\\u([0-9A-Fa-f]{4})""").replace(text) { match ->
+            match.groupValues[1].toInt(16).toChar().toString()
+        }
+
     private fun screen(): String = source(SCREEN)
 
     private fun toggleRow(): String =
@@ -85,7 +99,7 @@ class SettingsSearchContractTest {
 
     @Test
     fun `every searchable row label is a label the screen actually draws`() {
-        val text = screen()
+        val text = resolveEscapes(screen())
         SettingsSearchIndex.entries.filterNot { it.isSection }.forEach { entry ->
             assertTrue(
                 "no row in SettingsScreen.kt is labelled \"${entry.label}\", so that " +
@@ -93,6 +107,31 @@ class SettingsSearchContractTest {
                 text.contains("\"${entry.label}\"")
             )
         }
+    }
+
+    @Test
+    fun `every drawn toggle row is in the index, so none is visible but unfindable`() {
+        // The check above runs index -> screen. This is the other way round, and
+        // it is the direction that let SE-2 through: a row can be drawn,
+        // focusable and reachable by scrolling, yet no query can ever name it.
+        // The label literal is read with its escapes resolved, so a row written
+        // with an arrow escape is matched as the arrow it draws.
+        val drawn = Regex("""ToggleRow\(\s*label = \x22([^\x22]+)\x22""")
+            .findAll(screen())
+            .map { resolveEscapes(it.groupValues[1]) }
+            .toList()
+        assertTrue(
+            "the pattern no longer finds known rows, so it proves nothing",
+            drawn.containsAll(
+                listOf("P5 \u2192 HDR10", "AMOLED Black", "Match Content Frame Rate")
+            )
+        )
+        val indexed = SettingsSearchIndex.entries.map { it.label }.toSet()
+        assertEquals(
+            "these rows are drawn but no query can find them",
+            emptyList<String>(),
+            drawn.filterNot { indexed.contains(it) }
+        )
     }
 
     @Test
@@ -337,6 +376,51 @@ class SettingsSearchContractTest {
         assertTrue(search.contains("internal val LocalFlashingSetting"))
         assertTrue(search.contains("internal const val SETTINGS_SEARCH_MAX_RESULTS"))
         assertTrue(search.contains("internal const val SETTINGS_SEARCH_FLASH_MS"))
+    }
+
+    @Test
+    fun `a picked result hands the D-pad back instead of stranding it`() {
+        // Picking a result unmounts the very card that had focus, and a TV remote
+        // has no pointer to press from: focus left nowhere is a screen the viewer
+        // cannot steer. The search field is the one node the jump knows is still
+        // there, so it is where the focus has to land - deliberately, not by
+        // whatever Compose happens to pick next.
+        val block = squash(jump())
+        assertTrue(
+            "the jump must move focus to a node it can prove exists",
+            block.contains("settingsSearchFocus.requestFocus()")
+        )
+        assertTrue(
+            "and the field it targets has to carry that requester",
+            squash(screen()).contains("focusRequester = searchFocus")
+        )
+    }
+
+    @Test
+    fun `the jump keeps asking for its row for a time budget, not a frame count`() {
+        // A cold pane can take longer to attach its anchor than any fixed number
+        // of frames, and a frame is not a fixed amount of work: the old fixed
+        // count gave up silently, switching the pane and never scrolling.
+        val block = jump()
+        assertFalse(
+            "a frame count is not a bound on anything",
+            block.contains("repeat(4)")
+        )
+        assertTrue(
+            "the loop has to be bounded by time - the EXPRESSION, not a mention " +
+                "of the constant in a comment",
+            squash(block).contains(
+                "if (withFrameNanos { it } - startedAt >= SETTINGS_SEARCH_SCROLL_BUDGET_MS) {"
+            )
+        )
+        assertTrue(
+            "and it must still ask every frame",
+            squash(block).contains("entry.anchor.bringIntoView()")
+        )
+        assertTrue(
+            "the budget is declared once, next to the flash window",
+            source(SEARCH).contains("internal const val SETTINGS_SEARCH_SCROLL_BUDGET_MS = 250L")
+        )
     }
 
     @Test

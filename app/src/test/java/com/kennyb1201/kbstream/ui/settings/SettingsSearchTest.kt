@@ -114,6 +114,23 @@ class SettingsSearchTest {
     }
 
     @Test
+    fun `the Dolby Vision profile-5 rewrite is findable, not merely visible`() {
+        // It shipped drawn but unindexed: the viewer could reach it only by
+        // opening Playback and scrolling to the Dolby Vision cluster, which is
+        // the walk search exists to save. Pin the row, the pane it lives in,
+        // and the words a viewer would actually reach for - "P5" is jargon.
+        val entry = SettingsSearchIndex.entryForLabel("P5 \u2192 HDR10")
+        assertNotNull("P5 \u2192 HDR10 is drawn but missing from the index", entry)
+        assertEquals(SettingsPane.PLAYBACK, entry?.pane)
+        listOf("P5", "dolby", "profile 5", "icctp", "green").forEach { term ->
+            assertTrue(
+                "searching \"$term\" does not find the P5 \u2192 HDR10 row",
+                SettingsSearchIndex.search(term).any { it.label == "P5 \u2192 HDR10" }
+            )
+        }
+    }
+
+    @Test
     fun `the pane sections resolve by key and keep their old names out`() {
         assertEquals(
             SettingsPane.SYNC,

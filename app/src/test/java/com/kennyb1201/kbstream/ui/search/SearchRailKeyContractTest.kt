@@ -74,11 +74,58 @@ class SearchRailKeyContractTest {
         )
         assertTrue(
             "the rail itself is keyed by (add-on, label, type)",
-            screen.contains("key = \"addons_rail:${'$'}{group.addonName}:\"")
+            screen.contains("key = \"addons_rail:\" + addonRailIdentity(")
         )
         assertFalse(
             "and must not fall back to its position",
             screen.contains("${'$'}{group.catalogType ?: \"\"}:${'$'}index")
+        )
+    }
+
+    @Test
+    fun `the screen's rail key IS the identity the view model coalesces by`() {
+        // Two spellings of one identity is how the separator drift happened: the
+        // key joined with a colon and the coalescer with NUL, so the key was
+        // only injective while no add-on name contained a colon - and an add-on
+        // name is a manifest string. One function, both callers.
+        val screen = source(SCREEN)
+        val viewModel = source(MODELS)
+
+        assertTrue(
+            "the rail key must be built by the shared identity",
+            screen.contains("addonRailIdentity(")
+        )
+        assertTrue(
+            "and the coalescer must use that same function",
+            viewModel.contains("val id = addonRailIdentity(group.addonName, group.railLabel, group.catalogType)")
+        )
+    }
+
+    @Test
+    fun `an add-on name carrying the separator cannot forge another rail's key`() {
+        // The value, not the source: joining with a separator a manifest can
+        // contain collides two DIFFERENT triples onto one key, which is a
+        // duplicate LazyColumn key - the crash, from bad upstream data rather
+        // than from the app's own list.
+        assertFalse(
+            "a colon in a name must not let two rails share a key",
+            addonRailIdentity("Add:on", "Movies", "movie") ==
+                addonRailIdentity("Add", "on:Movies", "movie")
+        )
+        assertFalse(
+            "nor in a label",
+            addonRailIdentity("Addon", "Mov:ies", null) ==
+                addonRailIdentity("Addon", "Mov", "ies:")
+        )
+        assertTrue(
+            "the same triple is still one identity, or the key would reset on every publish",
+            addonRailIdentity("Addon", "Movies", "movie") ==
+                addonRailIdentity("Addon", "Movies", "movie")
+        )
+        assertFalse(
+            "a null type is not the literal string 'null'",
+            addonRailIdentity("Addon", "Movies", null) ==
+                addonRailIdentity("Addon", "Movies", "null")
         )
     }
 

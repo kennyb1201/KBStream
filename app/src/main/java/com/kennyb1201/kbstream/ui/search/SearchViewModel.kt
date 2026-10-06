@@ -56,6 +56,23 @@ data class SearchTitleResult(
 )
 
 /**
+ * The identity of one add-on rail: its (add-on, rail label, catalog type) triple.
+ *
+ * Shared by the search screen's LazyColumn key and the view model's coalescing
+ * map, and the sharing is the point. The key has to be INJECTIVE, so joining the
+ * parts with a separator a manifest can contain is enough to collide two
+ * different triples into one key - and a duplicate key is the crash this whole
+ * area was fixed for. The old separator was a colon, which an add-on name or a
+ * catalog label may hold; NUL cannot appear in either (see the coalescing
+ * comment for why the parts are joined rather than hashed).
+ */
+internal fun addonRailIdentity(
+    addonName: String,
+    railLabel: String,
+    catalogType: String?
+): String = "${addonName}\u0000${railLabel}\u0000${catalogType.orEmpty()}"
+
+/**
  * Search hits from one installed add-on (AIOMetadata, BingeCat, ...),
  * grouped so the search screen can show them as a labeled source rail.
  */
@@ -770,7 +787,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         if (groups.size < 2) return groups
         val merged = LinkedHashMap<String, AddonResultGroup>()
         groups.forEach { group ->
-            val id = "${group.addonName}\u0000${group.railLabel}\u0000${group.catalogType.orEmpty()}"
+            val id = addonRailIdentity(group.addonName, group.railLabel, group.catalogType)
             val existing = merged[id]
             merged[id] = if (existing == null) {
                 group
