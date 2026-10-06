@@ -343,7 +343,11 @@ class SimklRepository(
     ): Boolean {
         if (!isConfigured() || !hasToken()) return false
         val ids = SimklAddToListIds(
-            imdb = imdbId?.takeIf { it.isNotBlank() },
+            // An IMDb id must LOOK like one: `LibraryIds.split` passes an unknown
+            // flavor (an add-on's "kitsu:42") through on the imdb side so the
+            // title still lands locally, and sending that as `imdb:` is rejected
+            // by Simkl (see LS-P2-16). The MDBList mirror already guards this.
+            imdb = imdbId?.takeIf { it.isNotBlank() && it.startsWith("tt") },
             tmdb = tmdbId?.takeIf { it > 0 },
             simkl = simklId
         )

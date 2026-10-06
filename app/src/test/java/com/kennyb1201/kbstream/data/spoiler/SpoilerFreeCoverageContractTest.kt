@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.spoiler
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -230,7 +231,10 @@ class SpoilerFreeCoverageContractTest {
         listOf(
             "the continue-watching hero" to "if (!hidesHeroEpisodeTitle) {",
             "the upcoming rail card" to "if (!hidesUpcomingTitle) {",
-            "the next-up rail card" to "if (!hidesCardEpisodeTitle) {"
+            // One decision per card since its still is guarded too: the title
+            // line and the tile read the same value (see the Continue Watching
+            // tile contract below).
+            "the next-up rail card" to "if (!hidesEpisodeIdentity) {"
         ).forEach { (surface, guard) ->
             assertTrue("$surface must be guarded", home.contains(guard))
         }
@@ -283,9 +287,65 @@ class SpoilerFreeCoverageContractTest {
         )
     }
 
+    @Test
+    fun `the episode long-press menu cannot name the episode the card hid`() {
+        // The card is guarded and the menu it opens was not: long-pressing an
+        // unstarted episode's card opened a menu headed by its real name - and a
+        // screen reader announces that heading too, so it is the same reveal the
+        // card had just refused to make.
+        val detail = readSource(DETAIL)
+        assertTrue(
+            "the menu heading must be resolved through the mode's rule",
+            detail.contains("val hidesEpisodeMenuTitle = SpoilerFree.hidesIdentity(")
+        )
+        assertTrue(
+            "and the screen must read the mode's preference for it",
+            detail.contains("val spoilerFreeEnabled = remember(spoilerFreeContext)")
+        )
+        assertFalse(
+            "the heading must not be built straight from the episode's own name",
+            detail.contains("title = target.episodeTitle")
+        )
+    }
+
+    @Test
+    fun `the Continue Watching menu and tile obey the card's own rule`() {
+        // Two more spots on the same card: its long-press menu's subtitle was
+        // appending the episode name, and the tile itself drew a frame FROM an
+        // episode the mode hides - the card's title line was the only guarded
+        // part of it.
+        val home = readSource(HOME)
+        assertTrue(
+            "the menu subtitle must use the card's own rule",
+            home.contains("val hidesMenuEpisodeTitle = rememberHidesEpisodeTitle(")
+        )
+        assertTrue(
+            "and must not append the name when it hides",
+            home.contains("if (!hidesMenuEpisodeTitle) {")
+        )
+        assertTrue(
+            "the card must decide the episode's identity once, for the whole card",
+            home.contains("val hidesEpisodeIdentity = rememberHidesEpisodeTitle(")
+        )
+        assertTrue(
+            "and must not draw a frame from an episode it hides",
+            home.contains("posterUrl = if (hidesEpisodeIdentity) {")
+        )
+        assertTrue(
+            "the tile falls back to the show's own art",
+            home.contains("item.backdrop ?: item.poster ?: \"\"")
+        )
+        assertFalse(
+            "the unguarded episode still must not come back",
+            home.contains("posterUrl = item.episodeThumbnail ?: item.backdrop")
+        )
+    }
+
     private companion object {
         private const val NATIVE =
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
+        private const val DETAIL =
+            "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
         private const val MPV =
             "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
         private const val EXT =

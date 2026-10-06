@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.sync
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -145,6 +146,55 @@ class DeferredDeleteWiringContractTest {
             store.contains("kbstream_sync_deferred_deletes")
         )
         assertTrue(store.contains("last_account_id"))
+    }
+
+    @Test
+    fun `a stale staged delete cannot outrank a newer queued write`() {
+        // The replay used to borrow the signed-in delete's "the row is going
+        // away" contract, which is false for a delete staged BEFORE a later
+        // write to the same key (watching the title again while still signed
+        // out). The newer write is the only copy of that progress, so the stale
+        // tombstone is the one that goes.
+        val body = functionBody("private suspend fun replayDeferredDeletes(")
+        val check = body.indexOf("queued.enqueuedAtMs > item.enqueuedAtMs")
+        assertTrue("the replay must compare stamps", check >= 0)
+        val drop = body.indexOf("outbox.removeKeys(")
+        assertTrue(
+            "and the comparison must come FIRST - after removeKeys the newer write " +
+                "is already out of the queue",
+            check in 0 until drop
+        )
+        assertTrue(
+            "the stale staged delete must be skipped, not re-stamped",
+            body.contains("return@forEach")
+        )
+    }
+
+    @Test
+    fun `the pull only deletes the local row when the queued tombstone is newer`() {
+        // A queued-but-unflushed tombstone suppresses the still-live cloud row
+        // either way; what it may not do is remove a local row written after it
+        // (the same title played again), which is what the unconditional delete
+        // did - bypassing the strictly-newer rule a cloud tombstone gets.
+        val body = functionBody("private suspend fun pullHistory(")
+        val stamp = body.indexOf("HistoryTombstoneRules.deletedAt(pendingTombstone.payload)")
+        val remove = body.indexOf("pendingDeletes.add(id)")
+        assertTrue(
+            "the queued delete must be read through its own stamp",
+            stamp >= 0
+        )
+        assertTrue(
+            "and the local removal must sit behind that read, not in front of it",
+            remove > stamp
+        )
+        // Both tombstone paths in the pull - the queued one and the cloud one -
+        // have to compare stamps before they remove a row; a path that removes
+        // without the test is the bug this pins.
+        assertEquals(
+            "every tombstone path must run the strictly-newer test",
+            2,
+            body.split("HistoryTombstoneRules.tombstoneWins(").size - 1
+        )
     }
 
     private companion object {

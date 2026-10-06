@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -617,7 +617,10 @@ private fun SubmenuChipGrid(
     // strip's first chip again.
     var returnChipConsumed by remember(armedChipName) { mutableStateOf(false) }
 
-    val gridState = rememberLazyGridState()
+    // Keyed on the category: the grid shares one composition slot per submenu,
+    // so an unkeyed state carried the previous category's scroll position into
+    // the next one - opening mid-list instead of at the top (see LS-P2-4).
+    val gridState = remember(categoryKey) { LazyGridState() }
     val armedIndex = armedChipName
         ?.takeIf { !returnChipConsumed }
         ?.let { name ->

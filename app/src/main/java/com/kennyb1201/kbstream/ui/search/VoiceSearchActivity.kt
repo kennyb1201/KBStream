@@ -103,6 +103,10 @@ class VoiceSearchActivity : ComponentActivity() {
             if (target == null) {
                 openSearch(query)
             } else {
+                // The lookup resolved, so nothing is going to Search: drop the
+                // seed stashed below for the fallback, or the next time the
+                // viewer opens Search it would replay this spoken query.
+                SearchSeed.clear()
                 startActivity(detailIntent(target.type, target.id))
             }
             finish()
@@ -126,11 +130,14 @@ class VoiceSearchActivity : ComponentActivity() {
                     // The external-id lookup wants the "series" spelling for the
                     // second kind, which is the app's own name for it everywhere
                     // history and scrobbling are concerned.
+                    val mediaType = if (parsed.type == "tv") "series" else "movie"
+                    // Kids Mode: a tapped suggestion is a title the viewer never
+                    // typed, so the ceiling the suggestion ROWS already apply has
+                    // to gate the deep link too. A blocked title falls through to
+                    // Search (see the fallback below), never to playback.
+                    if (!tmdb.kidsAllowed(parsed.tmdbId, mediaType)) return@withContext null
                     val imdbId = runCatchingCancellable {
-                        tmdb.resolveImdbId(
-                            parsed.tmdbId,
-                            if (parsed.type == "tv") "series" else "movie"
-                        )
+                        tmdb.resolveImdbId(parsed.tmdbId, mediaType)
                     }.getOrNull()
                     imdbId?.takeIf { it.isNotBlank() }?.let { PlayTarget(parsed.type, it) }
                 }
@@ -153,9 +160,19 @@ class VoiceSearchActivity : ComponentActivity() {
 
     private suspend fun resolveSpokenTitle(query: String): PlayTarget? {
         val tmdb = TmdbRepository.getInstance(applicationContext)
+        val movies =
+            runCatchingCancellable { tmdb.searchMovies(query) }.getOrDefault(emptyList())
+        val shows =
+            runCatchingCancellable { tmdb.searchTv(query) }.getOrDefault(emptyList())
+        // Kids Mode: a spoken "play X" is resolved here, before any screen the
+        // app's gates could vet it on, so the same ceiling the in-app search
+        // applies to its TMDB wave has to be applied to the match itself (see
+        // kidsFilteredTmdbSearch). A title the ceiling drops leaves this
+        // returning null, which opens Search with the query - never playback.
+        val (allowedMovies, allowedShows) = kidsFilteredTmdbSearch(tmdb, movies, shows)
         val match = pickPlayFromSearchMatch(
-            movies = runCatchingCancellable { tmdb.searchMovies(query) }.getOrDefault(emptyList()),
-            shows = runCatchingCancellable { tmdb.searchTv(query) }.getOrDefault(emptyList())
+            movies = allowedMovies,
+            shows = allowedShows
         ) ?: return null
         // TMDB names the two kinds "movie" / "tv"; the external-id lookup wants
         // the "series" spelling for the second, which is the app's own name for

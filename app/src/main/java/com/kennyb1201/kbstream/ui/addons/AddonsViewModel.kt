@@ -430,23 +430,14 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      * Deliberately NOT [toggleCollectionHidden]: that one derives the current
      * state from the collections snapshot, which holds no built-in rows at all,
      * and its "never arranged counts as hidden" default is the opposite of a
-     * built-in's (a built-in is visible until it is hidden). This reads the
-     * stored flag alone, and SHOW only has to clear it - a built-in is already
-     * known to the merged order, so it does not need to be added to `order` to
-     * become arranged the way a collection does.
+     * built-in's (a built-in is visible until it is hidden).
+     *
+     * The transform itself lives in [KBHomeOrderPrefs.toggleBuiltinHidden], on
+     * the stored flag alone, so the rule is unit-tested rather than asserted by
+     * the mere existence of this method (HD-P2-4).
      */
     fun toggleBuiltinRailHidden(key: String) {
-        persistHomeOrder { prefs ->
-            if (key in prefs.hiddenSet) {
-                prefs.copy(hidden = prefs.hidden - key)
-            } else {
-                prefs.copy(
-                    hidden = prefs.hidden + key,
-                    pinned = prefs.pinned - key,
-                    order = prefs.order - key
-                )
-            }
-        }
+        persistHomeOrder { prefs -> KBHomeOrderPrefs.toggleBuiltinHidden(prefs, key) }
     }
 
     /**

@@ -75,6 +75,13 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 private val AVATAR_PLACEHOLDER_FILL: Int = 0xFF1D2530.toInt()
 
 /**
+ * Ceiling on an addon subtitle read back for validation. A subtitle is
+ * kilobytes, so a download past this is mislabeled content and is refused
+ * rather than pulled into memory (the main player's own file read cap).
+ */
+private const val MAX_ADDON_SUBTITLE_BYTES = 8 * 1024 * 1024
+
+/**
  * The MPV backup engine, as a playable activity.
  *
  * It takes the same launch extras as [NativePlayerActivity] on purpose: an
@@ -561,6 +568,28 @@ class MpvPlayerActivity : ComponentActivity() {
         nextUpCountdownHeld = false
         nextUpCountdownRemaining = 0
         nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+    }
+
+    /**
+     * Takes the end-of-episode cards down, with their countdown and their
+     * credits-mode geometry.
+     *
+     * They belong to the source and the episode that just ended, and the
+     * countdown is the dangerous half: it is a Handler tick, so it fires whether
+     * or not the surface is playing. Switching sources during the credits - the
+     * ordinary case, since that is when the cards are up - used to leave the card
+     * over the new file and let the countdown chain to the next episode a moment
+     * later, mid-new-source. The main player resets the same state on a source
+     * switch; see [switchToSource].
+     */
+    private fun hideEndPanels() {
+        cancelNextUpAutoAdvance()
+        nextUpPanel?.visibility = View.GONE
+        becauseYouWatchedPanel?.visibility = View.GONE
+        // The credits panel shrinks the video into a corner while it is up, and
+        // the next source loads into that same surface.
+        exitCreditsMode()
+        endPanelsShown = false
     }
 
     // --- Because you watched (end-credits recommendations) ------------------
@@ -1334,12 +1363,30 @@ class MpvPlayerActivity : ComponentActivity() {
         return android.app.PendingIntent.getActivity(this, mediaSessionRequestCode, intent, flags)
     }
 
+    /**
+     * The on-screen play/pause: the button, the seek bar's OK, and OK with the
+     * controls down.
+     *
+     * A finished session stays finished here too. mpv's toggle is `cycle pause`,
+     * so at the end of the file it replays from the top behind the end card -
+     * exactly what the media-key guard in dispatchKeyEvent and the MediaSession's
+     * play override already refuse. These three are the same press by other
+     * names, and OK is the most common one on a TV remote, so they refuse it the
+     * same way. Replay stays an explicit seek. Returns true when swallowed.
+     */
+    private fun togglePlayPauseFromControls(): Boolean {
+        if (endedHandled) return true
+        surface?.togglePause()
+        return false
+    }
+
     private fun setupControls() {
         updateNowPlayingText()
         updateControlsInfo()
 
         playPauseButton?.setOnClickListener {
-            surface?.togglePause()
+            // Swallowed at the end of playback (see togglePlayPauseFromControls).
+            if (togglePlayPauseFromControls()) return@setOnClickListener
             keepControlsVisible()
         }
         nextButton?.setOnClickListener {
@@ -1472,9 +1519,10 @@ class MpvPlayerActivity : ComponentActivity() {
                 }
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                     // One press, one toggle: a held OK would otherwise walk the
-                    // pause state back and forth.
+                    // pause state back and forth. Swallowed at the end of
+                    // playback (see togglePlayPauseFromControls).
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                        surface?.togglePause()
+                        togglePlayPauseFromControls()
                     }
                     true
                 }
@@ -2117,6 +2165,13 @@ class MpvPlayerActivity : ComponentActivity() {
     /**
      * Downloads an addon subtitle offer and attaches it, through the same path
      * a picked file takes (cache copy, mpv `sub-add`, remembered per video).
+     *
+     * A download that is not actually a subtitle - a truncated file, a
+     * plain-text limit notice, binary junk - used to be handed to mpv anyway
+     * and to draw nothing, exactly the silent no-cues failure the online pick
+     * and the auto-fetch already refuse (see
+     * [SubtitleSearchHelper.isUsableSubtitleBody]). mpv renders ASS itself, so
+     * an ASS body always counts here.
      */
     private fun downloadAddonSubtitle(offer: SubtitleEntry) {
         val url = offer.url
@@ -2129,8 +2184,42 @@ class MpvPlayerActivity : ComponentActivity() {
                 showToast("Could not download that subtitle", 4_000L)
                 return@launch
             }
+            val body = readAddonSubtitleBody(cached)
+            if (body == null ||
+                !SubtitleSearchHelper.isUsableSubtitleBody(body, assRenderable = true)
+            ) {
+                showToast(
+                    "Subtitle download failed: the file had no readable subtitles",
+                    4_000L
+                )
+                return@launch
+            }
             attachExternalSubtitle(cached)
         }
+    }
+
+    /**
+     * Reads the whole downloaded addon subtitle back as text for validation,
+     * bounded by [MAX_ADDON_SUBTITLE_BYTES]. Null when it cannot be read.
+     */
+    private suspend fun readAddonSubtitleBody(uri: Uri): String? = withContext(Dispatchers.IO) {
+        runCatchingCancellable {
+            val stream = contentResolver.openInputStream(uri)
+                ?: return@runCatchingCancellable null
+            stream.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(16 * 1024)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    if (total > MAX_ADDON_SUBTITLE_BYTES) return@runCatchingCancellable null
+                    out.write(buffer, 0, read)
+                }
+                out.toString(Charsets.UTF_8.name())
+            }
+        }.getOrNull()
     }
 
     /**
@@ -2435,9 +2524,22 @@ class MpvPlayerActivity : ComponentActivity() {
         currentBingeGroup = stream.bingeGroup
         resolveAddonIdentity(currentSourceLabel)
         startPositionMs = resumeAt
+        // The stall exclusion in onMpvBufferingChanged tests positionMs <= 0 to
+        // skip a source's INITIAL buffering, but the playhead kept its old value
+        // across a switch, so a just-switched source's normal load counted as a
+        // stall and quietly lowered the downshift threshold by one (PB-P2-6).
+        // The resume point lives in startPositionMs, so clearing the live clock
+        // is safe; onProgress repopulates it with the new source's position.
+        positionMs = 0L
         endedHandled = false
         completionSent = false
-        endPanelsShown = false
+        // The end-of-episode cards and their countdown go with the source being
+        // replaced: see hideEndPanels. endPanelsShown is reset there, and so is
+        // bywDismissed - the replacement file reaches its own end, and the
+        // credits panel belongs to THAT one (leaving the flag set would keep it
+        // down for the rest of the session).
+        hideEndPanels()
+        bywDismissed = false
         fileLoaded = false
         autoSkippedSegments.clear()
         // The segment the old file's playhead was inside belongs to that file:
@@ -4061,7 +4163,9 @@ class MpvPlayerActivity : ComponentActivity() {
         if (fileLoaded || linkCacheInvalidated) return
         val cacheKey = intent.getStringExtra("played_link_key") ?: return
         linkCacheInvalidated = true
-        PlayedLinkCache.forget(this, cacheKey)
+        // Pinned to the LAUNCH profile: a mid-playback switch must not spare
+        // the launching profile's dead entry (SD-2).
+        PlayedLinkCache.forgetForProfile(this, cacheKey, sessionProfileId)
     }
 
     private fun showError(message: String, hint: String) {
@@ -4315,7 +4419,9 @@ class MpvPlayerActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_ENTER,
                 KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                     if (!controlsVisible) {
-                        surface?.togglePause()
+                        // Swallowed at the end of playback, end card up (see
+                        // togglePlayPauseFromControls).
+                        if (togglePlayPauseFromControls()) return true
                         showControls()
                         return true
                     }

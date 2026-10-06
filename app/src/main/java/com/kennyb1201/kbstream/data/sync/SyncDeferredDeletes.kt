@@ -29,6 +29,15 @@ internal object SyncDeferredDeletes {
 
     private const val BASE_NAME = "kbstream_sync_deferred_deletes"
     private const val KEY_ACCOUNT = "last_account_id"
+
+    /**
+     * The account's email alongside [KEY_ACCOUNT], so a delete staged under the
+     * email form still matches once the session starts reporting a user id - and
+     * so a user-id-tagged stage still matches a caller that only has the email
+     * (SD-5). Not a credential: it is the same address the account already
+     * shows in Settings.
+     */
+    private const val KEY_ACCOUNT_EMAIL = "last_account_email"
     private const val KEY_DELETES = "deferred_deletes"
 
     /** One delete waiting for its account to sign back in. */
@@ -47,14 +56,25 @@ internal object SyncDeferredDeletes {
         context.getSharedPreferences(BASE_NAME, Context.MODE_PRIVATE)
 
     /**
-     * Remembers [accountId] as the account a later signed-out delete belongs
-     * to. Called on every successful sign-in, and again on sign-out BEFORE the
-     * session store is cleared (an upgraded install may sign out before it has
-     * ever recorded the id here). A blank id is ignored.
+     * Remembers the account a later signed-out delete belongs to, under BOTH
+     * identities it is known by. Called on every successful sign-in, and again
+     * on sign-out BEFORE the session store is cleared (an upgraded install may
+     * sign out before it has ever recorded the id here).
+     *
+     * [accountId] should be the Supabase user id whenever the session carries
+     * one: it is the stable choice, because it survives an email change, while
+     * the email is only a fallback. Both are recorded so a delete staged under
+     * either form can still be matched (SD-5). A call with both blank is a
+     * no-op, so an unknown account never clears what was already known.
      */
-    fun rememberAccount(context: Context, accountId: String?) {
-        val normalized = DeferredDeleteRules.normalizeAccount(accountId) ?: return
-        prefs(context).edit().putString(KEY_ACCOUNT, normalized).apply()
+    fun rememberAccount(context: Context, accountId: String?, email: String? = null) {
+        val id = DeferredDeleteRules.normalizeAccount(accountId)
+        val address = DeferredDeleteRules.normalizeAccount(email)
+        if (id == null && address == null) return
+        val editor = prefs(context).edit()
+        id?.let { editor.putString(KEY_ACCOUNT, it) }
+        address?.let { editor.putString(KEY_ACCOUNT_EMAIL, it) }
+        editor.apply()
     }
 
     /** The last account seen on this device, or null if none ever signed in. */
@@ -70,13 +90,22 @@ internal object SyncDeferredDeletes {
     }
 
     /**
-     * Every delete staged for [accountId] (compared normalized). Only these may
-     * replay when [accountId] signs in; another account's staged deletes are
+     * Every delete staged for the account signing in, matched against BOTH
+     * identities it is known by - its Supabase user id and its email (SD-5),
+     * normalized. Only these may replay; another account's staged deletes are
      * left untouched.
      */
-    fun stagedFor(context: Context, accountId: String?): List<Staged> {
-        val target = DeferredDeleteRules.normalizeAccount(accountId) ?: return emptyList()
-        return read(context).filter { it.accountId == target }
+    fun stagedFor(
+        context: Context,
+        accountId: String?,
+        email: String? = null
+    ): List<Staged> {
+        val targets = DeferredDeleteRules.identities(accountId, email)
+        if (targets.isEmpty()) return emptyList()
+        return read(context).filter { staged ->
+            val id = DeferredDeleteRules.normalizeAccount(staged.accountId)
+            id != null && id in targets
+        }
     }
 
     /** Drops the staged deletes with [ids] (called once they are replayed). */

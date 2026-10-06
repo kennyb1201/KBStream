@@ -357,8 +357,12 @@ object MdbListClient {
         val request = chain.request()
         val essential = request.tag() === WRITE_TAG
         if (maySpend(essential)) {
-            countRequest()
             val response = chain.proceed(request)
+            // Counted AFTER the call: a request that never reached MDBList (an
+            // IOException, a DNS failure) must not burn the daily budget, which
+            // the old count-before-proceed did (see LS-P2-19). A thrown error
+            // propagates and is handled by the caller exactly as before.
+            countRequest()
             if (response.code == 429) noteRateLimited(response)
             response
         } else {
@@ -406,6 +410,14 @@ object MdbListClient {
     // has not changed. A mark/unmark still invalidates it outright.
     private const val SNAPSHOT_TTL_MS = 20 * 60 * 1000L
     @Volatile private var cachedSnapshot: MdbListWatchedSnapshot? = null
+
+    /**
+     * Bumped by [invalidateWatchedSnapshot]. Counts invalidations rather than
+     * holding a lock, so a NON-suspend invalidate can still race the suspending
+     * fetch: a fetch that started before a mark/unmark must not write its
+     * pre-mark blob back (LS-P2-14).
+     */
+    @Volatile private var snapshotGeneration = 0
     @Volatile private var cachedSnapshotAt = 0L
 
     /** Cached GET /sync/playback — asked for on every detail-screen open. */
@@ -1431,6 +1443,11 @@ object MdbListClient {
         }
 
         return snapshotMutex.withLock {
+            // The generation this fetch started under. An invalidate landing
+            // while the download is in flight wins, or the pre-mark blob is
+            // written back and serves stale badges for the whole TTL
+            // (LS-P2-14).
+            val generationAtStart = snapshotGeneration
             // Re-check inside the lock: a parallel caller may have just
             // refreshed it while this one waited.
             val fresh = cachedSnapshot
@@ -1522,8 +1539,10 @@ object MdbListClient {
             }
 
             // Only cache successful non-empty fetches: an empty result from
-            // a transient API failure must not blank the badges for 5 min.
-            if (!result.isEmpty) {
+            // a transient API failure must not blank the badges for 5 min. And
+            // never write back over an invalidate that landed mid-fetch
+            // (LS-P2-14).
+            if (!result.isEmpty && generationAtStart == snapshotGeneration) {
                 cachedSnapshot = result
                 cachedSnapshotAt = System.currentTimeMillis()
                 cachedSnapshotKey = apiKey
@@ -1607,6 +1626,9 @@ object MdbListClient {
      * without a TTL shorter than the network cost justifies.
      */
     fun invalidateWatchedSnapshot() {
+        // Retire any fetch already in flight: it holds a pre-invalidation view
+        // of the account and must not cache it back (LS-P2-14).
+        snapshotGeneration += 1
         val snapshotKey = cachedSnapshotKey
         val playbackKey = cachedPlaybackKey
         cachedSnapshot = null
@@ -1656,8 +1678,8 @@ object MdbListClient {
                         if (!response.isSuccessful) {
                             Log.w(
                                 TAG,
-                                "GET ${'$'}{url.substringBefore('?')} " +
-                                    "failed code=${'$'}{response.code}"
+                                "GET ${url.substringBefore('?')} " +
+                                    "failed code=${response.code}"
                             )
                             null
                         } else {
@@ -1691,6 +1713,11 @@ object MdbListClient {
         val tmdbId = ids?.optInt("tmdb", -1)?.takeIf { it > 0 }
             ?: obj.optInt("tmdb_id", -1).takeIf { it > 0 }
         val mediatype = obj.optString("mediatype", fallbackType)
+        // A row with NEITHER id cannot be opened or enriched, and every such row
+        // collapsed onto one "movie:-:-" key - distinct titles merged into a
+        // single phantom "Untitled" row and each open spent a lookup on it (see
+        // LS-P2-10). Local library rows are dropped the same way.
+        if (imdbId == null && tmdbId == null) return null
         return MdbListEntry(
             title = obj.optString("title", "").ifBlank {
                 obj.optString("name", "").ifBlank { null }
@@ -1729,7 +1756,7 @@ object MdbListClient {
                 if (id <= 0) return@mapNotNull null
                 MdbListUserList(
                     id = id,
-                    name = obj.optString("name", "").ifBlank { "List ${'$'}id" },
+                    name = obj.optString("name", "").ifBlank { "List $id" },
                     itemCount = obj.optInt("items", 0)
                 )
             }
@@ -1842,10 +1869,15 @@ object MdbListClient {
                 val request = Request.Builder()
                     .url("$BASE/lists/user/add?apikey=$apiKey")
                     .post(payload.toString().toRequestBody("application/json".toMediaType()))
+                    // A user-initiated create is a WRITE: it must draw on the
+                    // write ceiling, not the smaller read budget, or an spent
+                    // read budget silently downgrades it to a local list
+                    // (see LS-P2-13).
+                    .tag(WRITE_TAG)
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
-                        Log.w(TAG, "lists/user/add failed code=${'$'}{response.code}")
+                        Log.w(TAG, "lists/user/add failed code=${response.code}")
                         return@use null
                     }
                     val root = JSONObject(response.body?.string().orEmpty())
@@ -1862,29 +1894,51 @@ object MdbListClient {
     }
 
     /**
-     * GET /watchlist/items — the account's MDBList watchlist.
+     * GET /watchlist/items — the account's MDBList watchlist, following the
+     * pagination cursor exactly as [getListItems] does. The old single
+     * `limit=1000` request silently truncated a watchlist longer than that
+     * (LS-P2-11).
      */
     suspend fun getWatchlist(context: Context): List<MdbListEntry> {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return emptyList()
-        val body = getString("$BASE/watchlist/items?apikey=$apiKey&limit=1000")
-            ?: return emptyList()
-        return runCatching {
-            val root = JSONObject(body)
-            val out = mutableListOf<MdbListEntry>()
-            fun collect(key: String, fallbackType: String) {
-                root.optJSONArray(key)?.let { arr ->
-                    for (i in 0 until arr.length()) {
-                        arr.optJSONObject(i)?.let {
-                            entryFromJson(it, fallbackType)?.let(out::add)
+
+        val out = mutableListOf<MdbListEntry>()
+        var cursor: String? = null
+        var guard = 0
+        do {
+            val url = buildString {
+                append("$BASE/watchlist/items?apikey=$apiKey&limit=1000")
+                if (!cursor.isNullOrBlank()) {
+                    append("&cursor=")
+                    append(java.net.URLEncoder.encode(cursor, "UTF-8"))
+                }
+            }
+            val body = getString(url) ?: break
+            val parsed = runCatching {
+                val root = JSONObject(body)
+                cursor = root.optJSONObject("pagination")
+                    ?.optString("next_cursor")
+                    ?.takeIf { it.isNotBlank() }
+
+                fun collect(key: String, fallbackType: String) {
+                    root.optJSONArray(key)?.let { arr ->
+                        for (i in 0 until arr.length()) {
+                            arr.optJSONObject(i)?.let {
+                                entryFromJson(it, fallbackType)?.let(out::add)
+                            }
                         }
                     }
                 }
+                collect("movies", "movie")
+                collect("shows", "series")
+                // Some responses carry both kinds under a combined "items".
+                collect("items", "movie")
             }
-            collect("movies", "movie")
-            collect("shows", "series")
-            out
-        }.getOrDefault(emptyList())
+            if (parsed.isFailure) break
+            guard += 1
+        } while (!cursor.isNullOrBlank() && guard < 30)
+        return out
     }
 
     /** POST /watchlist/items/add — add to the MDBList watchlist. */

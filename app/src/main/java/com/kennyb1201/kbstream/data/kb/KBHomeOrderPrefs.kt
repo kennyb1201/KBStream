@@ -406,6 +406,30 @@ object KBHomeOrderPrefs {
     }
 
     /**
+     * Hides a BUILT-IN rail, or shows a hidden one. Pure, so the manager's
+     * hide toggle is testable without an Activity or a prefs file.
+     *
+     * SHOW only clears the flag: a built-in is already known to the merged
+     * order (its key is one of [BUILTIN_KEYS]), so unlike a collection it does
+     * not have to be added to `order` to count as arranged.
+     *
+     * HIDE also lifts the key out of `pinned` and `order`, so the hidden state
+     * is the only thing remembered about it and it comes back at its default
+     * slot rather than at an arrangement the viewer cannot see. (The key is not
+     * pinnable - see [isPinnableKey] - so the pinned strip is defensive.)
+     */
+    fun toggleBuiltinHidden(value: KBHomeOrder, key: String): KBHomeOrder =
+        if (key in value.hiddenSet) {
+            value.copy(hidden = value.hidden - key)
+        } else {
+            value.copy(
+                hidden = value.hidden + key,
+                pinned = value.pinned - key,
+                order = value.order - key
+            )
+        }
+
+    /**
      * True for a rail the manager can PIN: a collection, or a Browse rail.
      *
      * Catalog rails are deliberately not pinnable - the manager offers no pin

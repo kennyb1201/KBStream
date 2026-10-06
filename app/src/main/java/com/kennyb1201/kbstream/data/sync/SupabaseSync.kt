@@ -493,6 +493,14 @@ object SupabaseSync {
         // Drop queued writes: they belong to the account being left, and a
         // later flush (or the OutboxFlushWorker) would push them under
         // whichever account signs in next.
+        //
+        // This does NOT wait for a flush already in flight (SD-6): one that
+        // passed its entry check has its snapshot in hand and will finish
+        // uploading. Those rows are the account's own and are correctly
+        // attributed, so the outcome is a few lost writes on the way out - not
+        // a misattribution - and the local Room state is what a same-account
+        // sign-in recovers from. Blocking sign-out on the network to chase them
+        // would trade a correct, immediate sign-out for a tardy one.
         outbox.clear()
         periodicFlushJob?.cancel()
         periodicFlushJob = null
@@ -510,9 +518,15 @@ object SupabaseSync {
         syncPrefs(context).edit().clear().apply()
         _authState.value = AuthState.SignedOut
         _syncEnabled.value = false
+        // Stop realtime here too, alongside the state flip, and NOT after the
+        // network sign-out (SD-7). The channels are subscribed with the account
+        // being left, so a change they deliver during that round-trip was still
+        // applied to local state - on a device that has already signed out, for
+        // a session that is over. Waiting for `c.auth.signOut()` left the
+        // subscription live for exactly as long as the network took.
+        stopRealtime()
         scope.launch {
             runCatching { c.auth.signOut() }
-            stopRealtime()
         }
     }
 
@@ -1132,6 +1146,17 @@ object SupabaseSync {
                     Log.w(TAG, "flush $table chunk of ${chunk.size} failed: ${e.message}")
                     recordSyncError("Upload", e)
                     // Keep in outbox; retried by the periodic sync loop.
+                    //
+                    // Deliberately unconditional (SD-3): the status is NOT
+                    // inspected, so a 4xx/429/RLS-denied chunk retries forever
+                    // at the periodic cadence. That is the trade-off this layer
+                    // is built on - a write is never dropped - and it is
+                    // bounded in practice by the 1/min periodic flush and by
+                    // KEEP-coalescing the retry worker, so the cost is a slow
+                    // trickle of doomed requests rather than a storm. A
+                    // dead-letter after N attempts would cap that, at the price
+                    // of a path on which a write can be lost; it is not taken
+                    // here on purpose.
                 } catch (t: Throwable) {
                     if (t is CancellationException) throw t
                     CrashReporter.recordNonFatal(
@@ -1350,7 +1375,23 @@ object SupabaseSync {
                 val pendingTombstone = outbox.pending(TABLE_HISTORY, "item_id", storedId)
                     ?.takeIf { HistoryTombstoneRules.isTombstone(it.payload) }
                 if (pendingTombstone != null) {
-                    if (localRow != null) {
+                    // Removing the local row needs the same strictly-newer test
+                    // a cloud tombstone gets below. The queue used to delete
+                    // unconditionally, so a staged delete that had been overtaken
+                    // by a later re-watch (the local row is the newer write)
+                    // erased that resume position when the delete was flushed.
+                    // The cloud row is skipped either way: it is the copy this
+                    // delete is about to overwrite, and a newer local row is
+                    // re-published by the push side once the tombstone is there.
+                    val pendingDeletedAt =
+                        HistoryTombstoneRules.deletedAt(pendingTombstone.payload)
+                    if (localRow != null &&
+                        pendingDeletedAt != null &&
+                        HistoryTombstoneRules.tombstoneWins(
+                            pendingDeletedAt,
+                            localRow.updatedAt
+                        )
+                    ) {
                         pendingDeletes.add(id)
                         removed++
                     }
@@ -2171,8 +2212,20 @@ object SupabaseSync {
         val known = email
             ?: (_authState.value as? AuthState.SignedIn)?.email
             ?: syncPrefs(context).getString(KEY_EMAIL, null)
-        SyncDeferredDeletes.rememberAccount(context, known)
+        // Record the Supabase USER ID alongside the email: the user id is the
+        // stable identity, because it survives an email change, while the email
+        // is what an install that has never had a session id knows (SD-5). Both
+        // are stored, and matching accepts either, so a delete staged under the
+        // old form still replays.
+        SyncDeferredDeletes.rememberAccount(context, currentUserId(), known)
     }
+
+    /**
+     * The signed-in Supabase user id, or null when this process has no session
+     * (or the session restore has not delivered one yet).
+     */
+    private fun currentUserId(): String? =
+        runCatching { client?.auth?.currentUserOrNull()?.id }.getOrNull()
 
     /**
      * Stages a signed-out delete for replay on the account's next sign-in. A
@@ -2209,7 +2262,17 @@ object SupabaseSync {
      * each. Signed out there is no session to enumerate with, but the local
      * rows this reset is about to clear are the device's own record of what the
      * account holds: every local history row becomes a history tombstone, and
-     * every local watched row that actually carries a marker (see
+     * every local watched row that actually carries a marker
+     *
+     * Known limitation (SD-4): with no session there is nothing to enumerate
+     * the cloud with, so only THIS device's rows can be tombstoned. Rows another
+     * device wrote survive the wipe and come back on the next pull - a "clear"
+     * that is device-scoped rather than account-scoped - and the tombstones
+     * carry stage-time stamps, so a row written elsewhere between staging and
+     * replay wins last-write-wins. A truly account-wide wipe needs a
+     * server-side clear; that is not something a signed-out client can do
+     * safely, and widening this device's authority over rows it cannot see
+     * would be worse than the limitation. (see
      * [WatchedMarkerRules.shouldPublish]) becomes a cleared marker - the
      * derived "nothing watched here" negatives are skipped, since they were
      * never published and clearing them would only push noise to the account.
@@ -2277,12 +2340,41 @@ object SupabaseSync {
      * own sign-in.
      */
     private suspend fun replayDeferredDeletes(context: Context, accountId: String?) {
-        val normalized = DeferredDeleteRules.normalizeAccount(accountId) ?: return
-        val staged = SyncDeferredDeletes.stagedFor(context, normalized)
+        // Match against BOTH identities the signing-in account is known by: the
+        // Supabase user id (what new stages carry, and what survives an email
+        // change) and the email (what stages written by an earlier build carry
+        // - SD-5). Passing only one left the other form's deletes stranded.
+        val uid = currentUserId()
+        val normalizedEmail = DeferredDeleteRules.normalizeAccount(accountId)
+        if (uid == null && normalizedEmail == null) return
+        val staged = SyncDeferredDeletes.stagedFor(context, uid, normalizedEmail)
         if (staged.isEmpty()) return
         staged.forEach { item ->
-            // Same contract as the signed-in delete path: drop any queued
-            // upload of this key first, then enqueue the tombstone.
+            // The signed-in delete path may drop a queued upload of this key
+            // because the row is going away in the same breath. A REPLAY cannot
+            // borrow that: the tombstone was stamped when the delete was made
+            // (stage time), and anything the viewer did to the same key since -
+            // watching the title again, marking it after the wipe - is queued
+            // behind it with a LATER stamp. Dropping that would lose the only
+            // copy of the newer write, which is the one thing the outbox exists
+            // to prevent.
+            //
+            // Last-write-wins, as everywhere else in the sync: the newer queued
+            // write stands and the stale tombstone is dropped with it (the
+            // staged rows are all cleared below). A stage time of 0 is treated
+            // as older than anything queued - resurrecting a deleted row is
+            // recoverable, losing the viewer's progress is not.
+            val queued = outbox.pending(item.table, item.keyColumn, item.key)
+            if (queued != null && queued.enqueuedAtMs > item.enqueuedAtMs) {
+                Log.i(
+                    TAG,
+                    "stale staged delete for ${item.key} dropped: " +
+                        "a newer write (${queued.enqueuedAtMs}) is queued"
+                )
+                return@forEach
+            }
+            // Otherwise: drop any queued upload of this key first, then enqueue
+            // the tombstone.
             outbox.removeKeys(item.table, item.keyColumn, listOf(item.key))
             val payload = runCatching {
                 Json.parseToJsonElement(item.payloadJson).jsonObject
@@ -2300,7 +2392,11 @@ object SupabaseSync {
         }
         SyncDeferredDeletes.remove(context, staged.map { it.id })
         scheduleFlush()
-        Log.i(TAG, "replayed ${staged.size} signed-out delete(s) for $normalized")
+        Log.i(
+            TAG,
+            "replayed ${staged.size} signed-out delete(s) for " +
+                (uid ?: normalizedEmail ?: "an unknown account")
+        )
     }
 
     private fun JsonObject.str(key: String): String? =

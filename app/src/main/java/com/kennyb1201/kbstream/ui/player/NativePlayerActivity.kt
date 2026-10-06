@@ -4781,7 +4781,10 @@ class NativePlayerActivity : ComponentActivity() {
         if (firstFrameRendered || linkCacheInvalidated) return
         val cacheKey = intent.getStringExtra("played_link_key") ?: return
         linkCacheInvalidated = true
-        PlayedLinkCache.forget(this, cacheKey)
+        // The session is pinned to its LAUNCH profile, so forget on THAT store:
+        // a mid-playback profile switch must not spare the launching profile's
+        // dead entry (SD-2).
+        PlayedLinkCache.forgetForProfile(this, cacheKey, sessionProfileId)
     }
 
     @Suppress("DEPRECATION")
@@ -5765,6 +5768,13 @@ class NativePlayerActivity : ComponentActivity() {
                 // buffer into is not counted as a slow source by the downshift
                 // counter (see RebufferDownshift.kt).
                 lastSeekAtMs = System.currentTimeMillis()
+                // The end-of-playback latch stops a stray play/OK at EOF from
+                // replaying the episode from 0, but it also latched OUT the
+                // viewer's own move: ended, seek back to a spot, press play -
+                // and the guard refused, leaving a paused player at 0 with no
+                // in-player way out (PB-P2-1). A seek is the viewer taking
+                // control, so the latch clears.
+                playbackEndedHandled = false
             }
             // Unknown, not the pre-seek position: the next poller tick must
             // not count the jump itself as a frozen position.
@@ -5857,10 +5867,15 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
-            // A cached link that fails before a single frame is a dead link:
-            // forget it now, so the next replay resolves fresh instead of
-            // looping back into this same error card.
-            invalidateCachedLinkBeforeFirstFrame()
+            // A cached link that fails to OPEN is a dead link: forget it now, so
+            // the next replay resolves fresh instead of looping back into this
+            // same error card. Only a failure ABOUT THE LINK counts (PB-P2-2):
+            // a decoder, container or track failure says something about this
+            // box, and forgetting on one of those discarded a link that was
+            // alive and made the next replay re-resolve for nothing.
+            if (PlaybackRecoveryRules.isLinkFailure(error)) {
+                invalidateCachedLinkBeforeFirstFrame()
+            }
             lastPlaybackError = error
             var msg = friendlyErrorMessage(error, hostOf(currentUrl))
             // Resource exhaustion is a different animal from "this box can't
@@ -6269,8 +6284,9 @@ class NativePlayerActivity : ComponentActivity() {
     private fun updateUIBuffering() {
         // Full splash overlay (backdrop + pulsing clearlogo) for every fresh
         // source load — first launch, auto-select, manual pick, in-player
-        // source switch, auto-advance (each source switch resets the
-        // hasPlayedOnce latch). Only mid-playback rebuffers (hasPlayedOnce
+        // source switch, auto-advance (a MANUAL source switch resets the
+        // hasPlayedOnce latch; an automatic mid-playback one deliberately does
+        // not - see isAutoRecovery). Only mid-playback rebuffers (hasPlayedOnce
         // still true) and actor-return sessions (fromActorReturn) get the
         // small spinner, so the video is never covered once the user is
         // already watching it.

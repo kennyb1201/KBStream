@@ -184,7 +184,13 @@ internal object SubtitleSearchHelper {
      */
     internal fun isUsableSubtitleBody(body: String, assRenderable: Boolean): Boolean =
         if (assRenderable && AssSubtitleSource.isAssContent(body)) {
-            body.isNotBlank()
+            // A blank check is not enough for an ASS script: `isAssContent`
+            // accepts a header-only file ([Script Info] and nothing else),
+            // which renders no cue but still rebuilt the player for a track
+            // that never drew (PB-P2-5). Require at least one Dialogue event.
+            body.lineSequence().any {
+                it.trimStart().startsWith("Dialogue:", ignoreCase = true)
+            }
         } else {
             SubtitleFileParser.parse(body).isNotEmpty()
         }

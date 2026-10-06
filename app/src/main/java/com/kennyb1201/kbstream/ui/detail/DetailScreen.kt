@@ -524,6 +524,14 @@ fun DetailScreen(
         lastSeasonFocusRequester?.requestFocus()
     }
 
+    // Spoiler-free mode, read once for the screen: the episode cards already
+    // hide an episode the viewer has not started, and the long-press menu they
+    // open has to agree with them (see the menu's heading).
+    val spoilerFreeContext = LocalContext.current
+    val spoilerFreeEnabled = remember(spoilerFreeContext) {
+        AppPreferences.getSpoilerFree(spoilerFreeContext)
+    }
+
     // Long-press context menu for the episode cards (mark this / previous /
     // whole season, or play manually).
     var episodeMenu by remember {
@@ -1983,6 +1991,20 @@ fun DetailScreen(
                             .scrollToTopOnFocus(detailListState, scope)
                     ) {
                         val openStreams = {
+                            // The viewer has taken the play action themselves, so
+                            // retire the pending auto-play effect before this
+                            // navigation (HD-P2-1). For a series that is still
+                            // loading episodes the effect is deliberately
+                            // parked - it has not set `autoPlayed` yet - and the
+                            // Play button is already live, so a short press in
+                            // that window used to navigate here AND then have the
+                            // effect fire a second `onNavigateStreams` once the
+                            // episodes landed. That second pass also issued its
+                            // own ManualSourceSelection.request, which is what
+                            // made the picker open instead of auto-selecting.
+                            // The menu rows below clear this again on purpose:
+                            // they hand the press back to the effect.
+                            autoPlayed = true
                             onNavigateStreams(
                                 playTarget,
                                 id,
@@ -2030,6 +2052,10 @@ fun DetailScreen(
                                     // A random episode needs an aired pick, which
                                     // takes a TMDB lookup — so the button resolves it
                                     // first and then opens the same way Play does.
+                                    // Every branch navigates, so the pending
+                                    // auto-play effect is retired here too
+                                    // (HD-P2-1).
+                                    autoPlayed = true
                                     randomScope.launch {
                                         val pick = randomAiredEpisode(
                                             context = context,
@@ -3017,6 +3043,7 @@ fun DetailScreen(
                                                                             ep.episodeNumber,
                                                                         episodeTitle =
                                                                             ep.name,
+
                                                                         seasonEpisodeNumbers =
                                                                             episodes
                                                                                 .map {
@@ -4384,10 +4411,30 @@ fun DetailScreen(
                             )
                         }
 
+                    // Spoiler-free: the card that opened this menu draws an
+                    // unstarted episode without its own name, and the heading has
+                    // to agree - a heading carrying the real name is the same
+                    // reveal, with the screen reader announcing it on top. The
+                    // name stays on the target for the stream picker's label,
+                    // which is built only after the viewer chose to play it.
+                    val hidesEpisodeMenuTitle = SpoilerFree.hidesIdentity(
+                        enabled = spoilerFreeEnabled,
+                        watched = isEpisodeWatched,
+                        started = inProgressByStreamId[target.streamId] != null ||
+                            resumeInfo?.episodeStreamId == target.streamId
+                    )
                     PosterContextMenu(
-                        title = target.episodeTitle
-                            ?.ifBlank { null }
-                            ?: "Episode ${target.episode}",
+                        title = if (hidesEpisodeMenuTitle) {
+                            SpoilerFree.episodeLabel(
+                                hidden = true,
+                                episodeNumber = target.episode,
+                                realTitle = null
+                            )
+                        } else {
+                            target.episodeTitle
+                                ?.ifBlank { null }
+                                ?: "Episode ${target.episode}"
+                        },
                         subtitle = "S${target.season.toString().padStart(2, '0')} · E${target.episode.toString().padStart(2, '0')}",
                         actions = menuActions,
                         onDismiss = {

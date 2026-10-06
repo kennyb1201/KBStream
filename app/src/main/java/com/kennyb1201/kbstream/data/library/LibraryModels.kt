@@ -218,6 +218,13 @@ object LocalLibraryStore {
     fun isInMyList(context: Context, mediaType: String, imdbId: String?, tmdbId: Int?): Boolean =
         readList(context, KEY_MY_LIST).any { matches(it, mediaType, imdbId, tmdbId) }
 
+    // Every mutator below is a read-modify-write over the same SharedPreferences
+    // blob (or the id-keyed lists map). Without a lock, two near-simultaneous
+    // adds/removes from different entry points each read the same base and the
+    // last apply() wins, silently dropping one entry (LS-P2-7). @Synchronized on
+    // the singleton serialises them; it is reentrant, so a public entry point
+    // calling a private helper is fine.
+    @Synchronized
     fun addToMyList(
         context: Context,
         mediaType: String,
@@ -240,6 +247,7 @@ object LocalLibraryStore {
         )
     }
 
+    @Synchronized
     fun removeFromMyList(context: Context, mediaType: String, imdbId: String?, tmdbId: Int?) {
         removeFromListInternal(context, KEY_MY_LIST, mediaType, imdbId, tmdbId)
     }
@@ -332,6 +340,7 @@ object LocalLibraryStore {
             )
         }
 
+    @Synchronized
     fun createList(context: Context, name: String): LibraryList? {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return null
@@ -340,10 +349,20 @@ object LocalLibraryStore {
             return userLists(context).firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
         }
         val createdAt = System.currentTimeMillis()
+        // Two lists created in the same millisecond derive the SAME id, and the
+        // store is keyed by it - the second silently replaced the first, a
+        // double-tap on create losing a list (LS-P2-8). Bump the stamp until
+        // the id is free.
+        var stamp = createdAt
+        var idForList = localListId(stamp)
+        while (lists.any { it.id == idForList }) {
+            stamp += 1L
+            idForList = localListId(stamp)
+        }
         val stored = StoredList(
-            id = localListId(createdAt),
+            id = idForList,
             name = trimmed,
-            createdAt = createdAt,
+            createdAt = stamp,
             items = mutableListOf()
         )
         lists += stored
@@ -351,6 +370,7 @@ object LocalLibraryStore {
         return LibraryList(stored.id, stored.name, 0, LibrarySource.LOCAL_LIST)
     }
 
+    @Synchronized
     fun renameList(context: Context, listId: Int, name: String): Boolean {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return false
@@ -362,6 +382,7 @@ object LocalLibraryStore {
         return true
     }
 
+    @Synchronized
     fun deleteList(context: Context, listId: Int): Boolean {
         val lists = readLists(context)
         val filtered = lists.filter { it.id != listId }
@@ -378,6 +399,7 @@ object LocalLibraryStore {
     fun isListEmpty(context: Context, listId: Int): Boolean =
         readLists(context).firstOrNull { it.id == listId }?.items.isNullOrEmpty()
 
+    @Synchronized
     fun addToLocalList(
         context: Context,
         listId: Int,
@@ -400,6 +422,7 @@ object LocalLibraryStore {
         source = LibrarySource.LOCAL_LIST
     )
 
+    @Synchronized
     fun removeFromLocalList(context: Context, listId: Int, mediaType: String, imdbId: String?, tmdbId: Int?) {
         val lists = readLists(context)
         val target = lists.firstOrNull { it.id == listId } ?: return

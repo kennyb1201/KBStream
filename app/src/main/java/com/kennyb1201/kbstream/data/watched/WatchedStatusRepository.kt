@@ -10,6 +10,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -1801,6 +1802,27 @@ class WatchedStatusRepository(
         // in-app navigation). Fire-and-forget: Home re-merges immediately and
         // runs its feed-lag retry window.
         ContinueWatchingRefreshBus.requestRefresh()
+
+        publishLauncherWatchNext()
+    }
+
+    /**
+     * Republish the active profile's Continue Watching rows to the TV
+     * launcher after a local mark/unmark removed the resume rows they mirror.
+     *
+     * The launcher's Watch Next channel is fed from those rows, and a manual
+     * mark never travels through a player - the one other place that used to
+     * signal the launcher (see [com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter.write]).
+     * Left alone, an episode this device had just marked watched kept its
+     * launcher card until the next playback save. Best-effort: a failed sync
+     * must not fail the mark.
+     */
+    private suspend fun publishLauncherWatchNext() {
+        runCatching {
+            WatchHistoryDatabase.withScopedDao(context) { dao ->
+                TvLauncherPublisher.sync(context, dao.getResumeRowsForLauncher())
+            }
+        }
     }
 
     /**
@@ -2030,6 +2052,8 @@ class WatchedStatusRepository(
         // card's own call keeps its local dismissal and inline rebuild; the
         // bus adds the feed-lag retry window that rebuild alone did not have.
         ContinueWatchingRefreshBus.requestRefresh()
+
+        publishLauncherWatchNext()
     }
 
     /**
@@ -2449,6 +2473,8 @@ class WatchedStatusRepository(
         // promptly, and the tracker removal lags the same way the mark's push
         // does. Signal Home here too.
         ContinueWatchingRefreshBus.requestRefresh()
+
+        publishLauncherWatchNext()
     }
 
     /**

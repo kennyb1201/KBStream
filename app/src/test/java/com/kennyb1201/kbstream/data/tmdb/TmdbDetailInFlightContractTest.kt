@@ -96,4 +96,23 @@ class TmdbDetailInFlightContractTest {
             body.contains("val result = runCatchingCancellable {")
         )
     }
+
+    @Test
+    fun `a miss is never pinned as this title's metadata`() {
+        // fetchEnrichedMetaCached already refuses to remember a miss, and this
+        // call has to match it: one transient failure (500 / 429 / timeout) used
+        // to be written into the 12h memory cache as a null, after which Detail,
+        // Home and the watched-state preload were all told this title has no
+        // metadata - with no way to retry inside the TTL. The disk write was
+        // guarded all along; only the memory pin was not.
+        val body = detailBody()
+        val guard = body.indexOf("if (result != null) {")
+        val pin = body.indexOf("detailCache[key] = now to result")
+        assertTrue("the body must guard its result", guard >= 0)
+        assertTrue("the memory pin must exist", pin >= 0)
+        assertTrue(
+            "the pin must sit behind the null guard, or a miss is cached for 12h",
+            guard in 0 until pin
+        )
+    }
 }

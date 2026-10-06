@@ -23,6 +23,16 @@ internal object SearchSeed {
         pending = query?.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Drops a pending query that will never be handed to Search - a spoken
+     * "play X" that resolved to the title's own screen, so nothing is going to
+     * consume the seed. Left set, the query would replay on the next visit to
+     * Search, long after the viewer last asked for it.
+     */
+    fun clear() {
+        pending = null
+    }
+
     /** Returns the pending query once, then forgets it. */
     fun consume(): String? {
         val query = pending ?: return null

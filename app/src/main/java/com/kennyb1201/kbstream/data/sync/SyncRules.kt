@@ -377,6 +377,24 @@ internal object DeferredDeleteRules {
         val target = normalizeAccount(signingInAccount) ?: return false
         return normalizeAccount(stagedAccountId) == target
     }
+
+    /**
+     * Every identity one account is known by, normalized and de-duplicated:
+     * the Supabase user id and the account email.
+     *
+     * A staged delete is tagged with whichever identity the device knew at the
+     * time. The user id is preferred (it survives an email change) and is what
+     * new stages carry, but an entry staged by a build that only had the email
+     * must still replay - so matching is against the WHOLE set, not one string.
+     * Without this, changing the account's email stranded every delete staged
+     * under the old form: it never replayed, and the rows it was meant to
+     * delete simply came back on the next pull (SD-5).
+     */
+    fun identities(accountId: String?, email: String?): Set<String> = buildSet {
+        listOf(accountId, email).forEach { raw ->
+            normalizeAccount(raw)?.let { add(it) }
+        }
+    }
 }
 
 /**

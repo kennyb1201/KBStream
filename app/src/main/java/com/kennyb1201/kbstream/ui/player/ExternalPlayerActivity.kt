@@ -23,6 +23,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
+import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -110,6 +111,18 @@ class ExternalPlayerActivity : ComponentActivity() {
     private var drmLicenseUrl: String? = null
     private var startPositionMs = 0L
     private var historyId = ""
+
+    /**
+     * The played-link cache key this session's URL came from, or null when the
+     * source was resolved fresh. Only a cached link is worth forgetting.
+     */
+    private var playedLinkKey: String? = null
+
+    /**
+     * Set once this session has retired its cached link, so a retry loop
+     * forgets at most once. See [invalidateCachedLink].
+     */
+    private var linkCacheInvalidated = false
 
     private var canonicalParent: String? = null
     private var resolvedTmdbId: Int? = null
@@ -367,6 +380,9 @@ class ExternalPlayerActivity : ComponentActivity() {
         runtimeMinutes = intent.getIntExtra("runtime_minutes", -1).takeIf { it > 0 }
         historyParentIdOverride = intent.getStringExtra("history_parent_id")
         drmLicenseUrl = intent.getStringExtra("drm_license_url")
+        // Only non-null when MainActivity reused a cached debrid link, which is
+        // exactly the case a failed hand-off has to retire.
+        playedLinkKey = intent.getStringExtra("played_link_key")
         streamHeaders = parseHeaderExtras(intent.getStringExtra("stream_headers").orEmpty())
         startPositionMs = if (intent.getBooleanExtra("from_beginning", false)) {
             0L
@@ -599,6 +615,13 @@ class ExternalPlayerActivity : ComponentActivity() {
             reportedPosition == null &&
             elapsedMs < BOUNCE_THRESHOLD_MS
         ) {
+            // The app took the stream and closed straight back: the link itself
+            // is the suspect, so retire the cached entry (PB-P2-3). This is the
+            // external engine's version of the in-app "failed before the first
+            // frame" rule - there is no frame to watch for here, so an
+            // immediate bounce with no playhead reported is the equivalent
+            // evidence. A viewer who watched and then left keeps the entry.
+            invalidateCachedLink()
             val label = ExternalPlayer.target(this)?.label ?: "The external player"
             // Name the most likely cause instead of leaving the viewer to guess.
             // A source that carries request headers is the case the External
@@ -1126,6 +1149,28 @@ class ExternalPlayerActivity : ComponentActivity() {
     }
 
     // ── Watch history ───────────────────────────────────────────────────────
+
+    /**
+     * Forgets the cached debrid link this session was opened from, so the next
+     * replay resolves fresh instead of handing the same dead URL to the
+     * external app again (PB-P2-3).
+     *
+     * The in-app engines have always done this the moment their launch fails
+     * before a first frame; the external engine did not, so a dead link stayed
+     * cached for its full TTL and every replay of that title bounced off it.
+     * Deliberately not called on a launch that never happened (the app was
+     * uninstalled between the query and the start): no player ever saw the URL,
+     * so nothing was learned about the link.
+     */
+    private fun invalidateCachedLink() {
+        if (linkCacheInvalidated) return
+        val cacheKey = playedLinkKey ?: return
+        linkCacheInvalidated = true
+        // Pinned to the LAUNCH profile, exactly like the in-app engines (SD-2):
+        // a mid-session switch must not spare the launching profile's dead
+        // entry.
+        PlayedLinkCache.forgetForProfile(this, cacheKey, sessionProfileId)
+    }
 
     /**
      * The duration a session is measured against, from whichever source knows

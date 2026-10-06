@@ -560,21 +560,32 @@ fun GuideScreen(
     // The ViewModel debounces the query and searches the EPG table; here the
     // hits are mapped onto VISIBLE channels only, so a channel the user hid
     // cannot resurface through a program match.
+    //
+    // The epg-id -> channel map is built OFF the main thread (HD-P2-8): it
+    // walks every visible channel, and a 10k-channel playlist paid that cost
+    // during composition - on every recomposition, exactly when the results
+    // were about to be drawn. Same shape as the channel filter above.
     val programSearchRows by viewModel.programSearchResults.collectAsStateWithLifecycle()
     LaunchedEffect(searchQuery, showSearch) {
         if (!showSearch) return@LaunchedEffect
         viewModel.searchPrograms(searchQuery)
     }
-    val programSearchHits = remember(programSearchRows, unhiddenChannels) {
-        if (programSearchRows.isEmpty()) {
+    val programSearchHits by produceState(
+        initialValue = emptyList<GuideProgramHit>(),
+        programSearchRows,
+        unhiddenChannels
+    ) {
+        value = if (programSearchRows.isEmpty()) {
             emptyList()
         } else {
-            val byEpgId = unhiddenChannels
-                .mapNotNull { item -> item.epgChannel?.id?.let { id -> id to item } }
-                .toMap()
-            programSearchRows
-                .mapNotNull { row -> byEpgId[row.channelId]?.let { item -> GuideProgramHit(item, row) } }
-                .take(30)
+            withContext(Dispatchers.Default) {
+                val byEpgId = unhiddenChannels
+                    .mapNotNull { item -> item.epgChannel?.id?.let { id -> id to item } }
+                    .toMap()
+                programSearchRows
+                    .mapNotNull { row -> byEpgId[row.channelId]?.let { item -> GuideProgramHit(item, row) } }
+                    .take(30)
+            }
         }
     }
 
@@ -2791,6 +2802,12 @@ private fun ChannelSearchDialog(
         if (!awaitingSubmitFocus || !hasHits) return@LaunchedEffect
         awaitingSubmitFocus = false
         focusFirstHit()
+    }
+    LaunchedEffect(query) {
+        // Editing the query retires a pending submit: the debounced hits that
+        // arrive next belong to what the viewer typed OVER, so they must not
+        // yank focus to the first row after they moved on (HD-P2-9).
+        awaitingSubmitFocus = false
     }
 
     Dialog(onDismissRequest = onDismiss) {

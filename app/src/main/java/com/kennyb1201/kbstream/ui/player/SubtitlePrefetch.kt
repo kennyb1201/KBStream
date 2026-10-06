@@ -201,7 +201,19 @@ internal object SubtitlePrefetch {
             is SubtitleDownload.Ready -> {
                 // Same rule as every other download route: a 200 that parses to
                 // nothing is not a subtitle, and must not be cached as one.
-                if (!SubtitleSearchHelper.isUsableSubtitleBody(result.body, assRenderable = true)) {
+                // The engine's own answer, not a hardcoded true: on a build
+                // without libass an ASS body is NOT renderable, so a prefetch
+                // that accepts one caches a track the player will draw as 0
+                // cues (PB-P2-4).
+                // The engine's own answer, not a hardcoded true: on a build
+                // without libass an ASS body is NOT renderable, so a prefetch
+                // that accepts one caches a track the player will draw as 0
+                // cues (PB-P2-4).
+                if (!SubtitleSearchHelper.isUsableSubtitleBody(
+                        result.body,
+                        assRenderable = AssSubtitleRenderer.available
+                    )
+                ) {
                     Log.w(TAG, "next-episode subtitle prefetch: download parsed to 0 cues")
                     return
                 }

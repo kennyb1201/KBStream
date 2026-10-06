@@ -58,6 +58,7 @@ import com.kennyb1201.kbstream.data.addon.CatalogConfiguration
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
@@ -108,6 +109,13 @@ fun AddonsScreen(
     var showFilterDialog by remember { mutableStateOf(false) }
     var filterDraft by remember { mutableStateOf("") }
     var showCatalogManager by remember { mutableStateOf(false) }
+    // Home's "all rails are hidden" card asks for this dialog and then
+    // navigates here (HD-P2-5). Consume the one-shot request as the screen
+    // appears: the flag is cleared either way, so it can never re-open the
+    // manager on a later, unrelated visit to Add-ons.
+    LaunchedEffect(Unit) {
+        if (HomeRailManagerRequest.consume()) showCatalogManager = true
+    }
     var showCopyDialog by remember { mutableStateOf(false) }
     var renameCatalogTarget by remember { mutableStateOf<CatalogConfiguration?>(null) }
     var renameCatalogDraft by remember { mutableStateOf("") }

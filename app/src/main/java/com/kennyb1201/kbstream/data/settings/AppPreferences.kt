@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.settings
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.security.SecureTokenStore
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import kotlin.math.abs
@@ -1257,9 +1258,10 @@ object AppPreferences {
 
     // ── MDBList API key (critic ratings: IMDb / RT / Metacritic / more) ─
     // Stored here so the user can paste their mdblist.com key without
-    // rebuilding. The build-time BuildConfig key (local.properties / env)
-    // takes precedence when present. A key left over in the old OMDb slot
-    // migrates once so nobody silently loses their ratings row.
+    // rebuilding. A PASTED key wins; the build-time BuildConfig key
+    // (local.properties / env) is the fallback, so a build that ships one still
+    // rates titles and verifies without a paste. A key left over in the old
+    // OMDb slot migrates once so nobody silently loses their ratings row.
     fun getMdbListApiKey(context: Context): String {
         val secure = apiKeyPrefs(context)
         val stored = secure.getString(KEY_MDBLIST_API_KEY, "")?.trim().orEmpty()
@@ -1268,7 +1270,12 @@ object AppPreferences {
         val legacy = migrateApiKey(context, KEY_MDBLIST_API_KEY)
             .ifBlank { migrateApiKey(context, KEY_OMDB_API_KEY) }
         if (legacy.isNotBlank()) return legacy
-        return ""
+        // The build-time key is the FALLBACK (a pasted key always wins). This
+        // getter used to stop at "" while the comment promised BuildConfig
+        // precedence, so on a build that shipped a key the ratings worked but
+        // Settings showed an empty field and VERIFY said "No key pasted yet
+        // (SI-P2-1). One chain now serves ratings, Verify and isConfigured.
+        return BuildConfig.MDBLIST_API_KEY.trim()
     }
 
     fun setMdbListApiKey(context: Context, key: String) {

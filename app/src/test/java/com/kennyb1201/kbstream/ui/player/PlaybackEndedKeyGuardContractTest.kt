@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -200,6 +201,68 @@ class PlaybackEndedKeyGuardContractTest {
         assertTrue(
             "a fresh mpv load must clear the latch",
             switchToSource.contains("endedHandled = false")
+        )
+    }
+
+    @Test
+    fun `every on-screen play path in mpv routes through the ended guard`() {
+        // The button, the seek bar's OK and OK-with-the-controls-down are the
+        // same press the media keys make, and OK is the common one on a TV
+        // remote: they have to refuse a post-end toggle for the same reason (see
+        // togglePlayPauseFromControls).
+        val controls = functionBody(MPV, "private fun setupControls() {")
+        assertEquals(
+            "the play/pause button and the seek bar's OK must both go through the guard",
+            2,
+            controls.split("togglePlayPauseFromControls()").size - 1
+        )
+        val dispatch = functionBody(MPV, "override fun dispatchKeyEvent(")
+        assertTrue(
+            "OK with the controls down must go through it too",
+            dispatch.contains("togglePlayPauseFromControls()")
+        )
+        val guard = functionBody(MPV, "private fun togglePlayPauseFromControls(): Boolean {")
+        assertTrue(
+            "the guard must consult the latch before toggling mpv",
+            guard.indexOf("if (endedHandled) return true") in
+                0 until guard.indexOf("surface?.togglePause()")
+        )
+    }
+
+    @Test
+    fun `an mpv source switch takes the end cards and their countdown down`() {
+        // The cards belong to the episode that just ended, and the countdown
+        // behind them is a Handler tick: it fires whether or not the surface is
+        // playing, so a switch during the credits used to leave the card over the
+        // replacement source and chain out of it a moment later.
+        val switchToSource = functionBody(
+            MPV,
+            "private fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {"
+        )
+        assertTrue(
+            "the switch must take the end-of-episode cards down",
+            switchToSource.contains("hideEndPanels()")
+        )
+        val hide = functionBody(MPV, "private fun hideEndPanels() {")
+        assertTrue(
+            "the countdown must be disarmed with them",
+            hide.contains("cancelNextUpAutoAdvance()")
+        )
+        assertTrue(
+            "the Up Next card must come down",
+            hide.contains("nextUpPanel?.visibility = View.GONE")
+        )
+        assertTrue(
+            "and the credits panel",
+            hide.contains("becauseYouWatchedPanel?.visibility = View.GONE")
+        )
+        assertTrue(
+            "with the credits-mode geometry restored for the next file",
+            hide.contains("exitCreditsMode()")
+        )
+        assertTrue(
+            "and the session's panel state reset with it",
+            hide.contains("endPanelsShown = false")
         )
     }
 

@@ -194,6 +194,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private var addonSearchJob: Job? = null
 
+    // Monotonic token for the add-on wave (LS-P2-2). Every call that
+    // supersedes the running search bumps it, so an in-flight publish can tell
+    // it has been overtaken and drop itself instead of showing the previous
+    // query's rails.
+    private var addonSearchGeneration = 0
+
     // Set by MainActivity: every browse entry opens a dedicated discover
     // screen (Tag = genre/keyword, Studio = network/company/service —
     // services carry a non-null providerId for movies+series rails,
@@ -418,7 +424,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         _searchQuery.value = query
 
         searchJob?.cancel()
-        addonSearchJob?.cancel()
+        invalidateAddonSearch()
         _addonResultGroups.value = emptyList()
 
         if (normalized.isBlank()) {
@@ -541,7 +547,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         tmdbMoviesDeferred: Deferred<List<TmdbSearchTitleResult>>,
         tmdbTvDeferred: Deferred<List<TmdbSearchTitleResult>>
     ) {
-        addonSearchJob?.cancel()
+        invalidateAddonSearch()
+        val generation = addonSearchGeneration
         // Kids Mode suppresses add-on rails entirely: third-party catalogs
         // (AIOMetadata, AIOStreams, ...) carry no certification data, so
         // their rails cannot be vetted against the profile's ceiling.
@@ -570,7 +577,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
             val groups =
                 try {
-                    searchAddonCatalogs(query, tmdbKeysDeferred)
+                    searchAddonCatalogs(query, tmdbKeysDeferred, generation)
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -604,6 +611,9 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                     .filter { group -> group.results.isNotEmpty() }
 
+            // A newer search already owns the rails: drop this wave rather
+            // than republish the superseded query's hits (LS-P2-2).
+            if (generation != addonSearchGeneration) return@launch
             _addonResultGroups.value = visibleGroups
 
             // Add-on results already carry IMDB ids: preload their watched /
@@ -622,7 +632,7 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
             try {
                 val enriched = enrichAddonGroups(visibleGroups)
-                if (enriched != visibleGroups) {
+                if (generation == addonSearchGeneration && enriched != visibleGroups) {
                     _addonResultGroups.value = enriched
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -689,7 +699,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private suspend fun searchAddonCatalogs(
         query: String,
-        tmdbKeysDeferred: Deferred<Set<String>>
+        tmdbKeysDeferred: Deferred<Set<String>>,
+        generation: Int
     ): List<AddonResultGroup> = coroutineScope {
         val addons = addonManager.getEnabledAddons()
 
@@ -714,20 +725,63 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 slots.set(index, groups)
 
-                val snapshot = (0 until slots.length())
-                    .mapNotNull { slots.get(it) }
-                    .flatten()
-                    .take(MAX_ADDON_GROUPS)
-                if (snapshot.isNotEmpty()) {
+                val snapshot = coalesceAddonGroups(
+                    (0 until slots.length())
+                        .mapNotNull { slots.get(it) }
+                        .flatten()
+                ).take(MAX_ADDON_GROUPS)
+                if (snapshot.isNotEmpty() && generation == addonSearchGeneration) {
                     _addonResultGroups.value = snapshot
                 }
             }
         }.joinAll()
 
-        return@coroutineScope (0 until slots.length())
-            .mapNotNull { slots.get(it) }
-            .flatten()
-            .take(MAX_ADDON_GROUPS)
+        return@coroutineScope coalesceAddonGroups(
+            (0 until slots.length())
+                .mapNotNull { slots.get(it) }
+                .flatten()
+        ).take(MAX_ADDON_GROUPS)
+    }
+
+    /**
+     * Retire the running add-on search (LS-P2-2). Cancelling the job is not
+     * enough on its own: a child that has already been resumed runs its
+     * remaining non-suspending statements before it observes the cancel, so an
+     * eager per-add-on snapshot could still land after [search] cleared the
+     * rails. Bumping the generation makes every pending publish stale, so those
+     * writes are dropped instead of showing the previous query's results.
+     */
+    private fun invalidateAddonSearch() {
+        addonSearchGeneration += 1
+        addonSearchJob?.cancel()
+    }
+
+    /**
+     * Merge rails that share one identity — the (add-on, rail label, catalog
+     * type) triple the search screen keys each rail by. Two catalogs of the
+     * same add-on can carry the same label and type, and an identity-keyed
+     * LazyColumn throws on a duplicate key, so their hits are concatenated
+     * into a single rail (first-seen order, de-duped by type:id) rather than
+     * left as two items the screen cannot tell apart (LS-P2-3).
+     */
+    private fun coalesceAddonGroups(
+        groups: List<AddonResultGroup>
+    ): List<AddonResultGroup> {
+        if (groups.size < 2) return groups
+        val merged = LinkedHashMap<String, AddonResultGroup>()
+        groups.forEach { group ->
+            val id = "${group.addonName}\u0000${group.railLabel}\u0000${group.catalogType.orEmpty()}"
+            val existing = merged[id]
+            merged[id] = if (existing == null) {
+                group
+            } else {
+                existing.copy(
+                    results = (existing.results + group.results)
+                        .distinctBy { "${it.type}:${it.id}" }
+                )
+            }
+        }
+        return merged.values.toList()
     }
 
     /**

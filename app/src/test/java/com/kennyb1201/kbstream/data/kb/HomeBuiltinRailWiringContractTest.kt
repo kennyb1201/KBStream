@@ -88,10 +88,16 @@ class HomeBuiltinRailWiringContractTest {
             "the entry must route to them",
             home.contains("HomeEntry.BuiltinRail ->")
         )
+        // Both rails must be reachable from the shared built-in wiring. It used
+        // to be an inline `when (e.key)` in the rail column; it is a lambda now
+        // because the no-catalog branch draws the same rows (see
+        // HomeRailUpHookContractTest), so what is pinned is that the key still
+        // selects a rail - not how the branch is spelled.
         assertTrue(
             "and both rails must be reachable from it",
-            home.contains(".BUILTIN_CONTINUE_WATCHING ->") &&
-                home.contains(".BUILTIN_UPCOMING_SCHEDULE,")
+            home.contains(".BUILTIN_CONTINUE_WATCHING") &&
+                home.contains("BuiltinContinueWatchingRail(") &&
+                home.contains("BuiltinUpcomingRail(")
         )
         // The rail no longer owns a fixed slot in the column: the old hardcoded
         // items are gone, or the merge's position is ignored.

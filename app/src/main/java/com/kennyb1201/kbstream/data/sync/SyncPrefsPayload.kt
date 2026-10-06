@@ -831,6 +831,12 @@ object PrefsPayloadApplier {
             ) {
                 return@forEach
             }
+            // Only keys we still SYNC may be adopted. A blob pushed by a build
+            // that predates the secure-store move can still carry an API key;
+            // without this filter the pull wrote it back into plaintext display
+            // prefs (SI-P2-2). The builder only ever pushes SYNCED_PREF_KEYS,
+            // so a key outside the set is exactly the stale-blob case.
+            if (key !in PrefsPayloadBuilder.SYNCED_PREF_KEYS) return@forEach
             val primitive = value as? kotlinx.serialization.json.JsonPrimitive ?: return@forEach
             val content = primitive.content
 

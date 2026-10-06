@@ -7,6 +7,7 @@ import android.content.Context
 import android.database.Cursor
 import android.database.MatrixCursor
 import android.net.Uri
+import android.os.SystemClock
 import android.provider.BaseColumns
 import android.util.Log
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -41,6 +42,12 @@ class SearchSuggestionsProvider : ContentProvider() {
 
     override fun onCreate(): Boolean = true
 
+    /**
+     * Bounds how often a caller can make this provider spend a TMDB query
+     * (HD-P2-6). One per provider instance, and a provider is one per process.
+     */
+    private val rateLimiter = SearchSuggestionRateLimiter()
+
     override fun query(
         uri: Uri,
         projection: Array<out String>?,
@@ -51,6 +58,14 @@ class SearchSuggestionsProvider : ContentProvider() {
         val cursor = MatrixCursor(COLUMNS)
         val context = context?.applicationContext ?: return cursor
         val query = suggestQuery(uri, selectionArgs) ?: return cursor
+        // The provider is exported, so any app on the box can call it: the query
+        // floor above stops one-character prefixes from being a free TMDB proxy,
+        // and this bounds the sustained rate of a caller that ignores it
+        // (HD-P2-6). A viewer typing stays far under it.
+        if (!rateLimiter.allow(SystemClock.elapsedRealtime())) {
+            Log.w(TAG, "search suggestions rate limited; answering empty")
+            return cursor
+        }
         fetchSuggestions(context, query).forEach { row ->
             cursor.addRow(
                 // Explicitly Any?: the columns are a mix of Long, String and a
@@ -102,7 +117,13 @@ class SearchSuggestionsProvider : ContentProvider() {
                             .getOrDefault(emptyList())
                         val shows = runCatchingCancellable { tmdb.searchTv(query) }
                             .getOrDefault(emptyList())
-                        buildSearchSuggestions(movies, shows)
+                        // Kids Mode first: these rows are drawn by the SYSTEM, on
+                        // the launcher, so nothing of this app's can vet them once
+                        // they are returned - unlike every in-app search path,
+                        // whose results pass the same ceiling before they render.
+                        val (allowedMovies, allowedShows) =
+                            kidsFilteredTmdbSearch(tmdb, movies, shows)
+                        buildSearchSuggestions(allowedMovies, allowedShows)
                     }
                 }
             }

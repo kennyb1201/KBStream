@@ -185,12 +185,21 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
     private var catchupJob: Job? = null
 
     /**
+     * Bumped by every catch-up load. A cancelled load's `finally` still runs -
+     * AFTER its replacement has set the flag true - so without this the old job
+     * cleared the new one's loading flag and the dialog showed "No recent
+     * programs available" until the real results landed (see HD-P2-7).
+     */
+    private var catchupGeneration = 0
+
+    /**
      * Loads the catch-up (DVR) list for [channel]. An empty result means
      * the channel carries no catch-up attributes or has no EPG history —
      * the UI hides the section rather than showing dead entries.
      */
     fun loadCatchupPrograms(channel: IptvChannel) {
         catchupJob?.cancel()
+        val generation = ++catchupGeneration
         // Drop the previous channel's list and flag the load: the dialog reads
         // this state the instant it opens, and leaving it populated flashed the
         // last channel's programs before the new ones landed.
@@ -217,7 +226,9 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 Log.w(TAG, "CATCHUP LOAD FAILED channel=${channel.id}: ${t.message}")
                 _catchupPrograms.value = emptyList()
             } finally {
-                _catchupLoading.value = false
+                // Only the CURRENT load may clear the flag (see
+                // [catchupGeneration]).
+                if (generation == catchupGeneration) _catchupLoading.value = false
             }
         }
     }

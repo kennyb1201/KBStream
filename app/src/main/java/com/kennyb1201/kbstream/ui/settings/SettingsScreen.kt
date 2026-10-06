@@ -343,6 +343,12 @@ fun SettingsScreen(
     var backupStatus by remember { mutableStateOf<String?>(null) }
     var mdbListKeyInput by remember { mutableStateOf(AppPreferences.getMdbListApiKey(context)) }
     var mdbListKeySaved by remember { mutableStateOf(false) }
+    // Key-verification posture (SI-P2-3): MDBList is the ONLY tracker with an
+    // opt-in VERIFY, so its status line can say "Connected". The other two have
+    // no verification endpoint wired, and their feedback says "Saved" rather
+    // than claiming a connection it has not tested. That wording is deliberate
+    // and honest - the key really was saved - and adding VERIFY for them means
+    // specifying a verification call per provider first.
     var subsKeyInput by remember { mutableStateOf(AppPreferences.getOpensubtitlesApiKey(context)) }
     var subsKeySaved by remember { mutableStateOf(false) }
     var torboxKeyInput by remember { mutableStateOf(AppPreferences.getTorboxApiKey(context)) }

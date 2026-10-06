@@ -114,6 +114,50 @@ class SyncDeferredDeletesTest {
 
         assertNull(SyncDeferredDeletes.lastAccountId(context))
     }
+
+    @Test
+    fun `the user id is the remembered identity when the session has one`() {
+        SyncDeferredDeletes.rememberAccount(context, "uid-123", "User@Example.com")
+
+        // The id is what survives an email change, so it is what a new stage
+        // carries; the email is kept alongside it as the fallback form.
+        assertEquals("uid-123", SyncDeferredDeletes.lastAccountId(context))
+    }
+
+    @Test
+    fun `a stage tagged with the user id replays when the caller knows both`() {
+        SyncDeferredDeletes.rememberAccount(context, "uid-123", "user@example.com")
+        SyncDeferredDeletes.stage(context, staged("uid-123", "p:a:movie::tt1"))
+
+        assertEquals(
+            listOf("p:a:movie::tt1"),
+            SyncDeferredDeletes.stagedFor(context, "uid-123", "user@example.com").map { it.key }
+        )
+    }
+
+    @Test
+    fun `a stage tagged with the OLD email still replays once the id is known`() {
+        // The form an earlier build wrote: email only. The account's email has
+        // since changed, so only the user id is stable - matching the email the
+        // session still reports is what keeps the old stage reachable (SD-5),
+        // and the id-only lookup below is the case that must NOT strand it
+        // silently when both are supplied.
+        SyncDeferredDeletes.stage(context, staged("old@example.com", "p:a:movie::tt9"))
+
+        assertEquals(
+            listOf("p:a:movie::tt9"),
+            SyncDeferredDeletes.stagedFor(context, "uid-123", "old@example.com").map { it.key }
+        )
+    }
+
+    @Test
+    fun `another account's stage is still invisible`() {
+        SyncDeferredDeletes.stage(context, staged("uid-999", "p:a:movie::tt7"))
+
+        assertTrue(
+            SyncDeferredDeletes.stagedFor(context, "uid-123", "user@example.com").isEmpty()
+        )
+    }
 }
 
 /** Pure rules: account normalization, identity, and same-account replay. */
@@ -136,6 +180,21 @@ class DeferredDeleteRulesTest {
         assertFalse(DeferredDeleteRules.mayReplay("user@example.com", "other@example.com"))
         assertFalse(DeferredDeleteRules.mayReplay("user@example.com", "  "))
         assertFalse(DeferredDeleteRules.mayReplay("user@example.com", null))
+    }
+
+    @Test
+    fun `identities carry both the user id and the email, normalized`() {
+        assertEquals(
+            setOf("uid-123", "user@example.com"),
+            DeferredDeleteRules.identities("uid-123", "  User@Example.com ")
+        )
+    }
+
+    @Test
+    fun `identities drop blanks rather than adding empty entries`() {
+        assertEquals(setOf("user@example.com"), DeferredDeleteRules.identities(null, "user@example.com"))
+        assertEquals(setOf("uid-123"), DeferredDeleteRules.identities("uid-123", "   "))
+        assertTrue(DeferredDeleteRules.identities(null, null).isEmpty())
     }
 
     @Test

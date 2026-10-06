@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.player
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamDrm
@@ -132,6 +133,24 @@ internal object PlayedLinkCache {
         }
     }
 
+    /**
+     * [forget] for a session pinned to its LAUNCH profile.
+     *
+     * The active profile can change mid-playback (a switch), and plain [forget]
+     * then resolves the NEW profile's store: the launching profile's dead entry
+     * survives and a replay of it loops until the TTL (SD-2). A null
+     * [profileId] - the legacy no-profiles device - falls back to the active one.
+     */
+    fun forgetForProfile(context: Context, key: String, profileId: String?) {
+        if (key.isBlank()) return
+        if (profileId == null) return forget(context, key)
+        runCatching {
+            val store = prefsFor(context, profileId)
+            val entries = LinkedHashMap(readFrom(store).entries)
+            if (entries.remove(key) != null) writeTo(store, Store(entries))
+        }
+    }
+
     private fun Stream.toCached(): CachedStream = CachedStream(
         url = url.orEmpty(),
         audioUrl = audioUrl,
@@ -163,8 +182,10 @@ internal object PlayedLinkCache {
         )
     }
 
-    private fun read(context: Context): Store {
-        val raw = prefs(context).getString(KEY_ENTRIES, null) ?: return Store()
+    private fun read(context: Context): Store = readFrom(prefs(context))
+
+    private fun readFrom(prefs: SharedPreferences): Store {
+        val raw = prefs.getString(KEY_ENTRIES, null) ?: return Store()
         return runCatching { json.decodeFromString(Store.serializer(), raw) }
             .getOrElse {
                 // A corrupt blob must never break playback: drop and restart.
@@ -173,16 +194,25 @@ internal object PlayedLinkCache {
             }
     }
 
-    private fun write(context: Context, store: Store) {
+    private fun write(context: Context, store: Store) = writeTo(prefs(context), store)
+
+    private fun writeTo(prefs: SharedPreferences, store: Store) {
         // apply(), never commit(): this runs on the UI thread as playback starts.
-        prefs(context).edit()
+        prefs.edit()
             .putString(KEY_ENTRIES, json.encodeToString(Store.serializer(), store))
             .apply()
     }
 
-    private fun prefs(context: Context) =
+    private fun prefs(context: Context): SharedPreferences = prefsFor(context, null)
+
+    /** The store of one profile, or the active profile's when [profileId] is null. */
+    private fun prefsFor(context: Context, profileId: String?): SharedPreferences =
         context.applicationContext.getSharedPreferences(
-            ProfileStorage.prefsName(context.applicationContext, PREFS_BASE),
+            if (profileId == null) {
+                ProfileStorage.prefsName(context.applicationContext, PREFS_BASE)
+            } else {
+                ProfileStorage.prefsName(profileId, PREFS_BASE)
+            },
             Context.MODE_PRIVATE
         )
 }

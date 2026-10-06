@@ -210,6 +210,82 @@ class LibraryMergeTest {
         assertEquals(listOf("New", "Old"), sorted.map { it.title })
     }
 
+    // ── cross-tracker flavor twins (asserts the real extracted merge) ──
+
+    @Test
+    fun `an imdb-only twin collapses with a both-ids twin`() {
+        // The exact-triple dedupeKey gave these different keys ("movie:tt…:-"
+        // against "movie:tt…:447365"), so the title drew twice. They share the
+        // IMDB id, which is what the either-id rule matches on.
+        val simkl = item("Dune", LibrarySource.SIMKL_WATCHLIST, imdb = "tt15239678")
+        val mdb = item(
+            "Dune",
+            LibrarySource.MDBLIST_WATCHLIST,
+            imdb = "tt15239678",
+            tmdb = 447365
+        )
+
+        assertEquals(listOf(simkl), mergeLibraryItemsById(listOf(simkl, mdb)))
+    }
+
+    @Test
+    fun `a tmdb-only twin collapses with a both-ids twin`() {
+        val simkl = item("Dune", LibrarySource.SIMKL_WATCHLIST, tmdb = 447365)
+        val mdb = item(
+            "Dune",
+            LibrarySource.MDBLIST_WATCHLIST,
+            imdb = "tt15239678",
+            tmdb = 447365
+        )
+
+        assertEquals(listOf(simkl), mergeLibraryItemsById(listOf(simkl, mdb)))
+    }
+
+    @Test
+    fun `the earlier source wins when flavor twins meet`() {
+        val simkl = item("Dune", LibrarySource.SIMKL_WATCHLIST, imdb = "tt15239678", tmdb = 447365)
+        val mdb = item("Dune", LibrarySource.MDBLIST_WATCHLIST, imdb = "tt15239678", tmdb = 447365)
+
+        assertEquals(listOf(simkl), mergeLibraryItemsById(listOf(simkl, mdb)))
+    }
+
+    @Test
+    fun `a twin's extra id folds onto the kept row so a third flavor still matches`() {
+        val simkl = item("Dune", LibrarySource.SIMKL_WATCHLIST, imdb = "tt15239678")
+        val both = item("Dune", LibrarySource.MDBLIST_WATCHLIST, imdb = "tt15239678", tmdb = 447365)
+        val tmdbOnly = item("Dune", LibrarySource.LOCAL_LIST, tmdb = 447365)
+
+        val merged = mergeLibraryItemsById(listOf(simkl, both, tmdbOnly))
+
+        assertEquals(1, merged.size)
+        assertEquals(simkl, merged.first())
+    }
+
+    @Test
+    fun `the same tmdb id under two trackers collapses`() {
+        val a = item("Dune", LibrarySource.MDBLIST_WATCHLIST, tmdb = 447365)
+        val b = item("Dune", LibrarySource.MDBLIST_LIST, tmdb = 447365)
+
+        assertEquals(listOf(a), mergeLibraryItemsById(listOf(a, b)))
+    }
+
+    @Test
+    fun `a movie and a series sharing an imdb id are never merged`() {
+        val movie = item("Severance", LibrarySource.LOCAL, imdb = "tt11280740", mediaType = "movie")
+        val series = item("Severance", LibrarySource.SIMKL_WATCHLIST, imdb = "tt11280740", mediaType = "series")
+
+        assertEquals(2, mergeLibraryItemsById(listOf(movie, series)).size)
+    }
+
+    @Test
+    fun `distinct titles keep their input order`() {
+        val a = item("A", LibrarySource.LOCAL, imdb = "tt1")
+        val b = item("B", LibrarySource.SIMKL_WATCHLIST, imdb = "tt2")
+        val c = item("C", LibrarySource.MDBLIST_WATCHLIST, tmdb = 3)
+
+        assertEquals(listOf(a, b, c), mergeLibraryItemsById(listOf(a, b, c)))
+    }
+
     /** Test bridge: the store object is pure Kotlin for key computation. */
     private object LocalLibraryStoreForTest {
         fun dedupeKey(item: LibraryItem): String {

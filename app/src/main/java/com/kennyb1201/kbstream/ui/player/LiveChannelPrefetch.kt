@@ -7,7 +7,6 @@ import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicReference
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -119,11 +118,12 @@ internal fun interface PrefetchTransport {
 
 /** [PrefetchTransport] backed by [client], reading a bounded body and closing. */
 internal fun okHttpPrefetchTransport(client: OkHttpClient): PrefetchTransport {
-    // The call the last [get] started, so a dismiss can abort it instead of
-    // letting a warm-up the viewer has left finish against a closed guide. Held
-    // in an atomic because [get] runs on the main thread while the cancel may
-    // not.
-    val inFlight = AtomicReference<Call?>(null)
+    // EVERY call [get] has started and not yet finished, so a dismiss can abort
+    // all of them: a single slot tracked only the last, and an overlapping
+    // warm-up the viewer had left kept running against a closed guide (PB-P2-7).
+    // A concurrent set because [get] runs on the main thread while the cancel
+    // may not.
+    val inFlight = java.util.concurrent.ConcurrentHashMap.newKeySet<Call>()
     return object : PrefetchTransport {
         override fun get(url: String, headers: Map<String, String>, onBody: (String?) -> Unit) {
             val request = Request.Builder().url(url).get().apply {
@@ -131,15 +131,17 @@ internal fun okHttpPrefetchTransport(client: OkHttpClient): PrefetchTransport {
             }.build()
             runCatching {
                 val call = client.newCall(request)
-                inFlight.set(call)
+                inFlight.add(call)
                 call.enqueue(
                     object : Callback {
                         override fun onFailure(call: Call, e: IOException) {
+                            inFlight.remove(call)
                             Log.d(TAG, "prefetch missed $url: ${e.message}")
                             onBody(null)
                         }
 
                         override fun onResponse(call: Call, response: Response) {
+                            inFlight.remove(call)
                             response.use { res -> onBody(readBoundedBody(res)) }
                         }
                     }
@@ -151,7 +153,11 @@ internal fun okHttpPrefetchTransport(client: OkHttpClient): PrefetchTransport {
         }
 
         override fun cancelInFlight() {
-            inFlight.getAndSet(null)?.cancel()
+            // Copy first: cancelling fires the callbacks, which remove from the
+            // set as they land.
+            val calls = inFlight.toList()
+            inFlight.clear()
+            calls.forEach { it.cancel() }
         }
     }
 }

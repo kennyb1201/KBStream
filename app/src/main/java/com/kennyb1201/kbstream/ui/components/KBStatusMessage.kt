@@ -40,11 +40,11 @@ import kotlinx.coroutines.android.awaitFrame
  * [loading] swaps the icon for a spinner; otherwise [icon] is drawn as-is
  * (emoji carry their own color, unlike a tinted vector).
  *
- * [onRetry] adds a focusable "Press OK to retry" card under the pill. Pass it
- * from FAILED loads only: a failure is the one state where the screen has
- * nothing else to offer, whereas an empty result is a real answer and gets no
- * action. The card takes focus itself, because with nothing focused the OK
- * button on a remote goes nowhere — see the comment in the body.
+ * [onRetry] adds a focusable action card under the pill. Pass it from a state
+ * where the screen has nothing else to offer: a failed load, or a Home whose
+ * every rail the viewer has hidden. The card takes focus itself, because with
+ * nothing focused the OK button on a remote goes nowhere — see the comment in
+ * the body.
  *
  * Callers that place this inside a `LazyColumn` item should pass
  * `Modifier.fillParentMaxSize()` so the card centers in the rail viewport
@@ -56,6 +56,12 @@ fun KBStatusMessage(
     loading: Boolean = false,
     icon: String = "⚠️",
     onRetry: (() -> Unit)? = null,
+    // The action's label. Overridable because the action is not always a retry
+    // - Home's "all rails hidden" card offers "Manage rails" - and a second
+    // copy of the focus-grabbing card below would be the thing that drifts.
+    // The callback keeps its onRetry name so retry-only call sites need no
+    // change.
+    actionLabel: String = "Press OK to retry.",
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
     val retryRequester = remember { FocusRequester() }
@@ -120,7 +126,7 @@ fun KBStatusMessage(
                         .padding(top = 14.dp)
                         .focusRequester(retryRequester)
                 ) {
-                    Text("Press OK to retry.")
+                    Text(actionLabel)
                 }
             }
         }

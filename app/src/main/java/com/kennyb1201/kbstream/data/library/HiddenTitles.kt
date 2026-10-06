@@ -229,25 +229,21 @@ object HiddenTitles {
         // surface that knows a spelling the first press did not) merges the
         // spellings instead of leaving two rows in the manager.
         val current = read(app).entries
+        // The entry being merged is read BEFORE it is filtered out of `current`:
+        // the merge used to search the already-filtered `kept`, which can never
+        // contain a match, so a second hide under another id spelling created a
+        // DUPLICATE row instead of folding the spellings together (see LS-P2-9).
+        val existing = current.firstOrNull { entry -> entry.keys.any { it in keys } }
         val kept = current.filterNot { entry -> entry.keys.any { it in keys } }
         val merged = Entry(
-            keys = (keys + kept.firstOrNull { entry ->
-                entry.keys.any { it in keys }
-            }?.keys.orEmpty()).distinct(),
-            title = title.takeIf { it.isNotBlank() }
-                ?: current.firstOrNull { entry -> entry.keys.any { it in keys } }
-                    ?.title
-                ?: "",
+            keys = (keys + existing?.keys.orEmpty()).distinct(),
+            title = title.takeIf { it.isNotBlank() } ?: existing?.title ?: "",
             mediaType = normalizedType(mediaType),
-            posterUrl = posterUrl ?: current.firstOrNull { entry ->
-                entry.keys.any { it in keys }
-            }?.posterUrl,
+            posterUrl = posterUrl ?: existing?.posterUrl,
             at = System.currentTimeMillis(),
             // Keep an earlier year when this hide does not carry one, so a
             // second hide from a year-less surface does not widen the match.
-            year = year ?: current.firstOrNull { entry ->
-                entry.keys.any { it in keys }
-            }?.year
+            year = year ?: existing?.year
         )
 
         write(app, Store(kept + merged))

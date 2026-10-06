@@ -200,8 +200,14 @@ fun SearchScreen(
     // Back from a drill-down restores the list at the same title. Exiting
     // Search itself resets it in MainActivity's BackHandler.
 
-    val totalCount = results.size + actorResults.size + studioResults.size + collectionResults.size +
-        addonResultGroups.sumOf { it.results.size }
+    // Counted from the RAW lists, before the hidden filter drops rows: a viewer
+    // who has hidden every hit still MATCHED something, so the "No matches
+    // found" card must not stand in for results they chose to hide (LS-P2-6).
+    // Counted from the RAW lists, before the hidden filter drops rows: a viewer
+    // who has hidden every hit still MATCHED something, so the "No matches
+    // found" card must not stand in for results they chose to hide (LS-P2-6).
+    val totalCount = resultsRaw.size + actorResults.size + studioResults.size +
+        collectionResults.size + addonResultGroupsRaw.sumOf { it.results.size }
 
     // Full-bleed screen: edge spacing lives in the LazyColumn's
     // contentPadding, not on the container, so the poster rails can draw
@@ -414,13 +420,16 @@ fun SearchScreen(
             }
 
             if (!isLoading && query.isNotBlank() && addonResultGroups.isNotEmpty()) {
-                addonResultGroups.forEachIndexed { index, group ->
-                    // Identity-first key (index kept as a tiebreaker): a rail
-                    // keyed by position alone loses its remembered scroll and
-                    // focus whenever the results reorder.
+                addonResultGroups.forEach { group ->
+                    // Identity key, never the position (LS-P2-3): the add-on
+                    // rails publish as each add-on answers, so a slow one
+                    // shifts every rail after it. A positional key would then
+                    // read as a brand-new item and throw away the rail's
+                    // remembered scroll and focus. The view model coalesces
+                    // rails that share this identity, so it stays unique.
                     item(
                         key = "addons_rail:${group.addonName}:" +
-                            "${group.railLabel}:${group.catalogType ?: ""}:$index"
+                            "${group.railLabel}:${group.catalogType ?: ""}"
                     ) {
                         SearchRail(
                             title = searchRailTitle(
@@ -433,8 +442,21 @@ fun SearchScreen(
                         ) {
                             items(
                                 items = group.results,
+                                // Type-qualified for the same reason the Titles
+                                // rail above is (see the comment there): an
+                                // add-on's /search can return the same id as
+                                // both a movie and a series, and a bare-id key
+                                // then collides - LazyRow throws on duplicate
+                                // keys instead of drawing the second tile. The
+                                // rail index is not enough to disambiguate
+                                // them: they are two entries in THIS list.
+                                // The positional index is also left out of the
+                                // key (LS-P2-3): the type-qualified id is
+                                // already unique within the rail, and a key
+                                // that changes when the rail moves would reset
+                                // this LazyRow's scroll.
                                 key = { result: SearchTitleResult ->
-                                    "addon:$index:${result.id}"
+                                    "addon:${result.type}:${result.id}"
                                 }
                             ) { result: SearchTitleResult ->
                                 val requester = remember(

@@ -115,6 +115,7 @@ import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -124,6 +125,7 @@ import com.kennyb1201.kbstream.ui.components.landscapeRank
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
+import com.kennyb1201.kbstream.ui.kb.homeTopRailUpHook
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -1688,7 +1690,11 @@ private fun rememberHidesEpisodeTitle(inProgress: Boolean): Boolean {
 private fun UpcomingEpisodeCard(
     upcoming: UpcomingEpisode,
     onClick: () -> Unit,
-    onFocus: () -> Unit = {}
+    onFocus: () -> Unit = {},
+    focusRequester: FocusRequester? = null,
+    // Non-null only when this card's rail is the one Home draws first (see
+    // [homeTopRailUpHook]).
+    onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
     var focused by remember {
         mutableStateOf(false)
@@ -1703,6 +1709,15 @@ private fun UpcomingEpisodeCard(
             .width(224.dp)
             .height(146.dp)
             .padding(end = HomeRailGap)
+            .then(
+                if (focusRequester == null) {
+                    Modifier
+                } else {
+                    Modifier
+                        .focusRequester(focusRequester)
+                        .homeTopRailUpHook(focusRequester, onUpPressed)
+                }
+            )
             .onFocusChanged {
                 focused = it.isFocused
                 if (it.isFocused) {
@@ -2062,7 +2077,9 @@ private fun BuiltinContinueWatchingRail(
     onOpenUpNext: (UpNextItem) -> Unit,
     onLongPress: (UpNextItem) -> Unit,
     onSelectHero: (MetaPreview, UpNextItem) -> Unit,
-    onUpPressed: (FocusRequester) -> Unit
+    // Non-null only when this rail is the one Home draws first (see
+    // [homeTopRailUpHook]).
+    onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.padding(
@@ -2114,7 +2131,7 @@ private fun BuiltinContinueWatchingRail(
                             onLongPress(item)
                         },
                         onFocus = { onSelectHero(hero, item) },
-                        onUpPressed = { onUpPressed(requester) },
+                        onUpPressed = onUpPressed,
                         focusRequester = requester,
                         badgeColor = when {
                             item.isSeriesFinale -> KBDanger
@@ -2146,7 +2163,10 @@ private fun BuiltinUpcomingRail(
     bringIntoViewSpec: BringIntoViewSpec,
     onTitleHeight: (Int) -> Unit,
     onOpenDetails: (UpNextItem) -> Unit,
-    onSelectHero: (MetaPreview, UpNextItem) -> Unit
+    onSelectHero: (MetaPreview, UpNextItem) -> Unit,
+    // Non-null only when this rail is the one Home draws first (see
+    // [homeTopRailUpHook]).
+    onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.padding(
@@ -2173,6 +2193,7 @@ private fun BuiltinUpcomingRail(
                     items = episodes,
                     key = { it.id }
                 ) { upcoming ->
+                    val requester = remember { FocusRequester() }
                     val heroItem = UpNextItem(
                         id = upcoming.id,
                         title = upcoming.title,
@@ -2199,6 +2220,8 @@ private fun BuiltinUpcomingRail(
                         UpcomingEpisodeCard(
                             upcoming = upcoming,
                             onClick = { onOpenDetails(heroItem) },
+                            focusRequester = requester,
+                            onUpPressed = onUpPressed,
                             onFocus = {
                                 onSelectHero(
                                     MetaPreview(
@@ -2249,7 +2272,9 @@ private fun CompactUpNextCard(
     item: UpNextItem,
     onClick: () -> Unit,
     onFocus: () -> Unit = {},
-    onUpPressed: () -> Unit = {},
+    // Non-null only for the card whose rail is the one Home draws first (see
+    // [homeTopRailUpHook]).
+    onUpPressed: ((FocusRequester) -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
     focusRequester: FocusRequester? = null,
     badgeColor: Color
@@ -2309,8 +2334,24 @@ private fun CompactUpNextCard(
         null
     }
 
+    // Spoiler-free, read once for the card: the same rule its title line uses
+    // ([rememberHidesEpisodeTitle]). A card offering an episode the viewer has
+    // not started must not show a frame FROM that episode either - the still was
+    // the loudest thing on the tile, and the detail screen's episode list covers
+    // the same frame. Covering it here means falling back to the show's own art
+    // rather than a blur: a blur is a no-op below API 31, which is where these
+    // boxes live (Fire OS 7), and the rail is a list of what to watch next, not
+    // a browse surface that needs a "hidden" marker.
+    val hidesEpisodeIdentity = rememberHidesEpisodeTitle(
+        inProgress = item.badge == UpNextBadge.CONTINUE_WATCHING
+    )
+
     PosterCard(
-        posterUrl = item.episodeThumbnail ?: item.backdrop ?: item.poster ?: "",
+        posterUrl = if (hidesEpisodeIdentity) {
+            item.backdrop ?: item.poster ?: ""
+        } else {
+            item.episodeThumbnail ?: item.backdrop ?: item.poster ?: ""
+        },
         contentDescription = item.title,
         isWatched = false,
         onClick = onClick,
@@ -2333,17 +2374,16 @@ private fun CompactUpNextCard(
                     onFocus()
                 }
             }
-            .onPreviewKeyEvent { event ->
-                if (
-                    event.type == KeyEventType.KeyDown &&
-                    event.key == Key.DirectionUp
-                ) {
-                    onUpPressed()
-                    true
+            .then(
+                // D-pad Up on the card of the rail Home draws first opens the
+                // top bar; every other card leaves the key to the focus system,
+                // which moves focus to the rail above.
+                if (focusRequester == null) {
+                    Modifier
                 } else {
-                    false
+                    Modifier.homeTopRailUpHook(focusRequester, onUpPressed)
                 }
-            }
+            )
     ) {
         Box(
             modifier = Modifier.fillMaxSize()
@@ -2427,10 +2467,7 @@ private fun CompactUpNextCard(
                     )
                 }
 
-                val hidesCardEpisodeTitle = rememberHidesEpisodeTitle(
-                    inProgress = item.badge == UpNextBadge.CONTINUE_WATCHING
-                )
-                if (!hidesCardEpisodeTitle) {
+                if (!hidesEpisodeIdentity) {
                     item.episodeTitle
                         ?.trim()
                         ?.takeIf {
@@ -2562,6 +2599,10 @@ fun HomeScreen(
     onOpenKBFolder: (String) -> Unit = {},
     onOpenBrowseShortcut: (com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut) -> Unit = {},
     onOpenCatalogGrid: (Rail) -> Unit = {},
+    // Opens the home rail manager (the Add-ons screen's dialog). Home cannot
+    // raise that dialog itself - it is wired to the Add-ons view model - so the
+    // press navigates there with a one-shot request behind it.
+    onManageRails: () -> Unit = {},
     viewModel: HomeViewModel =
         viewModel()
 ) {
@@ -2687,21 +2728,19 @@ fun HomeScreen(
     fun builtinRailTitle(key: String, default: String): String =
         homeRailRenames[key]?.takeIf { it.isNotBlank() } ?: default
 
-    // The up-onto-topbar hook belongs to the first rail in DISPLAY order,
-    // which a pinned collection can push away from rails[0].
-    val firstDisplayedRailSourceIndex =
-        mergedEntries
-            .indexOfFirst {
-                it is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail
-            }
-            .takeIf { it >= 0 }
-            ?.let { index ->
-                (
-                    mergedEntries[index] as
-                        com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail
-                    ).sourceIndex
-            }
-            ?: -1
+    // The rail drawn FIRST on Home owns the D-pad Up -> top bar hook: the hero
+    // spacer above the rails is inert, so that one hook is the only way the top
+    // bar can be reached - and it has to be exactly one rail, or Up from a rail
+    // with another rail above it jumps over that rail instead of moving focus to
+    // it (see [homeTopRailUpHook]).
+    //
+    // Ownership follows the MERGED ORDER below, not rail identity. It used to
+    // follow identity - Continue Watching took the hook whenever it had cards,
+    // and the first catalog rail took it only when Continue Watching was empty -
+    // which meant the same thing as "the topmost rail" only while CW was
+    // hardcoded above the catalogs. The home manager can now hide it, move it,
+    // or put the Upcoming rail or a browse row first, so the rail that draws
+    // first is the rail that owns the hook, whatever kind it is.
 
     var showTopBar by remember {
         mutableStateOf(false)
@@ -3104,8 +3143,101 @@ fun HomeScreen(
         }
     }
 
-    val firstRailNeedsUpHook =
-        upNext.isEmpty()
+    // One built-in row - Continue Watching or the Upcoming Schedule - wired to
+    // this screen's own callbacks.
+    //
+    // The built-ins are drawn from two places: the merged rail column, and the
+    // no-catalog fallback in the column below it. They read local history and
+    // the local schedule, so they have something to show even when no catalog
+    // rail built at all - base drew them there for exactly that reason, at
+    // column scope above the loading and retry cards, and the arrangement only
+    // moved WHERE they are drawn. One lambda so the two paths cannot drift.
+    val drawBuiltinRail: @Composable (key: String, isTopRail: Boolean) -> Unit =
+        { key, isTopRail ->
+            val title = builtinRailTitle(
+                key,
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                    .builtinDefaultTitle(key)
+                    ?: "Upcoming"
+            )
+            val upHook = if (isTopRail) {
+                { requester: FocusRequester -> openTopBar(requester) }
+            } else {
+                null
+            }
+            if (
+                key ==
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                    .BUILTIN_CONTINUE_WATCHING
+            ) {
+                BuiltinContinueWatchingRail(
+                    cards = upNext,
+                    title = title,
+                    bringIntoViewSpec = railCardsBringIntoViewSpec,
+                    onTitleHeight = { railTitleHeightPx = it.toFloat() },
+                    onCardFocusRequester = { requester ->
+                        lastPosterFocusRequester = requester
+                    },
+                    onOpenUpNext = { item -> openUpNext(item) },
+                    onLongPress = { item -> openContinueWatchingMenu(item) },
+                    onSelectHero = { hero, item ->
+                        selectContinueWatchingHero(hero, item)
+                    },
+                    onUpPressed = upHook
+                )
+            } else if (
+                key ==
+                com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+                    .BUILTIN_UPCOMING_SCHEDULE
+            ) {
+                BuiltinUpcomingRail(
+                    episodes = upcomingSchedule,
+                    title = title,
+                    bringIntoViewSpec = railCardsBringIntoViewSpec,
+                    onTitleHeight = { railTitleHeightPx = it.toFloat() },
+                    onOpenDetails = { item ->
+                        openUpNext(item, openDetailsOnly = true)
+                    },
+                    onSelectHero = { meta, item ->
+                        selectContinueWatchingHero(meta, item)
+                    },
+                    onUpPressed = upHook
+                )
+            }
+            // No catch-all: a built-in key this build does not know draws
+            // NOTHING rather than being silently mislabelled as the Upcoming
+            // rail. A String `when` gets no compiler help, so the branch is
+            // written out (HD-P2-2).
+        }
+
+    // The top-bar hook for the rail drawn at [entryIndex] - null for every rail
+    // but the first one in the merged order (see the note above).
+    fun topRailUpHook(entryIndex: Int): ((FocusRequester) -> Unit)? =
+        if (com.kennyb1201.kbstream.ui.kb.isTopRailEntry(entryIndex)) {
+            { requester: FocusRequester -> openTopBar(requester) }
+        } else {
+            null
+        }
+
+    // The built-in rows, in the arrangement's order, for the two branches of the
+    // rail column that draw no catalog rails at all (a failed build, and none to
+    // build): there is nothing to interleave them with, and they are still worth
+    // drawing, because they read local history and the local schedule. Base drew
+    // them at column scope above both of those cards.
+    fun androidx.compose.foundation.lazy.LazyListScope.builtinRailItems() {
+        val builtins =
+            mergedEntries.mapNotNull {
+                it as? com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail
+            }
+        builtins.forEachIndexed { index, entry ->
+            item(key = "builtin|" + entry.key.removePrefix("builtin:")) {
+                drawBuiltinRail(
+                    entry.key,
+                    com.kennyb1201.kbstream.ui.kb.isTopRailEntry(index)
+                )
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -3172,11 +3304,14 @@ fun HomeScreen(
 
 
                     when {
-                        // Full-screen spinner only when there is nothing to show
+                        // Full-screen spinner only when there is NOTHING to show
                         // yet: a rebuild with existing rails keeps them visible
                         // (rails stream in progressively on top of the old list
-                        // instead of flashing a loader on every refresh).
-                        isLoading && rails.isEmpty() -> {
+                        // instead of flashing a loader on every refresh), and a
+                        // built-in row or a local collection counts as something
+                        // - those are drawn by the branches below, where this
+                        // card would otherwise have pushed them off the screen.
+                        isLoading && mergedEntries.isEmpty() -> {
                             item(key = "loading") {
                                 // The shared status card -- the same plate the
                                 // browse screens show while they load -- rather
@@ -3198,6 +3333,11 @@ fun HomeScreen(
                         // line instead of the card whose entire point is that
                         // pressing OK retries -- see the empty branch.
                         error != null && rails.isNotEmpty() -> {
+                            // The built-in rows still draw: this line is status
+                            // about the CATALOG list, and they are not catalog
+                            // rows (see builtinRailItems). Base drew them here
+                            // too, above this line.
+                            builtinRailItems()
                             item(key = "error") {
                                 Text(
                                     text =
@@ -3216,7 +3356,17 @@ fun HomeScreen(
                             }
                         }
 
-                        rails.isEmpty() -> {
+                        // No catalog rails, and no load in flight: the retry
+                        // card, with the rows that do not come from a catalog
+                        // drawn first (see drawBuiltinRail) - which is where they
+                        // used to be drawn, above this card, back when they sat at
+                        // column scope. Without that, a profile with history but
+                        // no add-ons saw only this card: the rail column below is
+                        // reached only when a catalog rail exists, so the
+                        // built-ins were dropped from the one state they matter
+                        // most in.
+                        rails.isEmpty() && !isLoading -> {
+                            builtinRailItems()
                             item(key = "empty") {
                                 // Clicking (OK on the remote) retries the
                                 // rail build immediately - no need to leave
@@ -3234,6 +3384,26 @@ fun HomeScreen(
                                             "No catalogs available. Press OK to retry, or add an addon to get started."
                                     )
                                 }
+                            }
+                        }
+
+                        // Rails exist and nothing is loading, but the merged
+                        // order came back empty: every rail the loader produced
+                        // has been hidden by the viewer (HD-P2-5). The empty-
+                        // catalog card above cannot catch this - it keys on the
+                        // CATALOG list, and the rails are right there, just not
+                        // visible - so without this branch Home was the hero and
+                        // nothing else: no hint, and no way back to the manager
+                        // that did the hiding.
+                        mergedEntries.isEmpty() && !isLoading -> {
+                            item(key = "all-hidden") {
+                                KBStatusMessage(
+                                    message = "All rails are hidden.",
+                                    icon = KB_STATUS_ICON_EMPTY,
+                                    onRetry = onManageRails,
+                                    actionLabel = "Manage rails",
+                                    modifier = Modifier.fillParentMaxSize()
+                                )
                             }
                         }
 
@@ -3267,71 +3437,19 @@ fun HomeScreen(
                                             )
                                     }
                                 }
-                            ) { _, entry ->
+                            ) { entryIndex, entry ->
                                 when (val e = entry) {
                                     // A built-in rail: this app's own rows, drawn
                                     // where the arrangement put them rather than
-                                    // in a hardcoded slot above the catalogs.
+                                    // in a hardcoded slot above the catalogs - and
+                                    // the one drawn first owns the top-bar hook
+                                    // (see the merged-order note above).
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail ->
-                                        when (e.key) {
-                                            com.kennyb1201.kbstream.data.kb
-                                                .KBHomeOrderPrefs
-                                                .BUILTIN_CONTINUE_WATCHING ->
-                                                BuiltinContinueWatchingRail(
-                                                    cards = upNext,
-                                                    title = builtinRailTitle(
-                                                        com.kennyb1201.kbstream.data.kb
-                                                            .KBHomeOrderPrefs
-                                                            .BUILTIN_CONTINUE_WATCHING,
-                                                        "Continue Watching"
-                                                    ),
-                                                    bringIntoViewSpec =
-                                                        railCardsBringIntoViewSpec,
-                                                    onTitleHeight = {
-                                                        railTitleHeightPx = it.toFloat()
-                                                    },
-                                                    onCardFocusRequester = { requester ->
-                                                        lastPosterFocusRequester = requester
-                                                    },
-                                                    onOpenUpNext = { item ->
-                                                        openUpNext(item)
-                                                    },
-                                                    onLongPress = { item ->
-                                                        openContinueWatchingMenu(item)
-                                                    },
-                                                    onSelectHero = { hero, item ->
-                                                        selectContinueWatchingHero(hero, item)
-                                                    },
-                                                    onUpPressed = { requester ->
-                                                        openTopBar(requester)
-                                                    }
-                                                )
-
-                                            else ->
-                                                BuiltinUpcomingRail(
-                                                    episodes = upcomingSchedule,
-                                                    title = builtinRailTitle(
-                                                        com.kennyb1201.kbstream.data.kb
-                                                            .KBHomeOrderPrefs
-                                                            .BUILTIN_UPCOMING_SCHEDULE,
-                                                        "Upcoming"
-                                                    ),
-                                                    bringIntoViewSpec =
-                                                        railCardsBringIntoViewSpec,
-                                                    onTitleHeight = {
-                                                        railTitleHeightPx = it.toFloat()
-                                                    },
-                                                    onOpenDetails = { item ->
-                                                        openUpNext(
-                                                            item,
-                                                            openDetailsOnly = true
-                                                        )
-                                                    },
-                                                    onSelectHero = { meta, item ->
-                                                        selectContinueWatchingHero(meta, item)
-                                                    }
-                                                )
-                                        }
+                                        drawBuiltinRail(
+                                            e.key,
+                                            com.kennyb1201.kbstream.ui.kb
+                                                .isTopRailEntry(entryIndex)
+                                        )
 
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRail ->
                                         com.kennyb1201.kbstream.ui.kb.KBHomeBrowseRail(
@@ -3354,7 +3472,8 @@ fun HomeScreen(
                                                 focusedFolder = null
                                                 focusedContinueWatchingItem = null
                                                 focusedBrowseShortcut = shortcut
-                                            }
+                                            },
+                                            onUpPressed = topRailUpHook(entryIndex)
                                         )
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
                                         KBHomeCollectionRail(
@@ -3365,11 +3484,11 @@ fun HomeScreen(
                                                 focusedFolder = folder
                                                 focusedContinueWatchingItem = null
                                                 focusedBrowseShortcut = null
-                                            }
+                                            },
+                                            onUpPressed = topRailUpHook(entryIndex)
                                         )
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail -> {
                                         val rail = e.rail
-                                        val railIndex = e.sourceIndex
 
                                         Column(
                                             modifier = Modifier.padding(
@@ -3442,9 +3561,11 @@ fun HomeScreen(
                                                             meta.type
                                                         ) in partialWatchedKeys
 
-                                                val isFirstRailFirstRow =
-                                                    railIndex == firstDisplayedRailSourceIndex &&
-                                                        firstRailNeedsUpHook
+                                                // The rail drawn first owns the
+                                                // top-bar hook (see the merged-
+                                                // order note above).
+                                                val railUpHook =
+                                                    topRailUpHook(entryIndex)
 
                                                 val cardWidth =
                                                     if (landscapeCards) {
@@ -3480,21 +3601,14 @@ fun HomeScreen(
                                                         }
                                                     }
                                                     .then(
-                                                        if (isFirstRailFirstRow) {
-                                                            Modifier.onPreviewKeyEvent { event ->
-                                                                if (
-                                                                    event.type == KeyEventType.KeyDown &&
-                                                                    event.key == Key.DirectionUp
-                                                                ) {
-                                                                    openTopBar(requester)
-                                                                    true
-                                                                } else {
-                                                                    false
-                                                                }
-                                                            }
-                                                        } else {
-                                                            Modifier
-                                                        }
+                                                        // Only the rail drawn
+                                                        // first consumes D-pad Up
+                                                        // (see the merged-order
+                                                        // note above).
+                                                        Modifier.homeTopRailUpHook(
+                                                            requester,
+                                                            railUpHook
+                                                        )
                                                     )
 
                                                 Box(
@@ -3642,6 +3756,13 @@ fun HomeScreen(
 
         // Long-press menu for Continue Watching cards.
         continueWatchingMenu?.let { menuItem ->
+            // The card's own rule, so the menu cannot disagree with the title the
+            // viewer long-pressed: an episode they have not started is listed
+            // without its name, and this menu's subtitle was appending it
+            // anyway ("S02 · E05 · The Funeral").
+            val hidesMenuEpisodeTitle = rememberHidesEpisodeTitle(
+                inProgress = menuItem.badge == UpNextBadge.CONTINUE_WATCHING
+            )
             PosterContextMenu(
                 title = menuItem.title,
                 // The card is a SHOW, not the episode: hiding it takes the
@@ -3670,13 +3791,15 @@ fun HomeScreen(
                     if (seasonEpisode.isNotBlank()) {
                         append(seasonEpisode)
                     }
-                    menuItem.episodeTitle
-                        ?.trim()
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { episodeName ->
-                            if (isNotEmpty()) append(" · ")
-                            append(episodeName)
-                        }
+                    if (!hidesMenuEpisodeTitle) {
+                        menuItem.episodeTitle
+                            ?.trim()
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { episodeName ->
+                                if (isNotEmpty()) append(" · ")
+                                append(episodeName)
+                            }
+                    }
                 }.ifBlank { null },
                 actions = listOf(
                     PosterContextAction(

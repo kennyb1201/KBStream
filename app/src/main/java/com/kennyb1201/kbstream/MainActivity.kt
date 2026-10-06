@@ -98,6 +98,7 @@ import com.kennyb1201.kbstream.ui.kb.KBFolderScreen
 import com.kennyb1201.kbstream.ui.library.LibraryScreen
 import com.kennyb1201.kbstream.ui.settings.SettingsScreen
 import com.kennyb1201.kbstream.ui.search.SearchScreen
+import com.kennyb1201.kbstream.ui.search.SearchSeed
 import com.kennyb1201.kbstream.ui.search.SearchViewModel
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
 import com.kennyb1201.kbstream.ui.streams.StreamsScreen
@@ -421,9 +422,8 @@ private suspend fun recoveredEpisodeAlreadyWatched(
     } catch (_: Exception) {
         false
     }
-}
+}class MainActivity : ComponentActivity() {
 
-class MainActivity : ComponentActivity() {
 
     // Kids-time accumulation is driven by KidsTimeGuard's own application-level
     // ActivityLifecycleCallbacks, NOT by this Activity's onStart/onStop. The
@@ -447,6 +447,41 @@ class MainActivity : ComponentActivity() {
 
     /** Latched by [observeFirstFrame]: the draw listener records once. */
     private var firstFrameRecorded = false
+
+    /**
+     * A launch intent that arrived while this Activity was already running.
+     *
+     * `android:launchMode="singleTop"` (AndroidManifest) keeps the running
+     * instance and delivers the new intent to [onNewIntent] instead of
+     * re-creating the activity — and the platform's [android.app.Activity.onNewIntent]
+     * does nothing at all by default. Deep-link routing lives in the compose
+     * tree, which reads `activity.intent` once, when it first composes, so every
+     * WARM deep link (a TV-launcher Watch Next card, an OS global-search
+     * suggestion, a spoken query, a live-TV reminder tap, a new-episode alert)
+     * brought the app forward and then did nothing. [onNewIntent] publishes the
+     * intent here, and the tree consumes it and routes it through the same
+     * function as the cold launch (see [resolveLaunchIntentRoute]).
+     */
+    private var incomingIntent by mutableStateOf<Intent?>(null)
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // Keep `intent` current too: the cold-launch path reads it, and the
+        // activity is re-created (configuration change, the theme/profile
+        // `recreate()`) after a warm launch — the extras have to survive that.
+        setIntent(intent)
+        incomingIntent = intent
+    }
+
+    /**
+     * Hands the pending warm-launch intent to the compose tree, exactly once.
+     *
+     * Cleared on read rather than kept: a deep link is a handoff, not state, so
+     * nothing lingers to re-fire if [AppRoot] re-enters composition (the
+     * cold-launch effect runs once per activity; this one is keyed on the intent
+     * it carries).
+     */
+    fun consumeIncomingIntent(): Intent? = incomingIntent.also { incomingIntent = null }
 
     // androidx.core marks ComponentActivity.dispatchKeyEvent @RestrictedApi
     // ("same library group"), which an app cannot satisfy however it calls it.
@@ -562,7 +597,10 @@ class MainActivity : ComponentActivity() {
                         // would otherwise skip a host placed inside AppRoot.
                         val kbFeedback = rememberKBFeedbackState()
                         CompositionLocalProvider(LocalKBFeedback provides kbFeedback) {
-                            AppRoot()
+                            AppRoot(
+                                incomingIntent = incomingIntent,
+                                onIncomingIntentConsumed = { consumeIncomingIntent() }
+                            )
                         }
                         KBFeedbackHost(state = kbFeedback)
                     }
@@ -671,7 +709,16 @@ private fun HeroTransitionHost(
 }
 
 @Composable
-fun AppRoot() {
+fun AppRoot(
+    /**
+     * A deep link delivered while this activity was already running (see
+     * [MainActivity.onNewIntent]); null on a cold launch, where the same extras
+     * come off `activity.intent` below.
+     */
+    incomingIntent: Intent?,
+    /** Called once [incomingIntent] has been routed, so it cannot re-fire. */
+    onIncomingIntentConsumed: () -> Unit
+) {
 
     // Persisted across process death: Android can kill a backgrounded TV app,
     // and without a Saver the app would come back on Home instead of the
@@ -845,41 +892,82 @@ fun AppRoot() {
         }
     }
 
-    // Launcher deep links (TV Watch Next cards) open the title's detail
-    // screen, and on startup the TV launcher Continue Watching rail is
-    // reconciled with the in-app watch history (self-healing, cheap).
-    LaunchedEffect(Unit) {
-        val intent = (context as? android.app.Activity)?.intent
+    // One routing table for launch-intent extras, shared by the cold launch
+    // below and by a warm one ([incomingIntent], see MainActivity.onNewIntent).
+    // Living in one place is the fix: the extras used to be read inline in a
+    // one-shot effect, so an intent delivered to an already-running activity was
+    // dropped on the floor.
+    //
+    // Returns true when the intent named a launcher card or a reminder - a
+    // destination the user just asked for, which is what makes the startup-only
+    // dropped-handoff recovery below stand down. A spoken query deliberately
+    // does not (it never did: the recovery could override it).
+    fun applyLaunchIntentExtras(intent: Intent?): Boolean {
         val launcherType = intent?.getStringExtra(TvLauncherPublisher.EXTRA_TYPE)
         val launcherId = intent?.getStringExtra(TvLauncherPublisher.EXTRA_ID)
-        // A live-TV reminder tap: the reminder stores the channel but not its
-        // stream URL, so hand the id to the guide, which resolves it against
-        // the playlist it loads and plays it (see PendingChannelTune).
         val reminderChannelId =
             intent?.getStringExtra(NotificationCenter.EXTRA_REMINDER_CHANNEL_ID)
-        val reminderPending = !reminderChannelId.isNullOrBlank()
-        if (reminderPending) {
-            PendingChannelTune.set(reminderChannelId)
-            screen = Screen.Guide
-        }
-        if (!launcherType.isNullOrBlank() && !launcherId.isNullOrBlank()) {
-            screen = Screen.Detail(
-                if (launcherType == "tv") "series" else launcherType,
-                launcherId,
-                returnTo = Screen.Home
+        val spokenQuery = intent?.getStringExtra(SearchSeed.EXTRA_QUERY)
+        when (
+            val route = resolveLaunchIntentRoute(
+                launcherType = launcherType,
+                launcherId = launcherId,
+                reminderChannelId = reminderChannelId,
+                spokenQuery = spokenQuery
             )
-        }
+        ) {
+            is LaunchIntentRoute.Channel -> {
+                // A live-TV reminder tap: the reminder stores the channel but
+                // not its stream URL, so hand the id to the guide, which
+                // resolves it against the playlist it loads and plays it (see
+                // PendingChannelTune).
+                PendingChannelTune.set(route.channelId)
+                screen = Screen.Guide
+            }
 
-        // Voice / system search (see VoiceSearchActivity): land on Search with
-        // the spoken query already submitted instead of an empty field. The
-        // seed is also read by the Search screen itself, which covers the warm
-        // case where the view model already exists.
-        val spokenQuery =
-            intent?.getStringExtra(com.kennyb1201.kbstream.ui.search.SearchSeed.EXTRA_QUERY)
-        if (!spokenQuery.isNullOrBlank()) {
-            com.kennyb1201.kbstream.ui.search.SearchSeed.set(spokenQuery)
-            screen = Screen.Search
+            is LaunchIntentRoute.Title -> {
+                // A launcher Watch Next card, or one of the suggestions our own
+                // global-search provider contributes.
+                screen = Screen.Detail(route.type, route.id, returnTo = Screen.Home)
+            }
+
+            is LaunchIntentRoute.Query -> {
+                // Voice / system search (see VoiceSearchActivity): land on
+                // Search with the spoken query already submitted instead of an
+                // empty field. The seed is also read by the Search screen
+                // itself, which covers the warm case where the view model
+                // already exists.
+                SearchSeed.set(route.query)
+                screen = Screen.Search
+            }
+
+            null -> Unit
         }
+        return !reminderChannelId.isNullOrBlank() ||
+            !launcherType.isNullOrBlank() ||
+            !launcherId.isNullOrBlank()
+    }
+
+    // Warm deep links: an intent delivered to the already-running activity.
+    // `singleTop` means the user never sees a re-created activity here, and the
+    // compose tree never re-reads `activity.intent`, so without this the
+    // launcher card / suggestion / voice query / reminder tap only brought the
+    // app forward.
+    LaunchedEffect(incomingIntent) {
+        val intent = incomingIntent ?: return@LaunchedEffect
+        applyLaunchIntentExtras(intent)
+        // Cleared through the activity, so the same intent cannot be routed
+        // again if this shell re-enters composition.
+        onIncomingIntentConsumed()
+    }
+
+    // Cold launch: the same extras off the activity's own intent, plus the
+    // startup-only work - recovering a handoff dropped to process death, and
+    // reconciling the TV launcher's Continue Watching rail with the in-app
+    // watch history (self-healing, cheap).
+    LaunchedEffect(Unit) {
+        val handledByExtras =
+            applyLaunchIntentExtras((context as? android.app.Activity)?.intent)
 
         // Safety net: if the app was killed while a next-episode handoff was
         // pending (process death between the player finishing and this
@@ -887,7 +975,7 @@ fun AppRoot() {
         // instead of silently landing on Home. The pending Detail.target routes
         // through the same one-shot Continue Watching autoplay path. Skipped
         // when a launcher deep link is present - that launch intent wins.
-        if (launcherType.isNullOrBlank() && launcherId.isNullOrBlank() && !reminderPending) {
+        if (!handledByExtras) {
             NextEpisodeResult.restoreIfDropped(context)?.let { pending ->
                 // PendingNext carries the Stremio stream id ("tt123:S:E"), so
                 // the show id is its double-colon prefix; next episodes only
@@ -1091,8 +1179,7 @@ fun AppRoot() {
     // genuinely hand off, and backing out to Home brings the guide back
     // until "Start Browsing" is tapped.
     if (!onboardingComplete && screen is Screen.Home) {
-        OnboardingScreen(
-            onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
+        OnboardingScreen(                onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
             onOpenSimkl = { screen = Screen.Simkl },
             onOpenGuide = { screen = Screen.Guide },
             onFinish = {
@@ -1314,6 +1401,14 @@ fun AppRoot() {
                         addonName = rail.addonName,
                         returnTo = Screen.Home
                     )
+                },
+
+                // "Manage rails" on Home's all-hidden card (HD-P2-5): the
+                // manager is the Add-ons screen's dialog, so navigate there and
+                // leave the one-shot request for it to pick up on arrival.
+                onManageRails = {
+                    com.kennyb1201.kbstream.ui.home.HomeRailManagerRequest.request()
+                    screen = Screen.Addons(returnTo = Screen.Home)
                 }
             )
         }

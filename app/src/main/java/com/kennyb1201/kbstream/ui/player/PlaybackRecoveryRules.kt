@@ -185,4 +185,27 @@ internal object PlaybackRecoveryRules {
         PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS -> true
         else -> false
     }
+
+    /**
+     * True when the failure is evidence about the LINK itself, as opposed to
+     * what this box made of it.
+     *
+     * This is the gate the played-link cache reads before retiring a cached
+     * debrid entry (PB-P2-2). A cached link is only worth forgetting when the
+     * failure says the link is dead - the server refused it, or answered with
+     * something that is not a stream. A decoder failure, a container the box
+     * cannot open, an unsupported track: those say something about THIS DEVICE,
+     * and forgetting on them discarded a link that was alive and made the next
+     * replay re-resolve for nothing. The TTL remains the backstop for a dead
+     * link that fails in some other way.
+     *
+     * [isUnopenableSource] plus the status/content-type cases: a debrid link
+     * past its expiry answers 403/410 (a bad HTTP status) or redirects to an
+     * HTML error page (an invalid content type) - the two ways a dead link is
+     * actually reported.
+     */
+    fun isLinkFailure(error: PlaybackException): Boolean = when (error.errorCode) {
+        PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE -> true
+        else -> isUnopenableSource(error)
+    }
 }

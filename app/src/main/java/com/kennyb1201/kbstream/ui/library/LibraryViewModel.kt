@@ -263,6 +263,14 @@ class LibraryViewModel(
                         tmdbId = item.tmdbId
                     )
                     canonicalLocal = LocalLibraryStore.myList(appContext)
+                    // The mirror drops the same title from the remote watchlist,
+                    // so that canonical must lose it too: recomputeAll rebuilds
+                    // from BOTH, and a stale one keeps the removed row on screen
+                    // (LS-P2-12).
+                    val removedKey = LocalLibraryStore.dedupeKey(item)
+                    canonicalWatchlist = canonicalWatchlist.filter {
+                        LocalLibraryStore.dedupeKey(it) != removedKey
+                    }
                     recomputeAll()
                 }
 
@@ -291,6 +299,10 @@ class LibraryViewModel(
                     canonicalWatchlist = canonicalWatchlist.filter {
                         LocalLibraryStore.dedupeKey(it) != key
                     }
+                    // removeFromLibrary also clears the LOCAL twin, so refresh
+                    // that canonical too - otherwise the stale copy keeps the
+                    // removed row visible (LS-P2-12).
+                    canonicalLocal = LocalLibraryStore.myList(appContext)
                     recomputeAll()
                 }
 
@@ -411,7 +423,13 @@ class LibraryViewModel(
             // local rows (and localListFlatCache) were already published
             // above; only the remote halves are new here.
             canonicalWatchlist = watchlistMerged
-            canonicalListItems = emptyList()
+            // Keep the OPEN personal list's rows: refresh used to blank them
+            // here and never reload, so the items pane went empty until the
+            // list was reselected (see LS-P2-17). Re-derived on THIS refresh's
+            // request version, so it cannot race the list loader.
+            canonicalListItems = _uiState.value.selectedList
+                ?.let { fetchListItems(it) }
+                ?: emptyList()
             canonicalAll = kidsFiltered(
                 mergeAllSources(listOf(localItems, watchlistMerged, localListItems))
             )
@@ -455,36 +473,44 @@ class LibraryViewModel(
     }
 
     private fun loadListItems(list: LibraryList) {
-        val version = requestVersion
+        // Increment, do not just read: switching lists A -> B quickly left both
+        // loads on ONE version, so if A's slower fetch landed last it overwrote
+        // B's pane (see LS-P2-1). refresh() bumps the version the same way.
+        val version = ++requestVersion
         viewModelScope.launch {
-            val appContext = getApplication<Application>()
-            val items: List<LibraryItem> = if (list.id < 0) {
-                LocalLibraryStore.listItems(appContext, list.id)
-            } else {
-                val entries = runCatchingCancellable {
-                    MdbListClient.getListItems(appContext, list.id)
-                }.onFailure {
-                    Log.w(TAG, "MDBList list items fetch failed: ${it.message}")
-                }.getOrDefault(emptyList())
-                entries.map { entry ->
-                    LibraryItem(
-                        source = LibrarySource.MDBLIST_LIST,
-                        mediaType = entry.mediaType,
-                        title = entry.title ?: "Untitled",
-                        year = entry.year,
-                        posterUrl = entry.poster,
-                        imdbId = entry.imdbId,
-                        tmdbId = entry.tmdbId,
-                        listId = list.id,
-                        listName = list.name
-                    )
-                }
-            }
-
+            val items = fetchListItems(list)
             if (version != requestVersion) return@launch
             canonicalListItems = items
             pushDisplay()
             enrich(items, version)
+        }
+    }
+
+    /**
+     * The rows of [list]: local lists from disk, a personal MDBList list from
+     * the tracker. Shared so a refresh can re-derive the open list on its own
+     * request version instead of blanking it.
+     */
+    private suspend fun fetchListItems(list: LibraryList): List<LibraryItem> {
+        val appContext = getApplication<Application>()
+        if (list.id < 0) return LocalLibraryStore.listItems(appContext, list.id)
+        val entries = runCatchingCancellable {
+            MdbListClient.getListItems(appContext, list.id)
+        }.onFailure {
+            Log.w(TAG, "MDBList list items fetch failed: ${it.message}")
+        }.getOrDefault(emptyList())
+        return entries.map { entry ->
+            LibraryItem(
+                source = LibrarySource.MDBLIST_LIST,
+                mediaType = entry.mediaType,
+                title = entry.title ?: "Untitled",
+                year = entry.year,
+                posterUrl = entry.poster,
+                imdbId = entry.imdbId,
+                tmdbId = entry.tmdbId,
+                listId = list.id,
+                listName = list.name
+            )
         }
     }
 
@@ -498,6 +524,29 @@ class LibraryViewModel(
         if (items.isEmpty()) return
         viewModelScope.launch {
             val appContext = getApplication<Application>()
+
+            // Warm the watched cache for THIS batch before the per-row lookup:
+            // isWatchedCached reads memory only, so a first Library open - before
+            // Home or a detail screen had warmed it - reported every row as
+            // unwatched and drew no badges (LS-P2-18).
+            val watchedPreload = items
+                .mapNotNull { item ->
+                    val type = when (item.mediaType.lowercase()) {
+                        "tv", "series" -> "series"
+                        else -> "movie"
+                    }
+                    val id = item.imdbId ?: item.tmdbId?.let { "tmdb:$it" }
+                    id?.let { it to type }
+                }
+                .distinct()
+            if (watchedPreload.isNotEmpty()) {
+                runCatchingCancellable {
+                    watchedRepository.preloadAndGetWatchedKeys(watchedPreload)
+                }
+                runCatchingCancellable {
+                    watchedRepository.preloadAndGetPartiallyWatchedKeys(watchedPreload)
+                }
+            }
 
             data class Resolved(
                 val key: String,
@@ -715,17 +764,16 @@ class LibraryViewModel(
     private fun mergeAllSources(sources: List<List<LibraryItem>>): List<LibraryItem> =
         mergeById(sources.flatten())
 
-    /** Drops duplicate titles across trackers, Simkl winning over MDBList. */
-    private fun mergeById(items: List<LibraryItem>): List<LibraryItem> {
-        val seen = LinkedHashMap<String, LibraryItem>()
-        items.forEach { item ->
-            val key = LocalLibraryStore.dedupeKey(item)
-            if (!seen.containsKey(key)) {
-                seen[key] = item
-            }
-        }
-        return seen.values.toList()
-    }
+    /**
+     * Drops duplicate titles across trackers, Simkl winning over MDBList.
+     *
+     * Delegates to [mergeLibraryItemsById], which matches on title IDENTITY
+     * rather than the exact id triple: two trackers can name the same title
+     * with different id flavors (an IMDB id from Simkl, a TMDB id from
+     * MDBList), which the exact triple would draw as two rows.
+     */
+    private fun mergeById(items: List<LibraryItem>): List<LibraryItem> =
+        mergeLibraryItemsById(items)
 
     private fun sortItems(
         items: List<LibraryItem>,
@@ -764,6 +812,51 @@ internal fun sortLibraryItems(
     LibrarySort.RATING -> items.sortedWith(
         compareByDescending { ratings[LocalLibraryStore.dedupeKey(it)] ?: 0.0 }
     )
+}
+
+/**
+ * Cross-source merge for the ALL view: the first occurrence of a title wins
+ * (input order is the source priority — local rows before remote ones, Simkl
+ * before MDBList), de-duped by title IDENTITY rather than by the exact id
+ * triple [LocalLibraryStore.dedupeKey] builds.
+ *
+ * The exact triple was the bug: two trackers can hold the SAME title with
+ * different id flavors — Simkl resolves an IMDB id, MDBList a TMDB one — so
+ * their keys differ and the title drew twice. Matching on EITHER shared id is
+ * the rule the long-press menu already uses (see [LocalLibraryStore.matches]).
+ * A twin's extra id is folded onto the kept row, so a third flavor still
+ * resolves to it. Extracted alongside [sortLibraryItems] for testability.
+ */
+internal fun mergeLibraryItemsById(items: List<LibraryItem>): List<LibraryItem> {
+    // The kept row by its own dedupe key, plus the two id indexes that point
+    // back at it ("type:imdb" / "type:tmdb").
+    val kept = LinkedHashMap<String, LibraryItem>()
+    val byImdb = HashMap<String, String>()
+    val byTmdb = HashMap<String, String>()
+    items.forEach { item ->
+        val type = LocalLibraryStore.normalizedType(item.mediaType)
+        val imdb = item.imdbId
+            ?.trim()
+            ?.removePrefix("tmdb:")
+            ?.takeIf { it.isNotBlank() }
+        val tmdb = item.tmdbId?.takeIf { it > 0 }
+        val imdbKey = imdb?.let { "$type:${it.lowercase()}" }
+        val tmdbKey = tmdb?.let { "$type:$it" }
+        val existingKey = imdbKey?.let { byImdb[it] } ?: tmdbKey?.let { byTmdb[it] }
+        if (existingKey != null) {
+            // Fold the ids this twin adds onto the kept row's indexes, so a
+            // later single-flavor copy still resolves to it.
+            imdbKey?.let { byImdb[it] = existingKey }
+            tmdbKey?.let { byTmdb[it] = existingKey }
+            return@forEach
+        }
+        val key = LocalLibraryStore.dedupeKey(item)
+        if (kept.containsKey(key)) return@forEach
+        kept[key] = item
+        imdbKey?.let { byImdb[it] = key }
+        tmdbKey?.let { byTmdb[it] = key }
+    }
+    return kept.values.toList()
 }
 
 /**

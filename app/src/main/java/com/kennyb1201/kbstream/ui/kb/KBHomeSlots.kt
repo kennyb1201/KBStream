@@ -25,6 +25,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -426,11 +431,53 @@ private fun folderTileSize(tileShape: String?): FolderTileSize = when (tileShape
  * ModernPayload.CollectionFolder hero behavior. Clicking a folder opens
  * the folder screen with the collection's layout mode.
  */
+/**
+ * The D-pad Up -> top bar hook for the rail drawn FIRST on Home.
+ *
+ * The hero spacer above the rails is inert, so the top bar is unreachable
+ * except through a rail that consumes Up and opens it - and it has to be
+ * exactly ONE rail, the one drawn first, or Up from a rail with another rail
+ * above it jumps over that rail instead of moving focus to it. Home decides
+ * which rail that is from the merged arrangement (see the top-rail note in
+ * HomeScreen) and passes [openTopBar] only to that one; every other rail passes
+ * null and leaves Up to the focus system, which moves focus up normally.
+ *
+ * Here rather than in HomeScreen because every rail kind that can own the hook
+ * has to apply the same modifier, and two of them (the Browse and Collection
+ * rows) live in this file.
+ */
+/**
+ * True for the rail drawn FIRST in the merged Home order, and for nothing else.
+ *
+ * Its own function because the rule is all that decides which rail can open the
+ * top bar, so it is the thing worth pinning with a test rather than the call
+ * sites that apply it (see [homeTopRailUpHook]).
+ */
+internal fun isTopRailEntry(entryIndex: Int): Boolean = entryIndex == 0
+
+internal fun Modifier.homeTopRailUpHook(
+    requester: FocusRequester,
+    openTopBar: ((FocusRequester) -> Unit)?
+): Modifier = if (openTopBar == null) {
+    this
+} else {
+    this.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionUp) {
+            openTopBar(requester)
+            true
+        } else {
+            false
+        }
+    }
+}
+
 @Composable
 fun KBHomeCollectionRail(
     collection: KBCollectionProfile,
     onOpenFolder: (String) -> Unit,
-    onFolderFocused: ((KBFolder) -> Unit)? = null
+    onFolderFocused: ((KBFolder) -> Unit)? = null,
+    // Non-null only for the rail Home draws first (see [homeTopRailUpHook]).
+    onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
     Column(
         modifier = Modifier.padding(
@@ -467,11 +514,15 @@ fun KBHomeCollectionRail(
                 key = { it.id ?: it.title }
             ) { folder ->
                 val folderId = folder.id
+                val requester = remember { FocusRequester() }
                 if (folderId != null) {
                     CollectionFolderTile(
                         folder = folder,
                         onClick = { onOpenFolder(folderId) },
-                        onFocus = onFolderFocused?.let { callback -> { callback(folder) } }
+                        onFocus = onFolderFocused?.let { callback -> { callback(folder) } },
+                        modifier = Modifier
+                            .focusRequester(requester)
+                            .homeTopRailUpHook(requester, onUpPressed)
                     )
                 }
             }
@@ -483,7 +534,8 @@ fun KBHomeCollectionRail(
 private fun CollectionFolderTile(
     folder: KBFolder,
     onClick: () -> Unit,
-    onFocus: (() -> Unit)? = null
+    onFocus: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
     val tileSize = folderTileSize(folder.tileShape)
     var isFocused by remember { mutableStateOf(false) }
@@ -494,7 +546,7 @@ private fun CollectionFolderTile(
 
     KBCard(
         onClick = onClick,
-        modifier = focusModifier
+        modifier = focusModifier.then(modifier)
     ) {
         Box(
             modifier = Modifier
@@ -628,6 +680,8 @@ fun KBHomeBrowseRail(
     // menu hand focus back to the tile it came from - the same contract the
     // catalog rails' cards have (see HomeScreen's lastPosterFocusRequester).
     onShortcutLongPress: ((BrowseHomeShortcut, FocusRequester) -> Unit)? = null,
+    // Non-null only for the rail Home draws first (see [homeTopRailUpHook]).
+    onUpPressed: ((FocusRequester) -> Unit)? = null,
     // The rail's own name ("Genres & Tags", "Studios", ...). Defaulted to the
     // old shared row's word so a caller that predates the split still draws
     // something sensible.
@@ -671,7 +725,9 @@ fun KBHomeBrowseRail(
                     onFocus = onShortcutFocused?.let { callback ->
                         { callback(shortcut) }
                     },
-                    modifier = Modifier.focusRequester(requester)
+                    modifier = Modifier
+                        .focusRequester(requester)
+                        .homeTopRailUpHook(requester, onUpPressed)
                 )
             }
         }

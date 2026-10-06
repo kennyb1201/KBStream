@@ -1497,8 +1497,14 @@ class TmdbRepository private constructor(context: Context) :
                 throw cancellation
             }
 
-        detailCache[key] = now to result
+        // A MISS is deliberately not cached, here exactly as in
+        // fetchEnrichedMetaCached above: one transient failure (500 / 429 /
+        // timeout) used to pin a null in the 12h memory cache, after which every
+        // caller - Detail, Home, the watched-state preload - was told this title
+        // has no metadata, with no way to retry inside the TTL. Only the disk
+        // write was guarded; the memory map was not.
         if (result != null) {
+            detailCache[key] = now to result
             cacheJson(diskKey, detailJsonAdapter.toJson(result), now)
         }
         // Complete before dropping the in-flight marker, so a caller that
@@ -1891,8 +1897,13 @@ class TmdbRepository private constructor(context: Context) :
      */
     fun isKidsModeStrict(): Boolean = kidsMaxAge() != null && kidsMaxAge() != KidsMode.CEIL_PG13
 
-    /** Certification check for one (tmdbId, mediaType) pair under the active ceiling. */
-    private suspend fun kidsAllowed(tmdbId: Int, mediaType: String): Boolean {
+    /**
+     * Certification check for one (tmdbId, mediaType) pair under the active
+     * ceiling. Internal so a caller that resolves a SINGLE id rather than
+     * filtering a list - a tapped global-search suggestion's deep link - can
+     * apply the same ceiling (see [kidsFilterMetas]).
+     */
+    internal suspend fun kidsAllowed(tmdbId: Int, mediaType: String): Boolean {
         val ceiling = kidsMaxAge() ?: return true
         val isSeries = mediaType.equals("series", ignoreCase = true) ||
             mediaType.equals("tv", ignoreCase = true)

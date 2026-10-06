@@ -210,4 +210,62 @@ class PlaybackRecoveryRulesTest {
             )
         )
     }
+
+    // --- isLinkFailure ---
+    //
+    // The gate the played-link cache reads before retiring an entry (PB-P2-2):
+    // the failure has to be about the LINK, not about what this box made of it.
+
+    @Test
+    fun `a refused or expired link is a link failure`() {
+        // The canonical dead-debrid signature: 403/410 from the host.
+        assertTrue(
+            PlaybackRecoveryRules.isLinkFailure(
+                playbackError(PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS)
+            )
+        )
+        // And the other shape of the same thing: the redirect landed on an HTML
+        // error page instead of media.
+        assertTrue(
+            PlaybackRecoveryRules.isLinkFailure(
+                playbackError(PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE)
+            )
+        )
+        // The host was unreachable: still nothing about the box.
+        assertTrue(
+            PlaybackRecoveryRules.isLinkFailure(
+                playbackError(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED)
+            )
+        )
+    }
+
+    @Test
+    fun `a decoder failure is not a link failure`() {
+        // THIS is the bug PB-P2-2 covers: the box could not decode the stream,
+        // which says nothing about whether the link is alive, so the cached
+        // entry must survive for the next replay.
+        val codes = listOf(
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED
+        )
+        codes.forEach { code ->
+            assertFalse("code $code must not retire a cached link", PlaybackRecoveryRules.isLinkFailure(playbackError(code)))
+        }
+    }
+
+    @Test
+    fun `a container or track failure is not a link failure`() {
+        val codes = listOf(
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_TIMEOUT,
+            PlaybackException.ERROR_CODE_UNSPECIFIED
+        )
+        codes.forEach { code ->
+            assertFalse("code $code must not retire a cached link", PlaybackRecoveryRules.isLinkFailure(playbackError(code)))
+        }
+    }
 }
