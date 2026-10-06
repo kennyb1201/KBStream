@@ -127,6 +127,27 @@ class GuideChipVisibilityContractTest {
         )
     }
 
+    @Test
+    fun `a group change from the list cannot send focus up to the chips`() {
+        val src = source()
+        val start = src.indexOf("state = channelListState")
+        assertTrue("the channel list must exist", start >= 0)
+        val end = src.indexOf(") {itemsIndexed(", start)
+        assertTrue("the channel list's item block must exist", end > start)
+        val container = src.substring(start, end)
+        assertTrue(
+            "the list must be a focus group",
+            container.contains(".focusGroup()")
+        )
+        assertTrue(
+            "and must restore focus inside itself: a Left/Right group change " +
+                "swaps every keyed row, and without a restorer the lost focus " +
+                "escaped into the chips, whose onFocus then reset selectedGroup " +
+                "back to the focused chip (the reported snap to All)",
+            container.contains(".focusRestorer()")
+        )
+    }
+
     private companion object {
         const val GUIDE = "com/kennyb1201/kbstream/ui/iptv/GuideScreen.kt"
     }

@@ -434,7 +434,13 @@ data class TmdbDiscoverItem(
     // it - see hasSomethingToDraw in TmdbRepository. Both ride on every
     // discover response, so parsing them costs nothing extra.
     val overview: String? = null,
-    @Json(name = "vote_count") val voteCount: Int? = null
+    @Json(name = "vote_count") val voteCount: Int? = null,
+    // Original language of the title. Every TMDB list endpoint carries it, so
+    // it costs nothing to parse and it is what lets the guest rails' English
+    // filter reach the FEEDS (/tv/on_the_air, /trending/*/week) - those have
+    // no server-side with_original_language parameter, so they can only be
+    // filtered on this side (see TmdbRepository.browseLanguage).
+    @Json(name = "original_language") val originalLanguage: String? = null
 )
 
 @JsonClass(generateAdapter = true)

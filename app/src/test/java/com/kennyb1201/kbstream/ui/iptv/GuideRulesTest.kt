@@ -399,4 +399,26 @@ class GuideRulesTest {
         assertEquals("News", state.selectedGroup)
         assertFalse(state.moveFocusToChannelList)
     }
+
+    @Test
+    fun `a program hit key is unique across overlapping EPG entries`() {
+        // Same channel + same start, different end: two EPG sources for one
+        // channel. The old channel|start key collided and Compose threw
+        // "Key ... was already used" (Sentry ANDROID-S). An exact duplicate row
+        // is separated only by the index.
+        val keys = listOf(
+            guideProgramHitKey("ch1", 1000L, 2000L, 0),
+            guideProgramHitKey("ch1", 1000L, 3000L, 1),
+            guideProgramHitKey("ch1", 1000L, 2000L, 2)
+        )
+        assertEquals(keys.size, keys.toSet().size)
+    }
+
+    @Test
+    fun `a program hit key carries the channel, window and index`() {
+        assertEquals(
+            "program|ch9|1000|2000|7",
+            guideProgramHitKey("ch9", 1000L, 2000L, 7)
+        )
+    }
 }

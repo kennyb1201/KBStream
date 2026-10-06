@@ -76,6 +76,7 @@ import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfileEditScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
+import com.kennyb1201.kbstream.ui.home.upNextPlayerNameOrUnknown
 import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.notifications.NotificationCenter
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
@@ -2043,7 +2044,15 @@ fun AppRoot(
                         contentType = current.parentType,
                         streamId = next.streamId,
                         title = next.title,
-                        displayName = current.itemName,
+                        // Belt-and-braces on the handoff: the session's own name
+                        // can be an internal id when its card had none (see
+                        // upNextPlayerDisplayName on the sending side). Copying
+                        // it raw is what carried the id into every episode
+                        // after this one.
+                        displayName = upNextPlayerNameOrUnknown(
+                            current.itemName,
+                            !(current.backdropUrl ?: current.itemPoster).isNullOrBlank()
+                        ),
                         season = next.season,
                         episode = next.episode,
                         resumePositionMs = 0L,
@@ -2109,7 +2118,12 @@ fun AppRoot(
                                 contentType = current.parentType,
                                 streamId = nextStreamId.orEmpty(),
                                 title = nextTitle.orEmpty(),
-                                displayName = current.itemName,
+                                // Same handoff guard as the persisted-next path
+                                // above.
+                                displayName = upNextPlayerNameOrUnknown(
+                                    current.itemName,
+                                    !(current.backdropUrl ?: current.itemPoster).isNullOrBlank()
+                                ),
                                 season = nextSeason,
                                 episode = nextEpisode,
                                 resumePositionMs = 0L,
@@ -2282,7 +2296,14 @@ fun AppRoot(
                                         episode = current.episode,
                                         episodeTitle = current.episodeTitle
                                     ),
-                                    displayName = current.itemName,
+                                    // The picker restore carries the session's
+                                    // name back, so it needs the same guard: a
+                                    // name that arrived here as an id must not
+                                    // ride out again.
+                                    displayName = upNextPlayerNameOrUnknown(
+                                        current.itemName,
+                                        !(current.backdropUrl ?: current.itemPoster).isNullOrBlank()
+                                    ),
                                     season = current.season,
                                     episode = current.episode,
                                     resumePositionMs = current.startPositionMs,
@@ -2477,8 +2498,10 @@ fun AppRoot(
                     pending.resumePositionMs > 0L
                 )
     }
-    if (detailAutoPlay != null) {
-        AutoPlayLoadSplash(
+    val pending = pendingAutoPlay
+    val playerSplash = current as? Screen.Player
+    when {
+        detailAutoPlay != null -> AutoPlayLoadSplash(
             backdropUrl = detailAutoPlay.itemBackdrop,
             // The logo Detail has resolved for this title, so the cover splash
             // shows the pulsing clearlogo too - not just the plain name it had
@@ -2489,15 +2512,29 @@ fun AppRoot(
                 .ifBlank { detailAutoPlay.id },
             subtitle = "Finding sources…"
         )
-    } else {
-        pendingAutoPlay?.let { pending ->
-            AutoPlayLoadSplash(
-                backdropUrl = pending.backdropUrl,
-                clearLogoUrl = pending.clearLogoUrl,
-                title = pending.target.displayName,
-                subtitle = "Finding sources…"
-            )
-        }
+
+        pending != null -> AutoPlayLoadSplash(
+            backdropUrl = pending.backdropUrl,
+            clearLogoUrl = pending.clearLogoUrl,
+            title = pending.target.displayName,
+            subtitle = "Finding sources…"
+        )
+
+        // The PLAYER screen composes nothing visible of its own (it only
+        // starts the player Activity). Left bare, the cover dropped here and
+        // the window showed its own background for a frame - the black flash
+        // between the "Finding sources" overlay and the player's own first
+        // load, which is what made it read as two splashes. Painting the SAME
+        // cover from the player screen's own art/logo keeps it continuous
+        // until the player Activity is on top. No "Finding sources..." line:
+        // the sources ARE found by the time we hand off, and this matches the
+        // player's own splash, which never carries one.
+        playerSplash != null -> AutoPlayLoadSplash(
+            backdropUrl = playerSplash.backdropUrl,
+            clearLogoUrl = playerSplash.clearLogoUrl,
+            title = playerSplash.itemName,
+            subtitle = null
+        )
     }
     }
     } // closes AnimatedContent( targetState = screen ) { current -> ... }

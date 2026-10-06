@@ -59,6 +59,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
@@ -1071,6 +1072,20 @@ Spacer(modifier = Modifier.height(14.dp))
                                         .width(348.dp)
                                         .fillMaxHeight()
                                         .focusGroup()
+                                        // A Left/Right group change swaps the
+                                        // WHOLE list (every row is keyed, so a
+                                        // new group means new keys and the
+                                        // focused row leaves the composition).
+                                        // Without a restorer that lost focus
+                                        // escaped up into the group chips, and
+                                        // a chip's onFocus then overwrote
+                                        // selectedGroup - the group snapped
+                                        // back to "All" after a few such
+                                        // presses. The restorer keeps focus in
+                                        // the list (last-viewed row, else the
+                                        // first), so the chip row is never
+                                        // touched by a group change made here.
+                                        .focusRestorer()
                                 ) {itemsIndexed(
     items = groupedChannels,
     key = { _, item -> channelKey(item) }
@@ -2983,8 +2998,21 @@ private fun ChannelSearchDialog(
                 ) {
                     itemsIndexed(
                         items = programHits,
-                        key = { _, hit ->
-                            "program|${hit.item.channel.id}|${hit.program.startUtcMillis}"
+                        // Channel + start alone is NOT unique: a playlist with
+                        // two EPG sources for one channel (or an overlapping
+                        // entry) holds two programmes at the same channel and
+                        // start, and a duplicate LazyColumn key throws
+                        // IllegalArgumentException and takes the whole screen
+                        // down (Sentry ANDROID-S). The end time separates the
+                        // common overlap; the index is the guaranteed
+                        // tiebreaker for an exact duplicate.
+                        key = { index, hit ->
+                            guideProgramHitKey(
+                                channelId = hit.item.channel.id,
+                                startUtcMillis = hit.program.startUtcMillis,
+                                endUtcMillis = hit.program.endUtcMillis,
+                                index = index
+                            )
                         }
                     ) { index, hit ->
                         KBCard(

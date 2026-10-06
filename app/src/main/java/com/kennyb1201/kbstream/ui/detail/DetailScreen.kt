@@ -126,6 +126,8 @@ import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
 import com.kennyb1201.kbstream.ui.components.heroSharedElement
 import com.kennyb1201.kbstream.ui.player.NativePlayerActivity
 import com.kennyb1201.kbstream.ui.player.randomAiredEpisode
+import com.kennyb1201.kbstream.ui.home.UNKNOWN_SHOW_NAME
+import com.kennyb1201.kbstream.ui.home.upNextDisplayTitleOrNull
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.PlayFromBeginningSelection
@@ -436,6 +438,31 @@ private fun IconButtonBody(
         }
     }
 }
+
+/**
+ * The Detail screen's display name, or [UNKNOWN_SHOW_NAME] when there is no
+ * real name to show.
+ *
+ * The screen's meta can carry the internal id as its `name` in three ways: an
+ * unresolved add-on/TMDB merge (`buildMergedMeta`'s `?: id`), a TMDB record
+ * whose `name` and `title` are both missing, and the cold-launch hand-off's
+ * `displayName = showId` placeholder. That name is what this screen prints and
+ * what every StreamsTarget on it copies into `displayName` - which the player
+ * carries as `itemName` and prints as the show title in its Up Next panel. So
+ * each candidate is filtered the way the Continue Watching cards already are
+ * (see [upNextDisplayTitleOrNull]): an internal id is never a name.
+ */
+internal fun detailDisplayName(
+    metaName: String?,
+    tmdbName: String?,
+    tmdbTitle: String?,
+    hasArtwork: Boolean
+): String =
+    listOf(metaName, tmdbName, tmdbTitle)
+        .firstNotNullOfOrNull { candidate ->
+            upNextDisplayTitleOrNull(candidate, hasArtwork)
+        }
+        ?: UNKNOWN_SHOW_NAME
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
 @Composable
@@ -1476,12 +1503,19 @@ fun DetailScreen(
         loadedMeta != null -> {
             val m = loadedMeta
 
+            // The name this screen prints and copies into every play target:
+            // the meta's own name, then TMDB's, with any raw internal id
+            // rejected at each rung (see upNextDisplayTitleOrNull). This
+            // screen is the producer the player's Up Next panel reads its
+            // show title from, so an id that got past here used to surface
+            // there - and ride every autoplay after it.
             val displayName = remember(m, tmdbDetail) {
-                m.name.ifBlank {
-                    tmdbDetail?.name
-                        ?: tmdbDetail?.title
-                        ?: m.name
-                }
+                detailDisplayName(
+                    metaName = m.name,
+                    tmdbName = tmdbDetail?.name,
+                    tmdbTitle = tmdbDetail?.title,
+                    hasArtwork = !m.poster.isNullOrBlank()
+                )
             }
 
             val keywords = remember(tmdbDetail) {

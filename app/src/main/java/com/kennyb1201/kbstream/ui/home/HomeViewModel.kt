@@ -7484,7 +7484,7 @@ private suspend fun calculateEpisodesRemaining(
      *   Airing Now
      *   Trending This Week
      *   Popular Movies / Popular Shows
-     *   Top Rated
+     *   Top Rated Movies / Top Rated Shows
      * "Continue Watching" leads them all and is NOT built here either - it comes
      * from the profile's own history, like every other profile.
      *
@@ -7503,6 +7503,15 @@ private suspend fun calculateEpisodesRemaining(
         landscapeCards: Boolean
     ) {
         val todayIso = java.time.LocalDate.now().toString()
+
+        // English-only browse filter (Settings' switch, on by default). The
+        // guest rows are browse surfaces, so they honour it like every other
+        // discover rail - a guest previously saw every region's top titles
+        // ("a lot of foreign stuff"). The discover rows filter server-side and
+        // then again in the fetch below; the two FEED rows (/tv/on_the_air,
+        // /trending/*/week) have no with_original_language parameter, so that
+        // pass is the only filter they get. Null when the switch is off.
+        val language = tmdbRepository.browseLanguage()
 
         // One row's query. No built-in row is ranked - the ranked rows a guest
         // leads with are the shared Top Today ones from
@@ -7528,7 +7537,10 @@ private suspend fun calculateEpisodesRemaining(
         ) = com.kennyb1201.kbstream.data.kb.KBFilters(
             voteCountGte = voteCountGte,
             releaseDateGte = releaseDateGte,
-            releaseDateLte = releaseDateLte
+            releaseDateLte = releaseDateLte,
+            // Server-side English-only, so a discover row still fills with
+            // real titles instead of being filtered down to a handful here.
+            withOriginalLanguage = language
         )
 
         val specs = listOf(
@@ -7575,9 +7587,21 @@ private suspend fun calculateEpisodesRemaining(
             ),
             Spec(
                 catalogId = "guest_top_rated",
-                title = "Top Rated",
+                title = "Top Rated Movies",
                 mediaType = "movie",
                 railType = "movie",
+                sortBy = "vote_average.desc",
+                filters = filters(voteCountGte = 500)
+            ),
+            // The TV half of the ranking, directly under the movie one. The
+            // id stays "guest_top_rated" for the movies row so a saved rail
+            // arrangement (order/pin/hide, keyed by catalogId) survives the
+            // title change; the show row gets its own id.
+            Spec(
+                catalogId = "guest_top_rated_shows",
+                title = "Top Rated Shows",
+                mediaType = "tv",
+                railType = "series",
                 sortBy = "vote_average.desc",
                 filters = filters(voteCountGte = 500)
             )
@@ -7597,7 +7621,24 @@ private suspend fun calculateEpisodesRemaining(
                                 sortBy = spec.sortBy,
                                 filters = spec.filters
                             )
-                        }.orEmpty().take(spec.limit)
+                        }.orEmpty()
+                            .let { list ->
+                                if (language == null) {
+                                    list
+                                } else {
+                                    // Fails open on a missing language: only a
+                                    // title that positively names a different
+                                    // one is dropped.
+                                    list.filter { item ->
+                                        item.originalLanguage == null ||
+                                            item.originalLanguage.equals(
+                                                language,
+                                                ignoreCase = true
+                                            )
+                                    }
+                                }
+                            }
+                            .take(spec.limit)
 
                         if (items.isEmpty()) return@async null
 

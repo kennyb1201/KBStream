@@ -176,6 +176,25 @@ internal data class ChipFocusState(
 )
 
 /**
+ * LazyColumn key for one program search hit.
+ *
+ * Channel + start alone is NOT unique: a playlist with two EPG sources for one
+ * channel (or an overlapping entry) holds two programmes at the same channel
+ * and start, and a duplicate LazyColumn key throws
+ * `IllegalArgumentException("Key ... was already used")` and takes the whole
+ * screen down - Sentry ANDROID-S, from the guide's PROGRAM search results. The
+ * end time separates the common overlap; [index] is the guaranteed tiebreaker
+ * for an exact duplicate. Pure so [GuideRulesTest] can pin the uniqueness
+ * instead of only the device.
+ */
+internal fun guideProgramHitKey(
+    channelId: String,
+    startUtcMillis: Long,
+    endUtcMillis: Long,
+    index: Int,
+): String = "program|$channelId|$startUtcMillis|$endUtcMillis|$index"
+
+/**
  * The group selection a chip's focus event must produce.
  *
  * Focus always wins: `selectedGroup` follows the focused chip, and a focus

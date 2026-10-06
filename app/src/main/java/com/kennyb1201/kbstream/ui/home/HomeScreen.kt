@@ -3101,7 +3101,18 @@ fun HomeScreen(
                 ?: item.parentId
                 ?: item.id,
             title = targetTitle,
-            displayName = item.title,
+            // The show name that rides itemName into the player and on into the
+            // Up Next panel. The card's title is usually the show name, but when
+            // the source's name was missing and enrichment failed it is the
+            // internal id - and the player used to print that id as the show
+            // title, then carry it through every autoplay after it (see
+            // upNextPlayerDisplayName).
+            displayName = upNextPlayerDisplayName(
+                cardTitle = item.title,
+                showTitle = item.showTitle,
+                composedTitle = targetTitle,
+                hasArtwork = !item.poster.isNullOrBlank()
+            ),
             season = item.season,
             episode = namedEpisode,
             resumePositionMs =

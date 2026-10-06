@@ -17,6 +17,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.lifecycleScope
 import coil3.load
 import com.kennyb1201.kbstream.R
+import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
@@ -857,7 +858,19 @@ class ExternalPlayerActivity : ComponentActivity() {
         pendingNextEpisode = targetEpisode
         pendingNextEpisodeName = null
 
-        nextUpShowTitle?.text = itemName
+        // The session's name can be an internal id when the card that launched
+        // it had no name of its own and enrichment failed (see
+        // upNextPlayerDisplayName, which stops that at the sending end - this is
+        // the receiving belt-and-braces, for a name that arrived by another
+        // route: a persisted NextEpisodeResult, a deep link, the picker). An id
+        // printed as the show title is worse than saying nothing, because the
+        // "Season 4 • Episode 41" line below still says what is coming.
+        if (looksLikeRawMediaId(itemName, hasArtwork = !(backdropUrl ?: itemPoster).isNullOrBlank())) {
+            nextUpShowTitle?.visibility = View.GONE
+        } else {
+            nextUpShowTitle?.visibility = View.VISIBLE
+            nextUpShowTitle?.text = itemName
+        }
         nextUpEpisodeLabel?.text = "Season $targetSeason \u2022 Episode $targetEpisode"
         nextUpEpisodeTitle?.text = "S${targetSeason}E$targetEpisode"
         nextUpCountdown?.text = ""

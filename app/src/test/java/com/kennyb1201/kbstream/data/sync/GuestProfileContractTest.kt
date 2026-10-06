@@ -116,7 +116,8 @@ class GuestProfileContractTest {
             "Trending This Week",
             "Popular Movies",
             "Popular Shows",
-            "Top Rated"
+            "Top Rated Movies",
+            "Top Rated Shows"
         ).forEach { title ->
             assertTrue("the guest lineup is missing \"$title\"", src.contains("\"$title\""))
         }
@@ -126,6 +127,40 @@ class GuestProfileContractTest {
             "only the Top Today rows may draw rank numbers",
             Regex("Spec\\([^)]*\"guest_latest_digital\"[^)]*ranked = true")
                 .containsMatchIn(src)
+        )
+    }
+
+    @Test
+    fun `top rated shows is a TV row directly under the top rated movie row`() {
+        val src = readSource(HOME_VM)
+        val movie = src.indexOf("catalogId = \"guest_top_rated\"")
+        val shows = src.indexOf("catalogId = \"guest_top_rated_shows\"")
+        assertTrue("the top rated movie row must exist", movie > 0)
+        assertTrue("the shows row must follow the movie row", shows > movie)
+        val showsBlock = src.substring(shows, (shows + 400).coerceAtMost(src.length))
+        assertTrue("the shows row must query TV", showsBlock.contains("mediaType = \"tv\""))
+        assertTrue("the shows row must rail as a series", showsBlock.contains("railType = \"series\""))
+        assertTrue("the shows row must rank by rating", showsBlock.contains("vote_average.desc"))
+    }
+
+    @Test
+    fun `the guest rails honour the English-only browse filter`() {
+        val src = readSource(HOME_VM)
+        assertTrue(
+            "the guest rows must read the browse-language setting",
+            src.contains("val language = tmdbRepository.browseLanguage()")
+        )
+        assertTrue(
+            "discover rows must filter server-side so they still fill with titles",
+            src.contains("withOriginalLanguage = language")
+        )
+        assertTrue(
+            "and the feeds, which have no such parameter, must be filtered here",
+            src.contains("item.originalLanguage == null ||")
+        )
+        assertTrue(
+            "the discover item must carry the language it is filtered on",
+            readSource(TMDB_MODELS).contains("@Json(name = \"original_language\")")
         )
     }
 
@@ -155,6 +190,7 @@ class GuestProfileContractTest {
         const val PROFILE_EDIT = "com/kennyb1201/kbstream/ui/profiles/ProfileEditScreen.kt"
         const val HOME_VM = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
         const val TMDB_REPO = "com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt"
+        const val TMDB_MODELS = "com/kennyb1201/kbstream/data/tmdb/TmdbModels.kt"
         const val ADDON_MANAGER = "com/kennyb1201/kbstream/data/addon/AddonManager.kt"
         const val ADDONS_SCREEN = "com/kennyb1201/kbstream/ui/addons/AddonsScreen.kt"
     }

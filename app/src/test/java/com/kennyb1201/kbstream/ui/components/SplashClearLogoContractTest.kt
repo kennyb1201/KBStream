@@ -19,6 +19,29 @@ import org.junit.Test
  */
 class SplashClearLogoContractTest {
 
+    @Test
+    fun `the cover stays painted across the hand-off to the player`() {
+        val activity = source(MAIN_ACTIVITY)
+        assertTrue(
+            "the Player screen composes nothing visible of its own, so the cover " +
+                "must paint there too, or it drops a frame before the player " +
+                "Activity is on top (the black flash that read as two splashes)",
+            activity.contains("current as? Screen.Player") &&
+                activity.contains("val playerSplash")
+        )
+        assertTrue(
+            "the Player branch must feed the same backdrop/logo/name the player gets",
+            activity.contains("backdropUrl = playerSplash.backdropUrl") &&
+                activity.contains("clearLogoUrl = playerSplash.clearLogoUrl") &&
+                activity.contains("title = playerSplash.itemName")
+        )
+        assertTrue(
+            "one when() picks exactly one splash, so two can never stack",
+            activity.contains("pending != null -> AutoPlayLoadSplash(") &&
+                activity.contains("playerSplash != null -> AutoPlayLoadSplash(")
+        )
+    }
+
     private companion object {
         const val DETAIL_SCREEN = "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
         const val MAIN_ACTIVITY = "com/kennyb1201/kbstream/MainActivity.kt"

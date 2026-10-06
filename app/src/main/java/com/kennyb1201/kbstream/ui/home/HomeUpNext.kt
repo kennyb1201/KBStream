@@ -313,6 +313,59 @@ internal fun upNextDisplayTitleOrNull(
     return trimmed
 }
 
+/** What the player falls back to when a card has no name to give it. */
+internal const val UNKNOWN_SHOW_NAME = "Unknown Show"
+
+/**
+ * The name a Continue Watching / Up Next card hands the PLAYER, i.e. the
+ * `StreamsTarget.displayName` that becomes `itemName`.
+ *
+ * This is the show name: it is what the Up Next panel prints as the title of
+ * the episode coming next, and what the autoplay handoff copies into the next
+ * session. [cardTitle] ([UpNextItem.title]) is usually exactly that - but when
+ * the source's own name was missing and enrichment failed it is the internal id
+ * instead ("tmdb:114666"). [upNextDisplayTitleOrNull] already keeps such a name
+ * off the CARD; the play path used to copy the raw field straight into the
+ * target, so the id reached the player anyway, was printed as the show title,
+ * and rode the handoff into every episode after it.
+ *
+ * The chain never ends on an id: the card title, then [showTitle], then
+ * [composedTitle] (the "S4 E41 • Name" field), then [UNKNOWN_SHOW_NAME].
+ *
+ * [composedTitle] gets one extra condition. It is built by appending the
+ * season/episode marker to the CARD title, so an id-like card title makes it
+ * "tmdb:114666 S4 E41" - which is NOT [looksLikeRawMediaId] (the marker stops it
+ * being all-numeric) even though it still prints an internal id. So the composed
+ * field is only trusted when there was no id-like card title for it to inherit
+ * from; otherwise the literal is better than an id with a suffix.
+ */
+internal fun upNextPlayerDisplayName(
+    cardTitle: String?,
+    showTitle: String?,
+    composedTitle: String?,
+    hasArtwork: Boolean,
+    fallback: String = UNKNOWN_SHOW_NAME
+): String {
+    upNextDisplayTitleOrNull(cardTitle, hasArtwork)?.let { return it }
+    upNextDisplayTitleOrNull(showTitle, hasArtwork)?.let { return it }
+    if (!looksLikeRawMediaId(cardTitle.orEmpty(), hasArtwork)) {
+        upNextDisplayTitleOrNull(composedTitle, hasArtwork)?.let { return it }
+    }
+    return fallback
+}
+
+/**
+ * [upNextDisplayTitleOrNull] for the handoff paths, which carry only the name a
+ * running session already had and have no second field to fall back to.
+ *
+ * The autoplay and picker-restore paths copy the session's `itemName` into the
+ * next target's `displayName`; a session that was launched before the name was
+ * sanitized (or by a route that never sanitized it) would otherwise propagate an
+ * internal id into every episode after it. The literal is the honest answer.
+ */
+internal fun upNextPlayerNameOrUnknown(name: String?, hasArtwork: Boolean): String =
+    upNextDisplayTitleOrNull(name, hasArtwork) ?: UNKNOWN_SHOW_NAME
+
 /**
  * The small season/episode label a Continue Watching card carries - "S02 · E08".
  *
