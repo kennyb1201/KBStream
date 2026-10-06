@@ -264,4 +264,114 @@ class ChannelGuideProgramsTest {
             )
         )
     }
+
+    // ── Multiple configured guide sources ──────────────────────────────
+    //
+    // Reported: "the in player guide still says alot of no guide data even
+    // though the regular guide in guide screen is fully populated". The screen
+    // reads EVERY configured source and merges; the player asked only the
+    // primary one, so a channel whose programs live under a secondary guide
+    // read as unmatched - and a device whose only guide is a secondary URL read
+    // as having no guide at all.
+
+    private fun multiSourceChannel(
+        id: String = "a",
+        epgChannelId: String? = "id.a",
+        epgUrls: List<String> = listOf("http://epg/primary", "http://epg/secondary"),
+        epgUrl: String? = null,
+        tvgId: String? = null
+    ) = LiveChannelZapRegistry.ZapChannel(
+        channelId = id,
+        name = id,
+        streamUrl = "http://host/$id",
+        logoUrl = null,
+        epgChannelId = epgChannelId,
+        epgUrl = epgUrl,
+        epgUrls = epgUrls,
+        tvgId = tvgId
+    )
+
+    @Test
+    fun `every published source is queried for a matched channel`() {
+        assertEquals(
+            listOf(
+                GuideQuery("http://epg/primary", listOf("id.a")),
+                GuideQuery("http://epg/secondary", listOf("id.a"))
+            ),
+            planGuideQueries(listOf(multiSourceChannel()))
+        )
+    }
+
+    @Test
+    fun `a channel with no single source but a published list still plans a read`() {
+        // The reported setup: the guide comes from a secondary source, so the
+        // legacy single-value field is empty.
+        assertEquals(
+            listOf(
+                GuideQuery("http://epg/primary", listOf("id.a")),
+                GuideQuery("http://epg/secondary", listOf("id.a"))
+            ),
+            planGuideQueries(listOf(multiSourceChannel(epgUrl = null)))
+        )
+    }
+
+    @Test
+    fun `the source list is trimmed, deduped and keeps the legacy value`() {
+        assertEquals(
+            listOf("http://epg/one", "http://epg/two"),
+            guideSourcesOf(
+                multiSourceChannel(
+                    epgUrls = listOf(" http://epg/one ", "", "http://epg/one", "http://epg/two"),
+                    epgUrl = "http://epg/two"
+                )
+            )
+        )
+        assertEquals(
+            listOf("http://epg/one"),
+            guideSourcesOf(multiSourceChannel(epgUrls = emptyList(), epgUrl = " http://epg/one "))
+        )
+        assertEquals(
+            emptyList<String>(),
+            guideSourcesOf(multiSourceChannel(epgUrls = emptyList(), epgUrl = null))
+        )
+    }
+
+    @Test
+    fun `an entry with only a published source list can still be matched`() {
+        val entry = multiSourceChannel(
+            epgChannelId = null,
+            epgUrls = listOf("http://epg/primary"),
+            tvgId = "a.us"
+        )
+
+        assertTrue(needsGuideMatch(entry))
+        assertEquals(
+            listOf("http://epg/primary"),
+            guideMatchQueriesFor(entry).map { it.epgUrl }
+        )
+    }
+
+    @Test
+    fun `one match query is built per published source, primary first`() {
+        val entry = multiSourceChannel(epgChannelId = null, tvgId = "a.us")
+
+        assertEquals(
+            listOf("http://epg/primary", "http://epg/secondary"),
+            guideMatchQueriesFor(entry).map { it.epgUrl }
+        )
+        assertEquals("http://epg/primary", guideMatchQueryFor(entry)?.epgUrl)
+    }
+
+    @Test
+    fun `a weaker name candidate still yields a query per source`() {
+        val entry = multiSourceChannel(
+            epgChannelId = null
+        ).copy(tvgId = null, tvgName = "Channel A")
+
+        assertEquals(2, guideMatchQueriesFor(entry).size)
+        assertEquals(
+            listOf("Channel A", "a"),
+            guideMatchQueriesFor(entry).first().nameCandidates
+        )
+    }
 }

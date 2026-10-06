@@ -217,6 +217,31 @@ internal fun chipFocusState(
     moveFocusToChannelList = false,
 )
 
+/**
+ * Which row inherits the selection when the selected row is removed from the
+ * channel list.
+ *
+ * Hiding a channel takes its row out of the list being browsed, and the guide
+ * used to answer that by resetting to the list's FIRST channel - scrolling the
+ * whole list back to the top - while Compose's focus followed the removed row
+ * out of the composition and landed up on the group chips row. The row the
+ * viewer had just acted on was thrown away twice over.
+ *
+ * [removedAt] - the removed row's index in the list as it was - is the answer:
+ * whichever row now occupies that slot is the one the viewer's eyes are
+ * already on. A removal at the END of the list hands the selection to the row
+ * before it (the anchor clamps into the new bounds), and an anchor that cannot
+ * be placed (-1: a selection that was never in the previous list) starts at the
+ * top. Null means there is no list left to inherit anything.
+ *
+ * Pure, so [GuideRulesTest] can pin the vicinity rule without a Compose test
+ * harness, which this module does not carry.
+ */
+internal fun inheritedChannelRowIndex(removedAt: Int, newSize: Int): Int? {
+    if (newSize <= 0) return null
+    return removedAt.coerceIn(0, newSize - 1)
+}
+
 internal fun buildSetupDiagnosticsText(
     playlistUrl: String,
     epgUrl: String,
@@ -241,3 +266,38 @@ internal fun buildSetupDiagnosticsText(
         if (playlistName.isNotBlank()) add("Name: $playlistName")
     }.joinToString("  \u2022  ")
 }
+
+/**
+ * How long after the search field's editing session ends a Back is still read as
+ * the keyboard's rather than the viewer's.
+ *
+ * Fire OS's leanback keyboard is a window of its own and hands the app a Back
+ * as well as closing itself, so one press ate both the keyboard and the results
+ * the viewer was about to read (on Google TV the leanback IME swallows Back,
+ * which is why the same press there only closed the keyboard). A Back that
+ * lands within this window of the session ending is that echo, not the viewer.
+ * Long enough to cover the IME's close, short enough that a considered second
+ * press is never mistaken for it.
+ */
+internal const val SEARCH_IME_ECHO_MS = 700L
+
+/**
+ * Whether a Back press belongs to the search field's keyboard rather than to the
+ * results the viewer is reading.
+ *
+ * True while the field is still editing, and true for a moment after it stops.
+ * Both halves are needed because the keyboard's close and the field's own state
+ * can arrive in EITHER order on Fire TV: a Back that beats the session's end is
+ * caught by [editing], and one that trails it by a frame or two is caught by the
+ * echo window. Only a Back with the keyboard genuinely gone - and not just gone -
+ * closes the search, so the press the viewer makes to shut the keyboard can no
+ * longer take the results with it.
+ *
+ * Pure, so [GuideRulesTest] can pin both orders without a Compose test harness,
+ * which this module does not carry.
+ */
+internal fun searchBackClosesKeyboard(
+    editing: Boolean,
+    sinceEditingChangeMs: Long,
+    echoMs: Long = SEARCH_IME_ECHO_MS
+): Boolean = editing || sinceEditingChangeMs in 0 until echoMs

@@ -9,6 +9,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -420,5 +421,84 @@ class GuideRulesTest {
             "program|ch9|1000|2000|7",
             guideProgramHitKey("ch9", 1000L, 2000L, 7)
         )
+    }
+
+    @Test
+    fun `a hidden row hands its place to the row that takes it`() {
+        // Hiding the 12th channel of the list: the row that slides into slot 12
+        // is the one the viewer's eyes are already on. Resetting to the first
+        // row here is what scrolled the guide back to its top.
+        assertEquals(12, inheritedChannelRowIndex(removedAt = 12, newSize = 40))
+    }
+
+    @Test
+    fun `a hidden row at the end hands its place to its neighbour`() {
+        // The removed row was last: the anchor clamps to the new last row, not
+        // out of bounds and not back to the top.
+        assertEquals(9, inheritedChannelRowIndex(removedAt = 10, newSize = 10))
+        assertEquals(0, inheritedChannelRowIndex(removedAt = 1, newSize = 1))
+    }
+
+    @Test
+    fun `a hidden first row leaves the selection at the top`() {
+        assertEquals(0, inheritedChannelRowIndex(removedAt = 0, newSize = 5))
+    }
+
+    @Test
+    fun `an anchor that cannot be placed starts at the top`() {
+        // -1: the selection was never in the previous list (a group switch, a
+        // playlist reload). There is no vicinity to keep, so it starts at the
+        // top - which is also the old behaviour, and right for the cases this
+        // rule does not cover.
+        assertEquals(0, inheritedChannelRowIndex(removedAt = -1, newSize = 5))
+    }
+
+    @Test
+    fun `an empty list has no row to inherit`() {
+        assertNull(inheritedChannelRowIndex(removedAt = 0, newSize = 0))
+        assertNull(inheritedChannelRowIndex(removedAt = 3, newSize = 0))
+    }
+
+    // ── whose Back a press is, in the search overlay ───────────────────────────
+
+    @Test
+    fun `a Back while the keyboard is still up belongs to the keyboard`() {
+        assertTrue(searchBackClosesKeyboard(editing = true, sinceEditingChangeMs = 0L))
+        assertTrue(searchBackClosesKeyboard(editing = true, sinceEditingChangeMs = 60_000L))
+    }
+
+    @Test
+    fun `a Back on the heels of the keyboard closing is still the keyboard's`() {
+        // Fire OS closes its keyboard AND hands the app the press, and the two
+        // arrive in either order: one before the field's session ends (caught by
+        // editing), one after it (caught here). Both must leave the results up.
+        assertTrue(searchBackClosesKeyboard(editing = false, sinceEditingChangeMs = 0L))
+        assertTrue(
+            searchBackClosesKeyboard(
+                editing = false,
+                sinceEditingChangeMs = SEARCH_IME_ECHO_MS - 1
+            )
+        )
+    }
+
+    @Test
+    fun `a Back with the keyboard genuinely gone closes the search`() {
+        assertFalse(
+            searchBackClosesKeyboard(
+                editing = false,
+                sinceEditingChangeMs = SEARCH_IME_ECHO_MS
+            )
+        )
+        assertFalse(searchBackClosesKeyboard(editing = false, sinceEditingChangeMs = 30_000L))
+    }
+
+    @Test
+    fun `a session that never reported leaves the first Back to the overlay`() {
+        // The clock starts at zero, so "never reported" reads as an enormous
+        // gap - and a negative gap (a clock that moved back) must not be read as
+        // "just changed" either: neither is an echo.
+        val neverReported = System.currentTimeMillis()
+        assertFalse(searchBackClosesKeyboard(editing = false, sinceEditingChangeMs = neverReported))
+        assertFalse(searchBackClosesKeyboard(editing = false, sinceEditingChangeMs = -5L))
     }
 }

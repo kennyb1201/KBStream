@@ -66,8 +66,8 @@ internal data class GuideQuery(
  * Turns a zap lineup into the guide reads needed to fill the overlay.
  *
  * Only channels matched to a guide can be asked about at all: a channel with no
- * `epgChannelId`/`epgUrl` (an unmatched M3U entry) has nothing in the program
- * tables and would only widen the query. The keys go through
+ * `epgChannelId` or no guide source (an unmatched M3U entry) has nothing in the
+ * program tables and would only widen the query. The keys go through
  * [epgProgramChannelKey] because that is the spelling the importer wrote - a
  * guide channel id carrying an uppercase letter reads back nothing otherwise.
  *
@@ -84,15 +84,39 @@ internal fun planGuideQueries(
     if (batchSize <= 0) return emptyList()
     val bySource = LinkedHashMap<String, MutableList<String>>()
     for (channel in channels) {
-        val sourceUrl = channel.epgUrl?.trim().orEmpty()
         val guideId = channel.epgChannelId?.trim().orEmpty()
-        if (sourceUrl.isEmpty() || guideId.isEmpty()) continue
-        bySource.getOrPut(sourceUrl) { mutableListOf() }.add(epgProgramChannelKey(guideId))
+        if (guideId.isEmpty()) continue
+        // Every configured source, not just the channel's own: programs are
+        // stored under whichever guide matched the channel, and a channel
+        // matched in a SECONDARY source read as "No guide data" in the player
+        // while the guide screen - which reads and merges every source - was
+        // fully populated. Asking a source that has nothing for this channel
+        // costs one indexed read that returns no rows.
+        for (sourceUrl in guideSourcesOf(channel)) {
+            bySource.getOrPut(sourceUrl) { mutableListOf() }.add(epgProgramChannelKey(guideId))
+        }
     }
     return bySource.flatMap { (sourceUrl, ids) ->
         ids.distinct().chunked(batchSize).map { batch -> GuideQuery(sourceUrl, batch) }
     }
 }
+
+/**
+ * The guide sources to ask about [channel], primary first, no blanks and no
+ * repeats.
+ *
+ * [LiveChannelZapRegistry.ZapChannel.epgUrls] is the published list of every
+ * configured source; [LiveChannelZapRegistry.ZapChannel.epgUrl] is the single
+ * value older lineups carry, and is used on its own when no list was
+ * published, so both shapes work.
+ */
+internal fun guideSourcesOf(
+    channel: LiveChannelZapRegistry.ZapChannel
+): List<String> =
+    (channel.epgUrls + listOfNotNull(channel.epgUrl))
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinct()
 
 /**
  * Whether an entry still needs its guide match resolved before it can be
@@ -105,11 +129,12 @@ internal fun planGuideQueries(
  * guide has to be able to resolve the match itself.
  */
 internal fun needsGuideMatch(channel: LiveChannelZapRegistry.ZapChannel): Boolean =
-    channel.epgChannelId.isNullOrBlank() && guideMatchQueryFor(channel) != null
+    channel.epgChannelId.isNullOrBlank() && guideMatchQueriesFor(channel).isNotEmpty()
 
 /**
- * The match query for a lineup entry's own guide identity, or null when the
- * entry has nothing to resolve with (no guide source, or no id/name at all).
+ * The match query for a lineup entry's own guide identity against the FIRST
+ * source it could match in, or null when the entry has nothing to resolve with
+ * (no guide source, or no id/name at all).
  *
  * The candidates mirror the guide screen's matcher exactly - ids first
  * (`tvg-id`), then names (`tvg-name`, the display name) - so a channel resolves
@@ -117,8 +142,28 @@ internal fun needsGuideMatch(channel: LiveChannelZapRegistry.ZapChannel): Boolea
  */
 internal fun guideMatchQueryFor(
     channel: LiveChannelZapRegistry.ZapChannel
+): GuideMatchQuery? =
+    guideSourcesOf(channel)
+        .firstOrNull()
+        ?.let { source -> guideMatchQueryForSource(channel, source) }
+
+/**
+ * One match query per published source, in order: a channel may be matched in
+ * ANY configured guide, so the resolver has to be able to try each of them
+ * before the entry is given up on (see the player's resolveMissingGuideMatches,
+ * which keeps the first source that answers).
+ */
+internal fun guideMatchQueriesFor(
+    channel: LiveChannelZapRegistry.ZapChannel
+): List<GuideMatchQuery> =
+    guideSourcesOf(channel).mapNotNull { source ->
+        guideMatchQueryForSource(channel, source)
+    }
+
+internal fun guideMatchQueryForSource(
+    channel: LiveChannelZapRegistry.ZapChannel,
+    epgUrl: String
 ): GuideMatchQuery? {
-    val epgUrl = channel.epgUrl?.trim().orEmpty()
     if (epgUrl.isEmpty()) return null
     if (channel.tvgId.isNullOrBlank() &&
         channel.tvgName.isNullOrBlank() &&

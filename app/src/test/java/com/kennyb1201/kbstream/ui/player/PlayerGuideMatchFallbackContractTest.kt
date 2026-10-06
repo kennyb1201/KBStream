@@ -93,8 +93,15 @@ class PlayerGuideMatchFallbackContractTest {
             player.contains("needsGuideMatch(channel)")
         )
         assertTrue(
-            "the player must build the match query from the entry",
-            player.contains("pending.mapNotNull(::guideMatchQueryFor)")
+            "the player must build the match query from the entry, once per " +
+                "published guide source - an entry matched in a secondary guide " +
+                "can never be resolved against the primary one",
+            player.contains("guideMatchQueryForSource(channel, source)")
+        )
+        assertTrue(
+            "the per-source resolve must walk every configured source",
+            player.contains("pending.flatMap { channel ->") &&
+                player.contains("guideSourcesOf(channel)")
         )
         assertTrue(
             "the player must resolve matches via the repository",

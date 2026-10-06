@@ -3641,8 +3641,28 @@ fun HomeScreen(
 
                                                     if (landscapeCards) {
                                                         LandscapeCard(
+                                                            // Resolved TMDB art first, then the
+                                                            // add-on's own background - and,
+                                                            // last, the add-on's POSTER. Rails
+                                                            // whose items carry no background at
+                                                            // all (catalog-only add-ons, the
+                                                            // resume rows when a title has only a
+                                                            // poster) had nothing to draw until
+                                                            // their landscape art resolved, so a
+                                                            // fast scroll showed holes that
+                                                            // filled in on the next frame. A
+                                                            // cropped poster is the same
+                                                            // degradation the global landscape
+                                                            // setting already uses; see
+                                                            // GlobalPosterCard. Note this is not
+                                                            // a way around `tmdbOnly`: a pinned
+                                                            // rail's resolved art is a blank
+                                                            // MARKER, not null, so it still
+                                                            // stops the chain here and keeps its
+                                                            // title-only treatment.
                                                             backdropUrl = art?.first
-                                                                ?: meta.background,
+                                                                ?: meta.background
+                                                                ?: meta.poster,
                                                             logoUrl = art?.second
                                                                 ?: meta.logo,
                                                             fallbackTitle = meta.name,

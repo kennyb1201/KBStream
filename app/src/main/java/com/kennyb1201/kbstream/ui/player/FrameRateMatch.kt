@@ -28,9 +28,9 @@ import kotlinx.coroutines.flow.asStateFlow
  * panel for a rate that is an exact multiple of the content rate (24, 48 or
  * 50 Hz) removes it.
  *
- * Split the way [Trickplay] is split: every decision lives in [FrameRateMatch]
- * as pure arithmetic over [DisplayModeInfo] and pure text, so both are unit
- * tested without a device, and [FrameRateMatcher] is the thin Android shell
+ * Every decision lives in [FrameRateMatch] as pure arithmetic over
+ * [DisplayModeInfo] and pure text, so both are unit tested without a device,
+ * and [FrameRateMatcher] is the thin Android shell
  * that reads the panel and makes one or two requests.
  *
  * Two deliberate limits, both chosen to fail quiet:

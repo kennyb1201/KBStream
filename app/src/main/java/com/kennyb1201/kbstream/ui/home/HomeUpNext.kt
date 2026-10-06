@@ -561,6 +561,124 @@ internal fun trackerCardLocallyFinished(
         upNextGroupingKeys(item).any { it in finishedShowKeys }
 
 /**
+ * How long after a completion on THIS device the tracker feeds are still
+ * allowed to disagree about the title.
+ *
+ * The feeds are what keeps Continue Watching working across devices, but their
+ * copy of a title this profile just finished is stale by definition: the
+ * completion is pushed to them in seconds (see syncCompletedToSimkl), and the
+ * tracker's own feed can take a minute or more to move on. The card that still
+ * points at the episode just completed is therefore hidden on LOCAL evidence
+ * for this long - the tracker-lag window and then some. Nothing is hidden once
+ * the feed catches up, and a card the tracker has moved on to (the NEXT
+ * episode) is a different pair and is never hidden at all.
+ */
+internal const val JUST_COMPLETED_CARD_SUPPRESSION_MS =
+    10L * 60L * 1000L
+
+/**
+ * One title this profile finished on this device, in the rail's own identity
+ * vocabulary ([upNextGroupingKeys] / [upNextTitleKey]).
+ */
+internal data class CompletedTitleMark(
+    /**
+     * Every key a card could name this title by: the parent id flavors AND the
+     * title key, because a local row filed under "tt123" and a tracker card
+     * carrying "tmdb:123" meet on neither id unless the card resolved TMDB.
+     */
+    val keys: Set<String>,
+    /** The episode that was completed, or null for a movie / an unnamed one. */
+    val season: Int?,
+    val episode: Int?
+)
+
+/** Builds the mark for one completed history row, or null when it can be keyed by nothing. */
+internal fun completedTitleMark(
+    parentId: String?,
+    parentType: String?,
+    tmdbId: Int?,
+    season: Int?,
+    episode: Int?,
+    title: String?
+): CompletedTitleMark? {
+    val keys =
+        upNextShowParentKeys(
+            parentId,
+            parentType,
+            tmdbId
+        ) +
+            listOfNotNull(
+                title
+                    ?.trim()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { "title:${upNextMediaType(parentType)}:${it.lowercase()}" }
+            )
+
+    if (keys.isEmpty()) return null
+
+    return CompletedTitleMark(
+        keys = keys,
+        season = namedEpisodeNumber(season),
+        episode = namedEpisodeNumber(episode)
+    )
+}
+
+/**
+ * True when a TRACKER card must be hidden because this profile just FINISHED
+ * what the card still points at.
+ *
+ * Reported: after watching something, its Continue Watching card stayed for
+ * around forty-five seconds. Nothing local was wrong - the finished row leaves
+ * the rail's own query the moment it is written - but the tracker feed that
+ * card came from still listed the title, and the rail only re-read that feed
+ * on a coarse schedule. The local completion is the one fact that is known
+ * immediately, so it is what decides: a tracker card pointing at something
+ * this profile has already completed is stale, whatever the feed says.
+ *
+ * [trackerCardLocallyFinished] is the other half of the same principle and
+ * covers the rest: it proves a show caught up from the TMDB walk (every aired
+ * episode watched), which this rule cannot - here the local row is the only
+ * evidence, and a movie's completion is evidence enough on its own.
+ *
+ * A card for a LATER episode of the same show is deliberately kept: that is the
+ * tracker having moved on to what is next, which is exactly the card the rail
+ * should show. Local cards are never this rule's business - they are built from
+ * the history row the completion just rotated out.
+ */
+internal fun trackerCardJustCompletedByProfile(
+    item: UpNextItem,
+    completed: List<CompletedTitleMark>
+): Boolean {
+    if (completed.isEmpty()) return false
+    if (!isTrackerSourcedCard(item)) return false
+
+    // The title key is carried alongside the id keys on purpose: a local row
+    // filed under "tt123" and a tracker card carrying "tmdb:123" meet on
+    // neither id, and the episode pair below is what keeps a same-named show
+    // from being caught by the name alone.
+    val cardKeys =
+        upNextGroupingKeys(item) +
+            upNextTitleKey(item)
+
+    val cardSeason = namedEpisodeNumber(item.season)
+    val cardEpisode = namedEpisodeNumber(item.episode)
+
+    return completed.any { mark ->
+        if (mark.keys.none { it in cardKeys }) return@any false
+
+        // A mark with no episode is a movie (or a row that named none): the
+        // whole title is finished, so any card for it is stale.
+        if (mark.season == null || mark.episode == null) return@any true
+
+        // A card that names no episode cannot be told apart from the one just
+        // finished, and the local pass owns that show's next card anyway.
+        if (cardSeason == null || cardEpisode == null) return@any true
+
+        mark.season == cardSeason && mark.episode == cardEpisode
+    }
+}
+
+/**
  * Whether a tracker card must stay off the active profile's rails because the
  * title belongs to a sibling profile.
  *

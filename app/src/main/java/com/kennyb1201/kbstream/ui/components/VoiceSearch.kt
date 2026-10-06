@@ -92,6 +92,26 @@ internal fun voiceSearchIntent(
 }
 
 /**
+ * Whether an in-app voice search can run on this device at all.
+ *
+ * Fire OS ships no speech recognizer, and Amazon's own guidance is explicit:
+ * the Leanback search flow's speech callback "produces an error" on Fire TV
+ * because "Fire TV does not support this speech recognizer" (voice search there
+ * is Alexa, which is system-level and cannot return a transcript to an app).
+ * The chip was drawn anyway, so on a Fire TV Stick its only reward for a press
+ * was nothing at all - the reported "voice search just doesn't work".
+ *
+ * Answered by what the platform will actually resolve rather than by
+ * `Build.MANUFACTURER`, so any box without a recognizer (a bare AOSP stick, a
+ * stripped TV ROM) drops the chip for the same reason, and a Fire OS build that
+ * ever does ship one gets it back for free.
+ */
+internal fun voiceSearchAvailable(context: Context): Boolean =
+    runCatching {
+        context.packageManager.queryIntentActivities(voiceSearchIntent(context), 0)
+    }.getOrDefault(emptyList()).isNotEmpty()
+
+/**
  * The voice-search launcher both search boxes drive. Returns a function that
  * fires the recognizer and reports whether it was actually dispatched —
  * false means no recognizer is installed, which is the caller's cue to fall

@@ -188,6 +188,36 @@ interface WatchHistoryDao {
     suspend fun getCompletedForParents(parentIds: List<String>): List<WatchHistoryEntity>
 
     /**
+     * Completed rows whose parent has NO in-progress (resume) row left, updated
+     * at or after [since].
+     *
+     * This is the read behind Home's "this profile just finished it" rule (see
+     * `trackerCardJustCompletedByProfile`): a tracker card leaves the rail as
+     * soon as local history proves the thing it points at was completed on
+     * this device, instead of waiting for the tracker's own feed to catch up
+     * (which is minutes, not seconds).
+     *
+     * [since] keeps the read small and keeps the rule off titles finished long
+     * ago. The NOT IN clause is what makes the rule safe: a title the viewer
+     * has since started again has an in-progress row, and its card is not this
+     * rule's business.
+     */
+    @Query(
+        """
+        SELECT * FROM watch_history
+        WHERE isCompleted = 1
+          AND updatedAt >= :since
+          AND parentId NOT IN (
+              SELECT parentId FROM watch_history
+              WHERE positionMs > 0
+                AND isCompleted = 0
+          )
+        ORDER BY updatedAt DESC
+        """
+    )
+    suspend fun getRecentlyCompletedWithoutResume(since: Long): List<WatchHistoryEntity>
+
+    /**
      * Reactive form of [getCompletedForParents]: the same rows, re-emitted
      * whenever the table changes.
      *

@@ -87,10 +87,9 @@ class LiveZapLightPathContractTest {
     }
 
     @Test
-    fun `the light path clears stale rebuilds, the live watchdog and trickplay`() {
+    fun `the light path clears stale rebuilds and the live watchdog`() {
         assertTrue(lightPath.contains("liveWatchdogToken++"))
         assertTrue(lightPath.contains("playerGeneration++"))
-        assertTrue(lightPath.contains("stopTrickplay()"))
         assertTrue(lightPath.contains("player.removeListener(cueHandler)"))
         assertTrue(lightPath.contains("SubtitleCueHandler().also { player.addListener(it) }"))
     }

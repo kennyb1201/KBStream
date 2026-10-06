@@ -42,7 +42,7 @@ internal fun rebuildSettleRemainingMs(settleMs: Long, releasedAtMs: Long, nowMs:
  * The fullscreen player is a separate Activity and a TV remote's Home button
  * STOPS it: the task, and the instance, survive. The viewer who leaves from the
  * launcher and comes back therefore arrives at a screen that is still composed
- * - and whose player, MediaSession and trickplay decoder [onStop] had already
+ * - and whose player and MediaSession [onStop] had already
  * released, with nothing left to build them again. The overlay drew over the
  * last frame, the play and restart presses ran against a null player, and the
  * only press that worked was a source switch, because that is the one path that

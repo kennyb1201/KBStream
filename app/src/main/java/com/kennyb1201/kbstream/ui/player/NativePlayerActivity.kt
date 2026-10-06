@@ -1703,7 +1703,7 @@ class NativePlayerActivity : ComponentActivity() {
         channel: LiveChannelZapRegistry.ZapChannel,
         cached: ZapEpgInfo?
     ): ZapEpgInfo {
-        val epgUrl = channel.epgUrl?.trim().orEmpty()
+        val epgSources = guideSourcesOf(channel)
         // The same resolved match the guide overlay uses: a channel clicked
         // before the guide screen matched it has no epgChannelId of its own,
         // and would otherwise report "No guide data" on the banner even after
@@ -1711,7 +1711,7 @@ class NativePlayerActivity : ComponentActivity() {
         val epgChannelId = guideChannelIdFor(channel)
         val now = System.currentTimeMillis()
         val isFresh = cached != null && now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS
-        val noSource = epgUrl.isBlank() || epgChannelId.isNullOrBlank()
+        val noSource = epgSources.isEmpty() || epgChannelId.isNullOrBlank()
         // isNullOrBlank() above already contract-proved epgChannelId non-null
         // whenever noSource is false, so an explicit null check on the third
         // operand here was unreachable (the compiler said so). The local val is
@@ -1721,34 +1721,52 @@ class NativePlayerActivity : ComponentActivity() {
             cached ?: ZapEpgInfo(now = null, next = null, fetchedAtMillis = now)
         } else {
             withContext(Dispatchers.IO) {
-                loadZapEpg(epgUrl, resolvedEpgChannelId)
+                loadZapEpg(epgSources, resolvedEpgChannelId)
             }
         }
     }
 
-    /** Queries the guide DB for the channel's current + next program. */
-    private suspend fun loadZapEpg(epgUrl: String, epgChannelId: String): ZapEpgInfo {
+    /**
+     * Queries the guide DB for the channel's current + next program, across
+     * EVERY configured source.
+     *
+     * A channel's programs are stored under whichever guide matched it (the
+     * DAO resolves a source by URL), and the guide screen merges every source
+     * for exactly this reason. Reading only the primary one is what made a
+     * channel matched in a secondary guide report "No guide data" on the
+     * banner while the guide screen showed its programs. Overlapping sources
+     * can import the same slot twice, so the merged rows are deduped on their
+     * air window.
+     */
+    private suspend fun loadZapEpg(epgSources: List<String>, epgChannelId: String): ZapEpgInfo {
         return try {
             val dao = IptvDatabase.getInstance(applicationContext).iptvDao()
             val now = System.currentTimeMillis()
-            // Full variant (not the Lite one): it returns the real
-            // category/description columns, which the banner shows.
-            val rows = dao.getProgramsForChannelsInWindow(
-                sourceUrl = epgUrl,
-                // The importer stores programs under a lowercased channel key
-                // (epgProgramChannelKey) and this query matches it exactly, so
-                // the guide channel's raw id returns nothing whenever it has an
-                // uppercase letter -- a matched channel with an empty banner.
-                channelIds = listOf(epgProgramChannelKey(epgChannelId)),
-                windowStart = now,
-                windowEnd = now + ZAP_EPG_LOOKAHEAD_MS,
-                perChannelLimit = ZAP_EPG_ROW_LIMIT
-            )
+            // The importer stores programs under a lowercased channel key
+            // (epgProgramChannelKey) and these queries match it exactly, so
+            // the guide channel's raw id returns nothing whenever it has an
+            // uppercase letter -- a matched channel with an empty banner.
+            val channelKey = epgProgramChannelKey(epgChannelId)
+            val rows = ArrayList<EpgProgramRow>()
+            for (source in epgSources) {
+                // Full variant (not the Lite one): it returns the real
+                // category/description columns, which the banner shows.
+                rows += dao.getProgramsForChannelsInWindow(
+                    sourceUrl = source,
+                    channelIds = listOf(channelKey),
+                    windowStart = now,
+                    windowEnd = now + ZAP_EPG_LOOKAHEAD_MS,
+                    perChannelLimit = ZAP_EPG_ROW_LIMIT
+                )
+            }
+            val merged = rows.distinctBy { row ->
+                Triple(row.channelId, row.startUtcMillis, row.endUtcMillis)
+            }
             ZapEpgInfo(
-                now = rows.firstOrNull { row ->
+                now = merged.firstOrNull { row ->
                     now >= row.startUtcMillis && now < row.endUtcMillis
                 },
-                next = rows.firstOrNull { row -> row.startUtcMillis >= now },
+                next = merged.firstOrNull { row -> row.startUtcMillis >= now },
                 fetchedAtMillis = now
             )
         } catch (t: Throwable) {
@@ -1853,7 +1871,7 @@ class NativePlayerActivity : ComponentActivity() {
 
     /** Cache key a channel's now/next rows are stored under. */
     private fun zapEpgCacheKey(channel: LiveChannelZapRegistry.ZapChannel): String =
-        channel.channelId + "|" + channel.epgUrl?.trim().orEmpty()
+        channel.channelId + "|" + guideSourcesOf(channel).joinToString(",")
 
     /**
      * Paints the overlay's live program block for the channel playing now.
@@ -2704,6 +2722,18 @@ class NativePlayerActivity : ComponentActivity() {
         // and toggles back, which is why it must not be swallowed here.
         val horizontal = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
             event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+        // The open channel guide owns LEFT/RIGHT: they step through the guide
+        // groups. Resolved here, ahead of the scrub, because the guide can be
+        // up while the controls are hidden - [plainPlaybackForeground] says
+        // nothing about it - and a group change must never seek the video.
+        if (isGuideShowing && horizontal) {
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                switchChannelGuideGroup(
+                    if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1
+                )
+            }
+            return true
+        }
         if (plainPlaybackForeground() && horizontal) {
             if (creditsPanelForeground()) {
                 // The credits recommendations own LEFT/RIGHT for as long as
@@ -3764,11 +3794,6 @@ class NativePlayerActivity : ComponentActivity() {
                     val durationMs = exoPlayer?.duration ?: 0L
                     val posMs = (progress.toLong() * durationMs) / 10_000L
                     currentTime.text = formatMillis(posMs)
-                    // The bar is inside the overlay, so the card tracks its
-                    // thumb: the viewer is looking at the bar, not the middle of
-                    // the screen. A remote fires a lot of these on the way, and
-                    // TrickplayFrames coalesces them onto one decode per bucket.
-                    requestTrickplayFrame(posMs, anchorView = seekbar)
                 }
             }
             override fun onStartTrackingTouch(sb: SeekBar) {
@@ -3781,7 +3806,6 @@ class NativePlayerActivity : ComponentActivity() {
                 val posMs = (sb.progress.toLong() * durationMs) / 10_000L
                 exoPlayer?.seekTo(posMs)
                 scheduleAutoHide()
-                endTrickplayScrub()
             }
         })
 
@@ -3848,7 +3872,6 @@ class NativePlayerActivity : ComponentActivity() {
                             // rather than landed on twice.
                             scrubMoved = false
                             commitSeekFromBar()
-                            endTrickplayScrub()
                             scheduleAutoHide()
                             true
                         }
@@ -4424,36 +4447,6 @@ class NativePlayerActivity : ComponentActivity() {
     private val scrubHintHandler = Handler(Looper.getMainLooper())
     private val scrubHintHider = Runnable { surfaceScrubHint?.visibility = View.GONE }
 
-    // --- Scrub previews (a frame copied off the video surface while scrubbing) ---
-    //
-    // Null until a scrub asks for its first frame. Nothing has to be built to
-    // make one: the frame is copied out of the surface the player is already
-    // rendering (see TrickplayFrames), so a session that never scrubs pays
-    // nothing at all.
-    private var trickplay: TrickplayFrames? = null
-    private var trickplayOverlay: TrickplayOverlay? = null
-
-    /** The view the card tracks, when the frame being asked for has one. */
-    private var trickplayAnchorView: View? = null
-
-    /**
-     * Whether a decoded frame is still worth putting on screen.
-     *
-     * A flag with a timer behind it rather than "is a scrub in progress": the
-     * frame for the position just scrubbed to is usually still being decoded
-     * when the key comes up (see [TRICKPLAY_SHOW_GRACE_MS]), so a flag cleared on
-     * the key release dropped every frame a press-and-release scrub had asked
-     * for. Armed by each request, cleared by [trickplayCardHider] once the viewer
-     * has genuinely stopped.
-     */
-    private var trickplayWanted = false
-
-    /** Clears [trickplayWanted] and takes the card away, on its own timer. */
-    private val trickplayCardHider = Runnable {
-        trickplayWanted = false
-        trickplayOverlay?.hide()
-    }
-
     private fun ensureScrubHint(): TextView {
         surfaceScrubHint?.let { return it }
         val density = resources.displayMetrics.density
@@ -4495,163 +4488,11 @@ class NativePlayerActivity : ComponentActivity() {
         }
         tv.visibility = View.VISIBLE
         scrubHintHandler.removeCallbacks(scrubHintHider)
-        // The preview card is not asked for from here: every press that moves
-        // this bubble's position goes through updateSeekBarPosition, which is
-        // where the request lives now (see trickplayAnchor).
     }
 
     private fun scheduleScrubHintHide() {
         scrubHintHandler.removeCallbacks(scrubHintHider)
         scrubHintHandler.postDelayed(scrubHintHider, 700L)
-        endTrickplayScrub()
-    }
-
-    // --- Scrub previews -------------------------------------------------------
-
-    /**
-     * Asks for the decoded frame covering [posMs] — the position a scrub has just
-     * landed on — and notes [anchorView] for the card to center itself over when
-     * the frame arrives: the seek bar while that is what is being dragged, and
-     * nothing when the overlay is down.
-     *
-     * Every scrub path ends up here — a drag on the seek bar, a 10-second press,
-     * a held LEFT/RIGHT with the overlay down — so the guards live here rather
-     * than at each of them:
-     *
-     *  - **Nothing to scrub.** Live TV has no duration, and neither has a stream
-     *    that never reported one. There is no position to preview and no seek
-     *    that could fetch it.
-     *  - **Hardware only.** The preview player runs on the default renderers, so
-     *    a stream whose video only the software decoder can handle gets no
-     *    preview rather than spending on a thumbnail the CPU the video itself
-     *    needs. That is the right way round: the frame is a nicety.
-     */
-    private fun requestTrickplayFrame(posMs: Long, anchorView: View?) {
-        if (isLiveChannel) {
-            declineTrickplay("a live channel has no scrub position")
-            return
-        }
-        if (currentUrl.isBlank()) {
-            declineTrickplay("no stream url to preview")
-            return
-        }
-        val duration = exoPlayer?.duration?.takeIf { it > 0 }
-        if (duration == null) {
-            declineTrickplay("the stream reports no duration")
-            return
-        }
-        trickplayWanted = true
-        // Re-armed by every press, so a held scrub keeps the card up and a
-        // released one keeps it for the grace window only - and armed for a
-        // whole decode, because a frame that arrives at four seconds is still
-        // the frame the viewer asked for (see TRICKPLAY_WAIT_MS).
-        handler.removeCallbacks(trickplayCardHider)
-        handler.postDelayed(trickplayCardHider, TRICKPLAY_WAIT_MS)
-        trickplayAnchorView = anchorView
-        val frames = trickplay ?: TrickplayFrames(
-            // Sampled per call, not held: a source switch rebuilds the player,
-            // and a preview that kept the dead instance would copy a surface
-            // nothing is rendering into any more.
-            player = { exoPlayer },
-            // The surface the picture is going to RIGHT NOW - PlayerView's own
-            // SurfaceView normally, the P5 GL surface while that ladder is up
-            // (see [videoOutputSurface]). Null under the TextureView fallback,
-            // which has no Surface to read, and before the surface exists.
-            surface = { videoOutputSurface() },
-            onUnavailable = { reason -> noticeNoScrubPreviews(reason) }
-        ) { _, frame ->
-            if (trickplayWanted) {
-                previewCard().show(frame, trickplayAnchorView)
-                // The window runs from the draw, not from the press: this is
-                // the viewer's time to look at it.
-                handler.removeCallbacks(trickplayCardHider)
-                handler.postDelayed(trickplayCardHider, TRICKPLAY_SHOW_GRACE_MS)
-            } else {
-                // Decoded after the card closed: cached, so dragging back over
-                // this position is free, but counted - "decoded and never
-                // shown" is a different fault from "never decoded".
-                com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
-                    "trickplay.late",
-                    0L,
-                    ok = false
-                )
-            }
-        }.also { trickplay = it }
-        if (!frames.isUsable) {
-            // The pipeline turned itself off earlier in this session (see
-            // TrickplayFrames), so the reason it gave up is already on record.
-            declineTrickplay("previews already gave up this session")
-            return
-        }
-        frames.request(posMs, duration)
-    }
-
-    /** The card previews appear in, built the first time a frame arrives. */
-    private fun previewCard(): TrickplayOverlay =
-        trickplayOverlay ?: TrickplayOverlay(this).also { trickplayOverlay = it }
-
-    /** Whether the "no scrub previews" notice has been shown in this session. */
-    private var scrubPreviewNoticeShown = false
-
-    /** Which declines of a preview request have already been recorded. */
-    private val trickplayDeclines = mutableSetOf<String>()
-
-    /**
-     * Records why a press asked for no preview at all.
-     *
-     * The pipeline is built to fail quietly, and the quietest failure of all is
-     * this one: a scrub that never reaches it leaves no card, no notice and no
-     * reason, so a report could not tell "the feature was never asked" from "it
-     * was asked and produced nothing" - and a session where both frame counts
-     * are zero printed no scrub-preview line at all. Recorded once per reason
-     * per session: a held scrub asks on every step, and one line per step would
-     * push every other sample out of the trace ring.
-     */
-    private fun declineTrickplay(reason: String) {
-        if (!trickplayDeclines.add(reason)) return
-        com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
-            "trickplay.decline:$reason",
-            0L,
-            ok = false
-        )
-    }
-
-    /**
-     * Says why no thumbnail will appear - in the app, not only in the log.
-     *
-     * The pipeline is built to fail quietly (the card simply never shows), which
-     * left "I never see thumbnails" with no way to tell a device that cannot
-     * spare a decoder from a source that will not serve a second connection.
-     * Those two want opposite fixes, so the reason is worth one toast. Once per
-     * session: it explains a feature rather than reporting a fault.
-     */
-    private fun noticeNoScrubPreviews(reason: String) {
-        if (scrubPreviewNoticeShown) return
-        scrubPreviewNoticeShown = true
-        Toast.makeText(this, reason, Toast.LENGTH_LONG).show()
-    }
-
-    /**
-     * The scrub is over. Nothing has to be given back - a surface copy holds no
-     * decoder and no connection (see [TrickplayFrames.idle]) - so this only
-     * stands the pipeline down.
-     *
-     * The card itself is deliberately NOT taken away here. The frame for the
-     * position just scrubbed to is usually still being decoded, and hiding on the
-     * key release is what made a press-and-release scrub show nothing at all;
-     * [trickplayCardHider] takes it away when the grace window ends.
-     */
-    private fun endTrickplayScrub() {
-        trickplay?.idle()
-    }
-
-    /** Hides the card and gives the preview decoder back now (leaving the screen). */
-    private fun stopTrickplay() {
-        trickplayWanted = false
-        handler.removeCallbacks(trickplayCardHider)
-        trickplayOverlay?.hide()
-        trickplay?.release()
-        trickplay = null
     }
 
     /**
@@ -4713,10 +4554,6 @@ class NativePlayerActivity : ComponentActivity() {
         scrubHandler.removeCallbacks(scrubRunnable)
         scrubHintHandler.removeCallbacks(scrubHintHider)
         surfaceScrubHint?.visibility = View.GONE
-        // The scrub is over for good here (the overlay is coming up, or the
-        // activity is leaving), so the preview player is told to stand down too.
-        // The card goes on its own timer.
-        endTrickplayScrub()
     }
 
     // --- Player Creation ---
@@ -5542,15 +5379,6 @@ class NativePlayerActivity : ComponentActivity() {
         subtitleCueHandler = null
         // Anything an earlier rebuild queued is stale once this one runs.
         val generation = ++playerGeneration
-        // The scrub preview runs a video decoder of its own, and it is built
-        // for the source being replaced. Hand it back before asking for the new
-        // one: on this Realtek/TCL stack a second 4K decode in the process
-        // comes back OMX_ErrorInsufficientResources (0x80001000), which is the
-        // "out of video decoder resources" card a source switch was landing on
-        // while starting the same source fresh played fine. The next scrub
-        // rebuilds the pipeline for the new source, which it had to do anyway -
-        // the frames it holds belong to the old one.
-        stopTrickplay()
         if (settleMs > 0L) {
             // Detach first: otherwise the dying codec is still holding the
             // SurfaceView's Surface when the next codec configures onto it.
@@ -7661,22 +7489,7 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * The view the preview card should track for the scrub that is running: the
-     * seek bar's thumb while the overlay is up, and nothing when it is not (the
-     * overlay-less scrub, where the bar is not on screen to track and the card
-     * sits centered over the position bubble instead).
-     */
-    private fun trickplayAnchor(): View? = if (controlsVisible) seekbar else null
-
     private fun updateSeekBarPosition(posMs: Long, durationMs: Long) {
-        // Every scrub that moves the position lands here - the 10-second step,
-        // the held accelerated scrub, and both of them whether they came from the
-        // seek bar or from the video surface with the overlay down - so this is
-        // where the preview is asked for. The bar's own onProgressChanged only
-        // fires for a touch drag, and a TV remote never drags: that is why
-        // scrubbing with the remote showed no previews however long it went on.
-        requestTrickplayFrame(posMs, anchorView = trickplayAnchor())
         if (durationMs > 0) {
             seekbar.progress = ((posMs * 10_000L) / durationMs).toInt().coerceIn(0, 10_000)
             currentTime.text = formatMillis(posMs)
@@ -8899,10 +8712,7 @@ class NativePlayerActivity : ComponentActivity() {
         // slot; opening the guide over one of them would stack two scrims.
         dismissPicker()
         dismissSettingsPanel()
-        channelGuideTitle?.text = LiveChannelZapRegistry.browsingGroup()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { "GUIDE  \u2022  ${it.uppercase()}" }
-            ?: "GUIDE"
+        channelGuideTitle?.text = channelGuideTitleText()
         // The GUIDE title's accent resolved @color/kb_accent at inflation, so
         // re-apply the chosen accent each time the overlay opens (the rows do
         // the same as they are created) - the outline and the title then track
@@ -8915,6 +8725,43 @@ class NativePlayerActivity : ComponentActivity() {
         focusChannelGuideCurrent()
         loadChannelGuidePrograms()
         startChannelGuideWatcher()
+    }
+
+    /**
+     * The overlay's header: the browsed group, and its position when there is
+     * more than one to browse - LEFT/RIGHT are the only way to move between
+     * them, so the count is what tells the viewer they exist.
+     */
+    private fun channelGuideTitleText(): String {
+        val label =
+            LiveChannelZapRegistry.browsingGroup()
+                ?.takeIf { it.isNotBlank() }
+                ?.uppercase()
+                ?: return "GUIDE"
+        val position = LiveChannelZapRegistry.groupPosition()
+        return if (position != null && position.second > 1) {
+            "GUIDE  \u2022  $label  (${position.first}/${position.second})"
+        } else {
+            "GUIDE  \u2022  $label"
+        }
+    }
+
+    /**
+     * Moves the in-guide group by [direction] and repaints.
+     *
+     * The rows are rebuilt from the new group's lineup (the identity pass
+     * first, so the overlay never blanks) and the EPG read re-runs for it; the
+     * registry's active group is what UP/DOWN and a typed channel number walk,
+     * so the overlay and the zapping stay on the same list. A press with
+     * nowhere to go is a no-op (see the registry's offsetGroup).
+     */
+    private fun switchChannelGuideGroup(direction: Int) {
+        if (!isGuideShowing) return
+        if (!LiveChannelZapRegistry.offsetGroup(direction)) return
+        channelGuideTitle?.text = channelGuideTitleText()
+        publishChannelGuideRows(programs = emptyMap(), loading = true)
+        focusChannelGuideCurrent()
+        loadChannelGuidePrograms()
     }
 
     /** Closes the guide and gives the D-pad back where it came from. */
@@ -9109,20 +8956,43 @@ class NativePlayerActivity : ComponentActivity() {
             needsGuideMatch(channel) && channel.channelId !in guideMatchAttempted
         }
         if (pending.isEmpty()) return
+
+        // One pass per configured source, in the guide screen's own order
+        // (primary first): a channel may be matched in ANY of them, and a
+        // channel matched in a secondary guide is exactly the one whose
+        // programs a primary-only read cannot find. The FIRST source that
+        // answers wins, which is the precedence the lineup matcher uses.
+        val sources = pending.flatMap { channel ->
+            guideSourcesOf(channel)
+        }.distinct()
+        if (sources.isEmpty()) return
+
         pending.forEach { guideMatchAttempted.add(it.channelId) }
-        val queries = pending.mapNotNull(::guideMatchQueryFor)
-        if (queries.isEmpty()) return
-        val resolved = runCatchingCancellable {
-            withContext(Dispatchers.IO) {
-                iptvRepository.resolveGuideChannelIds(queries)
+
+        val resolved = HashMap<String, String>()
+        var resolveFailed = false
+        for (source in sources) {
+            val queries = pending
+                .filter { channel -> channel.channelId !in resolved }
+                .mapNotNull { channel -> guideMatchQueryForSource(channel, source) }
+            if (queries.isEmpty()) continue
+            val batch = runCatchingCancellable {
+                withContext(Dispatchers.IO) {
+                    iptvRepository.resolveGuideChannelIds(queries)
+                }
+            }.getOrElse { t ->
+                Log.w(TAG, "CHANNEL GUIDE match resolve failed: ${t.message}")
+                resolveFailed = true
+                emptyMap()
             }
-        }.getOrElse { t ->
-            // The resolve never ran: un-mark the entries so the next pass (a
+            resolved.putAll(batch)
+        }
+
+        if (resolveFailed) {
+            // Something never ran: un-mark the entries so the next pass (a
             // revision bump, or reopening the guide) retries them instead of
             // leaving them permanently unresolved for the session.
-            Log.w(TAG, "CHANNEL GUIDE match resolve failed: ${t.message}")
             pending.forEach { guideMatchAttempted.remove(it.channelId) }
-            return
         }
         guideResolvedChannelIds.putAll(resolved)
     }
@@ -11071,9 +10941,6 @@ class NativePlayerActivity : ComponentActivity() {
         // LiveChannelPrefetch).
         liveChannelPrefetch.release()
         scrubDirection = 0
-        // The preview decoder goes with them: the session is leaving the screen,
-        // and a second decoder held behind a backgrounded player helps nobody.
-        stopTrickplay()
         // Remember where playback actually was: onSaveInstanceState() can run
         // after this method (API 28+) and the player is released by then.
         if (!isLiveChannel && firstFrameRendered) {
@@ -11151,8 +11018,6 @@ class NativePlayerActivity : ComponentActivity() {
         frameRateMatcher?.release()
         frameRateMatcher = null
         p5VideoGlesView.release()
-        trickplay?.release()
-        trickplay = null
         sleepTimerSection?.release()
         handler.removeCallbacksAndMessages(null)
         scrubHintHandler.removeCallbacksAndMessages(null)
@@ -11327,10 +11192,6 @@ class NativePlayerActivity : ComponentActivity() {
         // [videoTrackPresent]).
         firstFrameRendered = false
         videoTrackPresent = false
-        // The scrub preview decodes the source being replaced; hand it back
-        // before the new channel asks for a decoder - one 4K decode at a time
-        // on this class of box (same reason recreatePlayer does it).
-        stopTrickplay()
         // The cue handler holds cues from the channel being left and is a
         // listener on the player that survives here (it does not on a rebuild).
         // Detach it and add a fresh one to the same player, mirroring how

@@ -100,6 +100,7 @@ import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
+import com.kennyb1201.kbstream.ui.components.voiceSearchAvailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
@@ -252,6 +253,20 @@ fun GuideScreen(
     // text overlay that filters the channel list live.
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    // The search field's editing session, reported by the field itself (see
+    // KBTextField.onEditingChanged), plus the moment it last changed.
+    //
+    // This is what keeps a Back from taking the RESULTS with the keyboard on
+    // Fire TV: Fire OS closes its keyboard AND hands the app the press, so the
+    // press arrived here as "close the overlay" and one Back ate both the
+    // keyboard and the list the viewer had just searched for. On Google TV the
+    // leanback IME swallows Back, which is why the same press there was always
+    // harmless (see searchBackClosesKeyboard).
+    var searchInputEditing by remember(showSearch) { mutableStateOf(false) }
+    var searchInputChangedAt by remember(showSearch) { mutableStateOf(0L) }
+    // Hung on the search field to end its session when this screen decides a
+    // Back belonged to the keyboard (see KBTextField.endEditingSignal).
+    var searchEndEditingSignal by remember(showSearch) { mutableStateOf(0) }
 
     // Last-viewed persistence: reopening the guide drops you back on the
     // group/channel you were on instead of "All" + top of the list. The
@@ -327,8 +342,10 @@ fun GuideScreen(
         }
     }
     var selectedGroup by remember(activeProfileId) { mutableStateOf(savedGroup?.takeIf { it.isNotBlank() } ?: "All") }
-    val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites, recentChannelKeys) {
-        when (selectedGroup) {
+
+    /** The visible channels of one group, exactly as the list below renders them. */
+    fun groupChannels(label: String): List<IptvChannelWithEpg> =
+        when (label) {
             "All" -> unhiddenChannels
             "Favorites" -> unhiddenChannels.filter { favoriteKey(it) in favorites }
             "Recent" -> {
@@ -337,23 +354,57 @@ fun GuideScreen(
                 val byKey = unhiddenChannels.associateBy(::channelKey)
                 recentChannelKeys.mapNotNull(byKey::get)
             }
-            else -> unhiddenChannels.filter { it.channel.groupTitle?.trim() == selectedGroup }
+            else -> unhiddenChannels.filter { it.channel.groupTitle?.trim() == label }
         }
+
+    val groupedChannels = remember(unhiddenChannels, selectedGroup, favorites, recentChannelKeys) {
+        groupChannels(selectedGroup)
     }
 
-    // Publish the list being browsed as the zapping lineup. UP/DOWN in the
-    // player walks THIS list, so the group you are in — and its ordering, how
-    // "Favorites"/"Recent" are built included — is what changes channels;
-    // zapping across the whole playlist was what made it uselessly long. The
-    // same lineup resolves a typed channel number in the player, so both stay
-    // in step by construction rather than by a second filtering rule.
-    LaunchedEffect(selectedGroup, groupedChannels, epgUrl) {
+    // Every configured guide source, primary first (the same list the lineup
+    // flow matches against, see IptvViewModel.allEpgUrls). A channel's programs
+    // are stored under whichever source matched it, and the in-player guide
+    // queries per source - publishing only the primary is what left channels
+    // matched in a secondary guide reading "No guide data" in the player while
+    // this screen was fully populated.
+    val guideSourceUrls = remember(epgUrl, extraEpgUrls) {
+        (epgUrl.trim().takeIf(String::isNotEmpty)?.let(::listOf).orEmpty() +
+            extraEpgUrls.split('\n', ';').mapNotNull { it.trim().takeIf(String::isNotEmpty) })
+            .distinct()
+    }
+
+    // Publish EVERY browsable group as the zapping lineup, and the one being
+    // browsed as the active one. UP/DOWN in the player walks the active group,
+    // so the group you are in — and its ordering, how "Favorites"/"Recent" are
+    // built included — is what changes channels; zapping across the whole
+    // playlist was what made it uselessly long. The player's in-guide
+    // LEFT/RIGHT switches between these groups (see the registry's
+    // offsetGroup), so it has to know all of them, not just this one. The same
+    // lineup resolves a typed channel number in the player, so both stay in
+    // step by construction rather than by a second filtering rule.
+    LaunchedEffect(
+        selectedGroup,
+        groupedChannels,
+        groups,
+        unhiddenChannels,
+        favorites,
+        recentChannelKeys,
+        guideSourceUrls
+    ) {
         // An empty list is always transient here (the lineup flow restarts
         // empty on resubscribe); publishing it would blank a lineup that is
         // still correct for the moment the user is playing from.
         if (groupedChannels.isEmpty()) return@LaunchedEffect
-        LiveChannelZapRegistry.set(
-            channels = groupedChannels.map { item ->
+
+        // One descriptor per channel, shared by every group that contains it.
+        // Up to now only the browsed group was published, so mapping each group
+        // independently would allocate a copy per group a channel appears in
+        // (categories overlap), for a list the registry only ever reads one
+        // group at a time anyway.
+        val zapByChannelId = HashMap<String, LiveChannelZapRegistry.ZapChannel>()
+
+        fun zapChannelOf(item: IptvChannelWithEpg): LiveChannelZapRegistry.ZapChannel =
+            zapByChannelId.getOrPut(channelKey(item)) {
                 LiveChannelZapRegistry.ZapChannel(
                     channelId = channelKey(item),
                     name = item.channel.displayName.ifBlank { "Live Channel" },
@@ -362,12 +413,21 @@ fun GuideScreen(
                     headers = item.channel.headers,
                     chno = item.channel.tvgChno?.trim()?.takeIf { it.isNotBlank() },
                     epgChannelId = item.epgChannel?.id,
-                    epgUrl = epgUrl.trim().takeIf { it.isNotBlank() },
+                    epgUrl = guideSourceUrls.firstOrNull(),
+                    epgUrls = guideSourceUrls,
                     tvgId = item.channel.tvgId,
                     tvgName = item.channel.tvgName
                 )
+            }
+
+        LiveChannelZapRegistry.setGroups(
+            groups = groups.map { label ->
+                LiveChannelZapRegistry.ZapGroup(
+                    label = label,
+                    channels = groupChannels(label).map(::zapChannelOf)
+                )
             },
-            browsingGroup = selectedGroup
+            selected = selectedGroup
         )
     }
 
@@ -476,6 +536,28 @@ fun GuideScreen(
         searchQuery = ""
     }
 
+    /**
+     * Whose Back a press is while the search overlay is up.
+     *
+     * The keyboard's while its session is live or has just ended - in which
+     * case the session is ended and the results stay up - and the overlay's
+     * only once the keyboard is genuinely gone. Shared by the two places a Back
+     * can arrive: the guide's own root handler (which sees the press when Fire
+     * OS does not give it to the keyboard) and the dialog's onDismissRequest.
+     */
+    val handleSearchBack: () -> Unit = {
+        if (
+            searchBackClosesKeyboard(
+                editing = searchInputEditing,
+                sinceEditingChangeMs = System.currentTimeMillis() - searchInputChangedAt
+            )
+        ) {
+            searchEndEditingSignal += 1
+        } else {
+            dismissSearch()
+        }
+    }
+
     // Back contract for the guide, in priority order:
     //  1. an open search overlay closes;
     //  2. with no playlist loaded the setup form IS the screen — there is
@@ -496,7 +578,7 @@ fun GuideScreen(
     val handleGuideBack: () -> Boolean = {
         when {
             showSearch -> {
-                dismissSearch()
+                handleSearchBack()
                 true
             }
             // Before a playlist exists the setup form IS this screen, so Back
@@ -609,11 +691,70 @@ LaunchedEffect(playlist) {
     if (playlist != null) showSetup = false
 }
 
-LaunchedEffect(groupedChannels) {
-    val currentStillExists = groupedChannels.any { it.channel.id == selectedChannelId }
+// The channel list as the guide last showed it, so a row that has gone can
+// hand its place to the row that inherits it. Hiding a channel removes its row
+// from the list being browsed, and "where it was" only exists in the list
+// BEFORE the replacement landed here.
+var previousGroupedChannels by remember {
+    mutableStateOf<List<IptvChannelWithEpg>>(emptyList())
+}
 
-    if (!currentStillExists) {
-        selectedChannelId = groupedChannels.firstOrNull()?.channel?.id
+// The group the guide last settled on. It is what separates a GROUP change - a
+// different lineup, where the first row is the only sensible answer - from the
+// SAME group's list gaining or losing rows (a channel hidden, a playlist
+// reload), where the row the viewer is on is still the row to be on. Read by
+// the removal effect below (before the settle effect updates it) and by that
+// effect itself.
+var lastSettledGroup by remember(activeProfileId) { mutableStateOf(selectedGroup) }
+
+LaunchedEffect(groupedChannels) {
+    val previous = previousGroupedChannels
+    previousGroupedChannels = groupedChannels
+
+    // A different group is not a removal: the list is another lineup and its
+    // selection belongs to the group switch. This is also what keeps a walk
+    // along the chips row (each chip's focus selects its group) from pulling
+    // focus down into the list.
+    if (lastSettledGroup != selectedGroup) return@LaunchedEffect
+
+    // Nothing is selected yet (first build), or the selection is still in the
+    // list: no removed row to absorb, so leave the selection exactly alone.
+    val goneId =
+        selectedChannelId
+            ?.takeIf { id -> groupedChannels.none { it.channel.id == id } }
+            ?: return@LaunchedEffect
+
+    val inherited =
+        groupedChannels.getOrNull(
+            inheritedChannelRowIndex(
+                removedAt = previous.indexOfFirst { it.channel.id == goneId },
+                newSize = groupedChannels.size
+            ) ?: return@LaunchedEffect
+        ) ?: return@LaunchedEffect
+
+    // The hidden row's place is taken by its neighbour, in the same group. The
+    // VIEWPORT is deliberately left alone: that row is where the removed one
+    // was, so scrolling to it would be the very jump this exists to avoid -
+    // D-pad focus only pulls the row in as far as it has to.
+    selectedChannelId = inherited.channel.id
+
+    // Focus left with the removed row (Compose has nothing to keep it on),
+    // which is what dropped the viewer up onto the group chips row. Retry
+    // across a few frames: the inherited row may not have been composed yet
+    // when the list swapped, exactly like the restore-on-open path.
+    val key = channelKey(inherited)
+    var focused = false
+    var attempts = 0
+    while (!focused && attempts < 6) {
+        // The viewer has asked for the chips row in the meantime (Up from the
+        // list's top row): yielding is the whole point of that press, so stop
+        // pulling focus back at them.
+        if (pendingGroupChipFocus) return@LaunchedEffect
+        awaitFrame()
+        channelRowFocusRequesters[key]?.let { requester ->
+            focused = runCatching { requester.requestFocus() }.getOrDefault(false)
+        }
+        attempts++
     }
 }
 
@@ -754,15 +895,38 @@ LaunchedEffect(channelListState, groupedChannelIds) {
     val wasPendingFocus = pendingFocusChannel
     pendingFocusChannel = false
 
+    val groupChanged = lastSettledGroup != selectedGroup
+    lastSettledGroup = selectedGroup
+
     val target = pending?.let { key ->
         groupedChannels.firstOrNull { channelKey(it) == key }
     }
+
+    // A membership change inside the same group keeps the row the viewer is
+    // already on (the removal effect above has just handed a hidden row's
+    // place to its neighbour). Resetting to the first row there is what
+    // scrolled the list back to the top - and, with the focused row gone, sent
+    // D-pad focus up into the group chips row.
+    val keptId =
+        if (target == null && !groupChanged) {
+            selectedChannelId?.takeIf { id -> groupedChannels.any { it.channel.id == id } }
+        } else {
+            null
+        }
     val targetId = target?.channel?.id
+        ?: keptId
         ?: groupedChannels.firstOrNull()?.channel?.id
     selectedChannelId = targetId
 
-    val targetIndex = groupedChannels.indexOfFirst { it.channel.id == targetId }
-    channelListState.scrollToItem(if (targetIndex > 0) targetIndex else 0)
+    // Scroll only when something has to move: a pending jump (restore-on-open,
+    // typed channel number) or a settle onto the first row. A kept selection is
+    // NOT scrolled to - its row has shifted by at most the rows added or removed
+    // above it, and re-seating it at the top of the viewport is the jump this
+    // exists to avoid.
+    if (keptId == null) {
+        val targetIndex = groupedChannels.indexOfFirst { it.channel.id == targetId }
+        channelListState.scrollToItem(if (targetIndex > 0) targetIndex else 0)
+    }
 
     if (target != null && wasPendingFocus) {
         // The row for a distant restore is not composed yet: scrollToItem has
@@ -1261,7 +1425,12 @@ Spacer(modifier = Modifier.height(14.dp))
                             latestOnPlayChannel?.invoke(item)
                             dismissSearch()
                         },
-                        onDismiss = { dismissSearch() }
+                        onInputEditingChanged = { editing ->
+                            searchInputEditing = editing
+                            searchInputChangedAt = System.currentTimeMillis()
+                        },
+                        endEditingSignal = searchEndEditingSignal,
+                        onDismiss = handleSearchBack
                     )
                 }
 
@@ -2770,9 +2939,18 @@ private fun ChannelSearchDialog(
     programHits: List<GuideProgramHit> = emptyList(),
     channelKey: (IptvChannelWithEpg) -> String,
     onQueryChanged: (String) -> Unit,
+    /** Reports the query field's editing session as it starts and ends. */
+    onInputEditingChanged: (Boolean) -> Unit,
+    /** Ends that session when the screen decides a Back belonged to it. */
+    endEditingSignal: Int,
     onPlay: (IptvChannelWithEpg) -> Unit,
     onDismiss: () -> Unit
 ) {
+    // Whether this device can run an in-app voice search at all - false on Fire
+    // OS, which ships no recognizer (see [voiceSearchAvailable]).
+    val voiceContext = androidx.compose.ui.platform.LocalContext.current
+    val voiceSearchHere = remember(voiceContext) { voiceSearchAvailable(voiceContext) }
+
     // Enter/Done on the query field must not close the overlay: the results
     // live BELOW the field, so dismissing on Done dropped the user back on the
     // guide having never seen them (Back, which only closes the IME, was the
@@ -2853,7 +3031,9 @@ private fun ChannelSearchDialog(
                 // scrolling the results walked the D-pad back over the field
                 // and put the keyboard up again, which made the list reachable
                 // only by pressing Back.
-                closeKeyboardOnBlur = true
+                closeKeyboardOnBlur = true,
+                onEditingChanged = onInputEditingChanged,
+                endEditingSignal = endEditingSignal
             )
             // Voice search: the same chip the global search screen uses, wired
             // into this overlay's query state. A transcript also bumps
@@ -2861,13 +3041,19 @@ private fun ChannelSearchDialog(
             // produced, exactly as Done on the field does - the alternative was
             // the user talking to the remote and then having to press DOWN
             // themselves to see what it found.
-            VoiceSearchChip(
-                onTranscript = { spoken ->
-                    onQueryChanged(spoken)
-                    submitTick++
-                },
-                prompt = "Search channels and programs"
-            )
+            //
+            // Drawn only where a recognizer exists. Fire OS has none, and a chip
+            // whose only possible outcome is nothing is worse than no chip at
+            // all - that was the reported "voice search just doesn't work".
+            if (voiceSearchHere) {
+                VoiceSearchChip(
+                    onTranscript = { spoken ->
+                        onQueryChanged(spoken)
+                        submitTick++
+                    },
+                    prompt = "Search channels and programs"
+                )
+            }
             if (results.isEmpty() && programHits.isEmpty()) {
                 Text(
                     text = if (query.isBlank()) {

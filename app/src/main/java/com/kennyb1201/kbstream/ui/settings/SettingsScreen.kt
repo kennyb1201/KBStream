@@ -8,9 +8,12 @@ import android.content.ActivityNotFoundException
 import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -29,8 +32,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.ClosedCaption
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.OndemandVideo
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
@@ -53,8 +69,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
@@ -88,6 +106,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
@@ -122,57 +141,69 @@ internal enum class SettingsGroup(val label: String) {
 internal enum class SettingsPane(
     val label: String,
     val group: SettingsGroup,
-    val blurb: String
+    val blurb: String,
+    /** The rail's leading glyph: a scan target, not decoration. */
+    val icon: ImageVector
 ) {
     INTEGRATIONS(
         "Integrations",
         SettingsGroup.LIBRARY,
-        "Profiles, add-ons, accounts and API keys"
+        "Profiles, add-ons, accounts and API keys",
+        Icons.Filled.Extension
     ),
     HIDDEN(
         "Hidden Titles",
         SettingsGroup.LIBRARY,
-        "Titles you hid from every screen"
+        "Titles you hid from every screen",
+        Icons.Filled.VisibilityOff
     ),
     PLAYBACK(
         "Playback",
         SettingsGroup.PLAYBACK,
-        "Auto-play, skipping, binge grouping and stream picks"
+        "Auto-play, skipping, binge grouping and stream picks",
+        Icons.Filled.PlayArrow
     ),
     VIDEO(
         "Video & Audio",
         SettingsGroup.PLAYBACK,
-        "Buffer, player engine, Dolby Vision and picture-in-picture"
+        "Buffer, player engine, Dolby Vision and picture-in-picture",
+        Icons.Filled.OndemandVideo
     ),
     LANGUAGE(
         "Language",
         SettingsGroup.PLAYBACK,
-        "Preferred audio and subtitle language"
+        "Preferred audio and subtitle language",
+        Icons.Filled.Language
     ),
     SUBTITLES(
         "Subtitles",
         SettingsGroup.PLAYBACK,
-        "Caption size, background and position"
+        "Caption size, background and position",
+        Icons.Filled.ClosedCaption
     ),
     INTERFACE(
         "Interface",
         SettingsGroup.APP,
-        "Home rails, posters, theme and notifications"
+        "Home rails, posters, theme and notifications",
+        Icons.Filled.Palette
     ),
     DATA(
         "Data & Backup",
         SettingsGroup.APP,
-        "Backup, restore, caches and clearing history"
+        "Backup, restore, caches and clearing history",
+        Icons.Filled.Storage
     ),
     SYNC(
         "Sync",
         SettingsGroup.APP,
-        "Cloud sync health and what has been uploaded"
+        "Cloud sync health and what has been uploaded",
+        Icons.Filled.Sync
     ),
     ABOUT(
         "About",
         SettingsGroup.APP,
-        "Version, build and the in-app updater"
+        "Version, build and the in-app updater",
+        Icons.Filled.Info
     );
 
     companion object {
@@ -369,6 +400,33 @@ fun SettingsScreen(
 
     val backupScope = rememberCoroutineScope()
 
+    // ── Settings search ───────────────────────────────────────────────
+    // The rail's query, and the row a jump is currently flashing. Navigation
+    // only: a result switches pane, scrolls its row into view and highlights it
+    // for a moment. Nothing here can change a setting.
+    var settingsSearchQuery by remember { mutableStateOf("") }
+    var flashingSetting by remember { mutableStateOf<SettingSearchEntry?>(null) }
+    val settingsSearchScope = rememberCoroutineScope()
+    val jumpToSetting: (SettingSearchEntry) -> Unit = { entry ->
+        selectedPane = entry.pane
+        AppPreferences.setLastSettingsPane(context, entry.pane.name)
+        settingsSearchQuery = ""
+        settingsSearchScope.launch {
+            // BringIntoViewRequester is a no-op until a node is attached, and
+            // the freshly selected pane has not composed yet when this runs,
+            // so the earliest asks land on nothing rather than failing. Ask
+            // once per frame: by the second or third the row exists and its
+            // anchor scrolls it in.
+            repeat(4) {
+                withFrameNanos { }
+                runCatching { entry.anchor.bringIntoView() }
+            }
+            flashingSetting = entry
+            delay(SETTINGS_SEARCH_FLASH_MS)
+            if (flashingSetting === entry) flashingSetting = null
+        }
+    }
+
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -452,17 +510,25 @@ fun SettingsScreen(
                 onSelect = { pane ->
                     selectedPane = pane
                     AppPreferences.setLastSettingsPane(context, pane.name)
-                }
+                },
+                searchQuery = settingsSearchQuery,
+                onSearchQueryChange = { settingsSearchQuery = it },
+                onPickResult = jumpToSetting
             )
         }
         SettingsContentHost(
             title = selectedPane.label,
             blurb = selectedPane.blurb,
-            scrollable = selectedPane != SettingsPane.HIDDEN
+            scrollable = selectedPane != SettingsPane.HIDDEN,
+            flashing = flashingSetting
         ) {
                 if (selectedPane == SettingsPane.INTEGRATIONS) {
 
+                    SettingsSectionHeader("Sync", first = true)
+
                     com.kennyb1201.kbstream.ui.settings.SyncSection()
+
+                    SettingsSectionHeader("Profiles & Accounts")
 
                     NavigationRow(
                         label = "Profiles",
@@ -497,6 +563,8 @@ fun SettingsScreen(
                         description = "Connect your Simkl account for scrobbling",
                         onClick = onOpenSimkl
                     )
+                SettingsSectionHeader("API Keys")
+
                 // MDBList API key: mdblist.com key enables the critic ratings
                 // row (IMDb / RT / Metacritic / TMDB / Trakt / Letterboxd / MAL)
                 // on detail pages. Declared before the card so the card's click
@@ -802,6 +870,8 @@ fun SettingsScreen(
                 )
 
                 // ── STREAM BADGES (KB-compatible packs) ────────────────
+                SettingsSectionHeader("Badges")
+
                 val badgeFocusRequester = remember { FocusRequester() }
                 var badgesAboveFile by remember {
                     mutableStateOf(AppPreferences.getBadgesAboveFile(context))
@@ -812,6 +882,8 @@ fun SettingsScreen(
                 ) {
                     Column(
                         modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KBSurfaceRaised, KBShapeSmall)
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
                         Text(
@@ -943,6 +1015,8 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.DATA) {
+                SettingsSectionHeader("Backup & Restore", first = true)
+
                 NavigationRow(
                     label = "Export Backup",
                     description = "Save settings, add-ons & watched state to a file",
@@ -959,6 +1033,8 @@ fun SettingsScreen(
                         launchImportBackup()
                     }
                 )
+
+                SettingsSectionHeader("History")
 
                 NavigationRow(
                     label = if (clearingHistory) "Clearing..." else "Clear Continue Watching",
@@ -992,6 +1068,8 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.PLAYBACK) {
+                SettingsSectionHeader("Audio", first = true)
+
                 Text(
                     text = "Audio Decoder",
                     color = KBTextHi,
@@ -1113,6 +1191,8 @@ fun SettingsScreen(
                 )
 
                 Spacer(modifier = Modifier.height(14.dp))
+
+                SettingsSectionHeader("Player Engine")
 
                 Text(
                     text = "Playback engine",
@@ -1318,6 +1398,8 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
+                SettingsSectionHeader("Dolby Vision & HDR")
+
                 Text(
                     text = "Dolby Vision",
                     color = KBTextHi,
@@ -1418,6 +1500,8 @@ fun SettingsScreen(
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
+
+                SettingsSectionHeader("Stream Picks & Auto-play")
 
                 ToggleRow(
                     label = "Auto-select Stream",
@@ -1619,6 +1703,8 @@ fun SettingsScreen(
                 }
                 Spacer(modifier = Modifier.height(10.dp))
 
+                SettingsSectionHeader("Skipping & Frame Rate")
+
                 ToggleRow(
                     label = "Auto-skip Intros",
                     description = "Skip intros and recaps the moment they start, using IntroDB timestamps. Off keeps the SKIP INTRO button, so the choice stays yours. In the External player engine, which has nowhere to draw that button, the segment is skipped before the hand-off instead.",
@@ -1660,6 +1746,8 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.INTERFACE) {
+                SettingsSectionHeader("Notifications", first = true)
+
                 ToggleRow(
                     label = "New Episode Notifications",
                     description = if (!notificationsAllowed) {
@@ -1735,6 +1823,8 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                SettingsSectionHeader("Theme")
+
                 AccentColorPicker()
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -1764,6 +1854,8 @@ fun SettingsScreen(
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                SettingsSectionHeader("Hero & Clock")
 
                 ToggleRow(
                     label = "Hero Trailer Autoplay",
@@ -1813,6 +1905,8 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
+                SettingsSectionHeader("Home Rails")
+
                 ToggleRow(
                     label = "Show Catalog Type on Home Rails",
                     description = "Append Movies / Series / All after the rail name (e.g. \"Trending · Series\"). Applies when you return to Home.",
@@ -1860,6 +1954,8 @@ fun SettingsScreen(
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                SettingsSectionHeader("Posters & Browsing")
 
                 ToggleRow(
                     label = "Poster Titles",
@@ -2049,6 +2145,8 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.VIDEO) {
+                SettingsSectionHeader("Buffering & Playback", first = true)
+
                 Text(
                     text = "Network Buffer",
                     color = KBTextHi,
@@ -2170,6 +2268,8 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
+                SettingsSectionHeader("Picture")
+
                 Text(
                     text = "Default Aspect Ratio",
                     color = KBTextHi,
@@ -2189,6 +2289,8 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.LANGUAGE) {
+                SettingsSectionHeader("Audio", first = true)
+
                 Text(
                     text = "Preferred Audio Language",
                     color = KBTextHi,
@@ -2204,6 +2306,8 @@ fun SettingsScreen(
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                SettingsSectionHeader("Subtitles")
 
                 Text(
                     text = "Preferred Subtitle Language",
@@ -2221,6 +2325,8 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.SUBTITLES) {
+                SettingsSectionHeader("Behavior", first = true)
+
                 Text(
                     text = "Mode",
                     color = KBTextHi,
@@ -2247,6 +2353,8 @@ fun SettingsScreen(
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
+
+                SettingsSectionHeader("Appearance")
 
                 Text(
                     text = "Default Size",
@@ -2311,11 +2419,21 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.SYNC) {
-                    SyncHealthSection()
+                    // Anchored as a whole pane, not as a row: the sync pane has
+                    // no setting of its own, so its index entry is the pane.
+                    SyncHealthSection(
+                        modifier = Modifier.searchAnchor(
+                            SettingsSearchIndex.entryFor("${SECTION_KEY_PREFIX}sync-health")
+                        )
+                    )
                 }
 
                 if (selectedPane == SettingsPane.ABOUT) {
-                    AboutSection()
+                    AboutSection(
+                        modifier = Modifier.searchAnchor(
+                            SettingsSearchIndex.entryFor("${SECTION_KEY_PREFIX}about-updates")
+                        )
+                    )
                 }
 
         }
@@ -2382,7 +2500,10 @@ fun SettingsScreen(
 @Composable
 private fun SettingsNavRail(
     selected: SettingsPane,
-    onSelect: (SettingsPane) -> Unit
+    onSelect: (SettingsPane) -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    onPickResult: (SettingSearchEntry) -> Unit
 ) {
     // TV entry point: focus lands on the first rail item once. Selecting a
     // pane must NOT move focus — the user stays on the rail to keep browsing.
@@ -2404,6 +2525,40 @@ private fun SettingsNavRail(
             style = MaterialTheme.typography.headlineMedium,
             modifier = Modifier.padding(bottom = 8.dp)
         )
+
+        // Search filters the ROW list, not the pane list: the rail is only ten
+        // entries, and "which pane is the frame-rate switch in" is the question
+        // this answers. With a query up the grouped rail is replaced by flat
+        // results grouped by pane. An empty query renders the rail exactly as
+        // it always did - the field is the only thing added.
+        KBTextField(
+            value = searchQuery,
+            onValueChange = onSearchQueryChange,
+            placeholder = "Search settings",
+            modifier = Modifier.fillMaxWidth(),
+            leading = {
+                Icon(
+                    imageVector = Icons.Filled.Search,
+                    contentDescription = null,
+                    tint = KBTextLo,
+                    modifier = Modifier.size(18.dp)
+                )
+            },
+            // Manual IME, like the setup panel's fields: focus alone must not
+            // raise the full-screen TV keyboard over the results. OK starts
+            // editing, Done ends it and keeps focus so DOWN reaches the list.
+            openKeyboardOnFocus = false
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+
+        if (searchQuery.isNotBlank()) {
+            SettingsSearchResults(
+                results = remember(searchQuery) { SettingsSearchIndex.search(searchQuery) },
+                onPick = onPickResult
+            )
+            return@Column
+        }
+
         // Group heading drawn inline, before the first row of each group. One
         // flat pass over the panes leaves the row layout and its braces below
         // untouched, and because the panes are declared group-major each
@@ -2454,11 +2609,26 @@ private fun SettingsNavRail(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = pane.label,
-                        color = if (selectedHere) KBAccent else KBTextHi,
-                        style = MaterialTheme.typography.titleSmall
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = pane.icon,
+                            contentDescription = null,
+                            tint = if (selectedHere) KBAccent else KBTextLo,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = pane.label,
+                            color = if (selectedHere) KBAccent else KBTextHi,
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.padding(start = 12.dp)
+                        )
+                    }
+                    // Read-only status dot / count. Never focusable, so the
+                    // D-pad order is exactly what it was.
+                    SettingsRailBadge(pane)
                     if (selectedHere) {
                         Icon(
                             imageVector = Icons.Filled.ChevronRight,
@@ -2483,6 +2653,9 @@ private fun SettingsContentHost(
     // LazyColumn measured against that throws, so that pane scrolls itself
     // and this host only lays it out.
     scrollable: Boolean = true,
+    // The row a search jump is flashing, so the pane's rows can highlight it
+    // without every call site being handed the state (see LocalFlashingSetting).
+    flashing: SettingSearchEntry? = null,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit
 ) {
     // No focus stealing here: switching panes keeps focus on the rail.
@@ -2517,12 +2690,165 @@ private fun SettingsContentHost(
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(bottom = 14.dp)
         )
-        content()
+        CompositionLocalProvider(LocalFlashingSetting provides flashing) {
+            content()
+        }
     }
 }
 
+/**
+ * The flat result list shown while the rail's search box has a query.
+ *
+ * Grouped by pane with a small pane label, because which pane a setting is in
+ * is exactly what the viewer did not know. Selecting a row navigates; it can
+ * never change anything.
+ */
 @Composable
-private fun AboutSection() {
+private fun SettingsSearchResults(
+    results: List<SettingSearchEntry>,
+    onPick: (SettingSearchEntry) -> Unit
+) {
+    if (results.isEmpty()) {
+        Text(
+            text = "No settings match",
+            color = KBTextLo,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(start = 14.dp, top = 4.dp)
+        )
+        return
+    }
+    var drawnPane: SettingsPane? = null
+    results.take(SETTINGS_SEARCH_MAX_RESULTS).forEach { entry ->
+        if (entry.pane != drawnPane) {
+            drawnPane = entry.pane
+            Text(
+                text = entry.pane.label.uppercase(),
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 2.dp)
+            )
+        }
+        KBCard(
+            onClick = { onPick(entry) },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, KBShapeSmall)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = entry.label,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = entry.pane.label,
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A rail row's status badge: an accent dot, a warning dot, or a count.
+ *
+ * Indicators only - nothing here is focusable, so D-pad order is untouched and
+ * clicking still just selects the pane. Each badge collects the same StateFlow
+ * the pane itself reads, so there is no second source of truth to drift.
+ */
+@Composable
+private fun SettingsRailBadge(pane: SettingsPane) {
+    when (pane) {
+        SettingsPane.ABOUT -> {
+            val state by AppUpdater.state.collectAsStateWithLifecycle()
+            val pending = state is AppUpdater.UpdateState.Available ||
+                state is AppUpdater.UpdateState.Downloading ||
+                state is AppUpdater.UpdateState.ReadyToInstall
+            if (pending) RailDot()
+        }
+        SettingsPane.SYNC -> {
+            val syncing by SupabaseSync.isSyncing.collectAsStateWithLifecycle()
+            val auth by SupabaseSync.authState.collectAsStateWithLifecycle()
+            val pendingUploads by SupabaseSync.pendingOutboxCount.collectAsStateWithLifecycle()
+            // A failed or signed-out session with rows still queued is the one
+            // state a viewer cannot see anywhere else on this screen.
+            val stalled = auth is SupabaseSync.AuthState.Error ||
+                (auth is SupabaseSync.AuthState.SignedOut && pendingUploads > 0)
+            when {
+                syncing -> RailDot()
+                stalled -> RailDot(color = KBDanger)
+                else -> Unit
+            }
+        }
+        SettingsPane.INTEGRATIONS -> {
+            val context = LocalContext.current
+            // The same singleton the Addons screen and Home share, so the count
+            // is live rather than read once.
+            val addonManager = remember(context) {
+                com.kennyb1201.kbstream.data.addon.AddonManager
+                    .getInstance(context.applicationContext)
+            }
+            val addons by addonManager.installedAddons.collectAsStateWithLifecycle()
+            if (addons.isNotEmpty()) {
+                Text(
+                    text = addons.size.toString(),
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
+        }
+        else -> Unit
+    }
+}
+
+/** The 8dp status dot a rail badge uses, or nothing at all. */
+@Composable
+private fun RailDot(color: Color = KBAccent) {
+    Box(
+        modifier = Modifier
+            .padding(start = 8.dp)
+            .size(8.dp)
+            .background(color, CircleShape)
+    )
+}
+
+/**
+ * A pane's group heading: the visual break between clusters of related rows.
+ *
+ * Presentational only. It carries no preference, is not focusable, and is not
+ * in [SettingsSearchIndex] - a heading can never be a search result, a jump
+ * target, or something the viewer can change by mistake. Uppercase at
+ * [KBAccent] and small, so it reads as a caption over the rows rather than as
+ * one of them. [first] drops the top gap for a pane's opening heading, where
+ * the pane title and blurb above already supply it.
+ */
+@Composable
+private fun ColumnScope.SettingsSectionHeader(text: String, first: Boolean = false) {
+    Text(
+        text = text.uppercase(),
+        color = KBAccent,
+        style = MaterialTheme.typography.labelSmall,
+        modifier = Modifier.padding(
+            start = 4.dp,
+            top = if (first) 0.dp else 16.dp,
+            bottom = 2.dp
+        )
+    )
+}
+
+@Composable
+private fun AboutSection(modifier: Modifier = Modifier) {
     // About pane: build identity + the in-app update flow. Updates live here
     // (not in Integrations) — it's app plumbing, not an integration.
     //
@@ -2534,7 +2860,7 @@ private fun AboutSection() {
     // row reads. Shown whichever build is current, so "what changed last" is
     // visible without waiting for an update to exist.
     val changelog by AppUpdater.latestChangelog.collectAsStateWithLifecycle()
-    Column {
+    Column(modifier = modifier) {
         KBCard(onClick = {}, modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier
@@ -2597,7 +2923,7 @@ private fun AboutSection() {
  * outbox backlog, realtime channel state, and a one-shot force resync.
  */
 @Composable
-private fun SyncHealthSection() {
+private fun SyncHealthSection(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val sync = com.kennyb1201.kbstream.data.sync.SupabaseSync
     val profileManager = com.kennyb1201.kbstream.data.sync.ProfileManager
@@ -2631,7 +2957,7 @@ private fun SyncHealthSection() {
         else -> "signed out"
     }
 
-    Column {
+    Column(modifier = modifier) {
         Text(
             text = "SYNC HEALTH",
             color = KBAccent,
@@ -2797,16 +3123,28 @@ private fun SyncStatRow(label: String, value: String) {
             .padding(horizontal = 4.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // The LABEL keeps its intrinsic width on a single line and the VALUE
+        // takes the weight. The order matters: in a Row the un-weighted
+        // children are measured first with the whole row available, so a value
+        // that has to wrap claims the full width and starves the weighted
+        // label down to a one-glyph column. That is what turned "CLEANUP"
+        // into letters stacked vertically over its own value — its sweep
+        // detail ("completed - history=0 overrides=0 - ...") is the only sync
+        // value long enough to wrap. Same failure as the add-on header and the
+        // Settings chip grids.
         Text(
             text = label,
             color = KBTextLo,
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.weight(1f)
+            maxLines = 1
         )
+        Spacer(modifier = Modifier.width(12.dp))
         Text(
             text = value,
             color = KBTextHi,
-            style = MaterialTheme.typography.bodySmall
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+            textAlign = TextAlign.End
         )
     }
 }
@@ -2876,8 +3214,8 @@ private fun UpdateRow() {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(KBSurfaceRaised, KBShapeChip)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .background(KBSurfaceRaised, KBShapeSmall)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -3242,6 +3580,22 @@ private fun AccentSwatch(name: String, color: Color, selected: Boolean) {
     }
 }
 
+/** Whether [entry] is the row a search jump is highlighting right now. */
+@Composable
+private fun isFlashingSetting(entry: SettingSearchEntry?): Boolean {
+    val flashing = LocalFlashingSetting.current
+    return entry != null && flashing === entry
+}
+
+/**
+ * The row's bring-into-view anchor, or nothing when it is not searchable.
+ *
+ * The requester lives on the index entry rather than the row so it survives
+ * the pane being closed, which is exactly the case a search jump is in.
+ */
+private fun Modifier.searchAnchor(entry: SettingSearchEntry?): Modifier =
+    if (entry == null) this else this.bringIntoViewRequester(entry.anchor)
+
 @Composable
 private fun ToggleRow(
     label: String,
@@ -3250,17 +3604,32 @@ private fun ToggleRow(
     onToggle: (Boolean) -> Unit,
     enabled: Boolean = true,
     /** Forces the displayed state (e.g. showing OFF for a gated toggle) without touching the stored value. */
-    checkedOverride: Boolean? = null
+    checkedOverride: Boolean? = null,
+    /**
+     * An override for [SettingsSearchIndex], for a row whose displayed label
+     * is not the one the index knows. An ordinary row needs nothing: it is
+     * bound by its own [label], so every existing call site became searchable
+     * without being touched.
+     */
+    searchKey: String? = null
 ) {
     val displayChecked = checkedOverride ?: checked
+    val searchEntry = searchKey?.let { SettingsSearchIndex.entryFor(it) }
+        ?: SettingsSearchIndex.entryForLabel(label)
+    val flashing = isFlashingSetting(searchEntry)
     KBCard(
         onClick = { if (enabled) onToggle(!checked) },
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .searchAnchor(searchEntry)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(KBSurfaceRaised, KBShapeSmall)
+                .background(
+                    if (flashing) KBAccent.copy(alpha = 0.25f) else KBSurfaceRaised,
+                    KBShapeSmall
+                )
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
@@ -3374,17 +3743,35 @@ private fun FrameRateDiagnosticLine(label: String, value: String) {
 private fun NavigationRow(
     label: String,
     description: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    /**
+     * An override for [SettingsSearchIndex], for a row whose displayed label
+     * is not the one the index knows. An ordinary row needs nothing: it is
+     * bound by its own [label], so every existing call site became searchable
+     * without being touched.
+     */
+    searchKey: String? = null
 ) {
+    val searchEntry = searchKey?.let { SettingsSearchIndex.entryFor(it) }
+        ?: SettingsSearchIndex.entryForLabel(label)
+    val flashing = isFlashingSetting(searchEntry)
     KBCard(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .searchAnchor(searchEntry)
     ) {
+        // Same rhythm as ToggleRow: one row primitive, one shape, one padding.
+        // It used to sit at 16/14 on KBShapeChip, which made the two halves of
+        // the same pane look like two different screens.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(KBSurfaceRaised, KBShapeChip)
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .background(
+                    if (flashing) KBAccent.copy(alpha = 0.25f) else KBSurfaceRaised,
+                    KBShapeSmall
+                )
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -3475,8 +3862,8 @@ private fun androidx.compose.foundation.layout.ColumnScope.HiddenTitlesSection()
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(KBSurfaceRaised, KBShapeChip)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .background(KBSurfaceRaised, KBShapeSmall)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {

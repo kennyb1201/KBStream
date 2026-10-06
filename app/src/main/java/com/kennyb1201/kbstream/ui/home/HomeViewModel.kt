@@ -28,6 +28,7 @@ import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.simkl.UPCOMING_DIAGNOSTICS
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
+import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
@@ -683,6 +684,28 @@ class HomeViewModel(
                             ?.let { _heroLogoUrl.value = it }
                     }
 
+                    // The info leg gets the same head start as the art, and
+                    // for the same reason. The TMDB detail carries the year,
+                    // certification, status, season/episode count, synopsis
+                    // and cast the hero prints - and behind a rail prefetch
+                    // it answers from the cache in a frame or two, while the
+                    // add-on meta leg is a network round trip to the add-on
+                    // that is routinely the slowest thing on this screen.
+                    // Publishing it as it lands is what stops the hero's info
+                    // line and synopsis from sitting empty until the add-on
+                    // answers. The composite Meta still follows below with
+                    // finalMeta and refines the same fields; the trailer key
+                    // published here arms the pre-playback source resolve
+                    // that much earlier (HomeHeroHost pre-warms on the key).
+
+                    launch {
+                        val earlyDetail = tmdbDetailDeferred.await()
+                        if (earlyDetail != null) {
+                            _heroTmdbDetail.value = earlyDetail
+                            _heroTrailerKey.value = heroTrailerKeyOf(earlyDetail)
+                        }
+                    }
+
                     val resolvedAddonMeta = addonMetaDeferred.await()
                     val resolvedTmdbDetail = tmdbDetailDeferred.await()
 
@@ -832,15 +855,7 @@ Log.d(
                     _heroBackdropUrl.value = resolvedBackdrop
                     _heroLogoUrl.value = resolvedLogo
                     _heroTmdbDetail.value = resolvedTmdbDetail
-                    _heroTrailerKey.value = resolvedTmdbDetail?.videos?.results
-                        ?.asSequence()
-                        ?.filter { video ->
-                            video.site.equals("YouTube", ignoreCase = true) &&
-                                video.type.equals("Trailer", ignoreCase = true) &&
-                                video.key.isNotBlank()
-                        }
-                        ?.firstOrNull()
-                        ?.key
+                    _heroTrailerKey.value = heroTrailerKeyOf(resolvedTmdbDetail)
 
                     Log.d(
                         "HOME_HERO",
@@ -907,47 +922,60 @@ Log.d(
         viewModelScope.launch {
             try {
                 coroutineScope {
-                    toWarm.map { item ->
+                    toWarm.mapIndexed { index, item ->
                         async {
-                            heroArtPrefetchSemaphore.withPermit {
-                                try {
-                                    val detail = when {
-                                        item.id.startsWith("tmdb:", ignoreCase = true) ->
-                                            item.id.substringAfter(":").toIntOrNull()
-                                                ?.let { tmdbRepository.getDetailByTmdbId(it, item.type) }
+                            val artwork =
+                                heroArtPrefetchSemaphore.withPermit {
+                                    try {
+                                        val detail = when {
+                                            item.id.startsWith("tmdb:", ignoreCase = true) ->
+                                                item.id.substringAfter(":").toIntOrNull()
+                                                    ?.let { tmdbRepository.getDetailByTmdbId(it, item.type) }
 
-                                        item.id.startsWith("tt", ignoreCase = true) ->
-                                            tmdbRepository.fetchEnrichedMetaCached(item.id, item.type)
+                                            item.id.startsWith("tt", ignoreCase = true) ->
+                                                tmdbRepository.fetchEnrichedMetaCached(item.id, item.type)
 
-                                        item.id.toIntOrNull() != null ->
-                                            item.id.toIntOrNull()
-                                                ?.let { tmdbRepository.getDetailByTmdbId(it, item.type) }
+                                            item.id.toIntOrNull() != null ->
+                                                item.id.toIntOrNull()
+                                                    ?.let { tmdbRepository.getDetailByTmdbId(it, item.type) }
 
-                                        else -> null
+                                            else -> null
+                                        }
+
+                                        val tmdbId = when {
+                                            item.id.startsWith("tmdb:", ignoreCase = true) ->
+                                                item.id.substringAfter(":").toIntOrNull()
+                                            item.id.toIntOrNull() != null -> item.id.toIntOrNull()
+                                            else -> detail?.id
+                                        }
+
+                                        if (tmdbId != null && tmdbId > 0) {
+                                            tmdbHeroArtworkRepository.resolve(
+                                                id = "tmdb:$tmdbId",
+                                                type = item.type,
+                                                tmdbId = tmdbId
+                                            )
+                                        } else {
+                                            null
+                                        }
+                                    } catch (e: kotlinx.coroutines.CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        // Silent: prefetch is best-effort; the
+                                        // focus path handles failures properly.
+                                        null
+                                    } finally {
+                                        heroArtPrefetchInFlight.remove("${item.type}:${item.id}")
                                     }
-
-                                    val tmdbId = when {
-                                        item.id.startsWith("tmdb:", ignoreCase = true) ->
-                                            item.id.substringAfter(":").toIntOrNull()
-                                        item.id.toIntOrNull() != null -> item.id.toIntOrNull()
-                                        else -> detail?.id
-                                    }
-
-                                    if (tmdbId != null && tmdbId > 0) {
-                                        tmdbHeroArtworkRepository.resolve(
-                                            id = "tmdb:$tmdbId",
-                                            type = item.type,
-                                            tmdbId = tmdbId
-                                        )
-                                    }
-                                } catch (e: kotlinx.coroutines.CancellationException) {
-                                    throw e
-                                } catch (_: Exception) {
-                                    // Silent: prefetch is best-effort; the
-                                    // focus path handles failures properly.
-                                } finally {
-                                    heroArtPrefetchInFlight.remove("${item.type}:${item.id}")
                                 }
+
+                            // Deliberately OUTSIDE the permit. Warming the image
+                            // bytes is Coil's network work, not TMDB's, and
+                            // holding a prefetch permit across it would push
+                            // back every URL warm queued behind it - the warms
+                            // the hero's focus path is the reason for.
+                            if (index < HERO_ART_IMAGE_WARM_LIMIT) {
+                                warmHeroArtImages(artwork)
                             }
                         }
                     }.awaitAll()
@@ -958,6 +986,44 @@ Log.d(
                 // Scope-level failure (viewmodel clearing): nothing to do.
             } finally {
                 toWarm.forEach { heroArtPrefetchInFlight.remove("${it.type}:${it.id}") }
+            }
+        }
+    }
+
+    /**
+     * Fills Coil's cache with the images the hero will draw for one prefetched
+     * title, so that the first time that title owns the hero its backdrop and
+     * clearlogo paint from the cache instead of from a fresh download. This is
+     * the difference between the hero swapping its held-over art for the new
+     * title's in a frame and it going blank/plain-title for the length of a
+     * CDN round trip - and on a fast rail scroll, of every hero change paying
+     * that trip while the previous title's art is already on screen.
+     *
+     * Disk, not memory: the warm decodes a thumbnail, which is a fraction of
+     * the size the hero asks for, so it is not the bitmap the hero draws -
+     * keeping it resident would only evict art that IS on screen. Coil's disk
+     * cache is keyed by URL rather than by size, so the hero's own (much
+     * larger) request for the same URL then reads these bytes locally.
+     *
+     * Best-effort: a failure here is exactly the state before the warm existed,
+     * and the focus path resolves the same URL over the network.
+     */
+    private suspend fun warmHeroArtImages(artwork: HeroArtwork?) {
+        val targets = heroArtWarmTargets(artwork)
+        if (targets.isEmpty()) return
+
+        val application = getApplication<Application>()
+        val imageLoader = coil3.SingletonImageLoader.get(application)
+
+        targets.forEach { target ->
+            runCatchingCancellable {
+                imageLoader.execute(
+                    coil3.request.ImageRequest.Builder(application)
+                        .data(target.url)
+                        .size(target.width, target.height)
+                        .memoryCachePolicy(coil3.request.CachePolicy.DISABLED)
+                        .build()
+                )
             }
         }
     }
@@ -1448,6 +1514,59 @@ Log.d(
     }
 
     /**
+     * Drops TRACKER cards for titles this profile completed on this device
+     * within the last [JUST_COMPLETED_CARD_SUPPRESSION_MS].
+     *
+     * Continue Watching is a merge of this profile's own history and the
+     * tracker feeds. A completion leaves the local side the instant it is
+     * written, but the tracker's copy of the title is stale by definition - and
+     * a fetch that fails (or is answered before the tracker moved on) puts the
+     * finished card back, which is why "something stays in Continue Watching
+     * for about forty-five seconds after watching it". The local completion is
+     * the one input already known to be true, so it decides here instead of the
+     * rail waiting on a feed.
+     *
+     * Read fresh on every call: the row that matters is the one the player just
+     * wrote, and it is small (completed rows updated in the window, with no
+     * in-progress sibling). Any read failure returns the list untouched - a
+     * card too many beats hiding a rail on a database hiccup.
+     */
+    private suspend fun dropJustCompletedTrackerCards(
+        items: List<UpNextItem>
+    ): List<UpNextItem> {
+        if (items.isEmpty()) return items
+
+        val rows =
+            try {
+                historyDao.getRecentlyCompletedWithoutResume(
+                    System.currentTimeMillis() - JUST_COMPLETED_CARD_SUPPRESSION_MS
+                )
+            } catch (_: Exception) {
+                return items
+            }
+
+        if (rows.isEmpty()) return items
+
+        val marks =
+            rows.mapNotNull { row ->
+                completedTitleMark(
+                    parentId = row.parentId,
+                    parentType = row.type,
+                    tmdbId = null,
+                    season = row.season,
+                    episode = row.episode,
+                    title = row.name
+                )
+            }
+
+        if (marks.isEmpty()) return items
+
+        return items.filterNot { item ->
+            trackerCardJustCompletedByProfile(item, marks)
+        }
+    }
+
+    /**
      * Filters the merged Up Next list against locally dismissed titles (see
      * [removeFromContinueWatching]). A dismissal stays in effect until there
      * is watch activity for the title NEWER than the dismissal time - a
@@ -1474,7 +1593,7 @@ Log.d(
             dismissedContinueWatching.isEmpty() ||
             profileSafe.isEmpty()
         ) {
-            return profileSafe
+            return dropJustCompletedTrackerCards(profileSafe)
         }
 
         var changed =
@@ -1509,7 +1628,9 @@ Log.d(
             persistDismissedContinueWatching()
         }
 
-        return filtered
+        // Last: a title this profile just finished comes off the rail however
+        // the feed still describes it.
+        return dropJustCompletedTrackerCards(filtered)
     }
 
     /**
@@ -8045,6 +8166,15 @@ private suspend fun calculateEpisodesRemaining(
                 runCatchingCancellable {
                     simklRepository.clearContinueWatchingCache()
                 }
+
+                // The completion is already in the local history database when
+                // this fires, so the card for what was just finished comes off
+                // the rail HERE - before the re-merge below, and whatever the
+                // tracker feeds (or a failed fetch) still say about it.
+                _upNext.value =
+                    dropJustCompletedTrackerCards(
+                        _upNext.value
+                    )
 
                 refreshUpNext()
 

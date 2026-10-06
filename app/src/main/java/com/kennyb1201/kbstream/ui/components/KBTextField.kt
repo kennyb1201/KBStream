@@ -133,7 +133,25 @@ fun KBTextField(
      * pressed on the field again, which is what keeps the rest of the screen
      * reachable while the list is being browsed.
      */
-    closeKeyboardOnBlur: Boolean = false
+    closeKeyboardOnBlur: Boolean = false,
+    /**
+     * Reports the editing session as it starts and ends.
+     *
+     * Fired once with the initial value too, because a caller's guard is only
+     * correct if it knows the session STARTED as well as that it ended. The
+     * guide's search overlay uses it to tell whether a Back belongs to the
+     * keyboard (close it, keep the results) or to the overlay (close it).
+     */
+    onEditingChanged: ((Boolean) -> Unit)? = null,
+    /**
+     * Ends the editing session when this value changes (any non-zero value).
+     *
+     * The counterpart of [onEditingChanged]: a caller that decides a Back
+     * belongs to the keyboard must be able to end the session itself, or a Back
+     * it kept would leave the field editable forever and no further Back could
+     * ever reach the screen behind it.
+     */
+    endEditingSignal: Int = 0
 ) {
     var focused by remember { mutableStateOf(false) }
     // Manual mode starts inert: the field only becomes editable (and only then
@@ -172,6 +190,17 @@ fun KBTextField(
     // pasted text.
     LaunchedEffect(editing, focused) {
         if (editing && focused) keyboardController?.show()
+    }
+
+    // Report the session outward (see [onEditingChanged]).
+    LaunchedEffect(editing) { onEditingChanged?.invoke(editing) }
+
+    // ...and honour a caller asking for it to end (see [endEditingSignal]).
+    LaunchedEffect(endEditingSignal) {
+        if (endEditingSignal > 0) {
+            keyboardController?.hide()
+            editing = false
+        }
     }
 
     BasicTextField(
@@ -279,9 +308,13 @@ fun KBTextField(
                         // Back while editing normally belongs to the IME (it
                         // closes the keyboard). When it reaches the app instead
                         // it must end editing, not fall through to the screen's
-                        // back handler and drop the whole form.
+                        // back handler and drop the whole form — which is
+                        // exactly what Fire OS does: its keyboard closes AND
+                        // hands the press on, so one Back used to take the
+                        // guide's search overlay with it. [closeKeyboardOnBlur]
+                        // fields are included for that reason.
                         Key.Back -> {
-                            if (editing && !openKeyboardOnFocus) {
+                            if (editing && (!openKeyboardOnFocus || closeKeyboardOnBlur)) {
                                 finishEditing()
                                 true
                             } else {

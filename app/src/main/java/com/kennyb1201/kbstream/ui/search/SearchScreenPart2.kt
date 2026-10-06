@@ -50,6 +50,7 @@ import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
+import com.kennyb1201.kbstream.ui.components.voiceSearchAvailable
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -158,6 +159,10 @@ internal fun SearchHero(
 ) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    // Whether this device can run an in-app voice search at all - false on Fire
+    // OS, which ships no recognizer (see [voiceSearchAvailable]).
+    val voiceContext = androidx.compose.ui.platform.LocalContext.current
+    val voiceSearchHere = remember(voiceContext) { voiceSearchAvailable(voiceContext) }
 
     Column(
         modifier = Modifier
@@ -194,19 +199,23 @@ internal fun SearchHero(
 
         // Voice search trigger — the shared chip (see VoiceSearchChip) so this
         // screen and the guide's search overlay reach the recognizer and light
-        // the mic up identically.
-        VoiceSearchChip(
-            onTranscript = { spoken ->
-                onQueryChanged(spoken)
-                onSubmit()
-                focusManager.clearFocus()
-            },
-            onUnavailable = {
-                // No recognizer installed on this device.
-                keyboardController?.hide()
-            },
-            modifier = Modifier.padding(top = 10.dp)
-        )
+        // the mic up identically. Offered only where a recognizer exists: Fire
+        // OS has none, so the chip there could only ever do nothing (see
+        // [voiceSearchAvailable]).
+        if (voiceSearchHere) {
+            VoiceSearchChip(
+                onTranscript = { spoken ->
+                    onQueryChanged(spoken)
+                    onSubmit()
+                    focusManager.clearFocus()
+                },
+                onUnavailable = {
+                    // No recognizer installed on this device.
+                    keyboardController?.hide()
+                },
+                modifier = Modifier.padding(top = 10.dp)
+            )
+        }
 
         val statusText = when {
             isLoading -> "Searching..."

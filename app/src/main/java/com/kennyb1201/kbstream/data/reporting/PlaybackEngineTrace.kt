@@ -8,8 +8,7 @@ package com.kennyb1201.kbstream.data.reporting
  * but logcat is not reachable from a TV remote, and the one report that asks
  * this question — "after Skip Intro this TV is out of decoder sources" — was
  * answered from a diagnostics dump that said nothing about decoders at all. The
- * `playback:` line names the start, the stalls and the rebuild count, and the
- * `trickplay:` line names the preview pipeline's own declines, but the recovery
+ * `playback:` line names the start, the stalls and the rebuild count, but the recovery
  * ladder in between — resource exhaustion, a missing decoder, a Dolby Vision
  * refusal, and the handoff to the backup engine — recorded nothing. A capture
  * therefore could not say whether the box had run dry of decoders, whether the

@@ -22,7 +22,7 @@ class SentryPerfTest {
     @Test
     fun `characters the metric key format forbids are folded to underscore`() {
         assertEquals("kbstream.perf.a_b_c", SentryPerf.metricKey("a/b:c"))
-        assertEquals("kbstream.perf.trickplay_frame", SentryPerf.metricKey("trickplay:frame"))
+        assertEquals("kbstream.perf.playback_stall", SentryPerf.metricKey("playback:stall"))
     }
 
     @Test

@@ -13,6 +13,8 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -75,6 +77,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 // lives in AddonsHomeManagerDialog.kt; the screen reaches it through the
 // three `internal` composables that file exports.
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AddonsScreen(
     onBack: () -> Unit,
@@ -130,15 +133,20 @@ fun AddonsScreen(
 
     val filteredAddons = remember(addons, filterQuery) {
         val q = filterQuery.trim().lowercase()
-        if (q.isEmpty()) {
-            addons
-        } else {
-            addons.filter { addon ->
-                addon.displayName.lowercase().contains(q) ||
-                    addon.id.lowercase().contains(q) ||
-                    addon.resources.any { it.lowercase().contains(q) }
+        val matching =
+            if (q.isEmpty()) {
+                addons
+            } else {
+                addons.filter { addon ->
+                    addon.displayName.lowercase().contains(q) ||
+                        addon.id.lowercase().contains(q) ||
+                        addon.resources.any { it.lowercase().contains(q) }
+                }
             }
-        }
+        // One row per manifest URL, and the rows below are KEYED by it - see
+        // distinctAddonRows for why the manifest id is not unique enough to
+        // keep a LazyColumn from throwing.
+        distinctAddonRows(matching)
     }
 
     // Right from an add-on list card must land on the detail panel's first
@@ -154,11 +162,21 @@ fun AddonsScreen(
             .padding(horizontal = 30.dp, vertical = 24.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
+            // Title on the left at its OWN width, action buttons wrapping on the
+            // right. The title used to be the weighted cell - the one that
+            // absorbs whatever the buttons leave - so on a set whose width in dp
+            // is small (this TV reports 960dp) six buttons squeezed "ADD-ONS"
+            // down to "ADD-O…", and the buttons at the end of the row
+            // (COPY FROM PROFILE, BACK) were laid out past the right edge with
+            // no way to reach them: there is no sideways scroll on a TV remote,
+            // so nothing may be laid out off the end of a row. A FlowRow wraps
+            // them onto a second line instead. Same fix, same reasoning as
+            // LanguageChipGrid in SettingsScreen.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Column(modifier = Modifier.padding(end = 16.dp)) {
                     KBPageTitle(text = "ADD-ONS")
                     Text(
                         text = when (addons.size) {
@@ -172,40 +190,44 @@ fun AddonsScreen(
                     )
                 }
 
-                ActionButton(
-                    label = if (refreshing) "REFRESHING" else "REFRESH ALL",
-                    icon = Icons.Filled.Refresh,
-                    enabled = !refreshing && !isLoading,
-                    onClick = viewModel::refreshAllManifests
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                ActionButton(
-                    label = if (checkingHealth) "CHECKING" else "CHECK HEALTH",
-                    icon = Icons.Filled.CheckCircle,
-                    enabled = !checkingHealth && !refreshing && !isLoading,
-                    onClick = viewModel::checkHealth
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                ActionButton(
-                    label = "ADD",
-                    icon = Icons.Filled.Add,
-                    onClick = { showAddPanel = true }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                ActionButton(
-                    label = "HOME / COLLECTIONS",
-                    icon = Icons.AutoMirrored.Filled.List,
-                    onClick = { showCatalogManager = true }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                ActionButton(
-                    label = "COPY FROM PROFILE",
-                    icon = Icons.AutoMirrored.Filled.List,
-                    enabled = profiles.any { it.id != activeProfile?.id },
-                    onClick = { showCopyDialog = true }
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                ActionButton(label = "BACK", onClick = onBack)
+                // Keeps the buttons right-aligned while they fit on one line;
+                // a wrapping FlowRow takes the width itself when they do not.
+                Spacer(modifier = Modifier.weight(1f))
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    ActionButton(
+                        label = if (refreshing) "REFRESHING" else "REFRESH ALL",
+                        icon = Icons.Filled.Refresh,
+                        enabled = !refreshing && !isLoading,
+                        onClick = viewModel::refreshAllManifests
+                    )
+                    ActionButton(
+                        label = if (checkingHealth) "CHECKING" else "CHECK HEALTH",
+                        icon = Icons.Filled.CheckCircle,
+                        enabled = !checkingHealth && !refreshing && !isLoading,
+                        onClick = viewModel::checkHealth
+                    )
+                    ActionButton(
+                        label = "ADD",
+                        icon = Icons.Filled.Add,
+                        onClick = { showAddPanel = true }
+                    )
+                    ActionButton(
+                        label = "HOME / COLLECTIONS",
+                        icon = Icons.AutoMirrored.Filled.List,
+                        onClick = { showCatalogManager = true }
+                    )
+                    ActionButton(
+                        label = "COPY FROM PROFILE",
+                        icon = Icons.AutoMirrored.Filled.List,
+                        enabled = profiles.any { it.id != activeProfile?.id },
+                        onClick = { showCopyDialog = true }
+                    )
+                    ActionButton(label = "BACK", onClick = onBack)
+                }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -282,7 +304,7 @@ fun AddonsScreen(
                             ) {
                                 items(
                                     items = filteredAddons,
-                                    key = { addon -> addon.id }
+                                    key = { addon -> addon.manifestUrl }
                                 ) { addon ->
                                     AddonListCard(
                                         addon = addon,

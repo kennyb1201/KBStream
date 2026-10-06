@@ -80,7 +80,6 @@ object Diagnostics {
         // session whose player never had a decoder problem (see
         // PlaybackEngineTrace), so a clean report stays short.
         PlaybackEngineTrace.summary()?.let { report.appendLine(it) }
-        trickplayLine()?.let { report.appendLine(it) }
         artLine()?.let { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
         // the bookkeeping behind "the binge offered an episode I had already
@@ -225,51 +224,6 @@ object Diagnostics {
     }
 
     /**
-     * What the scrub previews did, on a session that ever asked for one.
-     *
-     * "I never see a thumbnail when I scrub" has three very different owners: no
-     * preview was ever asked for - in which case this line is absent from the
-     * report entirely, which is itself the answer - one was asked for and never
-     * came back, or one came back too late to be shown. The last is `late`, and
-     * it is the one that is invisible from the outside: the frame was decoded,
-     * cached, and taken off screen before the press-length window ran out. The
-     * second decoder a preview needs is the thing TV boxes run out of first, so
-     * `off` says the session gave up, and the reason recorded beside it says
-     * which of the two answers applies: no decoder to spare, or a source that
-     * refused one. `slowest` separates a frame that was worth the wait from one
-     * that arrived after the viewer had moved on. `declined` is the other end of
-     * the same question: it names the scrub that asked for nothing at all, which
-     * this report could not otherwise tell from a session nobody scrubbed.
-     */
-    private fun trickplayLine(): String? {
-        val decoded = PerfTrace.count("trickplay.decode")
-        val missed = PerfTrace.count("trickplay.miss")
-        val declined = trickplayDeclines()
-        if (decoded == 0 && missed == 0 && declined == null) return null
-        return buildString {
-            append("trickplay: frames=").append(decoded)
-            append(" failed=").append(missed)
-            val late = PerfTrace.count("trickplay.late")
-            if (late > 0) append(" late=").append(late)
-            if (decoded > 0) {
-                append(" slowest=").append(PerfTrace.maxMs("trickplay.decode")).append("ms")
-            }
-            if (declined != null) append(" · declined: ").append(declined)
-            // The reasons used to be printed only once the pipeline had given
-            // up, which hid the most informative case of all: a session that
-            // failed its extractions but never reached the give-up count, so
-            // "frames=0 failed=2" landed in the report with no statement of why
-            // anywhere in it. Anything that failed says why now.
-            if (missed > 0) append(" · why: ").append(trickplayReasons())
-            if (PerfTrace.count("trickplay.off") > 0) {
-                append(" · off for this session")
-            } else if (late > 0) {
-                append(" · frames arrived after the card closed")
-            }
-        }
-    }
-
-    /**
      * How the landscape cards' artwork lookups went, or null when there were
      * none (the toggle is off by default, and a build that needs no artwork
      * records nothing).
@@ -292,32 +246,6 @@ object Diagnostics {
             }
         }
     }
-
-    /**
-     * Every reason a preview was not produced this session, oldest first.
-     *
-     * Kept as the labels of the trace samples themselves so the answer costs no
-     * extra state: a preview that never came back recorded why (a decoder the
-     * box would not hand out, a seek that never settled, a source that refused)
-     * and this is that reason, read back.
-     */
-    private fun trickplayReasons(): String =
-        PerfTrace.latestByPrefix("trickplay.reason")
-            .joinToString(" / ") { it.first.removePrefix("trickplay.reason:") }
-            .ifEmpty { "no reason recorded" }
-
-    /**
-     * Every reason a scrub was turned away before it asked for a frame, oldest
-     * first, or null when no press was ever declined.
-     *
-     * Kept as the labels of the trace samples themselves, like the reasons
-     * above: a press that never reached the pipeline recorded why, and this is
-     * that reason read back.
-     */
-    private fun trickplayDeclines(): String? =
-        PerfTrace.latestByPrefix("trickplay.decline")
-            .joinToString(" / ") { it.first.removePrefix("trickplay.decline:") }
-            .ifEmpty { null }
 
     private fun accountLine(): String {
         val state = SupabaseSync.authState.value

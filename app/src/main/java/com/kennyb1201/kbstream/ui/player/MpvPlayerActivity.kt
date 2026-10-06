@@ -357,36 +357,6 @@ class MpvPlayerActivity : ComponentActivity() {
     /** True while the seekbar is being dragged, so progress cannot fight it. */
     private var scrubbing = false
 
-    // --- Scrub previews (the main player's, on this engine) ---
-    //
-    // The same decoded frames the main player shows, from the same URL and
-    // headers. None of it goes through mpv - the preview is a second ExoPlayer
-    // that reads the stream itself (see TrickplayFrames) - so switching engines
-    // does not change what a scrub looks like.
-    private var trickplay: MpvScrubPreviews? = null
-    private var trickplayOverlay: TrickplayOverlay? = null
-
-    /** The view the card tracks, when the frame being asked for has one. */
-    private var trickplayAnchorView: View? = null
-
-    /**
-     * Whether a decoded frame is still worth putting on screen.
-     *
-     * A flag with a timer behind it rather than "is a scrub in progress": the
-     * frame for the position just scrubbed to is usually still being decoded when
-     * the key comes up (see [TRICKPLAY_SHOW_GRACE_MS]), so a flag cleared on the
-     * key release dropped every frame a press-and-release scrub had asked for.
-     * Armed by each request, cleared by [trickplayCardHider] once the viewer has
-     * genuinely stopped.
-     */
-    private var trickplayWanted = false
-
-    /** Clears [trickplayWanted] and takes the card away, on its own timer. */
-    private val trickplayCardHider = Runnable {
-        trickplayWanted = false
-        trickplayOverlay?.hide()
-    }
-
     // --- Audio tuning: the main player's AUDIO section, on this engine -----
     //
     // Same three knobs, same option lists ([PlayerAudioTuning]), same storage:
@@ -1476,10 +1446,6 @@ class MpvPlayerActivity : ComponentActivity() {
                 if (!fromUser || durationMs <= 0L) return
                 val posMs = durationMs * progress / 1000L
                 positionView?.text = formatClock(posMs)
-                // The bar is what the viewer is looking at, so the card tracks
-                // its thumb. A remote fires a lot of these on the way, and
-                // TrickplayFrames coalesces them onto one decode per bucket.
-                requestTrickplayFrame(posMs, anchorView = bar)
             }
 
             override fun onStartTrackingTouch(bar: SeekBar?) {
@@ -1493,7 +1459,6 @@ class MpvPlayerActivity : ComponentActivity() {
                     seekTo(durationMs * (bar?.progress ?: 0) / 1000L)
                 }
                 keepControlsVisible()
-                endTrickplayScrub()
             }
         })
 
@@ -1537,167 +1502,9 @@ class MpvPlayerActivity : ComponentActivity() {
 
     // --- Scrub previews -------------------------------------------------------
 
-    /**
-     * One seek press - made from the D-pad with the overlay down, or from the
-     * seek bar itself with it up: the jump, then the preview for the position it
-     * lands on.
-     *
-     * The preview has to be asked for here rather than from the bar's own
-     * progress listener: that one only ever sees a drag, and a TV remote never
-     * drags - which is why a remote-only scrub showed no thumbnails on this
-     * engine and on the main one alike. The bar is the anchor either way: the
-     * overlay-down press brings the overlay up and the card tracks the bar from
-     * there, and the overlay-up press is made on the bar itself. Where the card
-     * sits is resolved when the frame arrives (see TrickplayOverlay).
-     */
+    /** One seek press - from the D-pad with the overlay down, or the seek bar with it up. */
     private fun seekStepBy(deltaMs: Long) {
-        val from = runCatching { surface?.positionMs() ?: positionMs }.getOrDefault(positionMs)
         surface?.seekBy(deltaMs)
-        requestTrickplayFrame(
-            posMs = (from + deltaMs).coerceIn(0L, durationMs.coerceAtLeast(0L)),
-            anchorView = seekBar
-        )
-        endTrickplayScrub()
-    }
-
-    /**
-     * Asks for the decoded frame covering [posMs] — the position the seek bar has
-     * been dragged to — and notes [anchorView] for the card to center itself over
-     * when the frame arrives.
-     *
-     * The guards are the main player's: no duration means nothing to scrub (live,
-     * or a stream that never reported one), and the preview decodes in hardware
-     * only, so a title that needs the software decoder gets a time readout rather
-     * than competing for the CPU the video is using.
-     *
-     * No container hint is passed, because this engine never resolved one - libmpv
-     * probes for itself. TrickplayFrames covers the one shape that would otherwise
-     * be fatal (a playlist whose `.m3u8` marker is only in its query) and leaves
-     * the rest to media3.
-     */
-    private fun requestTrickplayFrame(posMs: Long, anchorView: View?) {
-        if (currentUrl.isBlank()) {
-            declineTrickplay("no stream url to preview")
-            return
-        }
-        if (durationMs <= 0L) {
-            declineTrickplay("the stream reports no duration")
-            return
-        }
-        trickplayWanted = true
-        // Re-armed by every press, so a held scrub keeps the card up and a
-        // released one keeps it for the grace window only - and armed for a
-        // whole decode, because a frame that arrives at four seconds is still
-        // the frame the viewer asked for (see TRICKPLAY_WAIT_MS).
-        handler.removeCallbacks(trickplayCardHider)
-        handler.postDelayed(trickplayCardHider, TRICKPLAY_WAIT_MS)
-        trickplayAnchorView = anchorView
-        // No second player and no second connection: this engine can be asked
-        // for the picture it is already showing, so a preview is a screenshot of
-        // the frame the viewer is scrubbing over (see MpvScrubPreviews). The
-        // position is read per attempt rather than captured once, because
-        // whether the player has ARRIVED at the position being previewed is the
-        // whole gate - it is true while the remote's held LEFT/RIGHT seeks, and
-        // false for the span of a seek-bar drag, which deliberately does not
-        // move the player until the finger comes up.
-        val frames = trickplay ?: MpvScrubPreviews(
-            activity = this,
-            playerPositionMs = { surface?.positionMs() ?: 0L },
-            captureTo = { path -> surface?.screenshotToFile(path) },
-            onUnavailable = { reason -> noticeNoScrubPreviews(reason) }
-        ) { _, frame ->
-            if (trickplayWanted) {
-                previewCard().show(frame, trickplayAnchorView)
-                // The window runs from the draw, not from the press: this is
-                // the viewer's time to look at it.
-                handler.removeCallbacks(trickplayCardHider)
-                handler.postDelayed(trickplayCardHider, TRICKPLAY_SHOW_GRACE_MS)
-            } else {
-                // Decoded after the card closed: cached, so dragging back over
-                // this position is free, but counted - "decoded and never
-                // shown" is a different fault from "never decoded".
-                com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
-                    "trickplay.late",
-                    0L,
-                    ok = false
-                )
-            }
-        }.also { trickplay = it }
-        if (!frames.isUsable) {
-            // The pipeline turned itself off earlier in this session (see
-            // TrickplayFrames), so the reason it gave up is already on record.
-            declineTrickplay("previews already gave up this session")
-            return
-        }
-        frames.request(posMs, durationMs)
-    }
-
-    /** The card previews appear in, built the first time a frame arrives. */
-    private fun previewCard(): TrickplayOverlay =
-        trickplayOverlay ?: TrickplayOverlay(this).also { trickplayOverlay = it }
-
-    /** Whether the "no scrub previews" notice has been shown in this session. */
-    private var scrubPreviewNoticeShown = false
-
-    /** Which declines of a preview request have already been recorded. */
-    private val trickplayDeclines = mutableSetOf<String>()
-
-    /**
-     * Records why a press asked for no preview at all.
-     *
-     * The pipeline is built to fail quietly, and the quietest failure of all is
-     * this one: a scrub that never reaches it leaves no card, no notice and no
-     * reason, so a report could not tell "the feature was never asked" from "it
-     * was asked and produced nothing" - and a session where both frame counts
-     * are zero printed no scrub-preview line at all. Recorded once per reason
-     * per session: a held scrub asks on every step, and one line per step would
-     * push every other sample out of the trace ring.
-     */
-    private fun declineTrickplay(reason: String) {
-        if (!trickplayDeclines.add(reason)) return
-        com.kennyb1201.kbstream.data.reporting.PerfTrace.record(
-            "trickplay.decline:$reason",
-            0L,
-            ok = false
-        )
-    }
-
-    /**
-     * Says why no thumbnail will appear - in the app, not only in the log.
-     *
-     * The pipeline is built to fail quietly (the card simply never shows), which
-     * left "I never see thumbnails" with no way to tell a device that cannot
-     * spare a decoder from a source that will not serve a second connection.
-     * Those two want opposite fixes, so the reason is worth one toast. Once per
-     * session: it explains a feature rather than reporting a fault.
-     */
-    private fun noticeNoScrubPreviews(reason: String) {
-        if (scrubPreviewNoticeShown) return
-        scrubPreviewNoticeShown = true
-        showToast(reason, 4_000L)
-    }
-
-    /**
-     * The scrub is over: the decoder behind the card is given back a few seconds
-     * later, so the next press of the same scrub does not pay for a new player
-     * and a new connection (see [TrickplayFrames.idle]).
-     *
-     * The card itself is deliberately NOT taken away here. The frame for the
-     * position just scrubbed to is usually still being decoded, and hiding on the
-     * key release is what made a press-and-release scrub show nothing at all;
-     * [trickplayCardHider] takes it away when the grace window ends.
-     */
-    private fun endTrickplayScrub() {
-        trickplay?.idle()
-    }
-
-    /** Hides the card and gives the preview decoder back now (leaving the screen). */
-    private fun stopTrickplay() {
-        trickplayWanted = false
-        handler.removeCallbacks(trickplayCardHider)
-        trickplayOverlay?.hide()
-        trickplay?.release()
-        trickplay = null
     }
 
     // --- Chrome, matched to the main player's -----------------------------
@@ -2558,11 +2365,6 @@ class MpvPlayerActivity : ComponentActivity() {
         activeSkipStamp = null
         hideSkipPrompt()
 
-        // The scrub preview decodes the source being replaced, and its pipeline
-        // is bound to that URL: left running it would show the old file's frames
-        // on the next scrub, and on this box a second 4K decode in the process is
-        // what it refuses to the file now loading. The next scrub rebuilds it.
-        stopTrickplay()
         Log.w(TAG, "source switch -> ${stream.sourceLabel()} at ${resumeAt}ms")
         // The note reads out which source is playing, so it has to follow.
         updateControlsInfo()
@@ -4558,9 +4360,6 @@ class MpvPlayerActivity : ComponentActivity() {
             // bug report of its own.
             surface?.setPaused(true)
         }
-        // The preview decoder goes with the pause: a second decoder held behind a
-        // backgrounded player helps nobody.
-        stopTrickplay()
         // Not when this session is being continued in another engine (the
         // ExoPlayer switch or an installed external player). That engine
         // scrobbles its own "start" and its own "stop"; ours raced the start
@@ -4584,8 +4383,6 @@ class MpvPlayerActivity : ComponentActivity() {
         // release() is a no-op once onStop has already restored the panel.
         frameRateMatcher?.release()
         frameRateMatcher = null
-        trickplay?.release()
-        trickplay = null
         sleepTimerSection?.release()
         addonSubtitleFetchJob?.cancel()
         addonSubtitleFetchJob = null

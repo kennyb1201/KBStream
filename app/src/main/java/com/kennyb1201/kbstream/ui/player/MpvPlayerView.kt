@@ -350,28 +350,6 @@ class MpvPlayerView @JvmOverloads constructor(
         endNotified = false
     }
 
-    /**
-     * Writes the frame mpv is showing right now to [path].
-     *
-     * The `video` flag keeps this app's OSD and the subtitles out of the image:
-     * a scrub preview is a picture of the moment, and a subtitle line burned into
-     * it would put dialogue on the card the viewer is using to find their place.
-     * The format comes from the file extension - mpv goes by that for
-     * `screenshot-to-file` - and it is a JPEG because every capture is the
-     * file's own resolution and is deleted the moment it has been read (see
-     * [MpvScrubPreviews]).
-     *
-     * Synchronous in practice, since mpv writes the file inside the command, but
-     * the caller looks for the file rather than assuming: this call cannot await
-     * the write, and a missing file has to be a quiet "no preview" rather than a
-     * crash or a blank card.
-     */
-    fun screenshotToFile(path: String) {
-        if (!initialized) return
-        runCatching { mpv.command(arrayOf("screenshot-to-file", path, "video")) }
-            .onFailure { Log.w(TAG, "screenshot to $path failed", it) }
-    }
-
     /** Current playhead in ms, from the last observed value. */
     fun positionMs(): Long = lastPositionMs
 
@@ -864,14 +842,6 @@ class MpvPlayerView @JvmOverloads constructor(
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("gpu-context", "android")
         mpv.setOptionString("opengl-es", "yes")
-
-        // Scrub previews screenshot the frame this engine is already showing
-        // (see MpvScrubPreviews), so a capture is the file's own resolution and
-        // is written and deleted per preview: JPEG at a modest quality rather
-        // than the default PNG, which on a 4K source is tens of megabytes of
-        // flash per press for an image the card draws 480px wide.
-        mpv.setOptionString("screenshot-format", "jpg")
-        mpv.setOptionString("screenshot-jpeg-quality", "70")
 
         // Decoding: try MediaCodec zero-copy, then copy-back, then software.
         // The trailing `no` is the whole point of this engine — a file the
