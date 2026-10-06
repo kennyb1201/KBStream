@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -42,11 +43,74 @@ class SplashClearLogoContractTest {
         )
     }
 
+    /**
+     * A channel launch is the one shape with neither a backdrop nor a TMDB
+     * clearlogo: its only art is the channel icon the guide row draws. Left on
+     * the poster alone, both load splashes (the pre-player cover and the
+     * player's own first load) fell to the plain channel name - reported as the
+     * channel's title showing as text while a channel picked in the guide
+     * loads. The icon is carried as the clearlogo instead, which is also the
+     * extra the player's title-graphic policy reads.
+     */
+    @Test
+    fun `a guide channel launch carries its icon as the splash logo`() {
+        val activity = source(MAIN_ACTIVITY)
+        val launches = activity.split(CHANNEL_LAUNCH).drop(1)
+        assertEquals(
+            "both guide launches - the live channel and its DVR catch-up - open the " +
+                "player as a channel",
+            2,
+            launches.size
+        )
+        launches.forEachIndexed { index, tail ->
+            assertTrue(
+                "channel launch #$index must hand the channel icon over as clearLogoUrl, " +
+                    "or its load splash prints the channel name in plain text",
+                tail.take(LAUNCH_BODY_CHARS).contains("clearLogoUrl = poster")
+            )
+        }
+    }
+
+    /**
+     * The half of the fix that lives in the player: `clear_logo_url` is what
+     * makes it keep the art. Without it the policy deletes whatever the splash
+     * slot holds - including the channel icon the launch also filed as the
+     * poster - and shows the name, so the icon cannot ride the poster alone.
+     */
+    @Test
+    fun `the player prints the name unless the launch carried a clearlogo`() {
+        val player = source(NATIVE_PLAYER)
+        assertTrue(
+            "the title-graphic policy must stay keyed on the launch's clear_logo_url",
+            player.contains("private fun enforceTitleGraphicPolicy()") &&
+                player.contains("if (!clearLogoUrl.isNullOrBlank()) {") &&
+                player.contains("splashItemName?.visibility = View.GONE")
+        )
+        assertTrue(
+            "with no clearlogo the policy hides the art and shows the item name, which is " +
+                "the plain channel name this contract exists to keep off the channel splash",
+            player.contains("splashClearLogo.visibility = View.GONE") &&
+                player.contains("itemNameView.visibility = View.VISIBLE")
+        )
+    }
+
     private companion object {
         const val DETAIL_SCREEN = "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
         const val MAIN_ACTIVITY = "com/kennyb1201/kbstream/MainActivity.kt"
+        const val NATIVE_PLAYER =
+            "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
 
         const val CALLBACK = "onClearLogoResolved"
+
+        /** The exact launch literal; only the two guide launches carry it. */
+        const val CHANNEL_LAUNCH = "parentType = \"channel\""
+
+        /**
+         * Enough of a launch body to cover the whole Screen.Player(...) call
+         * (the logo is ~500 chars in), but well short of the gap to the next
+         * launch (~2000), so one launch's window can never read another's.
+         */
+        const val LAUNCH_BODY_CHARS = 900
     }
 
     private val sourceRoot: File by lazy { findSourceRoot() }

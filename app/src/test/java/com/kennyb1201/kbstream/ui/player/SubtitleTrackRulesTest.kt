@@ -162,4 +162,82 @@ class SubtitleTrackRulesTest {
         assertEquals("EN", SubtitleTrackRules.pickerLabel("en", null, "Track 1"))
         assertEquals("Track 1", SubtitleTrackRules.pickerLabel(null, null, "Track 1"))
     }
+
+    // ── Forced-only mode ───────────────
+
+    @Test
+    fun `forced mode shows only a forced track`() {
+        val tracks = listOf(srt("en"), srt("en", forced = true))
+        assertEquals(Choice.Show(1), SubtitleTrackRules.chooseForced(tracks, "en"))
+    }
+
+    @Test
+    fun `forced mode with no forced track is off, not a full translation`() {
+        // A forced-only viewer asked for foreign dialogue only. Falling back to
+        // the full track is the failure mode this mode exists to avoid.
+        assertEquals(Choice.Off, SubtitleTrackRules.chooseForced(listOf(srt("en")), "en"))
+    }
+
+    @Test
+    fun `forced mode without a preferred language still finds a forced track`() {
+        assertEquals(
+            Choice.Show(0),
+            SubtitleTrackRules.chooseForced(listOf(srt("fr", forced = true)), "")
+        )
+    }
+
+    @Test
+    fun `forced mode prefers the preferred language's forced track`() {
+        val tracks = listOf(srt("fr", forced = true), srt("en", forced = true))
+        assertEquals(Choice.Show(1), SubtitleTrackRules.chooseForced(tracks, "en"))
+    }
+
+    @Test
+    fun `forced mode prefers an untagged forced track over a tagged one`() {
+        val tracks = listOf(srt("fr", forced = true), srt(null, forced = true))
+        assertEquals(Choice.Show(1), SubtitleTrackRules.chooseForced(tracks, "en"))
+    }
+
+    @Test
+    fun `forced mode can hand a bitmap forced track to the other engine`() {
+        assertEquals(
+            Choice.NeedsMpv(0),
+            SubtitleTrackRules.chooseForced(listOf(pgs("en", forced = true)), "en")
+        )
+    }
+
+    // ── Mode dispatch ───────────────
+
+    @Test
+    fun `off mode is off whatever the file carries`() {
+        val tracks = listOf(srt("en"), srt("en", forced = true))
+        assertEquals(Choice.Off, SubtitleTrackRules.choose(tracks, "en", SubtitleModeRules.OFF))
+    }
+
+    @Test
+    fun `on mode is the language rules`() {
+        val tracks = listOf(srt("fr"), srt("en"))
+        assertEquals(
+            SubtitleTrackRules.choose(tracks, "en"),
+            SubtitleTrackRules.choose(tracks, "en", SubtitleModeRules.ON)
+        )
+    }
+
+    @Test
+    fun `forced mode dispatches to the forced rules`() {
+        val tracks = listOf(srt("en"), srt("en", forced = true))
+        assertEquals(
+            SubtitleTrackRules.chooseForced(tracks, "en"),
+            SubtitleTrackRules.choose(tracks, "en", SubtitleModeRules.FORCED)
+        )
+    }
+
+    @Test
+    fun `forced mode ignores the blank-preference off rule`() {
+        // With the language rules a blank preference is Off even for a forced
+        // track; forced mode is a positive request, so it still shows one.
+        val tracks = listOf(srt("en", forced = true))
+        assertEquals(Choice.Off, SubtitleTrackRules.choose(tracks, "", SubtitleModeRules.ON))
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(tracks, "", SubtitleModeRules.FORCED))
+    }
 }

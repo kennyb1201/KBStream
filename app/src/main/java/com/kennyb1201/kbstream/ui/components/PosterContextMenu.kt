@@ -4,15 +4,18 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -109,6 +112,43 @@ data class PosterContextAction(
     val isDestructive: Boolean = false,
     val onClick: () -> Unit
 )
+
+/**
+ * The order a long-press menu's rows are drawn in, by *function* rather than by
+ * the order each caller happens to list them in.
+ *
+ * Every poster menu in the app is built by [PosterContextMenu] from the same
+ * pieces - the shared library rows, the derived play rows, and whatever the
+ * caller adds - so without a canonical order the sequence drifted: a rail menu
+ * read "Add to Library, Open in Grid, Go to Details, …" while the Home
+ * continue-watching menu read "Go to Details, Play Manually, …". Sorting by
+ * this rank gives every menu the same section order, stable within a section so
+ * a caller's own rows keep their relative sequence:
+ *
+ *  0. Open / navigate - "Go to Details", "Open in Grid", "Add to Home"
+ *  1. Playback - "Play Manually", "Play from Beginning", "Resume"
+ *  2. Library - "Add to Library" / "In Library ✓", "Add to list…"
+ *  3. Reminders - "Remind me when it airs"
+ *  4. Watched - any "Mark …" row
+ *  5. Anything else the caller adds
+ *  6. Destructive last - "Hide", "Remove"
+ */
+internal fun contextMenuSectionRank(action: PosterContextAction): Int = when {
+    action.isDestructive -> 6
+    action.label == "Add to Home" ||
+        action.label.startsWith("Go to") ||
+        action.label.startsWith("Open") -> 0
+    action.label.startsWith("Play") || action.label.startsWith("Resume") -> 1
+    action.label.startsWith("Add to Library") ||
+        action.label.startsWith("In Library") ||
+        action.label.startsWith("Add to list") ||
+        action.label.startsWith("Remove from Library") ||
+        action.label.startsWith("Add to My List") ||
+        action.label.startsWith("Remove from My List") -> 2
+    action.label.startsWith("Remind") -> 3
+    action.label.startsWith("Mark") -> 4
+    else -> 5
+}
 
 /**
  * What a long-press menu needs in order to hide the title it was opened on:
@@ -439,10 +479,15 @@ fun PosterContextMenu(
     // Watching and the episode menus, which play one specific episode - keep
     // their wording and their position; menus with no "Go to Details" at all,
     // such as the browse chips, get no row.
+    //
+    // The list is then put in the app's canonical section order (see
+    // [contextMenuSectionRank]) so every menu reads the same way; the sort is
+    // stable, so a caller's own rows keep their relative order inside a section.
     val rows = buildList {
-        // The library rows come first on every menu that carries them, so
-        // "Add to Library" is where it has always been on the menus that had
-        // it and in the same place on the ones that have just gained it.
+        // The library rows are added here, but their PLACE in the menu is
+        // decided by [contextMenuSectionRank] (the library section), not by
+        // this order - the sort below puts them in the same place on every
+        // menu that carries them.
         //
         // "In Library ✓" is a state, not a different action: pressing it again
         // re-runs the add, which is how a title whose tracker mirror failed
@@ -552,10 +597,11 @@ fun PosterContextMenu(
             }
         }
 
-        // Hide is always the LAST row and always destructive: it is the one
-        // action here that takes the menu's own subject off the screen, so it
-        // sits below everything a viewer reaches for and never at a D-pad
-        // distance they could hit while aiming at something else.
+        // Hide is destructive, so [contextMenuSectionRank] sorts it into the
+        // last section: it is the one action here that takes the menu's own
+        // subject off the screen, so it sits below everything a viewer reaches
+        // for and never at a D-pad distance they could hit while aiming at
+        // something else.
         hideTarget?.let { target ->
             add(
                 PosterContextAction(
@@ -595,7 +641,7 @@ fun PosterContextMenu(
                 }
             )
         }
-    }
+    }.sortedBy { contextMenuSectionRank(it) }
 
     val dialogShape = KBShapePanel
 
@@ -643,7 +689,7 @@ fun PosterContextMenu(
         }
     }
 
-    Box(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             // The picker is this menu's own second stage, and while it is open
@@ -698,6 +744,14 @@ fun PosterContextMenu(
             },
         contentAlignment = Alignment.Center
     ) {
+        // A long menu (Home's title menu carries library, reminder, watch and
+        // hide rows) is taller than a short panel, and an unscrolled column
+        // simply clipped its last row - the destructive "Hide" - off the
+        // bottom with no way to D-pad to it. The panel is capped to the window
+        // and the rows scroll inside it, so the last action is always
+        // reachable.
+        val maxPanelHeight = maxHeight * 0.92f
+
         // Invisible focus anchor: gives the overlay a focused node the moment
         // it appears, so directional presses are bounded by the focusGroup
         // even during the frame(s) before the action rows attach. Drops out
@@ -751,6 +805,7 @@ fun PosterContextMenu(
             ),
             modifier = Modifier
                 .width(380.dp)
+                .heightIn(max = maxPanelHeight)
                 // The dialog container is click-to-dismiss for pointer users
                 // only; keeping it out of the focus search means pressing
                 // Down/Up past the last/first action can never land D-pad
@@ -763,6 +818,9 @@ fun PosterContextMenu(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(22.dp)
+                    // The scroll that keeps the last row reachable; the focused
+                    // row is auto-scrolled into view by Compose.
+                    .verticalScroll(rememberScrollState())
             ) {
                 Text(
                     text = title,

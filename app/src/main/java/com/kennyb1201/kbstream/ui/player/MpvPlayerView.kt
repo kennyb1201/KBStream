@@ -226,6 +226,14 @@ class MpvPlayerView @JvmOverloads constructor(
     private var subtitleLanguage = ""
 
     /**
+     * Off / forced only / on, from Settings (see [SubtitleModeRules]). Applied
+     * at open time: Off opens with subtitles disabled, Forced asks mpv for
+     * forced (signs / foreign-dialogue) cues only, and On follows
+     * [subtitleLanguage] through `slang`.
+     */
+    private var subtitleMode = SubtitleModeRules.DEFAULT
+
+    /**
      * The libmpv 1.0.0 handle. 1.0.0 turned [MPVLib] into an instance API -
      * `MPVLib.create()` returns the handle and every command hangs off it -
      * where 0.5.1 exposed the same native calls as a static singleton. Null
@@ -550,6 +558,24 @@ class MpvPlayerView @JvmOverloads constructor(
         runCatching {
             mpv.setPropertyString("alang", audioLanguage)
             mpv.setPropertyString("slang", subtitleLanguage)
+        }
+    }
+
+    /**
+     * The subtitle mode for the next load (see [SubtitleModeRules]). Set before
+     * [initialize] so it lands in the open-time options; applied as a runtime
+     * property too, so a later change acts on the next file the way `slang`
+     * does.
+     */
+    fun setSubtitleMode(mode: Int) {
+        subtitleMode = SubtitleModeRules.normalized(mode)
+        if (!initialized) return
+        runCatching {
+            when (subtitleMode) {
+                SubtitleModeRules.OFF -> mpv.setPropertyString("sid", "no")
+                SubtitleModeRules.FORCED -> mpv.setPropertyString("sub-forced-only", "yes")
+                else -> mpv.setPropertyString("sub-forced-only", "no")
+            }
         }
     }
 
@@ -907,7 +933,22 @@ class MpvPlayerView @JvmOverloads constructor(
         val wantedSubtitles = subtitleLanguage.ifBlank {
             preferredLanguage(AppPreferences.getPreferredSubtitleLanguage(context)).orEmpty()
         }
-        if (wantedSubtitles.isNotBlank()) mpv.setOptionString("slang", wantedSubtitles)
+        when (SubtitleModeRules.normalized(subtitleMode)) {
+            // Off: mpv opens with the subtitle track deselected. Left to its
+            // own selection it would arm a default track - the same "cannot
+            // actually turn subtitles off" the main player had.
+            SubtitleModeRules.OFF -> mpv.setOptionString("sid", "no")
+
+            // Forced: only the signs / foreign-dialogue cues, whichever track
+            // carries them. runCatching guards an mpv build without the option
+            // (it is ignored rather than failing the file).
+            SubtitleModeRules.FORCED -> {
+                runCatching { mpv.setOptionString("sub-forced-only", "yes") }
+                if (wantedSubtitles.isNotBlank()) mpv.setOptionString("slang", wantedSubtitles)
+            }
+
+            else -> if (wantedSubtitles.isNotBlank()) mpv.setOptionString("slang", wantedSubtitles)
+        }
 
         // Subtitle look, from the same global defaults the main player's
         // settings pane edits.

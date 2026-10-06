@@ -26,6 +26,7 @@ object AppPreferences {
     private const val KEY_DEFAULT_SUBTITLE_SIZE = "default_subtitle_size"   // 0=small, 1=normal, 2=large
     private const val KEY_DEFAULT_SUBTITLE_BG = "default_subtitle_bg"       // 0=none, 1=semi, 2=solid
     private const val KEY_DEFAULT_SUBTITLE_POSITION = "default_subtitle_position" // 0=low, 1=mid, 2=high
+    private const val KEY_SUBTITLE_MODE = "subtitle_mode"                   // 0=off, 1=forced only, 2=on
     private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
     // Automatic skipping of IntroDB segments. Both default OFF: moving the
     // playhead with no press is opted into, never assumed.
@@ -981,6 +982,21 @@ object AppPreferences {
 
     fun setPreferredSubtitleLanguage(context: Context, lang: String) {
         prefs(context).edit().putString(KEY_PREFERRED_SUBTITLE_LANG, lang).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Subtitle mode: off / forced only / on ────────────────────────
+    // 0 = never arm a subtitle on its own, 1 = forced (foreign-dialogue and
+    // sign) tracks only, 2 = follow the preferred subtitle language. Stored as
+    // an Int so an unknown value from a newer build degrades to 2 rather than
+    // to subtitles the viewer never asked for. The constants live in the UI
+    // layer's SubtitleModeRules - this layer must not depend on ui.player, so
+    // the default is spelled here and pinned by a test against that object.
+    fun getSubtitleMode(context: Context): Int =
+        readIntPref(context, KEY_SUBTITLE_MODE, 2)
+
+    fun setSubtitleMode(context: Context, mode: Int) {
+        prefs(context).edit().putInt(KEY_SUBTITLE_MODE, mode).apply()
         syncDisplayPrefsBlob(context)
     }
 

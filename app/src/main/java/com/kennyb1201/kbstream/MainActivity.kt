@@ -394,6 +394,29 @@ private data class PendingPlay(
 }
 
 /**
+ * The art a guide channel launch hands its load splashes: the channel's own
+ * icon.
+ *
+ * A channel is the one launch shape with no widescreen backdrop and no TMDB
+ * clearlogo, so both splashes - the pre-player cover in MainActivity, and the
+ * player's own first load - had nothing to draw but the channel NAME as plain
+ * text. The channel icon IS this launch's title graphic, so it is carried as
+ * the clearlogo.
+ *
+ * Handing it over matters twice: the cover paints it pulsing (see
+ * PulsingClearLogo), and the player keys its title-graphic policy off the same
+ * extra - with no clearlogo it deletes the icon from the splash and prints the
+ * name instead (see NativePlayerActivity.enforceTitleGraphicPolicy), so the
+ * icon may not simply ride the poster it also fills.
+ *
+ * Blank counts as absent, so a playlist row whose logo is "" falls through to
+ * the guide's icon rather than handing the image loader an empty URL.
+ */
+internal fun channelTitleGraphic(channelLogoUrl: String?, epgIconUrl: String?): String? =
+    channelLogoUrl?.takeIf { it.isNotBlank() }
+        ?: epgIconUrl?.takeIf { it.isNotBlank() }
+
+/**
  * True when a recovered next-episode handoff names an episode this profile has
  * ALREADY finished.
  *
@@ -1613,11 +1636,14 @@ fun AppRoot(
                                 channel.streamUrl
                             }
 
+                    // The channel icon is the only art a channel launch has,
+                    // so it is also this launch's title graphic. See
+                    // channelTitleGraphic.
                     val poster =
-                        channel.logoUrl
-                            ?: channelWithEpg
-                                .epgChannel
-                                ?.iconUrl
+                        channelTitleGraphic(
+                            channel.logoUrl,
+                            channelWithEpg.epgChannel?.iconUrl
+                        )
 
                     // Publish the guide's filtered/ordered lineup so the
                     // player can zap between live channels with CH+/CH− and
@@ -1645,6 +1671,10 @@ fun AppRoot(
                         episodeStreamId = channel.id,
                         itemName = channelName,
                         itemPoster = poster,
+                        // Also the splash's title graphic, which is what makes
+                        // the loading screen pulse the channel logo instead of
+                        // printing the channel name. See channelTitleGraphic.
+                        clearLogoUrl = poster,
                         startPositionMs = 0L,
                         sources = listOf(
                             directSource
@@ -1662,6 +1692,14 @@ fun AppRoot(
                     val channel = channelWithEpg.channel
                     val channelName = channel.displayName.ifBlank { "Live Channel" }
                     val programName = program.title.ifBlank { "Catch-up" }
+                    // The channel icon, exactly as the live launch carries it:
+                    // a DVR recording is the same channel, and the same splash
+                    // loads it. See channelTitleGraphic.
+                    val poster =
+                        channelTitleGraphic(
+                            channel.logoUrl,
+                            channelWithEpg.epgChannel?.iconUrl
+                        )
 
                     screen = Screen.Player(
                         url = program.url,
@@ -1672,8 +1710,8 @@ fun AppRoot(
                         episode = null,
                         episodeStreamId = channel.id,
                         itemName = "$channelName — $programName",
-                        itemPoster = channel.logoUrl
-                            ?: channelWithEpg.epgChannel?.iconUrl,
+                        itemPoster = poster,
+                        clearLogoUrl = poster,
                         startPositionMs = 0L,
                         sources = listOf(
                             Stream(

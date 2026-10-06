@@ -70,6 +70,7 @@ import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
+import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
 import com.kennyb1201.kbstream.ui.player.FrameRateDiagnostics
 import com.kennyb1201.kbstream.ui.player.FrameRateMatch
 import com.kennyb1201.kbstream.ui.player.displayReport
@@ -340,6 +341,9 @@ fun SettingsScreen(
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
+    var subtitleMode by remember {
+        mutableIntStateOf(SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(context)))
+    }
     var backupStatus by remember { mutableStateOf<String?>(null) }
     var mdbListKeyInput by remember { mutableStateOf(AppPreferences.getMdbListApiKey(context)) }
     var mdbListKeySaved by remember { mutableStateOf(false) }
@@ -2217,6 +2221,33 @@ fun SettingsScreen(
                 }
 
                 if (selectedPane == SettingsPane.SUBTITLES) {
+                Text(
+                    text = "Mode",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SubtitleModeRules.OPTIONS.forEach { (label, value) ->
+                        KBCard(onClick = {
+                            subtitleMode = value
+                            AppPreferences.setSubtitleMode(context, value)
+                        }) {
+                            PillChip(label, subtitleMode == value)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "Off never shows subtitles on its own; Forced only shows " +
+                        "foreign dialogue and signs when the file marks them; On follows " +
+                        "the preferred language below.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
                 Text(
                     text = "Default Size",
                     color = KBTextHi,

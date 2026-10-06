@@ -857,6 +857,9 @@ class MpvPlayerActivity : ComponentActivity() {
         // it here would also be a call against an mpv instance that mpv does not
         // create until initialize().
         view.setLanguagePreferences(effectiveAudioLanguage(), effectiveSubtitleLanguage())
+        // Off / forced only / on, the global subtitle mode: also an open-time
+        // choice, so it is set before initialize() beside the languages above.
+        view.setSubtitleMode(AppPreferences.getSubtitleMode(this))
 
         if (!view.initialize()) return
 
@@ -2382,6 +2385,13 @@ class MpvPlayerActivity : ComponentActivity() {
 
     private fun maybeAutoFetchSubtitle() {
         if (autoSubtitleFetchTried || autoSubtitleFetchInFlight) return
+        // Only the language mode fetches: Forced wants foreign-dialogue cues,
+        // not a full translation, and Off wants nothing.
+        if (SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this)) !=
+            SubtitleModeRules.ON
+        ) {
+            return
+        }
         if (!AppPreferences.getAutoFetchSubtitles(this)) return
         if (AppPreferences.getOpensubtitlesApiKey(this).isBlank()) return
         val queryTitle = itemName

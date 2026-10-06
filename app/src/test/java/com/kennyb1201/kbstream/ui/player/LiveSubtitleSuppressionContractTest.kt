@@ -71,9 +71,26 @@ class LiveSubtitleSuppressionContractTest {
     @Test
     fun `the subtitle auto-select pass is skipped for live`() {
         val player = readSource(NATIVE)
-        assertTrue(
-            "the subtitle branch must exclude live channels",
+        // Live is excluded from BOTH subtitle branches now: the explicit-Off
+        // branch that disables the text track, and the selection branch that
+        // arms one. A channel must land in neither.
+        assertFalse(
+            "the old inline gate must be gone",
             player.contains("if (preferredSubtitleLang.isNotBlank() && !isLiveChannel) {")
+        )
+        assertTrue(
+            "the explicit-Off branch must exclude live channels",
+            player.contains("if (!isLiveChannel && subtitleMode == SubtitleModeRules.OFF) {")
+        )
+        assertTrue(
+            "the selection branch must exclude live channels",
+            player.contains("} else if (\n            !isLiveChannel &&")
+        )
+        assertTrue(
+            "the selection branch must run for forced mode or a set language",
+            player.contains(
+                "(subtitleMode == SubtitleModeRules.FORCED || preferredSubtitleLang.isNotBlank())"
+            )
         )
     }
 

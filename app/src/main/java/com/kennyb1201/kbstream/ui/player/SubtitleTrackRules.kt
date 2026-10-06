@@ -165,4 +165,62 @@ internal object SubtitleTrackRules {
 
         return Choice.Off
     }
+
+    /**
+     * Decide the subtitle track for [candidates] under the viewer's [mode]
+     * (see [SubtitleModeRules]). [ON] is the language rules in [choose]; [OFF]
+     * is always off; [FORCED] only ever shows a forced track.
+     */
+    fun choose(candidates: List<Candidate>, preferredLanguage: String, mode: Int): Choice =
+        when (SubtitleModeRules.normalized(mode)) {
+            SubtitleModeRules.FORCED -> chooseForced(candidates, preferredLanguage)
+            SubtitleModeRules.OFF -> Choice.Off
+            else -> choose(candidates, preferredLanguage)
+        }
+
+    /**
+     * Forced-only selection: the signs / foreign-dialogue track, and nothing
+     * else.
+     *
+     * A forced track is authored to carry only the lines a viewer who does not
+     * speak the audio language needs, so "only when foreign language is spoken"
+     * is exactly this track. A file with no forced track therefore has nothing
+     * to show here, and this returns [Choice.Off] rather than falling back to a
+     * full translation - showing a full track when the viewer asked for forced
+     * only is the failure mode this mode exists to avoid.
+     */
+    fun chooseForced(candidates: List<Candidate>, preferredLanguage: String): Choice {
+        val preferred = normalize(preferredLanguage)
+        val renderable = candidates.withIndex().filter {
+            it.value.supported && !isBitmapFormat(it.value.mimeType)
+        }
+        val bitmap = candidates.withIndex().filter { isBitmapFormat(it.value.mimeType) }
+        val untagged: (Candidate) -> Boolean = { normalize(it.language) == null }
+
+        // 1. A forced track in the preferred language: when the viewer also
+        //    named a language, its forced track is the closest match.
+        if (preferred != null) {
+            renderable.firstOrNull { it.value.forced && normalize(it.value.language) == preferred }
+                ?.let { return Choice.Show(it.index) }
+            bitmap.firstOrNull { it.value.forced && normalize(it.value.language) == preferred }
+                ?.let { return Choice.NeedsMpv(it.index) }
+        }
+
+        // 2. A forced track with no tag: the common case in a rip, and the one
+        //    the viewer's own language is on far more often than not.
+        renderable.firstOrNull { it.value.forced && untagged(it.value) }
+            ?.let { return Choice.Show(it.index) }
+
+        // 3. Any forced track, whatever it is tagged. Forced-only is a narrower
+        //    request than a language, so a forced track in another language
+        //    still beats showing nothing.
+        renderable.firstOrNull { it.value.forced }?.let { return Choice.Show(it.index) }
+
+        // 4. Forced, but only as a bitmap this engine cannot draw: the other
+        //    engine is the only place it exists.
+        bitmap.firstOrNull { it.value.forced }?.let { return Choice.NeedsMpv(it.index) }
+
+        // 5. No forced track at all: forced-only has nothing to show.
+        return Choice.Off
+    }
 }

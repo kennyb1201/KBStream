@@ -7397,7 +7397,24 @@ class NativePlayerActivity : ComponentActivity() {
         // through SubtitleTrackRules to Off, which pulled a subtitle from
         // OpenSubtitles, rebuilt the player to attach it (the ~1s rebuffer) and
         // raised the "Subtitles: ..." toast - none of it asked for, on live TV.
-        if (preferredSubtitleLang.isNotBlank() && !isLiveChannel) {
+        // The mode is consulted before the language. Off means no subtitle is
+        // ever armed on its own: the old blank preference only told media3
+        // "no preference", and media3's own default selection would arm a
+        // track anyway - the "it keeps turning subtitles back on" report.
+        // Forced needs no language to run; On is the old language rules.
+        val subtitleMode = SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this))
+        if (!isLiveChannel && subtitleMode == SubtitleModeRules.OFF) {
+            // Explicit Off: the text track is disabled outright, so neither
+            // media3's own selection nor a re-selection after a stream rebuild
+            // can arm one.
+            player.trackSelectionParameters = player.trackSelectionParameters
+                .buildUpon()
+                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                .build()
+        } else if (
+            !isLiveChannel &&
+            (subtitleMode == SubtitleModeRules.FORCED || preferredSubtitleLang.isNotBlank())
+        ) {
             val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
             // Flatten to the shape SubtitleTrackRules works on, keeping the way
             // back to the media3 objects: the rules decide, this applies. They
@@ -7420,7 +7437,13 @@ class NativePlayerActivity : ComponentActivity() {
                 }
             }
 
-            when (val choice = SubtitleTrackRules.choose(candidates, preferredSubtitleLang)) {
+            when (
+                val choice = SubtitleTrackRules.choose(
+                    candidates,
+                    preferredSubtitleLang,
+                    subtitleMode
+                )
+            ) {
                 is SubtitleTrackRules.Choice.Show -> {
                     val (group, index) = locations[choice.index]
                     player.trackSelectionParameters = player.trackSelectionParameters
@@ -7549,6 +7572,13 @@ class NativePlayerActivity : ComponentActivity() {
         // attach/rebuild, or the toast - the same gate its sibling
         // [prefetchNextEpisodeSubtitle] already applies.
         if (isLiveChannel) return
+        // Only the language mode fetches. In Forced mode a full translation is
+        // exactly what the viewer did not ask for, and Off asked for nothing.
+        if (SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this)) !=
+            SubtitleModeRules.ON
+        ) {
+            return
+        }
         if (autoSubtitleFetchTried || autoSubtitleFetchInFlight) return
         if (!AppPreferences.getAutoFetchSubtitles(this)) return
         if (AppPreferences.getOpensubtitlesApiKey(this).isBlank()) return
