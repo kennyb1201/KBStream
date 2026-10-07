@@ -569,10 +569,14 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         val urls = manifestUrlByAddonId
         val addonKeys = _catalogConfigurations.value
             .filter { it.catalog.showOnHome }
-            // A Top Today row is keyed by its BUILT-IN key on Home, so listing
-            // it here under its add-on key would create a second, phantom rail
-            // the manager could move and Home could never draw.
-            .filterNot { KBHomeOrderPrefs.topTodayBuiltinKey(it.catalog.id) != null }
+            // An APP-BUILT row - a Top Today row, a kids row, a guest row - is
+            // keyed by its BUILT-IN key on Home (see
+            // KBHomeOrderPrefs.builtinKeyForCatalogId), so listing it here under
+            // its add-on key would create a second, phantom rail the manager
+            // could move and Home could never draw. The profile's own rails are
+            // not add-on catalogs at all, so this only ever catches a Top Today
+            // row; the wider rule is the one the merge itself uses.
+            .filterNot { KBHomeOrderPrefs.builtinKeyForCatalogId(it.catalog.id) != null }
             .map {
                 KBHomeOrderPrefs.addonKeyFromManifest(
                     urls[it.addonId],
@@ -583,16 +587,18 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         val collectionKeys = _collections.value.collections.map { it.key }
         // Which built-ins belong to THIS profile: a kids profile does not
         // draw the two Top Today rows (Home swaps its pinned batch for the
-        // kids rails), so they are not rails its arrangement can aim at -
-        // otherwise every arrow near them moves a rail the viewer cannot see
-        // (see KBHomeOrderPrefs.builtinKeysFor).
+        // kids rails), and a guest profile draws its own rails after them -
+        // so a rail the profile does not draw is not one its arrangement can
+        // aim at, or every arrow near it would move a rail the viewer cannot
+        // see (see KBHomeOrderPrefs.builtinKeysFor).
         val kidsMaxAge = com.kennyb1201.kbstream.data.sync.ProfileManager
             .activeProfile.value?.kidsMaxAge
+        val isGuest = com.kennyb1201.kbstream.data.sync.ProfileManager.activeIsGuest()
         // Hidden built-ins stay in the list on purpose: like a collection,
         // the key has to remain KNOWN so the merged order can still place it
         // (and so a show/hide leaves the arrangement otherwise untouched).
         // A hidden rail is filtered out by the hidden set, not by omission.
-        return KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge) +
+        return KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge, isGuest) +
             browseKeys + customKeys + addonKeys + collectionKeys
     }
 

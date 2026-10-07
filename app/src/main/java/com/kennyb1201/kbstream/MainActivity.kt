@@ -880,7 +880,12 @@ fun AppRoot(
         }
         val streams = streamsViewModel.resolve(
             pending.target.contentType,
-            pending.target.streamId
+            pending.target.streamId,
+            // The episode's own length goes with the request: it is what lets
+            // the ranker score a file's size as a density rather than as bulk
+            // (see StreamRanker), which is the difference between a healthy
+            // 45-minute encode and a bloated one.
+            pending.target.runtimeMinutes
         )
         // Binge continuation: when this auto-play is the next episode of a
         // show whose previous stream carried a Stremio bingeGroup, reorder
@@ -2030,7 +2035,8 @@ fun AppRoot(
                 if (streamsViewModel.loadedKey.value != targetKey) {
                     streamsViewModel.load(
                         current.target.contentType,
-                        current.target.streamId
+                        current.target.streamId,
+                        current.target.runtimeMinutes
                     )
                 }
             }

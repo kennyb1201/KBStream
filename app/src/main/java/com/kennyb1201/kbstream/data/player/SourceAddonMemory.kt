@@ -9,7 +9,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 /**
- * Which addon last worked - and which last failed - for a given title.
+ * Which addon last worked, which kept stalling, and which last failed - for a
+ * given title.
  *
  * Reported problem: a show whose every AIOStreams link was dead played fine
  * from another addon, but nothing remembered that, so the next episode put the
@@ -31,6 +32,14 @@ import kotlinx.serialization.json.Json
  * failure must not keep demoting an addon that now works. The window is long
  * enough to cover a binge - the case the report is about - and short enough
  * that a stale verdict cannot outlive its cause permanently.
+ *
+ * The third outcome is the source that opens and cannot keep up. V1 recorded
+ * only open-failures, so a source that plays and stalls was demoted for the
+ * session (the player's own rebuffer downshift moved the viewer off it) and
+ * then forgotten - the next episode started from the same bad source again.
+ * A stall is therefore counted per addon here and the count is what decides the
+ * slow tier (see [SLOW_STALL_THRESHOLD]); one good session clears it, exactly
+ * as one good session already supersedes a failure.
  *
  * A record only ever REORDERS (see [SourceAddonPreference]): nothing is hidden,
  * nothing is deleted from the picker, and a title with no record resolves
@@ -56,15 +65,39 @@ internal object SourceAddonMemory {
      */
     private const val MAX_ADDONS_PER_SHOW = 12
 
+    /**
+     * Fresh stall-downshifts that make an addon "slow" for one title.
+     *
+     * Two, not one: a single downshift is an evening (a CDN hiccup, a household
+     * saturating the line), and the in-session downshift has already moved the
+     * viewer off that source - this record is only about the order the NEXT
+     * episode starts from, which is too much to hand to one bad night. Two
+     * separate sessions that both failed to keep up is the pattern.
+     */
+    internal const val SLOW_STALL_THRESHOLD = 2
+
     private const val PREFS_BASE = "kbstream_source_addons"
     private const val KEY_ENTRIES = "source_addons_v1"
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
+    /**
+     * One fact per addon, and only ever the latest one.
+     *
+     * [worked] is deliberately three-valued: `null` means this addon has only
+     * ever STALLED here, which is neither "it opened a file" nor "its link
+     * would not open" - and reading an unset boolean as a failure is exactly
+     * how a source that plays perfectly well would be sent to the back of the
+     * list.
+     */
     @Serializable
     private data class Outcome(
-        val worked: Boolean,
-        val atMs: Long
+        val worked: Boolean? = null,
+        val atMs: Long = 0L,
+        /** Stall-downshifts recorded since this addon's last success. */
+        val stalls: Int = 0,
+        /** When the most recent stall landed, 0 when it never has. */
+        val lastStallAtMs: Long = 0L
     )
 
     @Serializable
@@ -77,13 +110,49 @@ internal object SourceAddonMemory {
     @Serializable
     private data class Store(val shows: Map<String, ShowEntry> = emptyMap())
 
-    /** An addon opened a file for this title: it leads the next list. */
+    /**
+     * An addon opened a file for this title: it leads the next list.
+     *
+     * A success also clears this addon's stall count - one good session forgives
+     * the stalls that came before it, the same way it supersedes a failure. The
+     * record holds ONE verdict per addon, and "it is playing fine now" is it.
+     */
     fun rememberWorked(context: Context, showKey: String, addonName: String?) =
-        record(context, showKey, addonName, worked = true)
+        update(context, showKey, addonName) { _ ->
+            Outcome(worked = true, atMs = System.currentTimeMillis())
+        }
 
     /** An addon's link would not open here: it goes behind everything else. */
     fun rememberFailed(context: Context, showKey: String, addonName: String?) =
-        record(context, showKey, addonName, worked = false)
+        update(context, showKey, addonName) { _ ->
+            // Supersedes a stall count as well as a success: a link that will
+            // not open at all is the worse fact about the same addon, and this
+            // store keeps one.
+            Outcome(worked = false, atMs = System.currentTimeMillis())
+        }
+
+    /**
+     * An addon opened here and could not keep up: the player's rebuffer
+     * downshift moved the viewer off it, and this is that verdict, kept for the
+     * next session.
+     *
+     * Reached only where the downshift actually starts a switch, so a stall the
+     * session chose not to act on (no rung left, a seek's own buffering) is not
+     * counted. One good session clears the count again ([rememberWorked]).
+     */
+    fun rememberStalled(context: Context, showKey: String, addonName: String?) =
+        update(context, showKey, addonName) { previous ->
+            val now = System.currentTimeMillis()
+            Outcome(
+                // Whatever this addon's open outcome was stays as it was: a
+                // stall says the source was too slow, not that it failed to
+                // open, and the two are separate tiers.
+                worked = previous?.worked,
+                atMs = now,
+                stalls = (previous?.stalls ?: 0) + 1,
+                lastStallAtMs = now
+            )
+        }
 
     /**
      * What this title's addons last did, or empty when nothing is known - in
@@ -96,8 +165,12 @@ internal object SourceAddonMemory {
             ?: return SourceAddonPreference.Outcomes()
         val fresh = entry.addons.filterValues { isFresh(it.atMs) }
         return SourceAddonPreference.Outcomes(
-            worked = fresh.filterValues { it.worked }.keys.toSet(),
-            failed = fresh.filterValues { !it.worked }.keys.toSet()
+            worked = fresh.filterValues { it.worked == true }.keys.toSet(),
+            failed = fresh.filterValues { it.worked == false }.keys.toSet(),
+            slow = fresh
+                .filterValues { freshStallCount(it) >= SLOW_STALL_THRESHOLD }
+                .keys
+                .toSet()
         )
     }
 
@@ -113,7 +186,15 @@ internal object SourceAddonMemory {
         }
     }
 
-    private fun record(context: Context, showKey: String, addonName: String?, worked: Boolean) {
+    private fun update(
+        context: Context,
+        showKey: String,
+        addonName: String?,
+        // The entry this addon has now, or null when it has none: every write
+        // is expressed as "what the new fact makes of the old one", so the
+        // stall count can build on the outcome that is already there.
+        next: (Outcome?) -> Outcome
+    ) {
         val key = SourceAddonPreference.showKeyOf(showKey)
         val addon = SourceAddonPreference.normalize(addonName)
         // A blank key or a nameless label has nothing to record. A label the
@@ -132,7 +213,7 @@ internal object SourceAddonMemory {
             // Last outcome wins, so an addon that failed and later played is
             // remembered as working - the store holds one fact per addon, not
             // two contradictory ones.
-            addons[addon] = Outcome(worked = worked, atMs = now)
+            addons[addon] = next(addons[addon])
             if (addons.size > MAX_ADDONS_PER_SHOW) {
                 addons.entries
                     .sortedBy { it.value.atMs }
@@ -152,6 +233,17 @@ internal object SourceAddonMemory {
             Log.w(TAG, "record failed: ${it.message}")
         }
     }
+
+    /**
+     * This addon's stall-downshifts that still count: the count itself when the
+     * most recent one is inside the window, zero otherwise.
+     *
+     * Keyed off the newest stall, like the outcome is keyed off [Outcome.atMs]:
+     * a month with no stall since means the source has had a month of chances,
+     * which is the same reason a failure expires rather than sticking.
+     */
+    private fun freshStallCount(outcome: Outcome): Int =
+        if (outcome.lastStallAtMs > 0L && isFresh(outcome.lastStallAtMs)) outcome.stalls else 0
 
     private fun isFresh(atMs: Long): Boolean = System.currentTimeMillis() - atMs <= TTL_MS
 

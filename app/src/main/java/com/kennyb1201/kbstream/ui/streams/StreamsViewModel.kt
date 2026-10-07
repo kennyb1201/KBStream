@@ -11,12 +11,14 @@ import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.device.DeviceCapability
+import com.kennyb1201.kbstream.data.player.DolbyVisionCapability
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.SourceAddonMemory
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
+import com.kennyb1201.kbstream.domain.streamengine.StreamDedup
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -45,6 +47,22 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     // the fact about this device is passed into every rank call below.
     private val constrainedDevice: Boolean by lazy {
         DeviceCapability.constrainedStreamDevice(application)
+    }
+
+    /**
+     * Whether a Dolby Vision label is worth anything on this box, resolved once
+     * like [constrainedDevice].
+     *
+     * Two things have to be true for it to be: the device must advertise a DV
+     * decoder to MediaCodec, and the viewer must not have told Settings that
+     * their display has none (DV compat "Strip All" = "my display has no DV",
+     * per DolbyVisionCapability's own note). Otherwise a DV copy is not the
+     * better of two releases - it is the one the player has to strip, or a
+     * pink/green screen - so the ranker must not promote it on the label.
+     */
+    private val dolbyVisionUseful: Boolean by lazy {
+        DolbyVisionCapability.supportsNativeDolbyVision &&
+            AppPreferences.getDvCompatMode(application) != AppPreferences.DV_COMPAT_ALL
     }
 
     private companion object {
@@ -87,7 +105,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         data class Failure(val addonName: String, val message: String?) : AddonLoadResult()
     }
 
-    fun load(contentType: String, streamId: String) {
+    /**
+     * [runtimeMinutes] is the title's own length when the screen knows it: the
+     * ranker scores size as a density (GB/hour) with it and as bulk without it,
+     * so a 45-minute episode's 4 GB and a two-hour film's 4 GB are not read the
+     * same way (see StreamRanker).
+     */
+    fun load(contentType: String, streamId: String, runtimeMinutes: Int? = null) {
         viewModelScope.launch {
             _isLoading.value = true
             _streams.value = emptyList()
@@ -104,7 +128,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 debugLines,
                 onAddonResult = { incoming ->
                     _streams.value = _streams.value + incoming
-                }
+                },
+                runtimeMinutes = runtimeMinutes
             )
 
             _debug.value = debugLines
@@ -118,9 +143,18 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     // publish the result to the picker state so the streams screen can show it
     // instantly — or skip a re-fetch entirely — if it is ever opened for this
     // target afterwards.
-    suspend fun resolve(contentType: String, streamId: String): List<Stream> {
+    suspend fun resolve(
+        contentType: String,
+        streamId: String,
+        runtimeMinutes: Int? = null
+    ): List<Stream> {
         val debugLines = mutableListOf<String>()
-        val streams = fetch(contentType, streamId, debugLines)
+        val streams = fetch(
+            contentType,
+            streamId,
+            debugLines,
+            runtimeMinutes = runtimeMinutes
+        )
 
         _debug.value = debugLines
         _streams.value = streams
@@ -133,7 +167,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         contentType: String,
         streamId: String,
         debugLines: MutableList<String>,
-        onAddonResult: ((List<Stream>) -> Unit)? = null
+        onAddonResult: ((List<Stream>) -> Unit)? = null,
+        runtimeMinutes: Int? = null
     ): List<Stream> {
         // A new target's groups replace the last one's as soon as this fetch
         // starts, so a background resolve cannot leave stale tabs behind.
@@ -227,7 +262,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         val requestedEpisode = EpisodeMatch.requestedFrom(streamId)
         val preppedStreams =
             if (useRanker) {
-                StreamRanker.rank(allStreams, requestedEpisode, constrainedDevice)
+                StreamRanker.rank(
+                    allStreams,
+                    requestedEpisode,
+                    constrainedDevice,
+                    dolbyVisionUseful,
+                    runtimeMinutes
+                )
             } else {
                 allStreams
             }
@@ -257,9 +298,16 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 outcomes = SourceAddonMemory.outcomes(getApplication(), streamId)
             )
 
+        // The same torrent served by several addons is ONE choice: collapse the
+        // repeats into the best-placed row (see StreamDedup). Deliberately after
+        // the reorder above, so the survivor is the addon the viewer would have
+        // picked from anyway - the one that last worked this title - and before
+        // the badges below, so the surviving row keeps them.
+        val deduped = StreamDedup.collapse(preferredStreams)
+
         // KB-compatible badge packs: attach matched badge chips before
         // the list reaches the UI.
-        val withBadges = StreamBadgeEngine.apply(preferredStreams, getApplication())
+        val withBadges = StreamBadgeEngine.apply(deduped, getApplication())
 
         // Which copies the viewer's own debrid account already holds (see
         // TorBoxClient): a cached hash starts instantly off the CDN, with no
@@ -281,7 +329,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             .map { result ->
                 val prepared =
                     if (useRanker) {
-                        StreamRanker.rank(result.streams, requestedEpisode, constrainedDevice)
+                        StreamRanker.rank(
+                            result.streams,
+                            requestedEpisode,
+                            constrainedDevice,
+                            dolbyVisionUseful,
+                            runtimeMinutes
+                        )
                     } else {
                         result.streams
                     }
@@ -310,7 +364,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 streams = markedStreams,
                 results = results,
                 ranked = useRanker,
-                requestedEpisode = requestedEpisode
+                requestedEpisode = requestedEpisode,
+                runtimeMinutes = runtimeMinutes
             )
         )
 
@@ -330,7 +385,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         streams: List<Stream>,
         results: List<AddonLoadResult>,
         ranked: Boolean,
-        requestedEpisode: Pair<Int, Int>?
+        requestedEpisode: Pair<Int, Int>?,
+        runtimeMinutes: Int?
     ): List<String> {
         if (streams.isEmpty()) return listOf("streams: none returned")
 
@@ -354,7 +410,18 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             streams.take(RANK_REPORT_TOP).forEach { stream ->
                 add(
                     "  ${addonByStream[streamKey(stream)] ?: "?"} · " +
-                        StreamRanker.explain(stream, requestedEpisode, constrainedDevice)
+                        StreamRanker.explain(
+                            stream,
+                            requestedEpisode,
+                            constrainedDevice,
+                            // The parameters the order was actually built with,
+                            // not the defaults: a report that printed a DV
+                            // bonus for a box that cannot show DV - or a
+                            // density score for a runtime the request did not
+                            // carry - would explain a different list.
+                            dolbyVisionUseful,
+                            runtimeMinutes
+                        )
                 )
             }
             // Why auto-play did or did not start a source, in the report's own

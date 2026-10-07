@@ -1069,11 +1069,21 @@ class MpvPlayerActivity : ComponentActivity() {
             episode?.let { requestedEpisode -> requestedSeason to requestedEpisode }
         }
         val parsedSources = parseSourcesJson(intent.getStringExtra("sources_json"))
+        // Whether a Dolby Vision label is worth anything on this box, read the
+        // same way the resolver reads it (see StreamsViewModel): the device has
+        // to advertise a DV decoder AND the viewer must not have said their
+        // display has none. Otherwise the ranker must not put a DV copy ahead of
+        // its HDR10 fallback over here either, or this re-rank would undo the
+        // one the picker was built from.
+        val dolbyVisionUseful =
+            com.kennyb1201.kbstream.data.player.DolbyVisionCapability.supportsNativeDolbyVision &&
+                AppPreferences.getDvCompatMode(this) != AppPreferences.DV_COMPAT_ALL
         val orderedSources = if (AppPreferences.getUseStreamRanker(this)) {
             StreamRanker.rank(
                 parsedSources,
                 requestedEpisode,
-                constrainedDevice = DeviceCapability.constrainedStreamDevice(this)
+                constrainedDevice = DeviceCapability.constrainedStreamDevice(this),
+                dolbyVisionUseful = dolbyVisionUseful
             )
         } else {
             parsedSources
@@ -3503,6 +3513,17 @@ class MpvPlayerActivity : ComponentActivity() {
             rebufferDownshiftGivenUp = true
             return
         }
+        // A switch is about to start, so this addon has opened the file and
+        // failed to keep up for this title: record the downshift against the
+        // TITLE, so the next episode's list (and the picker's order) does not
+        // start from the same source again (see SourceAddonMemory). Read before
+        // the switch, which re-resolves the on-screen addon identity to the
+        // next source's. The in-session behavior is untouched.
+        com.kennyb1201.kbstream.data.player.SourceAddonMemory.rememberStalled(
+            this,
+            parentId,
+            currentAddonName
+        )
         switchToSource(next, isAutoRecovery = true)
     }
 

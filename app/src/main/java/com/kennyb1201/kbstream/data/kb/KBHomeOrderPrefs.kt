@@ -381,13 +381,22 @@ object KBHomeOrderPrefs {
         key?.startsWith(KB_BUILTIN_KEY_PREFIX) == true
 
     /**
-     * Every built-in rail key, in the order they have always been drawn.
+     * Every built-in rail key there is: the rows this app builds for every
+     * profile, then the rows it builds for one profile's kind (a kids
+     * profile's two TMDB rows, a guest profile's fixed set).
      *
-     * That order IS their default position: an arrangement that never mentions
-     * them falls them back here (see [mergedHomeRailKeys]), which is what keeps
-     * the default Home - Continue Watching first, then Upcoming, then the two
-     * Top Today rows - byte-identical for a user who never opens the home
-     * manager.
+     * The registry names ALL of them on purpose, because the arrangement is the
+     * one thing every rail on Home has in common: a rail whose key the
+     * arrangement does not know could not be placed, moved or renamed at all.
+     * Which of them a given profile actually DRAWS is a different question, and
+     * it is answered in one place - [builtinKeysFor] - so a rail the profile
+     * does not draw is absent from its manager rather than un-movable in it.
+     *
+     * The order here IS the default position: an arrangement that never
+     * mentions these keys falls them back here (see [mergedHomeRailKeys]), which
+     * is what keeps the default Home - Continue Watching first, then Upcoming,
+     * then the Top Today rows, then the profile's own rails - exactly what it
+     * drew before for a viewer who never opens the home manager.
      *
      * The Top Today rows are built-ins too. They used to be a family of their
      * own - addon catalogs whose position the loader FIXED above everything -
@@ -397,18 +406,75 @@ object KBHomeOrderPrefs {
      * Continue Watching above them, hide them, or rename them like anything
      * else. Their content is still the addon feed Home fetches (see
      * `loadPinnedTopTodayRails`); only their POSITION joins the arrangement.
+     *
+     * Built lazily so it can name the three lists below however they are
+     * declared: this registry is the one key list the rest of the object reads,
+     * and its ORDER is the fallback position of a rail nothing has arranged.
      */
-    val BUILTIN_KEYS: List<String> = listOf(
+    val BUILTIN_KEYS: List<String> by lazy {
+        BASE_BUILTIN_KEYS + KIDS_BUILTIN_KEYS + GUEST_BUILTIN_KEYS
+    }
+
+    /**
+     * The rows EVERY profile draws, in their default order: Continue Watching,
+     * Upcoming, then the two Top Today feed rows.
+     *
+     * This is the head of Home on every profile - a kids profile is the one
+     * exception, and what it swaps is the two Top Today rows (see
+     * [builtinKeysFor]).
+     */
+    private val BASE_BUILTIN_KEYS: List<String> = listOf(
         builtinKey("continue_watching"),
         builtinKey("upcoming_schedule"),
         builtinKey(TOP_TODAY_MOVIES_KEY_ID),
         builtinKey(TOP_TODAY_SHOWS_KEY_ID)
     )
 
-    val BUILTIN_CONTINUE_WATCHING: String = BUILTIN_KEYS[0]
-    val BUILTIN_UPCOMING_SCHEDULE: String = BUILTIN_KEYS[1]
-    val BUILTIN_TOP_MOVIES_TODAY: String = BUILTIN_KEYS[2]
-    val BUILTIN_TOP_SHOWS_TODAY: String = BUILTIN_KEYS[3]
+    /**
+     * The rails a KIDS profile draws where the Top Today rows would be: two
+     * ceiling-filtered TMDB rows built by `loadPinnedKidsRails`.
+     *
+     * They are built-in rails rather than add-on rails because that is what
+     * makes them arrangeable and renamable: a rail keyed by an addon URL is a
+     * rail no manifest describes, so it could never be listed in the manager
+     * (see [builtinKeyForCatalogId] and `KBHomeSlots.buildMergedEntries`).
+     */
+    val KIDS_BUILTIN_KEYS: List<String> = listOf(
+        builtinKey(TOP_KIDS_MOVIES_KEY_ID),
+        builtinKey(TOP_KIDS_SHOWS_KEY_ID)
+    )
+
+    /**
+     * The rails a GUEST profile draws after the Top Today rows: the fixed set
+     * of TMDB rows built by `loadPinnedGuestRails`, so a profile with no
+     * add-ons installed still opens onto a full screen.
+     *
+     * Their order here is the order the loader builds them in, which is the
+     * order a guest has always seen them in.
+     */
+    val GUEST_BUILTIN_KEYS: List<String> = listOf(
+        builtinKey(GUEST_LATEST_DIGITAL_KEY_ID),
+        builtinKey(GUEST_AIRING_NOW_KEY_ID),
+        builtinKey(GUEST_TRENDING_WEEK_KEY_ID),
+        builtinKey(GUEST_POPULAR_MOVIES_KEY_ID),
+        builtinKey(GUEST_POPULAR_SHOWS_KEY_ID),
+        builtinKey(GUEST_TOP_RATED_MOVIES_KEY_ID),
+        builtinKey(GUEST_TOP_RATED_SHOWS_KEY_ID)
+    )
+
+    val BUILTIN_CONTINUE_WATCHING: String = BASE_BUILTIN_KEYS[0]
+    val BUILTIN_UPCOMING_SCHEDULE: String = BASE_BUILTIN_KEYS[1]
+    val BUILTIN_TOP_MOVIES_TODAY: String = BASE_BUILTIN_KEYS[2]
+    val BUILTIN_TOP_SHOWS_TODAY: String = BASE_BUILTIN_KEYS[3]
+    val BUILTIN_TOP_KIDS_MOVIES: String = KIDS_BUILTIN_KEYS[0]
+    val BUILTIN_TOP_KIDS_SHOWS: String = KIDS_BUILTIN_KEYS[1]
+    val BUILTIN_GUEST_LATEST_DIGITAL: String = GUEST_BUILTIN_KEYS[0]
+    val BUILTIN_GUEST_AIRING_NOW: String = GUEST_BUILTIN_KEYS[1]
+    val BUILTIN_GUEST_TRENDING_WEEK: String = GUEST_BUILTIN_KEYS[2]
+    val BUILTIN_GUEST_POPULAR_MOVIES: String = GUEST_BUILTIN_KEYS[3]
+    val BUILTIN_GUEST_POPULAR_SHOWS: String = GUEST_BUILTIN_KEYS[4]
+    val BUILTIN_GUEST_TOP_RATED_MOVIES: String = GUEST_BUILTIN_KEYS[5]
+    val BUILTIN_GUEST_TOP_RATED_SHOWS: String = GUEST_BUILTIN_KEYS[6]
 
     /**
      * The built-in arrangement key a Top Today catalog is keyed by, or null for
@@ -424,42 +490,69 @@ object KBHomeOrderPrefs {
     }
 
     /**
-     * The built-in rails a profile with this Kids Mode ceiling can actually
-     * draw on Home, in their default order.
+     * The built-in rails THIS profile draws on Home, in their default order.
      *
-     * Every built-in is profile-independent except the two "Top ... Today"
-     * rows: Home does not load them for a kids profile at all - it swaps its
-     * pinned batch for the ceiling-filtered kids rails instead (see the pinned
-     * branch of HomeViewModel's rail load) - so a kids profile never draws
-     * them.
+     * The order is the same shape for every profile: Continue Watching,
+     * Upcoming, the two Top Today rows, then the rails built for this profile's
+     * kind - and every one of them is a row the viewer can move, hide and
+     * rename, because every one of them is a built-in key (see
+     * [builtinKeyForCatalogId]).
      *
-     * Listing them in the home manager would offer rows for rails that are not
-     * there, and every arrow on those rows would be worse than inert: a move
-     * would be computed against a rail the viewer cannot see, so the rail they
-     * DID press on would jump two slots at once. Both the manager's list and
-     * the ViewModel's arrangement defaults therefore ask this, not
-     * [BUILTIN_KEYS].
+     * The one substitution is the kids profile's: Home does not load the two
+     * Top Today rows for it at all - it swaps its pinned batch for the
+     * ceiling-filtered kids rails instead (see the pinned branch of
+     * HomeViewModel's rail load) - so a kids profile draws [KIDS_BUILTIN_KEYS]
+     * where those two would be. A guest profile draws the Top Today rows and
+     * then its own fixed set ([GUEST_BUILTIN_KEYS]), and an ordinary profile
+     * draws neither of the profile-specific families.
+     *
+     * Listing a rail the profile does not draw would offer a row whose arrows
+     * are worse than inert: a move would be computed against a rail the viewer
+     * cannot see, so the rail they DID press on would jump two slots at once.
+     * Both the manager's list and the ViewModel's arrangement defaults
+     * therefore ask this, not [BUILTIN_KEYS].
      *
      * [BUILTIN_KEYS] stays the full list on purpose: the arrangement still has
-     * to know those two keys, so a profile that later loses its ceiling comes
-     * back to an arrangement that names them (a rename or hide written while
-     * kids mode was off is honoured again).
+     * to know every key, so a profile that later loses its ceiling (or stops
+     * being the guest) comes back to an arrangement that names them - a rename
+     * or a hide written under the other profile is honoured again.
      */
-    fun builtinKeysFor(kidsMaxAge: Int?): List<String> =
-        if (kidsMaxAge == null) {
-            BUILTIN_KEYS
-        } else {
-            BUILTIN_KEYS.filterNot {
+    fun builtinKeysFor(kidsMaxAge: Int?, isGuest: Boolean = false): List<String> = when {
+        kidsMaxAge != null ->
+            BASE_BUILTIN_KEYS.filterNot {
                 it == BUILTIN_TOP_MOVIES_TODAY || it == BUILTIN_TOP_SHOWS_TODAY
-            }
-        }
+            } + KIDS_BUILTIN_KEYS
 
-    /** The section title a built-in rail draws when the viewer has not renamed it. */
+        // Kids Mode wins over the guest flag, exactly as Home's rail load does
+        // (a profile that is both gets the ceiling-filtered kids rails).
+        isGuest -> BASE_BUILTIN_KEYS + GUEST_BUILTIN_KEYS
+
+        else -> BASE_BUILTIN_KEYS
+    }
+
+    /**
+     * The section title a built-in rail draws when the viewer has not renamed
+     * it.
+     *
+     * The profile rails' names are the ones the loaders build them with
+     * (`loadPinnedKidsRails`, `loadPinnedGuestRails`), repeated here because the
+     * manager has to show a row's name - and the default it offers to restore -
+     * whether or not anything has been loaded into it yet.
+     */
     fun builtinDefaultTitle(key: String): String? = when (key) {
         BUILTIN_CONTINUE_WATCHING -> "Continue Watching"
         BUILTIN_UPCOMING_SCHEDULE -> "Upcoming"
         BUILTIN_TOP_MOVIES_TODAY -> "Top Movies Today"
         BUILTIN_TOP_SHOWS_TODAY -> "Top Shows Today"
+        BUILTIN_TOP_KIDS_MOVIES -> "Top Kids Movies"
+        BUILTIN_TOP_KIDS_SHOWS -> "Top Kids Shows"
+        BUILTIN_GUEST_LATEST_DIGITAL -> "Latest Digital Releases"
+        BUILTIN_GUEST_AIRING_NOW -> "Airing Now"
+        BUILTIN_GUEST_TRENDING_WEEK -> "Trending This Week"
+        BUILTIN_GUEST_POPULAR_MOVIES -> "Popular Movies"
+        BUILTIN_GUEST_POPULAR_SHOWS -> "Popular Shows"
+        BUILTIN_GUEST_TOP_RATED_MOVIES -> "Top Rated Movies"
+        BUILTIN_GUEST_TOP_RATED_SHOWS -> "Top Rated Shows"
         else -> null
     }
 
@@ -535,6 +628,49 @@ object KBHomeOrderPrefs {
     /** Catalog ids of the two pinned "Top Today" feed rows (see `loadPinnedTopTodayRails`). */
     private const val TOP_TODAY_MOVIES_KEY_ID = "top_movies_today"
     private const val TOP_TODAY_SHOWS_KEY_ID = "top_shows_today"
+
+    /** Catalog ids of the two kids rails (see `loadPinnedKidsRails`). */
+    private const val TOP_KIDS_MOVIES_KEY_ID = "top_kids_movies"
+    private const val TOP_KIDS_SHOWS_KEY_ID = "top_kids_shows"
+
+    /**
+     * Catalog ids of the guest rails (see `loadPinnedGuestRails`), in the order
+     * that loader builds them.
+     */
+    private const val GUEST_LATEST_DIGITAL_KEY_ID = "guest_latest_digital"
+    private const val GUEST_AIRING_NOW_KEY_ID = "guest_airing_now"
+    private const val GUEST_TRENDING_WEEK_KEY_ID = "guest_trending_week"
+    private const val GUEST_POPULAR_MOVIES_KEY_ID = "guest_popular_movies"
+    private const val GUEST_POPULAR_SHOWS_KEY_ID = "guest_popular_shows"
+    private const val GUEST_TOP_RATED_MOVIES_KEY_ID = "guest_top_rated"
+    private const val GUEST_TOP_RATED_SHOWS_KEY_ID = "guest_top_rated_shows"
+
+    /**
+     * The arrangement key an APP-BUILT rail is placed by, matched on the catalog
+     * id the loader builds it with, or null for anything that is not one.
+     *
+     * The two Top Today feed rows and the profile rails (`loadPinnedKidsRails`,
+     * `loadPinnedGuestRails`) are rows this app fetches and names itself: they
+     * have no manifest to key against, so keying them by an add-on URL would be
+     * keying them by nothing - which is exactly why they used to be fixed above
+     * every arranged rail. Under their own built-in keys they take a position in
+     * the one arrangement, which is what lets the viewer move, hide and rename
+     * them like anything else on Home.
+     */
+    fun builtinKeyForCatalogId(catalogId: String?): String? = when (catalogId) {
+        TOP_TODAY_MOVIES_KEY_ID -> BUILTIN_TOP_MOVIES_TODAY
+        TOP_TODAY_SHOWS_KEY_ID -> BUILTIN_TOP_SHOWS_TODAY
+        TOP_KIDS_MOVIES_KEY_ID -> BUILTIN_TOP_KIDS_MOVIES
+        TOP_KIDS_SHOWS_KEY_ID -> BUILTIN_TOP_KIDS_SHOWS
+        GUEST_LATEST_DIGITAL_KEY_ID -> BUILTIN_GUEST_LATEST_DIGITAL
+        GUEST_AIRING_NOW_KEY_ID -> BUILTIN_GUEST_AIRING_NOW
+        GUEST_TRENDING_WEEK_KEY_ID -> BUILTIN_GUEST_TRENDING_WEEK
+        GUEST_POPULAR_MOVIES_KEY_ID -> BUILTIN_GUEST_POPULAR_MOVIES
+        GUEST_POPULAR_SHOWS_KEY_ID -> BUILTIN_GUEST_POPULAR_SHOWS
+        GUEST_TOP_RATED_MOVIES_KEY_ID -> BUILTIN_GUEST_TOP_RATED_MOVIES
+        GUEST_TOP_RATED_SHOWS_KEY_ID -> BUILTIN_GUEST_TOP_RATED_SHOWS
+        else -> null
+    }
 
     /**
      * Resolves the arrangement key for a collection, honoring history: when

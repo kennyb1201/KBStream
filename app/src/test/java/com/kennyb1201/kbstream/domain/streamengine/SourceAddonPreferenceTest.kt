@@ -27,13 +27,15 @@ class SourceAddonPreferenceTest {
     private fun ordered(
         streams: List<Stream>,
         worked: Set<String> = emptySet(),
-        failed: Set<String> = emptySet()
+        failed: Set<String> = emptySet(),
+        slow: Set<String> = emptySet()
     ): List<Stream> = SourceAddonPreference.ordered(
         streams = streams,
         addonOf = { it.name },
         outcomes = SourceAddonPreference.Outcomes(
             worked = worked.map { SourceAddonPreference.normalize(it) }.toSet(),
-            failed = failed.map { SourceAddonPreference.normalize(it) }.toSet()
+            failed = failed.map { SourceAddonPreference.normalize(it) }.toSet(),
+            slow = slow.map { SourceAddonPreference.normalize(it) }.toSet()
         )
     )
 
@@ -121,6 +123,59 @@ class SourceAddonPreferenceTest {
         val streams = listOf(aio)
 
         assertTrue(streams === ordered(streams, worked = setOf("FlixStreams")))
+    }
+
+    @Test
+    fun `a stalling addon sits under an unknown one and over a dead one`() {
+        // Reported problem (the other half of it): a source that opens and
+        // cannot keep up was demoted for the session and forgotten, so the next
+        // episode started from it again. It belongs behind everything the app
+        // has nothing against - and still ahead of an addon that will not open
+        // at all, because it does play.
+        val slow = stream("SlowStreams", "https://slow.example/e5.mp4")
+
+        val result = ordered(
+            streams = listOf(aio, slow, other),
+            failed = setOf("AIOStreams"),
+            slow = setOf("SlowStreams")
+        )
+
+        assertEquals(
+            listOf("Torrentio", "SlowStreams", "AIOStreams"),
+            result.map { it.name }
+        )
+    }
+
+    @Test
+    fun `an addon that worked still leads a stalling one`() {
+        // The two only meet across a half-written store (one good session
+        // clears the count), and when they do the working one leads: a source
+        // that plays cleanly here beats one that plays and stutters.
+        val slow = stream("SlowStreams", "https://slow.example/e5.mp4")
+
+        val result = ordered(
+            streams = listOf(slow, flix),
+            worked = setOf("FlixStreams"),
+            slow = setOf("SlowStreams")
+        )
+
+        assertEquals(listOf("FlixStreams", "SlowStreams"), result.map { it.name })
+    }
+
+    @Test
+    fun `the ranker's order survives inside the stalling tier`() {
+        val slowA = stream("Slow A", "https://sa.example/1.mp4")
+        val slowB = stream("Slow B", "https://sb.example/1.mp4")
+
+        val result = ordered(
+            streams = listOf(aio, slowA, slowB),
+            slow = setOf("Slow A", "Slow B")
+        )
+
+        // The two stalling addons keep their relative order - and the unseen one
+        // keeps its place ABOVE both, because a demotion for stalling must never
+        // drag an addon under one nobody has a reason to doubt.
+        assertEquals(listOf("AIOStreams", "Slow A", "Slow B"), result.map { it.name })
     }
 
     @Test

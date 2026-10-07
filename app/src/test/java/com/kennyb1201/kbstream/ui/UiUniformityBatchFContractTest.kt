@@ -254,6 +254,34 @@ class UiUniformityBatchFContractTest {
     }
 
     @Test
+    fun `the avatar tile's glow is round like the tile`() {
+        val picker = source("ui/profiles/ProfilePickerScreen.kt")
+
+        // Reported: the focused tile drew a rounded SQUARE around a round
+        // avatar. The ring was never the problem - tv-material draws a focused
+        // border with the Border's own shape, and this screen already passed
+        // CircleShape there. The GLOW is: SurfaceGlowNode paints the shape the
+        // SURFACE was handed, so the tile's glow was the surface's default
+        // rounded rectangle. The two have to agree, and the surface is the one
+        // that was left unset.
+        val glowAt = picker.indexOf(
+            "focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)"
+        )
+        assertTrue("the tile's glow is still declared", glowAt >= 0)
+
+        val surfaceAt = picker.lastIndexOf("Surface(", glowAt)
+        assertTrue("the glow is still declared on the tile's Surface", surfaceAt >= 0)
+
+        assertTrue(
+            "an avatar tile is a circle, so its Surface has to declare the " +
+                "circular shape: the glow is painted from the surface's shape, " +
+                "so leaving it unset lights a square plate behind a round avatar",
+            picker.substring(surfaceAt, glowAt)
+                .contains("shape = ClickableSurfaceDefaults.shape(shape = CircleShape)")
+        )
+    }
+
+    @Test
     fun `onboarding setup rows grow like rows`() {
         val onboarding = source("ui/onboarding/OnboardingScreen.kt")
         assertTrue(

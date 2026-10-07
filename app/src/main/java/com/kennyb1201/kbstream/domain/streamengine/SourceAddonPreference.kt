@@ -15,13 +15,22 @@ import com.kennyb1201.kbstream.data.addon.Stream
  * addon that will not open has no working link to continue from.
  *
  * So each title keeps a small record of its addons' last OUTCOME - one that
- * actually opened a file, or one whose link failed to open - and this rule turns
- * that record into an order:
+ * actually opened a file, one that opened and could not keep up, or one whose
+ * link failed to open - and this rule turns that record into an order:
  *
  *  1. streams from an addon that opened a file for this title,
  *  2. everything else, in the order the ranker put it (an addon the app has
  *     never seen play here is not punished for it),
- *  3. streams from an addon whose link failed to open here.
+ *  3. streams from an addon that opened here and kept stalling (see
+ *     [Outcomes.slow]),
+ *  4. streams from an addon whose link failed to open here.
+ *
+ * A slow addon sits above a dead one and below everything else on purpose. It
+ * is not the worst thing the app knows about a source - it demonstrably plays -
+ * so a title whose only alternative is an addon that would not open at all must
+ * still prefer the slow one; and it is worse than an addon nothing is known
+ * about, because the viewer has watched this exact source fail to keep up for
+ * this exact title.
  *
  * The tiers are stable, so within one the ranker's own order survives: this
  * rule moves whole addons, it does not second-guess the ranking.
@@ -40,10 +49,16 @@ internal object SourceAddonPreference {
     /** The addons this title has a record for, split by what they last did. */
     data class Outcomes(
         val worked: Set<String> = emptySet(),
-        val failed: Set<String> = emptySet()
+        val failed: Set<String> = emptySet(),
+        /**
+         * Opened here, but could not sustain its own bitrate: the addon whose
+         * links this title has stalled on often enough to be a pattern rather
+         * than a bad evening (see [SourceAddonMemory.rememberStalled]).
+         */
+        val slow: Set<String> = emptySet()
     ) {
         val isEmpty: Boolean
-            get() = worked.isEmpty() && failed.isEmpty()
+            get() = worked.isEmpty() && failed.isEmpty() && slow.isEmpty()
     }
 
     /**
@@ -54,8 +69,14 @@ internal object SourceAddonPreference {
     /** Tier of an addon with no record for this title: the ranker decides. */
     private const val TIER_UNKNOWN = 1
 
+    /**
+     * Tier of an addon that opened here and then kept stalling: it goes behind
+     * everything the app has nothing against, and ahead of a dead addon.
+     */
+    private const val TIER_SLOW = 2
+
     /** Tier of an addon whose link would not open here: it goes last. */
-    private const val TIER_FAILED = 2
+    private const val TIER_FAILED = 3
 
     /**
      * Identity for comparing an addon across the picker and the player.
@@ -106,12 +127,13 @@ internal object SourceAddonPreference {
         if (outcomes.isEmpty || streams.size < 2) return streams
 
         val worked = outcomes.worked
+        val slow = outcomes.slow
         val failed = outcomes.failed
         return streams
             .withIndex()
             .sortedWith(
                 compareBy(
-                    { (_, stream) -> tierOf(addonOf(stream), worked, failed) },
+                    { (_, stream) -> tierOf(addonOf(stream), worked, slow, failed) },
                     // The ranker's own order inside a tier: `sortedWith` is
                     // stable, but being explicit about the tie-break keeps the
                     // rule honest if that ever changes.
@@ -124,6 +146,7 @@ internal object SourceAddonPreference {
     private fun tierOf(
         addon: String?,
         worked: Set<String>,
+        slow: Set<String>,
         failed: Set<String>
     ): Int {
         val key = normalize(addon)
@@ -131,8 +154,14 @@ internal object SourceAddonPreference {
         // A failure wins when an addon is somehow in both records: the record
         // keeps only the LAST outcome, so this is only reachable across a
         // hand-edited or half-written store - and "its links would not open" is
-        // the safe way to be wrong.
+        // the safe way to be wrong. A stall loses to it for the same reason:
+        // a link that will not open at all is worse than one that opens and
+        // cannot keep up.
         if (key in failed) return TIER_FAILED
+        // Then the stalling addon, before the working one: the two are only
+        // ever both true for a half-written store too, since a fresh success
+        // clears the stall count (see [SourceAddonMemory.rememberWorked]).
+        if (key in slow) return TIER_SLOW
         if (key in worked) return TIER_WORKED
         return TIER_UNKNOWN
     }

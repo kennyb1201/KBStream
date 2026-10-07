@@ -41,6 +41,26 @@ class StreamRankerTest {
         vararg streams: Stream
     ): List<Stream> = StreamRanker.rank(streams.toList(), season to episode)
 
+    /**
+     * The score the diagnostics line reports, so a scoring test reads the number
+     * the order was actually built from instead of a second copy of the
+     * arithmetic. The parameters mirror [StreamRanker.rank]'s.
+     */
+    private fun scoreOf(
+        stream: Stream,
+        dolbyVisionUseful: Boolean = true,
+        runtimeMinutes: Int? = null
+    ): Int {
+        val line = StreamRanker.explain(
+            stream,
+            dolbyVisionUseful = dolbyVisionUseful,
+            runtimeMinutes = runtimeMinutes
+        )
+        val match = Regex("""score=(-?\d+)""").find(line)
+        assertTrue("no score in: $line", match != null)
+        return match!!.groupValues[1].toInt()
+    }
+
     // ── The episode asked for ──
     //
     // Reported bug: "Paw Patrol is still playing the wrong episodes", with a
@@ -620,5 +640,111 @@ class StreamRankerTest {
         val hd = stream("Some Film 2024 720p HDTV 1 GB", url = "https://host/720.mkv")
 
         assertEquals(listOf(uhd, hd), orderConstrained(uhd, hd))
+    }
+
+    // ── Dolby Vision, where it can be shown ──
+    //
+    // Reported: a DV copy was promoted on the label alone. On a box with no DV
+    // decoder - and for a viewer who told Settings their display has no DV - it
+    // is not the better release: it is the one the player has to strip, or a
+    // pink/green screen on exactly this hardware.
+
+    private fun orderForDv(
+        dolbyVisionUseful: Boolean,
+        vararg streams: Stream
+    ): List<Stream> = StreamRanker.rank(streams.toList(), dolbyVisionUseful = dolbyVisionUseful)
+
+    @Test
+    fun `a Dolby Vision copy is not promoted where it cannot be shown`() {
+        val dv = stream("Some Film 2024 1080p WEB-DL DV", url = "https://host/dv.mkv")
+        val hdr10 = stream("Some Film 2024 1080p WEB-DL HDR10", url = "https://host/hdr.mkv")
+
+        // Where DV can be shown, its label is worth exactly what HDR10's is:
+        // the two releases are level, so the addon's own order survives.
+        assertEquals(scoreOf(hdr10), scoreOf(dv))
+        assertEquals(listOf(hdr10, dv), order(hdr10, dv))
+
+        // No DV decoder (or the viewer's "my display has no DV" override): the
+        // label no longer carries the copy over its HDR10 fallback, whatever
+        // order the addon sent them in.
+        assertEquals(
+            "the DV part of the HDR bonus is the only thing that changed",
+            scoreOf(dv) - 30,
+            scoreOf(dv, dolbyVisionUseful = false)
+        )
+        assertEquals(listOf(hdr10, dv), orderForDv(false, dv, hdr10))
+    }
+
+    @Test
+    fun `HDR10 keeps its bonus on a box with no Dolby Vision`() {
+        val hdr10 = stream("Some Film 2024 1080p WEB-DL HDR10", url = "https://host/hdr.mkv")
+        val plain = stream("Some Film 2024 1080p WEB-DL", url = "https://host/plain.mkv")
+
+        assertEquals(
+            "a static grade every HDR panel can render is not gated on a DV probe",
+            scoreOf(hdr10),
+            scoreOf(hdr10, dolbyVisionUseful = false)
+        )
+        assertEquals(30, scoreOf(hdr10, dolbyVisionUseful = false) - scoreOf(plain))
+    }
+
+    @Test
+    fun `a dvdrip is neither a DV label nor touched by the DV gate`() {
+        val dvdrip = stream("Some Film 1999 DVDRip XviD", url = "https://host/a.mkv")
+
+        assertEquals(
+            "\"dv\" stays word-bounded, so the gate cannot read a DVD rip as" +
+                " Dolby Vision either",
+            scoreOf(dvdrip),
+            scoreOf(dvdrip, dolbyVisionUseful = false)
+        )
+    }
+
+    // ── Density, not bulk ──
+    //
+    // Reported: the size nudge was raw GB, so it rewarded long runtimes. 4 GB
+    // is a healthy 45-minute episode (5.3 GB/h) and a thin two-hour film
+    // (2 GB/h), and the score could not tell the two apart.
+
+    @Test
+    fun `the same file is worth more per hour at 45 minutes than at two hours`() {
+        val file = stream("Some Show S01E01 1080p WEB-DL 4 GB", url = "https://host/a.mkv")
+
+        assertTrue(
+            "45 minutes makes the same 4 GB a denser encode: 5.3 GB/h against" +
+                " 2 GB/h",
+            scoreOf(file, runtimeMinutes = 45) > scoreOf(file, runtimeMinutes = 120)
+        )
+    }
+
+    @Test
+    fun `an unknown runtime still scores the raw size`() {
+        val big = stream("Some Film 2024 1080p WEB-DL 15 GB", url = "https://host/big.mkv")
+        val small = stream("Some Film 2024 1080p WEB-DL 2 GB", url = "https://host/small.mkv")
+
+        // No runtime in the request: the bulk nudge decides, exactly as it did
+        // before the density reading existed.
+        assertEquals(listOf(big, small), order(small, big))
+        assertTrue(scoreOf(big) > scoreOf(small))
+        assertEquals(
+            "a runtime of 0 is no runtime: it must not take the density path",
+            scoreOf(big, runtimeMinutes = null),
+            scoreOf(big, runtimeMinutes = 0)
+        )
+    }
+
+    @Test
+    fun `a remux-tier density caps at the size nudge's ceiling`() {
+        val thirty = stream("Some Show S01E01 2160p REMUX 30 GB", url = "https://host/a.mkv")
+        val hundred = stream("Some Show S01E01 2160p REMUX 100 GB", url = "https://host/b.mkv")
+
+        // ~40 GB/h and ~133 GB/h: both past the 10 GB/h cap, so they tie at the
+        // same +30 the 20 GB size cap awards - where an uncapped density nudge
+        // would have dragged the 100 GB file to the head on bytes alone.
+        assertEquals(scoreOf(thirty, runtimeMinutes = 45), scoreOf(hundred, runtimeMinutes = 45))
+        assertEquals(
+            listOf(thirty, hundred),
+            StreamRanker.rank(listOf(thirty, hundred), runtimeMinutes = 45)
+        )
     }
 }

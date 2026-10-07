@@ -327,6 +327,15 @@ private fun ProfileAvatarTile(
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Surface(
             onClick = onClick,
+            // The tile IS a circle, so the surface has to SAY so. The focused
+            // GLOW below is painted from this shape, not from the ring's Border
+            // (tvSurfaceGlow draws the shape the surface was handed), so a tile
+            // left on the default rounded-rectangle shape lit a rounded SQUARE
+            // plate behind a round avatar: the square outline in the report.
+            // The ring's own shape still comes from the Border; what this line
+            // fixes is the tile's glow, its clip and its ripple. CastCard on
+            // Detail, the app's other avatar circle, passes the same shape.
+            shape = ClickableSurfaceDefaults.shape(shape = CircleShape),
             colors = ClickableSurfaceDefaults.colors(
                 containerColor = Color.Transparent,
                 focusedContainerColor = Color.Transparent,

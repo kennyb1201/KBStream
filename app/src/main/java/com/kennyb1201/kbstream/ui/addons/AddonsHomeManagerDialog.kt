@@ -123,6 +123,14 @@ internal fun CatalogManagerDialog(
      * arrange is a row that only misfires.
      */
     kidsMaxAge: Int?,
+    /**
+     * Whether the active profile is the guest profile, whose Home carries the
+     * app's own guest rails after the Top Today rows (see
+     * KBHomeOrderPrefs.GUEST_BUILTIN_KEYS). They are built-in rows here for the
+     * same reason the kids rails are: they are rows this app fetches and names
+     * itself, so without a built-in key there is no row to move or rename.
+     */
+    isGuest: Boolean,
     collectionUrlInput: String,
     onCollectionUrlChange: (String) -> Unit,
     onImportCollectionUrl: () -> Unit,
@@ -219,10 +227,16 @@ internal fun CatalogManagerDialog(
         // list Home renders (see mergedHomeRailKeys).
         //
         // They are the PROFILE's built-ins, not the full registry: a kids
-        // profile has no Top Today rows on Home at all, so they are not rails
-        // its manager can aim at (see KBHomeOrderPrefs.builtinKeysFor) - an
+        // profile has no Top Today rows on Home at all, and a guest profile has
+        // its own rails after them, so what is aimable here is exactly what
+        // Home draws for this profile (see KBHomeOrderPrefs.builtinKeysFor) - an
         // arrow next to a rail nobody can see would move it two drawn slots.
-        val movableDefaults = KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge) +
+        //
+        // Every one of those rows can be moved, hidden and renamed, the app's
+        // own TMDB rails included: that is the whole reason the kids and guest
+        // rails are keyed as built-ins rather than by a base URL they do not
+        // have.
+        val movableDefaults = KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge, isGuest) +
             browseRailByKey.keys.toList() +
             customCatalogByKey.keys.toList() +
             addonByKey.keys +

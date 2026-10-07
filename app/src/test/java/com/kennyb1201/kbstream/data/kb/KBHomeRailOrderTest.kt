@@ -147,7 +147,12 @@ class KBHomeRailOrderTest {
         assertNull(KBHomeOrderPrefs.topTodayBuiltinKey("top_movies_week"))
         assertNull(KBHomeOrderPrefs.topTodayBuiltinKey(null))
 
-        val withTopToday = KBHomeOrderPrefs.BUILTIN_KEYS + listOf("browse:1", "addon:a")
+        // The list the manager builds for an ordinary profile: the built-ins
+        // that profile draws, then the rails (see
+        // KBHomeOrderPrefs.builtinKeysFor - the registry names the profile
+        // rails as well, and this profile draws none of them).
+        val withTopToday =
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null) + listOf("browse:1", "addon:a")
         val prefs = KBHomeOrder()
 
         // Every direction changes the order, exactly as it does for any rail.

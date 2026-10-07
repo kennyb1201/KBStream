@@ -18,9 +18,15 @@ import org.junit.runner.RunWith
  * from another addon, and nothing carried that to the next episode - the same
  * unplayable links came back at the head of the list.
  *
+ * Reported problem (the other half): a source that opens and then cannot keep
+ * up was demoted for the session and forgotten, so the next episode started
+ * from the same slow source again.
+ *
  * Pinned here: the record is PER TITLE, the last outcome for an addon wins, a
- * blank or unresolved addon is never recorded, an entry expires, and the store
- * stays bounded.
+ * stall is its own third state (neither working nor failed), two of them make
+ * the addon slow while one does not, a success clears the count, a blank or
+ * unresolved addon is never recorded, an entry expires, and the store stays
+ * bounded.
  */
 @RunWith(AndroidJUnit4::class)
 class SourceAddonMemoryTest {
@@ -144,6 +150,111 @@ class SourceAddonMemoryTest {
         assertEquals(12, outcomes.failed.size)
         assertTrue("the oldest must be the one dropped", "addon0" !in outcomes.failed)
         assertTrue("the newest must survive", "addon14" in outcomes.failed)
+    }
+
+    @Test
+    fun `one stall-downshift is not yet a pattern`() {
+        SourceAddonMemory.rememberStalled(context, "tt1234", "AIOStreams")
+
+        val outcomes = SourceAddonMemory.outcomes(context, "tt1234")
+
+        assertTrue(
+            "a single downshift is a bad evening: the addon has to stay in" +
+                " the unknown tier, where the ranker put it",
+            outcomes.isEmpty
+        )
+    }
+
+    @Test
+    fun `two stall-downshifts make the addon slow for this title`() {
+        SourceAddonMemory.rememberStalled(context, "tt1234", "AIOStreams")
+        SourceAddonMemory.rememberStalled(context, "tt1234", "AIOStreams")
+
+        assertEquals(
+            setOf("aiostreams"),
+            SourceAddonMemory.outcomes(context, "tt1234").slow
+        )
+    }
+
+    @Test
+    fun `a stalling addon is neither working nor failed`() {
+        // The heart of the third state: a source that opens and cannot keep up
+        // still PLAYS, so recording it as a failure would send a playable addon
+        // to the back of the list - and recording it as working would hide the
+        // stalls the feature exists to remember.
+        repeat(2) { SourceAddonMemory.rememberStalled(context, "tt1234", "AIOStreams") }
+
+        val outcomes = SourceAddonMemory.outcomes(context, "tt1234")
+
+        assertTrue("a slow addon is not a dead one", outcomes.failed.isEmpty())
+        assertTrue(outcomes.worked.isEmpty())
+    }
+
+    @Test
+    fun `a success clears the stall count`() {
+        repeat(2) { SourceAddonMemory.rememberStalled(context, "tt1234", "AIOStreams") }
+
+        SourceAddonMemory.rememberWorked(context, "tt1234", "AIOStreams")
+
+        val outcomes = SourceAddonMemory.outcomes(context, "tt1234")
+        assertEquals(setOf("aiostreams"), outcomes.worked)
+        assertTrue("one good session forgives", outcomes.slow.isEmpty())
+    }
+
+    @Test
+    fun `a failure supersedes the stall count`() {
+        repeat(2) { SourceAddonMemory.rememberStalled(context, "tt1234", "AIOStreams") }
+
+        SourceAddonMemory.rememberFailed(context, "tt1234", "AIOStreams")
+
+        val outcomes = SourceAddonMemory.outcomes(context, "tt1234")
+        assertEquals(setOf("aiostreams"), outcomes.failed)
+        assertTrue(outcomes.slow.isEmpty())
+    }
+
+    @Test
+    fun `a stall count from more than a month ago does not count`() {
+        seedStalls(
+            showKey = "tt1234",
+            addon = "aiostreams",
+            stalls = 3,
+            lastStallAtMs = System.currentTimeMillis() - SourceAddonMemory.TTL_MS - 1_000L
+        )
+
+        assertTrue(
+            "the source has had a month of chances since: a stale stall must" +
+                " not keep demoting it",
+            SourceAddonMemory.outcomes(context, "tt1234").slow.isEmpty()
+        )
+    }
+
+    @Test
+    fun `a stall inside the window counts`() {
+        seedStalls(
+            showKey = "tt1234",
+            addon = "aiostreams",
+            stalls = 2,
+            lastStallAtMs = System.currentTimeMillis() - 1_000L
+        )
+
+        assertEquals(
+            setOf("aiostreams"),
+            SourceAddonMemory.outcomes(context, "tt1234").slow
+        )
+    }
+
+    /**
+     * Writes a stall record straight into the store so its timestamp can be
+     * forged - the one thing the public API cannot express, because
+     * `rememberStalled` always stamps "now". The blob uses the store's own
+     * field names.
+     */
+    private fun seedStalls(showKey: String, addon: String, stalls: Int, lastStallAtMs: Long) {
+        val blob =
+            """{"shows":{"$showKey":{"addons":{"$addon":{"worked":null,""" +
+                """"atMs":$lastStallAtMs,"stalls":$stalls,""" +
+                """"lastStallAtMs":$lastStallAtMs}},"atMs":$lastStallAtMs}}}"""
+        prefs().edit().putString("source_addons_v1", blob).commit()
     }
 
     /**

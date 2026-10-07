@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.data.kb
 import com.kennyb1201.kbstream.ui.kb.visibleBuiltinRailKeys
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,12 +28,22 @@ class KBHomeBuiltinRailTest {
     // Browse, catalogs, collections: the pre-existing defaults, which the
     // built-ins now lead.
     private val existingDefaults = listOf("browse:1", "addon:a", "addon:b", "kb:c")
-    private val defaults = KBHomeOrderPrefs.BUILTIN_KEYS + existingDefaults
+
+    // The list the manager and the ViewModel build for THIS profile kind: the
+    // built-ins a profile with no ceiling and no guest key actually draws, then
+    // the rails that were already there. The registry is wider - it also names
+    // a kids profile's two rails and a guest profile's fixed set - but this
+    // profile draws none of those, so they are not in its list (see
+    // `builtinKeysFor`, and the profile cases below).
+    private val defaults =
+        KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null) + existingDefaults
 
     private val continueWatching = KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
     private val upcoming = KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE
     private val topMovies = KBHomeOrderPrefs.BUILTIN_TOP_MOVIES_TODAY
     private val topShows = KBHomeOrderPrefs.BUILTIN_TOP_SHOWS_TODAY
+    private val kidsMovies = KBHomeOrderPrefs.BUILTIN_TOP_KIDS_MOVIES
+    private val kidsShows = KBHomeOrderPrefs.BUILTIN_TOP_KIDS_SHOWS
 
     @Test
     fun `the built-in keys are stable, prefixed and distinct`() {
@@ -46,12 +57,33 @@ class KBHomeBuiltinRailTest {
         assertFalse(KBHomeOrderPrefs.isBuiltinKey("addon:a"))
         assertFalse(KBHomeOrderPrefs.isBuiltinKey(null))
         // Continue Watching leads, and the two Top Today rows follow Upcoming:
-        // that is the layout being preserved. The Top Today rows are built-ins
-        // now too (they used to be addon rails whose position the loader FIXED,
-        // which is why the manager could never list them).
+        // that is the layout being preserved, and it is the whole list for a
+        // profile that draws no profile-specific rails. The Top Today rows are
+        // built-ins now too (they used to be addon rails whose position the
+        // loader FIXED, which is why the manager could never list them).
         assertEquals(
             listOf(continueWatching, upcoming, topMovies, topShows),
-            KBHomeOrderPrefs.BUILTIN_KEYS
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null)
+        )
+        // The registry leads with that same list - every profile starts with
+        // these four - and then names the rails each PROFILE kind adds, so an
+        // arrangement can still place a key written under another profile.
+        assertEquals(
+            listOf(continueWatching, upcoming, topMovies, topShows),
+            KBHomeOrderPrefs.BUILTIN_KEYS.take(4)
+        )
+        assertEquals(
+            listOf(kidsMovies, kidsShows),
+            KBHomeOrderPrefs.KIDS_BUILTIN_KEYS
+        )
+        assertEquals(
+            KBHomeOrderPrefs.KIDS_BUILTIN_KEYS + KBHomeOrderPrefs.GUEST_BUILTIN_KEYS,
+            KBHomeOrderPrefs.BUILTIN_KEYS.drop(4)
+        )
+        assertEquals(
+            "a key must appear in the registry exactly once",
+            KBHomeOrderPrefs.BUILTIN_KEYS.size,
+            KBHomeOrderPrefs.BUILTIN_KEYS.toSet().size
         )
         assertTrue(KBHomeOrderPrefs.isBuiltinKey(topMovies))
         assertTrue(KBHomeOrderPrefs.isBuiltinKey(topShows))
@@ -126,36 +158,90 @@ class KBHomeBuiltinRailTest {
     fun `a kids profile's arrangeable built-ins leave out the Top Today rows`() {
         // Home never loads the two Top Today rails for a kids profile - it
         // swaps its pinned batch for the ceiling-filtered kids rails - so they
-        // are not rails a kids profile's manager can aim at.
+        // are not rails a kids profile's manager can aim at. What it draws
+        // INSTEAD are built-ins in their place: the two kids rows are rows this
+        // app fetches and names itself, so without their own keys there would
+        // be no row to move or rename them from.
         assertEquals(
-            listOf(continueWatching, upcoming),
+            listOf(continueWatching, upcoming, kidsMovies, kidsShows),
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7)
         )
-        // A profile with no ceiling gets the full list, unchanged.
+        // A profile with no ceiling gets the base list; the guest flag adds the
+        // guest rails after the Top Today rows, and Kids Mode wins over it -
+        // exactly as Home's rail load decides which batch to fetch.
         assertEquals(
-            KBHomeOrderPrefs.BUILTIN_KEYS,
+            KBHomeOrderPrefs.BUILTIN_KEYS.take(4),
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null)
         )
+        assertEquals(
+            KBHomeOrderPrefs.BUILTIN_KEYS.take(4) + KBHomeOrderPrefs.GUEST_BUILTIN_KEYS,
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null, isGuest = true)
+        )
+        assertEquals(
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7),
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7, isGuest = true)
+        )
         // The registry itself still names them: the arrangement has to know
-        // the keys, or a profile that later loses its ceiling comes back to a
+        // every key, or a profile that later loses its ceiling comes back to a
         // list that dropped the position they were given.
         assertTrue(topMovies in KBHomeOrderPrefs.BUILTIN_KEYS)
         assertTrue(topShows in KBHomeOrderPrefs.BUILTIN_KEYS)
+        assertTrue(kidsMovies in KBHomeOrderPrefs.BUILTIN_KEYS)
+        assertTrue(kidsShows in KBHomeOrderPrefs.BUILTIN_KEYS)
+    }
+
+    @Test
+    fun `a guest profile's rails are built-ins too, after the Top Today rows`() {
+        // A guest profile's Home is a fixed set of app-built rows (see
+        // `loadPinnedGuestRails`). They key against no manifest, so under their
+        // add-on urls they could not be arranged at all; as built-ins they are
+        // rows the guest can move, hide and rename like anything else.
+        val guestDefaults = KBHomeOrderPrefs.builtinKeysFor(
+            kidsMaxAge = null,
+            isGuest = true
+        ) + existingDefaults
+
+        assertEquals(
+            listOf(continueWatching, upcoming, topMovies, topShows) +
+                KBHomeOrderPrefs.GUEST_BUILTIN_KEYS +
+                existingDefaults,
+            mergedHomeRailKeys(KBHomeOrder(), guestDefaults)
+        )
+        KBHomeOrderPrefs.GUEST_BUILTIN_KEYS.forEach { key ->
+            assertTrue("$key must be a built-in key", KBHomeOrderPrefs.isBuiltinKey(key))
+            assertNotNull(
+                "$key must offer a default name",
+                KBHomeOrderPrefs.builtinDefaultTitle(key)
+            )
+            assertTrue(
+                "$key must be movable",
+                railMoveChangesOrder(KBHomeOrder(), guestDefaults, key, -1)
+            )
+        }
     }
 
     @Test
     fun `a kids rail list moves one DRAWN slot at a time`() {
-        // The failure the profile-aware list exists to prevent: while the two
-        // Top Today rows are still IN the list but not drawn, the rail below
-        // them has an invisible neighbour to swap with, so one press moves it
-        // two slots on screen. With the kids list, every neighbouring key is a
-        // rail the viewer can actually see.
+        // The failure the profile-aware list exists to prevent: while a rail is
+        // still IN the list but not drawn (the Top Today rows were, before the
+        // kids list replaced them), the rail next to it has an invisible
+        // neighbour to swap with, so one press moves it two slots on screen.
+        // With the kids list, every neighbouring key is a rail the kid can see.
         val kidsDefaults =
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7) + existingDefaults
         val drawn = mergedHomeRailKeys(KBHomeOrder(), kidsDefaults)
 
         assertEquals(
-            listOf(continueWatching, upcoming, "browse:1", "addon:a", "addon:b", "kb:c"),
+            listOf(
+                continueWatching,
+                upcoming,
+                kidsMovies,
+                kidsShows,
+                "browse:1",
+                "addon:a",
+                "addon:b",
+                "kb:c"
+            ),
             drawn
         )
         assertFalse(topMovies in drawn)

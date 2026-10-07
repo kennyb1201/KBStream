@@ -154,18 +154,24 @@ class HomeBuiltinRailWiringContractTest {
 
     @Test
     fun `the manager offers built-ins move, hide and rename but no pin`() {
-        // The manager's built-ins are the PROFILE's, not the full list: a kids
-        // profile has no Top Today rows on Home, so its manager must not offer
-        // rows for them (its arrows would move rails the viewer cannot see).
-        // Which keys that is stays one rule, in KBHomeOrderPrefs.builtinKeysFor
-        // - pinned as behaviour in KBHomeBuiltinRailTest.
+        // The manager's built-ins are the PROFILE's, not the full registry: a
+        // kids profile has no Top Today rows on Home, so its manager must not
+        // offer rows for them (its arrows would move rails the viewer cannot
+        // see), while the rails it DOES draw - the kids rows, a guest's fixed
+        // set - must be offered. Which keys those are stays one rule, in
+        // KBHomeOrderPrefs.builtinKeysFor - pinned as behaviour in
+        // KBHomeBuiltinRailTest.
         assertTrue(
             "built-ins must reach the manager's default list",
-            dialog.contains("KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge)")
+            dialog.contains("KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge, isGuest)")
         )
         assertTrue(
             "and the manager must be told the profile's ceiling",
             dialog.contains("kidsMaxAge: Int?")
+        )
+        assertTrue(
+            "and whether it is the guest profile",
+            dialog.contains("isGuest: Boolean")
         )
         assertTrue(
             "the manager must build a built-in row",
@@ -199,7 +205,7 @@ class HomeBuiltinRailWiringContractTest {
     fun `the view model answers the manager's built-in writes`() {
         assertTrue(
             "built-ins must be in the arrangement defaults",
-            viewModel.contains("return KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge) +")
+            viewModel.contains("return KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge, isGuest) +")
         )
         assertTrue(
             "a rename must be persisted",

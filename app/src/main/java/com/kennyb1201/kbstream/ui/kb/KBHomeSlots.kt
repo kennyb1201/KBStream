@@ -59,11 +59,11 @@ import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
 import com.kennyb1201.kbstream.ui.home.TvSafeAreaHorizontal
 import com.kennyb1201.kbstream.ui.theme.KBAccent
-import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -212,28 +212,33 @@ object KBHomeSlots {
             )
         }        // A built catalog has no manifest to key against, so it keys by its own
         // id in the `custom:` family and is arranged like any other rail.
-        // Everything else keys by its add-on URL exactly as before - EXCEPT a
-        // Top Today row, which keys by its BUILT-IN key (see
-        // KBHomeOrderPrefs.topTodayBuiltinKey). That is what puts it in the one
-        // arrangement with the rest of Home: the manager lists it as a built-in
-        // row, it can be moved, hidden and renamed, and its content still comes
-        // from the feed the loader fetched.
+        // Everything else keys by its add-on URL exactly as before - EXCEPT an
+        // APP-BUILT row, which keys by its BUILT-IN key (see
+        // KBHomeOrderPrefs.builtinKeyForCatalogId): the two Top Today feed rows
+        // and the profile rails the app builds itself (a kids profile's two
+        // rows, a guest profile's fixed set). That is what puts every one of
+        // them in the one arrangement with the rest of Home: the manager lists
+        // them as built-in rows, they can be moved, hidden and renamed, and
+        // their content still comes from the feed the loader fetched.
         val addonKeyByRail = rails.associate { rail ->
             rail to (
                 rail.customCatalogId
                     ?.let { KBHomeOrderPrefs.customCatalogKey(it) }
-                    ?: KBHomeOrderPrefs.topTodayBuiltinKey(rail.catalogId)
+                    ?: KBHomeOrderPrefs.builtinKeyForCatalogId(rail.catalogId)
                     ?: KBHomeOrderPrefs.addonKey(rail.baseUrl, rail.type, rail.catalogId)
             )
         }
 
-        // The loaded Top Today rails by their built-in key, so the emission
+        // The loaded app-built rails by their built-in key, so the emission
         // below can draw the fetched rail (its content) at whichever slot the
-        // arrangement gives that key, rather than a bare built-in placeholder.
-        val topTodayAddonByKey = addonEntries
+        // arrangement gives that key, rather than a bare built-in placeholder -
+        // which is what a Top Today row, a kids row and a guest row all need:
+        // the key decides WHERE the rail sits, the fetcher decides what is in
+        // it.
+        val appBuiltAddonByKey = addonEntries
             .mapNotNull { entry ->
                 val rail = (entry as HomeEntry.AddonRail).rail
-                KBHomeOrderPrefs.topTodayBuiltinKey(rail.catalogId)?.let { it to entry }
+                KBHomeOrderPrefs.builtinKeyForCatalogId(rail.catalogId)?.let { it to entry }
             }
             .toMap()
 
@@ -267,11 +272,12 @@ object KBHomeSlots {
         return mergedOrder.flatMap { key ->
             if (key in hidden) return@flatMap emptyList()
             when {
-                // A Top Today row: draw the loaded rail (its content), at the
-                // slot the arrangement gave its built-in key.
-                topTodayAddonByKey.containsKey(key) ->
+                // An app-built row (a Top Today row, a kids row, a guest row):
+                // draw the loaded rail (its content), at the slot the
+                // arrangement gave its built-in key.
+                appBuiltAddonByKey.containsKey(key) ->
                     listOf(
-                        topTodayAddonByKey.getValue(key).copy(
+                        appBuiltAddonByKey.getValue(key).copy(
                             titleOverride = renamedTitle(key)
                         )
                     )
@@ -506,9 +512,22 @@ private fun CollectionFolderTile(
         if (it.isFocused) onFocus?.invoke()
     }
 
+    // The poster edge the tile's outline is drawn with (Settings → Display →
+    // Poster Edges), handed to the card as well as to the border below.
+    //
+    // The card's shape is what tv-material3 CLIPS the content to, so a tile
+    // that draws a Pill outline over a card-class clip shows its cover art
+    // outside its own outline at the corners - which is the reported "the
+    // poster spills out of the outline on the edges" (see [BrowseShortcutTile],
+    // where it was reported). PosterCard and LandscapeCard have always passed
+    // the viewer's edge for exactly this reason; these two tiles drew the edge
+    // without following it.
+    val tileShape = posterEdgeShape()
+
     KBCard(
         onClick = onClick,
-        modifier = focusModifier.then(modifier)
+        modifier = focusModifier.then(modifier),
+        shape = tileShape
     ) {
         Box(
             modifier = Modifier
@@ -573,7 +592,10 @@ private fun CollectionFolderTile(
                     onSuccess = { gifLoaded = true },
                     modifier = Modifier
                         .matchParentSize()
-                        .clip(CardShape)
+                        // The tile's own edge, not the card default: the GIF
+                        // covers the whole cover, so its corners have to be the
+                        // corners the tile draws (see tileShape).
+                        .clip(tileShape)
                         .graphicsLayer { alpha = gifAlpha }
                 )
             }
@@ -769,10 +791,20 @@ private fun BrowseShortcutTile(
     // has color and depth instead of an empty surface.
     val backgroundUrl = art?.backdropUrl?.takeIf { it.isNotBlank() }
 
+    // Reported: "the poster spills out of the outline on the edges". The tile
+    // draws the poster edge's outline (posterBorderModifier below), but the CARD
+    // was left on the default card shape - and the card's shape is what
+    // tv-material3 clips the content to. With Poster Edges set to Pill the tile
+    // clipped (and ringed) at the card's 12dp while its outline was drawn at
+    // 20dp, so the backdrop's corners sat outside the very line framing them.
+    // The viewer's own edge, passed to the card exactly as PosterCard does.
+    val tileShape = posterEdgeShape()
+
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
-        modifier = modifier.then(focusModifier)
+        modifier = modifier.then(focusModifier),
+        shape = tileShape
     ) {
         Box(
             modifier = Modifier

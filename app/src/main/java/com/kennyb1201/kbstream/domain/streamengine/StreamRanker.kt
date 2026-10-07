@@ -45,8 +45,11 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *     criterion a re-sort by quality labels alone got backwards - which is how
  *     a 4K that had to find its swarm ended up heading a list whose addon had
  *     deliberately put a cached 1080p there.
- *  6. Resolution, HDR/DV, release type, size, seeders and a resolution label
- *     its own file size contradicts, in that order of weight.
+ *  6. Resolution, HDR/DV, release type, size (or density, when the title's
+ *     runtime is known), seeders and a resolution label its own file size
+ *     contradicts, in that order of weight. The Dolby Vision half of the HDR
+ *     bonus is paid only where this box can actually show it (see [rank]'s
+ *     `dolbyVisionUseful`).
  *
  * Every rule but the debrid one above reads the stream's *text*, and that text
  * is every field the addon
@@ -114,6 +117,21 @@ object StreamRanker {
      */
     private val HDR_RELEASE =
         Regex("""\b(hdr10\+?|hdr|dolby\s?vision|dv)\b""")
+
+    /**
+     * The Dolby Vision half of [HDR_RELEASE], and only that half.
+     *
+     * Read separately because the bonus is not paid for both markers on every
+     * box: HDR10 is a static grade every HDR panel can show, while DV needs a
+     * decoder this device may not have and a display the viewer may not own. On
+     * such a box a DV copy is not the better copy - it is the one the player has
+     * to strip first, or, where stripping is off, the pink/green screen - so the
+     * bonus waits for [rank]'s `dolbyVisionUseful`.
+     *
+     * `\bdv\b` still cannot match "dvdrip" (no word boundary between the `v`
+     * and the `d`), for the same reason [HDR_RELEASE] is word-bounded.
+     */
+    private val DV_RELEASE = Regex("""\b(dolby\s?vision|dolbyvision|dv)\b""")
 
     /** Release types worth a nudge, best tier first. */
     private val RELEASE_TIERS = listOf(
@@ -216,6 +234,23 @@ object StreamRanker {
     private const val CONSTRAINED_HEAVY_PENALTY = 120
 
     /**
+     * The size nudge, for a title whose runtime is unknown: its cap and its
+     * slope. 20 GB × 1.5 is the +30 that [DENSITY_POINTS_PER_GB_PER_HOUR] also
+     * caps at, so the two are one nudge measured two ways rather than a
+     * re-weighting of size against the other signals.
+     */
+    private const val SIZE_CAP_GB = 20.0
+    private const val SIZE_POINTS_PER_GB = 1.5
+
+    /**
+     * The density nudge, for a title whose runtime IS known: GB per hour, capped
+     * where an encode stops being likely to look better and starts being likely
+     * to stall this device. ~10 GB/h is remux-tier for 1080p and high for 4K.
+     */
+    private const val DENSITY_CAP_GB_PER_HOUR = 10.0
+    private const val DENSITY_POINTS_PER_GB_PER_HOUR = 3.0
+
+    /**
      * One stream and the facts the rules read, worked out once per stream. The
      * comparator runs O(n log n) times, so the text join, the URL decode and
      * the host parse must not happen inside a selector.
@@ -238,7 +273,13 @@ object StreamRanker {
     fun rank(
         streams: List<Stream>,
         episode: Pair<Int, Int>? = null,
-        constrainedDevice: Boolean = false
+        constrainedDevice: Boolean = false,
+        // Default = today's behaviour: every existing caller keeps the DV bonus
+        // it has always had, and a caller that knows better opts out.
+        dolbyVisionUseful: Boolean = true,
+        // The title's own length in minutes, when the caller knows it. Null = no
+        // density signal, which is exactly the old bulk-size scoring.
+        runtimeMinutes: Int? = null
     ): List<Stream> =
         streams
             .filter { stream -> isPlayable(stream) || !stream.infoHash.isNullOrBlank() }
@@ -283,7 +324,15 @@ object StreamRanker {
                     // Availability, because it is what the sorted addons sort on
                     // first and what the viewer's configuration asked for.
                     .thenByDescending { if (INSTANT_HINT.containsMatchIn(it.text)) 1 else 0 }
-                    .thenByDescending { score(it.stream, it.text, constrainedDevice) }
+                    .thenByDescending {
+                        score(
+                            it.stream,
+                            it.text,
+                            constrainedDevice,
+                            dolbyVisionUseful,
+                            runtimeMinutes
+                        )
+                    }
             )
             .map { it.stream }
 
@@ -301,7 +350,9 @@ object StreamRanker {
     internal fun explain(
         stream: Stream,
         episode: Pair<Int, Int>? = null,
-        constrainedDevice: Boolean = false
+        constrainedDevice: Boolean = false,
+        dolbyVisionUseful: Boolean = true,
+        runtimeMinutes: Int? = null
     ): String {
         val text = searchableText(stream)
         return buildString {
@@ -311,7 +362,12 @@ object StreamRanker {
             if (isDebridServed(stream, text)) append(" debrid-served")
             if (INSTANT_HINT.containsMatchIn(text)) append(" instant")
             if (constrainedDevice) append(" constrained-device")
-            append(" score=").append(score(stream, text, constrainedDevice))
+            if (!dolbyVisionUseful) append(" dv-stripped")
+            // The same score [rank] sorted on, read through the same parameters:
+            // a report that quietly kept the default would print a number that
+            // is not the one that decided the order.
+            append(" score=")
+                .append(score(stream, text, constrainedDevice, dolbyVisionUseful, runtimeMinutes))
             sizeInGb(stream, text)?.let { size ->
                 append(" size=")
                     .append(String.format(java.util.Locale.US, "%.1f", size))
@@ -442,7 +498,13 @@ object StreamRanker {
             THREE_D_RELEASE.containsMatchIn(text) ||
             FOREIGN_OR_HARDSUBBED_RELEASE.containsMatchIn(text)
 
-    private fun score(stream: Stream, text: String, constrainedDevice: Boolean): Int {
+    private fun score(
+        stream: Stream,
+        text: String,
+        constrainedDevice: Boolean,
+        dolbyVisionUseful: Boolean,
+        runtimeMinutes: Int?
+    ): Int {
         var score = 0
 
         // --- Signals from the stream's own fields ---
@@ -471,7 +533,19 @@ object StreamRanker {
             "480p" in text -> score += 50
         }
 
-        if (HDR_RELEASE.containsMatchIn(text)) score += 30
+        // HDR is a signal on every box; Dolby Vision is one only where it can be
+        // shown. On a device with no DV decoder - or where the viewer told
+        // Settings the display has no DV (AppPreferences.DV_COMPAT_ALL) - a DV
+        // copy is not better than the same release's HDR10/SDR fallback: the
+        // player has to strip it first, and unstripped it is a pink/green screen
+        // on exactly this class of hardware. Promoting it on the label alone is
+        // how the ranker handed the head of the list to a file this box cannot
+        // show. A copy labeled HDR10 (or both) still keeps the bonus: it has a
+        // grade every HDR panel can render.
+        val isDolbyVision = DV_RELEASE.containsMatchIn(text)
+        if (HDR_RELEASE.containsMatchIn(text) && (dolbyVisionUseful || !isDolbyVision)) {
+            score += 30
+        }
 
         // Only the best matching tier counts: a "WEB-DL BluRay REMUX" is a
         // remux, not three bonuses.
@@ -495,11 +569,28 @@ object StreamRanker {
             }
         }
 
-        // --- Size: bigger usually means less compressed, but it is a nudge
-        // next to resolution/HDR and it is capped - past ~20 GB the file is
-        // likelier to stall this device than to look better.
+        // --- Size, as density when the title's length is known ---
+        //
+        // Bigger usually means less compressed, so size is a nudge next to
+        // resolution and HDR - but it is a nudge against BULK, and bulk means
+        // something different for a 45-minute episode (4 GB is 5.3 GB/h, a
+        // healthy encode) than for a two-hour film (2 GB/h, thin). Scored raw,
+        // it systematically preferred long runtimes over dense encodes and put a
+        // bloated file of a short episode over a properly encoded longer one.
+        // With the runtime in hand the nudge reads GB per HOUR instead, capped at
+        // the same +30; without it the bulk reading below is untouched, and an
+        // unknown size earns nothing either way ("an unknown swarm is not an
+        // empty one").
         val sizeGb = sizeInGb(stream, text)
-        sizeGb?.let { score += (it.coerceAtMost(20.0) * 1.5).toInt() }
+        val runtime = runtimeMinutes?.takeIf { it > 0 }
+        if (sizeGb != null && runtime != null) {
+            val gbPerHour = sizeGb / (runtime / 60.0)
+            score +=
+                (gbPerHour.coerceAtMost(DENSITY_CAP_GB_PER_HOUR) *
+                    DENSITY_POINTS_PER_GB_PER_HOUR).toInt()
+        } else {
+            sizeGb?.let { score += (it.coerceAtMost(SIZE_CAP_GB) * SIZE_POINTS_PER_GB).toInt() }
+        }
 
         // A heavy 4K on a constrained device is the stall this ranker was
         // picking: penalize it below the honest 1080p it was beating.

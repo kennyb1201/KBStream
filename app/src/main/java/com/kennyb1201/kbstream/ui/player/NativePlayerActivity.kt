@@ -11542,6 +11542,10 @@ class NativePlayerActivity : ComponentActivity() {
                     "${currentSourceLabel ?: "unknown source"}"
             )
         )
+        // Which addon this source came from, read BEFORE the switch: switching
+        // re-resolves the on-screen identity to the next source's addon, and
+        // the verdict belongs to the one that stalled.
+        val stalledAddon = currentAddonName
         val switching = tryNextSource(
             statusText = "This source keeps stalling — trying the next one…"
         )
@@ -11551,6 +11555,17 @@ class NativePlayerActivity : ComponentActivity() {
         rebufferDownshift.reset()
         if (!switching) {
             rebufferDownshiftGivenUp = true
+        } else {
+            // A switch actually started, so this source has failed to keep up
+            // for this title - the fact the next episode's list is missing
+            // (see SourceAddonMemory). The in-session behavior is untouched:
+            // this only remembers the verdict for next time. No live guard is
+            // needed - live channels returned above.
+            com.kennyb1201.kbstream.data.player.SourceAddonMemory.rememberStalled(
+                this,
+                parentId,
+                stalledAddon
+            )
         }
         return switching
     }
