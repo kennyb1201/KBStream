@@ -336,6 +336,15 @@ private data class PendingPlay(
     val streamKey: String
         get() = streamNavigationKey(target.contentType, target.streamId)
 
+    /**
+     * True when this launch is the NEXT episode of what just finished, rather
+     * than a fresh start. The two binge fields are set only by the handoff
+     * paths (see launchNextEpisode in the players), so their presence is the
+     * distinction the played-link cache uses to stay out of a binge's way.
+     */
+    val isNextEpisodeAdvance: Boolean
+        get() = !bingeGroup.isNullOrBlank() || !addonName.isNullOrBlank()
+
     fun toPlayerScreen(stream: Stream, allSources: List<Stream>): Screen.Player {
         // A DRM stream cannot play on MPV (the engine's own handoff excludes
         // those too), so it must not inherit the anime route's engine choice.
@@ -870,7 +879,15 @@ fun AppRoot(
         // played last time instead of paying the addon round-trip again. A miss
         // (nothing cached, expired, or a different episode) falls straight
         // through to the resolve below, unchanged.
-        val cached = PlayedLinkCache.get(context, pending.streamKey)
+        //
+        // A NEXT-EPISODE advance is deliberately excluded (see
+        // PendingPlay.isNextEpisodeAdvance): re-binging an episode inside the
+        // link's lifetime would otherwise replay the PREVIOUS episode's
+        // ordering and skip BingeGroupResolver.orderedForNextEpisode entirely,
+        // which is the continuity a binge is supposed to inherit.
+        val cached =
+            if (pending.isNextEpisodeAdvance) null
+            else PlayedLinkCache.get(context, pending.streamKey)
         if (cached != null) {
             Log.i(TAG, "played-link cache hit for ${pending.streamKey}; skipping resolve")
             pendingAutoPlay = null
@@ -941,10 +958,25 @@ fun AppRoot(
         )
         pendingAutoPlay = null
         screen = if (top != null) {
-            // Remember what actually started, so a replay within the link's
-            // lifetime can skip this resolve entirely.
-            PlayedLinkCache.remember(context, pending.streamKey, top, ordered)
-            pending.toPlayerScreen(top, ordered)
+            if (pending.isNextEpisodeAdvance) {
+                // Not remembered either: caching the advance's ordering would
+                // hand the NEXT replay of this episode the same stale ordering
+                // the get above just refused. A fresh start (no binge identity)
+                // is the case the cache is for.
+                pending.toPlayerScreen(top, ordered)
+            } else {
+                // Remember what actually started, so a replay within the link's
+                // lifetime can skip this resolve entirely.
+                PlayedLinkCache.remember(context, pending.streamKey, top, ordered)
+                // ...and stamp the key on the player screen as well, exactly as
+                // the cache-hit path above does: the key is the invalidation
+                // handle the player uses when this freshly-resolved link turns
+                // out to be dead before its first frame. Without it only a
+                // REPLAY (a cache hit) could heal the entry, so one more launch
+                // replayed the corpse.
+                pending.toPlayerScreen(top, ordered)
+                    .copy(linkCacheKey = pending.streamKey)
+            }
         } else {
             pending.toStreamsScreen()
         }
@@ -2113,6 +2145,12 @@ fun AppRoot(
                             drmLicenseUrl = stream.drm?.licenseUrl,
                             drmHeaders = stream.drm?.headers.orEmpty()
                         )
+                            // The manual pick is cached too, so carry the same
+                            // invalidation handle the auto-play paths set: a
+                            // hand-picked link that dies before its first frame
+                            // must be able to heal itself rather than be served
+                            // once more from the cache.
+                            .copy(linkCacheKey = streamKey)
                         // Remember the manual pick too, so a replay of this
                         // episode within the link's lifetime skips the resolve.
                         PlayedLinkCache.remember(context, streamKey, stream, allSources)

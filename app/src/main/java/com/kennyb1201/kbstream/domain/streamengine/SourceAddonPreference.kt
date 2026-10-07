@@ -158,9 +158,13 @@ internal object SourceAddonPreference {
         // a link that will not open at all is worse than one that opens and
         // cannot keep up.
         if (key in failed) return TIER_FAILED
-        // Then the stalling addon, before the working one: the two are only
-        // ever both true for a half-written store too, since a fresh success
-        // clears the stall count (see [SourceAddonMemory.rememberWorked]).
+        // Then the stalling addon, before the working one. Both CAN be true at
+        // once through the public API - a [SourceAddonMemory.rememberWorked]
+        // followed by two rememberStalled calls leaves worked=true beside a
+        // fresh stall count - and slow is the right answer there: the addon last
+        // proved it OPENS (it stalled, it did not fail) but has since failed to
+        // keep up twice, which is the worse fact for choosing what to start
+        // from.
         if (key in slow) return TIER_SLOW
         if (key in worked) return TIER_WORKED
         return TIER_UNKNOWN

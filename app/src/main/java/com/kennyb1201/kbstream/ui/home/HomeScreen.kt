@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -152,7 +153,10 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 private val HomePosterWidth = 124.dp
@@ -843,6 +847,7 @@ private fun HeroClearLogo(
     modifier: Modifier = Modifier
 ) {
     var logoIsDark by remember(url) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     // Has the art actually PAINTED? A logo URL that exists is not a logo on
     // screen: the fetch takes a moment, and it is a fetch again whenever Coil's
     // decoded-bitmap cache has been dropped (which is this device's normal
@@ -884,9 +889,20 @@ private fun HeroClearLogo(
             contentScale = ContentScale.Fit,
             onSuccess = { state ->
                 artPainted = true
-                logoIsDark = runCatching {
-                    isDarkMonochromeArtwork(state.result.image.toBitmap())
-                }.getOrDefault(false)
+                // Downscale, sample and luminance-sum the bitmap OFF the main
+                // thread: this runs on the hero's focus path (every logo
+                // change), and the analysis is real bitmap work that hitched
+                // the frame it landed on. The tint arrives a frame later at
+                // most, which is the same visual result without the stall.
+                val image = state.result.image
+                scope.launch {
+                    val dark = withContext(Dispatchers.Default) {
+                        runCatching {
+                            isDarkMonochromeArtwork(image.toBitmap())
+                        }.getOrDefault(false)
+                    }
+                    logoIsDark = dark
+                }
             },
             colorFilter = if (logoIsDark) ColorFilter.tint(KBTextHi) else null,
             modifier = Modifier.fillMaxSize()

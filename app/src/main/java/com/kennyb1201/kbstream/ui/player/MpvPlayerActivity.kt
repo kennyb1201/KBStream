@@ -47,7 +47,6 @@ import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
-import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
@@ -2556,7 +2555,17 @@ class MpvPlayerActivity : ComponentActivity() {
         } else {
             view.selectAudioLanguage(effectiveAudioLanguage())
         }
-        view.selectSubtitleLanguage(effectiveSubtitleLanguage())
+        // The subtitle MODE owns the subtitle track when it is not On: the
+        // open-time pass already left Off deselected and Forced on the forced
+        // cues only, and this runs on every file open (a source rebuild
+        // included) - re-selecting by language here put a full track back, the
+        // "subtitles turn themselves on again" report. Only the On mode
+        // re-asserts the remembered language.
+        if (SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this)) ==
+            SubtitleModeRules.ON
+        ) {
+            view.selectSubtitleLanguage(effectiveSubtitleLanguage())
+        }
         refreshSettings()
     }
 
@@ -2982,15 +2991,14 @@ class MpvPlayerActivity : ComponentActivity() {
      * The TMDB episodes the file that just finished covered: one for every
      * scheme but SEGMENTS_PER_FILE, which holds its own factor. Without this the
      * second segment of a doubled file is never marked and the tracker keeps
-     * offering it. Mirrors NativePlayerActivity.coveredTmdbEpisodes().
+     * offering it. Anchored on the FILE cursor, not the session's TMDB label,
+     * for the same reason as the main player: a session entered at a non-first
+     * segment would otherwise mark the wrong episodes. Mirrors
+     * NativePlayerActivity.coveredTmdbEpisodes().
      */
     private fun coveredTmdbEpisodes(tmdbEpisode: Int): List<Int> {
-        if (bingeScheme.kind != SchemeKind.SEGMENTS_PER_FILE) return listOf(tmdbEpisode)
-        val maxEpisodes = totalEpisodesInSeason
-        return (0 until bingeScheme.factor)
-            .map { tmdbEpisode + it }
-            .filter { maxEpisodes == null || it <= maxEpisodes }
-            .ifEmpty { listOf(tmdbEpisode) }
+        val fileEpisode = currentFileEpisode() ?: tmdbEpisode
+        return bingeScheme.episodesOfFileClamped(fileEpisode, totalEpisodesInSeason)
     }
 
     /**
@@ -3003,7 +3011,10 @@ class MpvPlayerActivity : ComponentActivity() {
         val showSeason = season ?: return null
         val showEpisode = episode ?: return null
         val fileEpisode = currentFileEpisode() ?: showEpisode
-        val nextEpisode = bingeScheme.advance(fileEpisode, showEpisode).second
+        // The label of the next FILE, not the session's label plus the factor:
+        // the two differ for a session entered at a non-first segment. See
+        // NativePlayerActivity.nextEpisodeTarget().
+        val nextEpisode = bingeScheme.labelForFile(fileEpisode + 1)
         val maxEpisodes = totalEpisodesInSeason
         return if (maxEpisodes != null && nextEpisode > maxEpisodes) {
             (showSeason + 1) to 1
@@ -3836,17 +3847,27 @@ class MpvPlayerActivity : ComponentActivity() {
 
         val position = view.positionMs().coerceAtLeast(0L)
         val duration = view.durationMs()
+        // "This episode reached its end" is sticky for the session (see
+        // [endedHandled], set by onPlaybackEnded), so EVERY save in a finished
+        // session is judged by the same fact as the end itself - a pause taken
+        // after a rewind, the onStop save, an actor-return, a sleep-timer save.
+        // Judged from the playhead alone, a seek back past the credits filed a
+        // RESUME row over the completion: the episode lost its watched marker
+        // and returned to Continue Watching. Mirrors
+        // NativePlayerActivity.saveProgress's sessionCompleted, early returns
+        // included.
+        val sessionCompleted = forceCompleted || endedHandled
         // A missing duration used to abandon the write entirely - including
         // the completion write at end of file, which is the one fact the
         // player can state without knowing how long the file was. A finished
         // episode then kept no watch marker and its old resume bar.
-        if (duration <= 0L && !forceCompleted) return
-        if (position < MIN_RESUME_POSITION_MS && !forceCompleted) return
+        if (duration <= 0L && !sessionCompleted) return
+        if (position < MIN_RESUME_POSITION_MS && !sessionCompleted) return
 
         // With no length the played position is the best duration we have.
         val effectiveDuration = if (duration > 0L) duration else position.coerceAtLeast(1L)
         val completed =
-            forceCompleted ||
+            sessionCompleted ||
                 position >= (effectiveDuration * COMPLETION_THRESHOLD_RATIO).toLong()
         val safePosition = if (completed) 0L else position.coerceAtMost(effectiveDuration)
         val now = System.currentTimeMillis()
@@ -4456,8 +4477,14 @@ class MpvPlayerActivity : ComponentActivity() {
                 return true
             }
             if (event.action == KeyEvent.ACTION_DOWN && horizontal &&
-                bywUi?.hasFocus() == false && bywUi?.focusFirst() == true
+                bywUi?.hasFocus() == false
             ) {
+                // Park focus on the first pick, and swallow the press whether or
+                // not there was one to park on: the row fills in a beat after
+                // the panel opens, and a press that falls through reaches the
+                // seek bar underneath, which steps the finished episode. The
+                // main player's credits panel already swallows this way.
+                bywUi?.focusFirst()
                 return true
             }
             return super.dispatchKeyEvent(event)

@@ -52,7 +52,7 @@ internal const val HERO_ART_IMAGE_WARM_LIMIT = 10
  * The decode sizes the warm uses. They are NOT the sizes the hero draws: the
  * point of the warm is the bytes Coil's DISK cache now holds (that cache is
  * keyed by URL, not by size), and decoding a thumbnail is the cheapest way to
- * get them there. A decode at the hero's own 1920x1080 would cost ~8 MB of heap
+ * get them there. A decode at the hero's own 1280x720 would cost ~8 MB of heap
  * per title and evict the art actually on screen from the memory cache.
  */
 private const val HERO_BACKDROP_WARM_WIDTH = 640

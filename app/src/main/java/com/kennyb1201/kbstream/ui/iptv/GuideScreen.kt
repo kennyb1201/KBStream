@@ -487,9 +487,15 @@ fun GuideScreen(
         groupChipFocusRequesters.keys.retainAll(groups.toHashSet())
     }
     var selectedChannelId by remember { mutableStateOf<String?>(null) }
-    val selectedChannelIndex = groupedChannels.indexOfFirst { item ->
-        item.channel.id == selectedChannelId
-    }.takeIf { it >= 0 } ?: if (groupedChannels.isNotEmpty()) 0 else -1
+    // Memoized: the index is asked for on every recomposition (the grid reads
+    // it per row), and an O(n) scan of the whole channel list on each of them
+    // is work the selection did not change. Recomputed only when the selection
+    // or the list itself moves.
+    val selectedChannelIndex = remember(selectedChannelId, groupedChannels) {
+        groupedChannels.indexOfFirst { item ->
+            item.channel.id == selectedChannelId
+        }.takeIf { it >= 0 } ?: if (groupedChannels.isNotEmpty()) 0 else -1
+    }
     val selectedChannel = groupedChannels.getOrNull(selectedChannelIndex)
 
     // If the restored/selected group no longer exists (playlist changed or

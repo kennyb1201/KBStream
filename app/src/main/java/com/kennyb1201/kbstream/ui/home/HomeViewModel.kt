@@ -5711,12 +5711,21 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
     }
 
     // Publish the walked season map for other rows of the same show. Only
-    // self-walked maps get stored (a cache-seeded call must not re-store a
-    // map it didn't build), and an empty walk means every lookup failed, so
-    // that isn't cached either.
-    if (seasonEpisodesBySeason.isNotEmpty()) {
+    // self-walked maps get stored (a cache-seeded call must not re-store a map
+    // it didn't build), and only the seasons that actually carry episodes are:
+    // TMDB answers an empty season while a listing lags (a new season announced
+    // but not yet populated), and caching those empties made the show resolve
+    // to "nothing left to watch" for the whole TTL - so it was recorded as
+    // locally finished and its tracker card suppressed even though a new
+    // episode exists. An all-empty walk carries no populated season and is
+    // therefore not stored at all; the next call re-walks and sees the season
+    // once TMDB catches up. (TmdbRepository's own season cache never stores an
+    // empty answer either - see seasonEpisodesAreAnAnswer.)
+    val populatedSeasons =
+        seasonEpisodesBySeason.filterValues { it.isNotEmpty() }
+    if (populatedSeasons.isNotEmpty()) {
         showSeasonEpisodesCache[tmdbId] =
-            System.currentTimeMillis() to seasonEpisodesBySeason.toMap()
+            System.currentTimeMillis() to populatedSeasons
         pruneShowSeasonEpisodesCache()
     }
     }

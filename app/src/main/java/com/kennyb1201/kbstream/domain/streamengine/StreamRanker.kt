@@ -540,8 +540,11 @@ object StreamRanker {
         // player has to strip it first, and unstripped it is a pink/green screen
         // on exactly this class of hardware. Promoting it on the label alone is
         // how the ranker handed the head of the list to a file this box cannot
-        // show. A copy labeled HDR10 (or both) still keeps the bonus: it has a
-        // grade every HDR panel can render.
+        // show. A copy labeled HDR10 on its own still keeps the bonus: it has a
+        // grade every HDR panel can render. A copy labeled BOTH HDR10 and DV
+        // does not - the file that opens is still the DV one, so it loses the
+        // bonus exactly like a DV-only release. The label is not a promise
+        // this box can show the file.
         val isDolbyVision = DV_RELEASE.containsMatchIn(text)
         if (HDR_RELEASE.containsMatchIn(text) && (dolbyVisionUseful || !isDolbyVision)) {
             score += 30

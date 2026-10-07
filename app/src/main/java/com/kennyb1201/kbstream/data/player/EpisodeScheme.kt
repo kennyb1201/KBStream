@@ -133,6 +133,33 @@ data class EpisodeScheme(val kind: SchemeKind, val factor: Int) {
     }
 
     /**
+     * The TMDB episodes 1-based file [fileEp] covers, clamped to a season of
+     * [maxEpisodes] episodes (null = unknown length).
+     *
+     * Anchored on the FILE cursor, deliberately - not on a session's TMDB label.
+     * The two differ whenever a session is entered at a non-first segment (an
+     * episode tap, a Continue Watching resume, a random pick): the stream id
+     * carries the FILE number while the launched intent keeps the tapped TMDB
+     * number, so reading `label + factor` marked the wrong episodes and pushed
+     * the binge onto a label that advanced by the wrong amount.
+     * [tmdbEpisodesOfFile] answers from the cursor and cannot drift this way.
+     * Never empty: a cursor past the season's end still answers with its own set.
+     */
+    fun episodesOfFileClamped(fileEp: Int, maxEpisodes: Int?): List<Int> {
+        val episodes = tmdbEpisodesOfFile(fileEp)
+        val clamped = episodes.filter { maxEpisodes == null || it <= maxEpisodes }
+        return clamped.ifEmpty { episodes }
+    }
+
+    /**
+     * The first TMDB episode 1-based file [fileEp] covers - the label that file
+     * is shown and handed off under. Derived from the cursor for the same reason
+     * as [episodesOfFileClamped]; the episode after a file is simply the label
+     * of the next file.
+     */
+    fun labelForFile(fileEp: Int): Int = tmdbEpisodesOfFile(fileEp).first()
+
+    /**
      * True when [fileEp] is one of the files that hold TMDB episode [tmdbEp].
      *
      * Under [SchemeKind.FILES_PER_EPISODE] an episode's files are its whole

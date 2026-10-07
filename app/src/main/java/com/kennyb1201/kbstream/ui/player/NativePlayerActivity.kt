@@ -82,7 +82,6 @@ import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
-import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
@@ -3131,6 +3130,10 @@ class NativePlayerActivity : ComponentActivity() {
         // no title key, so nothing is remembered for them (the panel still
         // applies for the session).
         PlayerTrackBridge.setGlobalLanguages(globalAudioLang, globalSubtitleLang)
+        // The subtitle MODE too, not only the languages: the bridge re-applies
+        // languages on every ready transition (a rebuffer is enough), and a
+        // session set to Off must not have a subtitle track armed behind it.
+        PlayerTrackBridge.setSubtitleMode(AppPreferences.getSubtitleMode(this))
         PlayerTrackBridge.loadFor(
             context = this,
             titleKey =
@@ -8693,14 +8696,14 @@ class NativePlayerActivity : ComponentActivity() {
                                 .takeIf { it != "Track" } ?: "Track ${groupIdx + 1}",
                             isSelected = group.isTrackSelected(trackIdx),
                             onClick = {
-                                exoPlayer?.let { player ->
-                                    player.trackSelectionParameters = player.trackSelectionParameters
-                                        .buildUpon()
-                                        .setOverrideForType(
-                                            TrackSelectionOverride(group.mediaTrackGroup, trackIdx)
-                                        )
-                                        .build()
-                                }
+                                // Through the bridge, not the player directly: a
+                                // raw write here outlived nothing - the bridge's
+                                // ready-time pass re-applied the language prefs
+                                // on the next rebuffer and reverted the pick.
+                                PlayerTrackBridge.chooseAudioTrack(
+                                    this@NativePlayerActivity,
+                                    PlayerTrackBridge.signatureOf(format)
+                                )
                                 dismissPicker()
                             }
                         )
@@ -8747,12 +8750,10 @@ class NativePlayerActivity : ComponentActivity() {
                     label = "OFF",
                     isSelected = !anySelected,
                     onClick = {
-                        exoPlayer?.let { player ->
-                            player.trackSelectionParameters = player.trackSelectionParameters
-                                .buildUpon()
-                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                                .build()
-                        }
+                        // Through the bridge: OFF is remembered per show, so the
+                        // ready-time language pass cannot turn subtitles back on
+                        // at the next rebuffer.
+                        PlayerTrackBridge.chooseSubtitlesOff(this@NativePlayerActivity)
                         dismissPicker()
                     }
                 )
@@ -8818,15 +8819,15 @@ class NativePlayerActivity : ComponentActivity() {
                                         ).show()
                                     }
                                 } else {
-                                    exoPlayer?.let { player ->
-                                        player.trackSelectionParameters = player.trackSelectionParameters
-                                            .buildUpon()
-                                            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                                            .setOverrideForType(
-                                                TrackSelectionOverride(group.mediaTrackGroup, trackIdx)
-                                            )
-                                            .build()
-                                    }
+                                    // Through the bridge for the same reason as
+                                    // OFF and the audio rows: the ready-time
+                                    // language pass would otherwise replace this
+                                    // precise pick with the first track in the
+                                    // preferred language.
+                                    PlayerTrackBridge.chooseSubtitleTrack(
+                                        this@NativePlayerActivity,
+                                        PlayerTrackBridge.signatureOf(format)
+                                    )
                                 }
                             }
                         )
@@ -9795,19 +9796,20 @@ class NativePlayerActivity : ComponentActivity() {
     /**
      * The TMDB episodes the file that just finished covered.
      *
-     * One for every scheme but [SchemeKind.SEGMENTS_PER_FILE], which holds its
-     * own factor: a tracker told only the first would leave the second segment
-     * unmarked, and its own "next up" would keep pointing at an episode the
-     * viewer has already seen. The season's tail is clamped so the odd extra
-     * segment cannot be pushed as an episode that does not exist.
+     * Answered from the FILE cursor ([currentFileEpisode]) through
+     * [EpisodeScheme.episodesOfFileClamped], not from the session's TMDB label:
+     * an episode tap / resume / random pick keeps the tapped TMDB number while
+     * the stream id is file-numbered, so the two disagree for a session entered
+     * at a non-first segment. Adding the factor to the label then marked the
+     * wrong episodes (an E4 tap on an sp2 file holding [3,4] marked E4+E5) and
+     * left the ones the file really held unmarked. One for every scheme but
+     * the segmented one, which holds its own factor; the season's tail is
+     * clamped so the odd extra segment cannot be pushed as an episode that does
+     * not exist.
      */
     private fun coveredTmdbEpisodes(tmdbEpisode: Int): List<Int> {
-        if (bingeScheme.kind != SchemeKind.SEGMENTS_PER_FILE) return listOf(tmdbEpisode)
-        val maxEps = totalEpisodesInSeason
-        return (0 until bingeScheme.factor)
-            .map { tmdbEpisode + it }
-            .filter { maxEps == null || it <= maxEps }
-            .ifEmpty { listOf(tmdbEpisode) }
+        val fileE = currentFileEpisode() ?: tmdbEpisode
+        return bingeScheme.episodesOfFileClamped(fileE, totalEpisodesInSeason)
     }
 
     /**
@@ -9823,7 +9825,12 @@ class NativePlayerActivity : ComponentActivity() {
         val s = season ?: return null
         val e = episode ?: return null
         val fileE = currentFileEpisode() ?: e
-        val nextTmdb = bingeScheme.advance(fileE, e).second
+        // The label of the next FILE, not the session's label plus the factor:
+        // they differ for a session entered at a non-first segment, and adding
+        // the factor to the wrong label chained the rest of the binge onto the
+        // wrong episodes (an E4 tap on an sp2 file advanced to E6, skipping E5
+        // and every label after it). See [EpisodeScheme.labelForFile].
+        val nextTmdb = bingeScheme.labelForFile(fileE + 1)
         val maxEps = totalEpisodesInSeason
         return if (maxEps != null && nextTmdb > maxEps) {
             // End of season — jump to next season episode 1

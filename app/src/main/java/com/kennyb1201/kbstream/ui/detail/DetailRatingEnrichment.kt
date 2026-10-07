@@ -4,7 +4,12 @@ import android.util.Log
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 /**
  * Background enrichment for the Detail screen: MDBList audience ratings and
@@ -17,6 +22,15 @@ import kotlinx.coroutines.launch
  * "no extra data" rather than an error.
  */
 internal object DetailRatingEnrichment {
+
+    /**
+     * Bounds the concurrent review-page reads in [extraReviews]. Review pages
+     * are independent, so fetching them one at a time was up to 29 serial TMDB
+     * round trips before a heavily-reviewed title's row could finish; four at a
+     * time removes most of that wait without a burst the API would notice (the
+     * same bounded fan-out shape HomeViewModel uses).
+     */
+    private val reviewPagesSemaphore = Semaphore(permits = 4)
 
     /** Prefers the user's key from Settings, falling back to the build field. */
     private fun mdbListApiKey(vm: DetailViewModel): String {
@@ -106,14 +120,25 @@ internal object DetailRatingEnrichment {
                 // pathological response can never spin the loop; 30 pages
                 // = 600 reviews is far beyond any title's real list.
                 val maxPage = minOf(lastPage, 31)
-                (3..maxPage).forEach { page ->
-                    val pageResults = vm.tmdbRepository.getReviews(
-                        tmdbId,
-                        normalizedType,
-                        page
-                    )?.results.orEmpty()
-                    if (pageResults.isEmpty()) return@forEach
-                    extras += pageResults
+                // Fetched in bounded parallel rather than one page at a time:
+                // the pages are independent reads, and serializing them made a
+                // cold open of a heavily-reviewed title wait on up to 29 round
+                // trips before the row could settle.
+                val pages = coroutineScope {
+                    (3..maxPage).map { page ->
+                        async {
+                            reviewPagesSemaphore.withPermit {
+                                vm.tmdbRepository.getReviews(
+                                    tmdbId,
+                                    normalizedType,
+                                    page
+                                )?.results.orEmpty()
+                            }
+                        }
+                    }.awaitAll()
+                }
+                pages.forEach { pageResults ->
+                    if (pageResults.isNotEmpty()) extras += pageResults
                 }
             }
 

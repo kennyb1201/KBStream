@@ -275,12 +275,34 @@ object MdbListClient {
     /** Tags a request that must go out (a write) rather than a refetch. */
     private val WRITE_TAG = Any()
 
-    @Volatile private var requestsDay = ""
-    private val requestsToday = java.util.concurrent.atomic.AtomicInteger(0)
-    @Volatile private var limitedUntilMs = 0L
+    /**
+     * One API key's spend and backoff.
+     *
+     * Per KEY, not per process: MDBList keys are per-profile, each with its own
+     * ~1k/day allowance, so one shared counter plus one shared 429 backoff let
+     * profile A's spend stop profile B's reads even though B's key still had
+     * quota - and a 429 on A's key blocked B too. Keyed by a hash of the key, so
+     * the secret is never a map entry or a prefs name.
+     */
+    private class KeyBudget {
+        @Volatile var day: String = ""
+        val count = java.util.concurrent.atomic.AtomicInteger(0)
+        @Volatile var limitedUntilMs: Long = 0L
+    }
+
+    private val budgets = java.util.concurrent.ConcurrentHashMap<String, KeyBudget>()
+
+    /** The record for the request's own key; one bucket when the key is unset. */
+    private fun budgetFor(request: Request): Pair<String, KeyBudget> {
+        val tag = keyTag(request.url.queryParameter("apikey").orEmpty())
+        return tag to budgets.getOrPut(tag) { KeyBudget() }
+    }
 
     private fun budgetPrefs(context: Context) =
         context.getSharedPreferences(REQUEST_PREFS, Context.MODE_PRIVATE)
+
+    private fun budgetDayKey(tag: String) = "$KEY_REQUEST_DAY:$tag"
+    private fun budgetCountKey(tag: String) = "$KEY_REQUEST_COUNT:$tag"
 
     private fun utcDay(nowMs: Long): String =
         java.time.Instant.ofEpochMilli(nowMs)
@@ -297,51 +319,51 @@ object MdbListClient {
             .toInstant()
             .toEpochMilli()
 
-    /** Rolls the persisted counter over when the UTC day changes. */
-    private fun ensureBudget() {
+    /** Rolls THIS key's persisted counter over when the UTC day changes. */
+    private fun ensureBudget(budget: KeyBudget, tag: String) {
         val now = System.currentTimeMillis()
         val today = utcDay(now)
-        if (requestsDay == today) return
+        if (budget.day == today) return
         val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
         val stored = if (context != null) {
             val prefs = budgetPrefs(context)
-            if (prefs.getString(KEY_REQUEST_DAY, "") == today) {
-                prefs.getInt(KEY_REQUEST_COUNT, 0)
+            if (prefs.getString(budgetDayKey(tag), "") == today) {
+                prefs.getInt(budgetCountKey(tag), 0)
             } else 0
         } else 0
-        requestsDay = today
-        requestsToday.set(stored)
+        budget.day = today
+        budget.count.set(stored)
         // A new UTC day is a new allowance: yesterday's reset no longer
         // applies.
-        if (limitedUntilMs < now) limitedUntilMs = 0L
+        if (budget.limitedUntilMs < now) budget.limitedUntilMs = 0L
     }
 
-    private fun maySpend(essential: Boolean): Boolean {
-        ensureBudget()
-        if (limitedUntilMs > System.currentTimeMillis()) return false
-        return requestsToday.get() < (if (essential) TOTAL_CEILING else READ_BUDGET)
+    private fun maySpend(budget: KeyBudget, tag: String, essential: Boolean): Boolean {
+        ensureBudget(budget, tag)
+        if (budget.limitedUntilMs > System.currentTimeMillis()) return false
+        return budget.count.get() < (if (essential) TOTAL_CEILING else READ_BUDGET)
     }
 
-    private fun countRequest() {
-        ensureBudget()
-        requestsToday.incrementAndGet()
+    private fun countRequest(budget: KeyBudget, tag: String) {
+        ensureBudget(budget, tag)
+        budget.count.incrementAndGet()
         val context = com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext
         context?.let {
             budgetPrefs(it).edit()
-                .putString(KEY_REQUEST_DAY, requestsDay)
-                .putInt(KEY_REQUEST_COUNT, requestsToday.get())
+                .putString(budgetDayKey(tag), budget.day)
+                .putInt(budgetCountKey(tag), budget.count.get())
                 .apply()
         }
     }
 
-    /** 429 → stop calling until the allowance actually returns. */
-    private fun noteRateLimited(response: Response) {
+    /** 429 → stop calling THIS key until the allowance actually returns. */
+    private fun noteRateLimited(budget: KeyBudget, response: Response) {
         val body = runCatching { response.peekBody(200).string() }.getOrDefault("")
         val daily = body.contains("Daily API limit", ignoreCase = true)
         val now = System.currentTimeMillis()
         val until = if (daily) nextUtcMidnight(now) else now + 60_000L
-        if (until <= limitedUntilMs) return
-        limitedUntilMs = until
+        if (until <= budget.limitedUntilMs) return
+        budget.limitedUntilMs = until
         Log.w(
             TAG,
             "MDBList rate limited (HTTP ${response.code}" +
@@ -356,21 +378,24 @@ object MdbListClient {
     private val budgetInterceptor = Interceptor { chain ->
         val request = chain.request()
         val essential = request.tag() === WRITE_TAG
-        if (maySpend(essential)) {
+        // Scoped to the request's own key: the budget and the backoff belong to
+        // the account the call is billed to, not to the process.
+        val (budgetTag, budget) = budgetFor(request)
+        if (maySpend(budget, budgetTag, essential)) {
             val response = chain.proceed(request)
             // Counted AFTER the call: a request that never reached MDBList (an
             // IOException, a DNS failure) must not burn the daily budget, which
             // the old count-before-proceed did (see LS-P2-19). A thrown error
             // propagates and is handled by the caller exactly as before.
-            countRequest()
-            if (response.code == 429) noteRateLimited(response)
+            countRequest(budget, budgetTag)
+            if (response.code == 429) noteRateLimited(budget, response)
             response
         } else {
-            val limited = limitedUntilMs > System.currentTimeMillis()
+            val limited = budget.limitedUntilMs > System.currentTimeMillis()
             Log.i(
                 TAG,
                 "skipped ${request.url.encodedPath} — MDBList daily budget " +
-                    "(${requestsToday.get()} sent" +
+                    "(${budget.count.get()} sent" +
                     (if (limited) ", rate limited" else "") +
                     ")"
             )
@@ -495,10 +520,28 @@ object MdbListClient {
                 .getOrNull()
         }
 
-    private fun snapshotDiskKey(apiKey: String) = "mdblist:snapshot:$apiKey"
-    private fun playbackDiskKey(apiKey: String) = "mdblist:playback:$apiKey"
+    /**
+     * A stable, non-reversible tag for an MDBList API key: 12 hex characters of
+     * its SHA-256. Used for the per-key budget entries AND the disk cache keys,
+     * so the raw secret never lands in a prefs name, an in-memory map or a disk
+     * row - the same rule Simkl's cache keys already follow.
+     */
+    private fun keyTag(apiKey: String): String =
+        runCatching {
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(apiKey.toByteArray())
+                .take(6)
+                .joinToString("") { byte -> "%02x".format(byte) }
+        }.getOrElse {
+            // A JVM without SHA-256 is not a real one; degrade to a stable
+            // per-key value rather than failing a cache lookup.
+            apiKey.hashCode().toString(16)
+        }
+
+    private fun snapshotDiskKey(apiKey: String) = "mdblist:snapshot:${keyTag(apiKey)}"
+    private fun playbackDiskKey(apiKey: String) = "mdblist:playback:${keyTag(apiKey)}"
     private fun ratingsDiskKey(apiKey: String, mediaType: String, id: String) =
-        "mdblist:ratings:$apiKey:${mediaType.lowercase()}:$id"
+        "mdblist:ratings:${keyTag(apiKey)}:${mediaType.lowercase()}:$id"
 
     private val snapshotMutex = kotlinx.coroutines.sync.Mutex()
 
@@ -592,7 +635,7 @@ object MdbListClient {
         if (apiKey.isBlank() || id.isBlank()) return@withContext null
         if (!id.startsWith("tt") && id.toIntOrNull() == null) return@withContext null
 
-        val cacheKey = "$apiKey|${mediaType.lowercase()}|$id"
+        val cacheKey = "${keyTag(apiKey)}|${mediaType.lowercase()}|$id"
         val now = System.currentTimeMillis()
         ratingsCache[cacheKey]?.let { (cachedAt, cached) ->
             if (now - cachedAt < RATINGS_TTL_MS) return@withContext cached

@@ -126,14 +126,26 @@ class EpisodeSchemeWiringContractTest {
     fun `the next episode is the scheme's arithmetic and not a plus one`() {
         listOf(NATIVE, MPV, EXTERNAL).forEach { path ->
             val body = functionBody(read(path), "private fun nextEpisodeTarget(): Pair<Int, Int>? {")
+            // The label of the NEXT FILE, derived from the scheme's own file-
+            // cursor mapping. It used to be `advance(fileE, sessionLabel)`, which
+            // is the same arithmetic only when the session entered at a file's
+            // FIRST segment: an E4 tap on an sp2 file holding [3,4] advanced to
+            // E6 and drifted the rest of the binge. labelForFile answers from
+            // the cursor instead (see EpisodeSchemeFileCursorTest).
             assertTrue(
-                "$path must advance through the detected scheme, or a file holding two " +
-                    "segments leaves the TMDB label one episode short",
-                body.contains("bingeScheme.advance(")
+                "$path must derive the next label from the scheme's file-cursor " +
+                    "mapping, or a session entered at a non-first segment leaves the " +
+                    "TMDB label wrong for the rest of the binge",
+                body.contains("bingeScheme.labelForFile(")
+            )
+            assertTrue(
+                "$path must read the FILE cursor that mapping is anchored on",
+                body.contains("currentFileEpisode()")
             )
             assertFalse(
-                "$path still adds one episode instead of the scheme's own step",
-                body.contains("Episode + 1") || body.contains("episode + 1")
+                "$path still walks the SESSION label through the scheme, which drifts " +
+                    "whenever the session did not start at a file's first episode",
+                body.contains("bingeScheme.advance(")
             )
         }
     }

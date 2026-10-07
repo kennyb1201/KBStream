@@ -140,7 +140,14 @@ android {
         // API 24-25 box was already ExoPlayer-on-MediaCodec only. work-runtime
         // 2.12 (minSdk 24) is satisfied by 26 as well.
         minSdk = 26
-        targetSdk = 35
+        // 36, not 35: Play rejects updates from phone/tablet/foldable apps that
+        // do not target API 36+, and this manifest also carries a plain LAUNCHER
+        // category, so the same AAB is distributed to those form factors (the
+        // leanback/TV entry only needs API 34 and is unaffected either way).
+        // compileSdk 37 already satisfies the build requirement. The API-36
+        // behavior changes (edge-to-edge enforcement, predictive back, tablet
+        // orientation locks) still need a device pass.
+        targetSdk = 36
         versionCode = ciVersionCode
         versionName = ciVersionName
 

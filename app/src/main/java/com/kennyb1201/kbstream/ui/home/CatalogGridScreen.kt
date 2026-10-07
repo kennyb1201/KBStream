@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -40,13 +41,16 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
+import com.kennyb1201.kbstream.ui.components.PosterCaptions
+import com.kennyb1201.kbstream.ui.components.landscapeTileHeight
+import com.kennyb1201.kbstream.ui.components.landscapeTileWidth
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
+import com.kennyb1201.kbstream.ui.components.rememberHomeLandscape
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
-import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -142,6 +146,22 @@ fun CatalogGridScreen(
     val openHeader = header
     val lazyItems = items
 
+    // The tile this grid draws, in the shape it is actually drawn in: a Home
+    // surface follows the Home-rails landscape switch as well as the everywhere
+    // one (see AppPreferences.homeLandscapeActive), exactly like the rail the
+    // grid was opened from - a viewer who set up Home that way is not asking for
+    // posters back the moment they press Open in Grid.
+    //
+    // Cell, card and caption all read from here, so the three cannot disagree
+    // about the shape: that is what made these tiles square (see the grid
+    // below).
+    val posterSize = rememberPosterSize()
+    val landscape = rememberHomeLandscape()
+    val tileWidth =
+        if (landscape) landscapeTileWidth(posterSize.width) else posterSize.width
+    val tileHeight =
+        if (landscape) landscapeTileHeight(posterSize.width) else posterSize.height
+
     if (openHeader == null || lazyItems == null) {
         // Grid not seeded yet. On a fresh open the effect above seeds it
         // within a frame; this is just that one loading frame (plus a
@@ -149,17 +169,24 @@ fun CatalogGridScreen(
         // navigates from here — see the open effect above for why.
         // Skeleton grid rather than a centered spinner: the cards cost the
         // same space either way, so the page does not jump when the real
-        // posters land.
-        val posterSize = rememberPosterSize()
+        // posters land. The placeholders take the shape the real tiles will
+        // (see tileWidth/tileHeight above), or the page would jump between two
+        // shapes instead of between nothing and one.
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(KBVoid)
         ) {
             KBSkeletonGrid(
-                cellWidth = posterSize.width,
-                cellHeight = posterSize.height,
-                columns = 6,
+                cellWidth = tileWidth,
+                cellHeight = tileHeight,
+                // The live grid sizes its cells from the tile itself
+                // (GridCells.Adaptive below), so it draws as many columns as
+                // the pane holds. A landscape tile is 1.7x as wide as the
+                // poster it replaces, so six of them no longer fit the pane
+                // six posters did - and the skeleton rows are laid out at
+                // fixed size, so they would run off it.
+                columns = if (landscape) 4 else 6,
                 rows = 2,
                 shape = posterEdgeShape()
             )
@@ -228,7 +255,15 @@ fun CatalogGridScreen(
             else -> {
                 LazyVerticalGrid(
                     state = gridState,
-                    columns = GridCells.Fixed(6),
+                    // Sized from the tile, not a hardcoded six. Six cells of the
+                    // POSTER width cannot hold a landscape card: the cell clamps
+                    // the card's width back to roughly the poster width while its
+                    // height stays the landscape height, so a 210x118 tile was
+                    // drawn short and wide - square rather than 16:9. Library's
+                    // grid carries the same fix and the same note for the same
+                    // defect. Adapting to the tile also means the Poster Size
+                    // setting reaches this grid.
+                    columns = GridCells.Adaptive(minSize = tileWidth),
                     contentPadding = PaddingValues(
                         start = KBScreenEdge,
                         end = KBScreenEdge,
@@ -249,11 +284,15 @@ fun CatalogGridScreen(
                         // and its items being indexed.
                         val meta = lazyItems[index] ?: return@items
 
-                        val posterSize = rememberPosterSize()
-                        // Landscape tiles are wider than the poster they replace,
-                        // so the caption follows the shape the card draws.
-                        val tileWidth = rememberPosterTileWidth(posterSize.width)
-                        Column {
+                        // The tile's own focus drives the caption marquee below,
+                        // like every other poster surface in the app.
+                        var focused by remember { mutableStateOf(false) }
+
+                        Column(
+                            modifier = Modifier
+                                .width(tileWidth)
+                                .onFocusChanged { focused = it.hasFocus }
+                        ) {
                             GlobalPosterCard(
                                 posterUrl = meta.poster,
                                 backdropUrl = meta.background,
@@ -278,21 +317,31 @@ fun CatalogGridScreen(
                                 // + clearlogo the rails use.
                                 artId = meta.id,
                                 artType = meta.type,
+                                // This grid's own rule, not the global switch:
+                                // it hangs off Home, so Home's landscape setting
+                                // has to reach it (the same value the cell was
+                                // sized from above).
+                                landscape = landscape,
                                 modifier = Modifier
                                     // Opts this tile into the poster ->
                                     // Detail hero flight (shared key is
                                     // type:id, same as the rail posters).
                                     .heroSourceElement(meta.type, meta.id)
                             )
-                            Text(
-                                text = meta.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = KBTextLo,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .width(tileWidth)
-                                    .padding(top = 2.dp)
+                            // The shared caption block, so the "Poster Titles /
+                            // Years / Star Ratings" toggles reach this grid like
+                            // every other screen: it used to draw the title
+                            // itself and ignore all three, and it had no rating
+                            // or year to show at all. A catalog's own preview
+                            // supplies both (see MetaPreview.yearOrNull and
+                            // imdbRating); a catalog that ships neither simply
+                            // shows what it has.
+                            PosterCaptions(
+                                title = meta.name,
+                                year = meta.yearOrNull?.toString(),
+                                rating = meta.imdbRating?.toDoubleOrNull(),
+                                focused = focused,
+                                modifier = Modifier.padding(top = 5.dp)
                             )
                         }
                     }

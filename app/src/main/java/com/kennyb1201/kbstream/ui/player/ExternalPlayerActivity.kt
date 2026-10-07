@@ -27,7 +27,6 @@ import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
-import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -943,16 +942,14 @@ class ExternalPlayerActivity : ComponentActivity() {
 
     /**
      * The TMDB episodes the file that played covered: one for every scheme but
-     * SEGMENTS_PER_FILE, which holds its own factor. Mirrors the in-app engines
-     * (see NativePlayerActivity.coveredTmdbEpisodes).
+     * SEGMENTS_PER_FILE, which holds its own factor. Anchored on the FILE cursor,
+     * not the session's TMDB label, for the same reason as the in-app engines -
+     * a session entered at a non-first segment would otherwise mark the wrong
+     * episodes (see NativePlayerActivity.coveredTmdbEpisodes).
      */
     private fun coveredTmdbEpisodes(tmdbEpisode: Int): List<Int> {
-        if (bingeScheme.kind != SchemeKind.SEGMENTS_PER_FILE) return listOf(tmdbEpisode)
-        val maxEpisodes = totalEpisodesInSeason
-        return (0 until bingeScheme.factor)
-            .map { tmdbEpisode + it }
-            .filter { maxEpisodes == null || it <= maxEpisodes }
-            .ifEmpty { listOf(tmdbEpisode) }
+        val fileEpisode = currentFileEpisode() ?: tmdbEpisode
+        return bingeScheme.episodesOfFileClamped(fileEpisode, totalEpisodesInSeason)
     }
 
     /**
@@ -966,7 +963,10 @@ class ExternalPlayerActivity : ComponentActivity() {
         val showSeason = season ?: return null
         val showEpisode = episode ?: return null
         val fileEpisode = currentFileEpisode() ?: showEpisode
-        val nextEpisode = bingeScheme.advance(fileEpisode, showEpisode).second
+        // The label of the next FILE, not the session's label plus the factor:
+        // the two differ for a session entered at a non-first segment. See
+        // NativePlayerActivity.nextEpisodeTarget().
+        val nextEpisode = bingeScheme.labelForFile(fileEpisode + 1)
         val maxEpisodes = totalEpisodesInSeason
         return if (maxEpisodes != null && nextEpisode > maxEpisodes) {
             (showSeason + 1) to 1

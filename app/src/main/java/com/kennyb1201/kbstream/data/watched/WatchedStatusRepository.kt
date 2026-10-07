@@ -97,8 +97,18 @@ class WatchedStatusRepository(
                     Context.MODE_PRIVATE
                 )
             }
+                // Never the unscoped name: AppContextHolder is null in the
+                // window before Application.onCreate, and falling back to the
+                // global file there put manual "Mark as Watched" overrides in
+                // a store no profile reads afterwards (silently lost) AND
+                // shared across profiles during the window. Resolving through
+                // the repository's own context keeps the write on the active
+                // profile's file, which is the same one the primary path uses.
                 ?: context.getSharedPreferences(
-                    "kbstream_watched_overrides",
+                    com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                        context,
+                        "kbstream_watched_overrides"
+                    ),
                     Context.MODE_PRIVATE
                 )
 

@@ -97,7 +97,17 @@ internal object SourceAddonMemory {
         /** Stall-downshifts recorded since this addon's last success. */
         val stalls: Int = 0,
         /** When the most recent stall landed, 0 when it never has. */
-        val lastStallAtMs: Long = 0L
+        val lastStallAtMs: Long = 0L,
+        /**
+         * When the OPEN verdict ([worked]) landed - deliberately separate from
+         * [atMs], which a stall also refreshes. A stall is later evidence that
+         * the link opens, so it must neither re-arm a failure's expiry by
+         * bumping [atMs] nor be read as still-failed; keeping the verdict's own
+         * timestamp lets [outcomes] age it out and lets a later stall supersede
+         * it. 0 on entries written before this field existed; the accessor
+         * falls back to [atMs] for those.
+         */
+        val openAtMs: Long = 0L
     )
 
     @Serializable
@@ -119,7 +129,8 @@ internal object SourceAddonMemory {
      */
     fun rememberWorked(context: Context, showKey: String, addonName: String?) =
         update(context, showKey, addonName) { _ ->
-            Outcome(worked = true, atMs = System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            Outcome(worked = true, atMs = now, openAtMs = now)
         }
 
     /** An addon's link would not open here: it goes behind everything else. */
@@ -128,7 +139,8 @@ internal object SourceAddonMemory {
             // Supersedes a stall count as well as a success: a link that will
             // not open at all is the worse fact about the same addon, and this
             // store keeps one.
-            Outcome(worked = false, atMs = System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            Outcome(worked = false, atMs = now, openAtMs = now)
         }
 
     /**
@@ -146,11 +158,14 @@ internal object SourceAddonMemory {
             Outcome(
                 // Whatever this addon's open outcome was stays as it was: a
                 // stall says the source was too slow, not that it failed to
-                // open, and the two are separate tiers.
+                // open, and the two are separate tiers. Its TIME is carried
+                // over rather than refreshed, though, so the failure is not
+                // re-armed by a stall and can be superseded below.
                 worked = previous?.worked,
                 atMs = now,
                 stalls = (previous?.stalls ?: 0) + 1,
-                lastStallAtMs = now
+                lastStallAtMs = now,
+                openAtMs = previous?.let { openVerdictAtMs(it) } ?: 0L
             )
         }
 
@@ -163,11 +178,19 @@ internal object SourceAddonMemory {
         if (key.isBlank()) return SourceAddonPreference.Outcomes()
         val entry = runCatching { read(context).shows[key] }.getOrNull()
             ?: return SourceAddonPreference.Outcomes()
-        val fresh = entry.addons.filterValues { isFresh(it.atMs) }
+        // The open verdict (worked/failed) ages off its OWN timestamp, so a
+        // stall cannot re-arm a 29-day-old failure. A stall that landed AFTER
+        // the failure is later evidence that the link opens, so it supersedes
+        // the failure instead of leaving the addon reported as both failed and
+        // slow - where the tier rule then picked failed.
+        val freshOpen = entry.addons.filterValues { isFresh(openVerdictAtMs(it)) }
         return SourceAddonPreference.Outcomes(
-            worked = fresh.filterValues { it.worked == true }.keys.toSet(),
-            failed = fresh.filterValues { it.worked == false }.keys.toSet(),
-            slow = fresh
+            worked = freshOpen.filterValues { it.worked == true }.keys.toSet(),
+            failed = freshOpen
+                .filterValues { it.worked == false && !stallSupersedesOpen(it) }
+                .keys
+                .toSet(),
+            slow = entry.addons
                 .filterValues { freshStallCount(it) >= SLOW_STALL_THRESHOLD }
                 .keys
                 .toSet()
@@ -175,6 +198,7 @@ internal object SourceAddonMemory {
     }
 
     /** Drops this title's record: the per-title "stop remembering this". */
+    @Synchronized
     fun forget(context: Context, showKey: String) {
         val key = SourceAddonPreference.showKeyOf(showKey)
         if (key.isBlank()) return
@@ -186,6 +210,7 @@ internal object SourceAddonMemory {
         }
     }
 
+    @Synchronized
     private fun update(
         context: Context,
         showKey: String,
@@ -244,6 +269,24 @@ internal object SourceAddonMemory {
      */
     private fun freshStallCount(outcome: Outcome): Int =
         if (outcome.lastStallAtMs > 0L && isFresh(outcome.lastStallAtMs)) outcome.stalls else 0
+
+    /**
+     * When this addon's open verdict landed. [Outcome.openAtMs] where set; an
+     * entry written before that field existed falls back to [Outcome.atMs],
+     * which for those entries was the verdict's own time (stalls only bumped it
+     * afterwards, and the first stall after this change carries the value over).
+     */
+    private fun openVerdictAtMs(outcome: Outcome): Long =
+        if (outcome.openAtMs > 0L) outcome.openAtMs else outcome.atMs
+
+    /**
+     * True when a stall landed after the open verdict: the link demonstrably
+     * opened (the player moved off it for slowness, not a failure to open), so
+     * the failure is stale and must not keep the addon in the failed tier.
+     */
+    private fun stallSupersedesOpen(outcome: Outcome): Boolean =
+        outcome.lastStallAtMs > 0L &&
+            outcome.lastStallAtMs > openVerdictAtMs(outcome)
 
     private fun isFresh(atMs: Long): Boolean = System.currentTimeMillis() - atMs <= TTL_MS
 

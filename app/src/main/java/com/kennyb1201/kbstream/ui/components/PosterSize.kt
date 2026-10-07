@@ -68,3 +68,27 @@ internal fun landscapeTileHeight(posterWidth: Dp): Dp =
 fun rememberPosterTileWidth(posterWidth: Dp): Dp =
     if (rememberGlobalLandscape()) landscapeTileWidth(posterWidth) else posterWidth
 
+/**
+ * Whether this HOME surface draws landscape tiles: the everywhere switch, or the
+ * Home-rails one (see [AppPreferences.homeLandscapeActive]).
+ *
+ * The Home sibling of [rememberGlobalLandscape], for the surfaces that hang off
+ * Home - Home's own rails, and the catalog grid a rail's long-press opens -
+ * where the Home-rails switch is allowed to matter. It lives here rather than
+ * beside [rememberGlobalLandscape] on purpose: the shared card must not know
+ * Home's rule at all (pinned by LandscapeScopeContractTest), and this is the
+ * file the tile arithmetic already lives in, so the rule and the shape it
+ * implies stay together.
+ *
+ * A surface asks this ONCE and sizes its cell, its card and its caption from
+ * that one answer. Home's grid asked only the global switch while its cards
+ * followed the same global switch, so a viewer whose Home is all landscape got
+ * posters; sizing its cell from the raw poster width then drew those landscape
+ * cards as squares (see CatalogGridScreen).
+ */
+@Composable
+fun rememberHomeLandscape(): Boolean {
+    val context = LocalContext.current
+    return remember { AppPreferences.homeLandscapeActive(context) }
+}
+

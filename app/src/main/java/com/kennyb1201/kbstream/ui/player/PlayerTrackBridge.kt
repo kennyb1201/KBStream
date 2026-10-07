@@ -134,6 +134,31 @@ internal object PlayerTrackBridge {
     var audioTrackSignature: String = ""
         private set
 
+    /** The specific subtitle track this show was set to, if any. */
+    @Volatile
+    var subtitleTrackSignature: String = ""
+        private set
+
+    /**
+     * The viewer turned subtitles OFF for this show (the picker's OFF row). Not
+     * the same as "Auto": Auto follows the global subtitle mode, while this is
+     * an explicit per-show refusal. The ready-time language pass clears it with
+     * a hard disable, so a configured subtitle language cannot turn subtitles
+     * back on against it - the "subtitles come back after a rebuffer" report.
+     */
+    @Volatile
+    var subtitlesOff: Boolean = false
+        private set
+
+    /**
+     * The global subtitle mode (see [SubtitleModeRules]), published with the
+     * global languages. The language pass must not arm a subtitle track when it
+     * is not [SubtitleModeRules.ON], or a session the viewer set to Off gets
+     * text on the first ready transition.
+     */
+    @Volatile
+    private var subtitleMode: Int = SubtitleModeRules.DEFAULT
+
     /**
      * Per-show audio tuning, or -1 for "follow the global setting". The global
      * values live in [PlayerAudioTuning] already; these are only the overrides
@@ -162,6 +187,10 @@ internal object PlayerTrackBridge {
     /** One application per player instance; see [onPlayerAttached]. */
     @Volatile
     private var rememberedTrackApplied = false
+
+    /** One re-assertion per player instance; see [applyRememberedSubtitleTrack]. */
+    @Volatile
+    private var rememberedSubtitleTrackApplied = false
 
     /** The player we already wired; [setPlayer] can repeat an instance. */
     @Volatile
@@ -192,6 +221,10 @@ internal object PlayerTrackBridge {
         audioDownmix = -1
         audioDialogueBoost = -1
         audioVolumeBoostDb = -1
+        subtitleTrackSignature = ""
+        subtitlesOff = false
+        rememberedTrackApplied = false
+        rememberedSubtitleTrackApplied = false
     }
 
     /**
@@ -219,12 +252,15 @@ internal object PlayerTrackBridge {
         audioDelayMs = remembered?.audioDelayMs ?: 0
         subtitleOffsetMs = remembered?.subtitleOffsetMs ?: 0
         audioTrackSignature = remembered?.audioTrackSignature.orEmpty()
+        subtitleTrackSignature = remembered?.subtitleTrackSignature.orEmpty()
+        subtitlesOff = remembered?.subtitleOff == true
         // -1 means "no override": the session then uses the global setting.
         audioDownmix = remembered?.audioDownmix ?: -1
         audioDialogueBoost = remembered?.audioDialogueBoost ?: -1
         audioVolumeBoostDb = remembered?.audioVolumeBoostDb ?: -1
         audioTracks = emptyList()
         rememberedTrackApplied = false
+        rememberedSubtitleTrackApplied = false
 
         // Resolve global + override into the live tuning the processor reads.
         publishAudioTuning(context)
@@ -237,6 +273,16 @@ internal object PlayerTrackBridge {
     fun setGlobalLanguages(audio: String, subtitle: String) {
         globalAudioLanguage = audio
         globalSubtitleLanguage = subtitle
+    }
+
+    /**
+     * Publishes the global subtitle mode alongside the global languages. Read
+     * by [reapplyLanguageSelection], which runs on every ready transition, so a
+     * session the viewer set to Off cannot silently acquire subtitles when a
+     * subtitle language happens to be configured.
+     */
+    fun setSubtitleMode(mode: Int) {
+        subtitleMode = SubtitleModeRules.normalized(mode)
     }
 
     /**
@@ -389,9 +435,25 @@ internal object PlayerTrackBridge {
         if (audioTrackSignature.isBlank()) {
             applyLanguage(player, C.TRACK_TYPE_AUDIO, effectiveAudioLanguage())
         }
-        // Blank subtitle preference is "Auto" with nothing configured: leave
-        // the file's own default in place (subtitles off stays off, an
-        // always-on track keeps playing) instead of forcing the type disabled.
+        // Subtitles, in priority order.
+        //
+        // 1. An explicit per-show OFF is a hard disable: the activity's own
+        //    automatic pass may have armed a track from the global mode and
+        //    language, and this runs after it, so skipping alone is not enough.
+        if (subtitlesOff) {
+            applyLanguage(player, C.TRACK_TYPE_TEXT, "")
+            return
+        }
+        // 2. A remembered specific track is re-asserted by
+        //    [applyRememberedSubtitleTrack] instead; running the language pass
+        //    as well would replace it with the first track in that language.
+        if (subtitleTrackSignature.isNotBlank()) return
+        // 3. The mode must be On. Off must arm nothing, and Forced has already
+        //    chosen its track - either one is undone by a language match here.
+        if (SubtitleModeRules.normalized(subtitleMode) != SubtitleModeRules.ON) return
+        // 4. Blank subtitle preference is "Auto" with nothing configured: leave
+        //    the file's own default in place (subtitles off stays off, an
+        //    always-on track keeps playing) instead of forcing the type disabled.
         val subtitle = effectiveSubtitleLanguage()
         if (subtitle.isNotBlank()) applyLanguage(player, C.TRACK_TYPE_TEXT, subtitle)
     }
@@ -409,6 +471,7 @@ internal object PlayerTrackBridge {
         if (wiredPlayer === player) return
         wiredPlayer = player
         rememberedTrackApplied = false
+        rememberedSubtitleTrackApplied = false
         // The player may already be ready (rebuild after a source switch), in
         // which case a READY listener would never fire for this state.
         if (player.playbackState == Player.STATE_READY) applyOnReady(player)
@@ -424,10 +487,11 @@ internal object PlayerTrackBridge {
         })
     }
 
-    /** One corrected pass over a ready player: languages, then the track. */
+    /** One corrected pass over a ready player: languages, then the tracks. */
     private fun applyOnReady(player: Player) {
         reapplyLanguageSelection(player)
         applyRememberedAudioTrack(player)
+        applyRememberedSubtitleTrack(player)
     }
 
     /** Log of what the file actually carries, for a language that missed. */
@@ -454,6 +518,27 @@ internal object PlayerTrackBridge {
             .setOverrideForType(TrackSelectionOverride(match.group.mediaTrackGroup, match.index))
             .build()
         Log.i(TAG, "re-applied remembered audio track '$signature'")
+        return true
+    }
+
+    /**
+     * Applies the remembered subtitle track if this file carries it. True when
+     * applied. Mirrors [applyRememberedAudioTrack]: a hand-picked subtitle row
+     * (SDH, forced, a second language) is not the first track the language pass
+     * would pick, so it has to be re-stated once per player instance.
+     */
+    private fun applyRememberedSubtitleTrack(player: Player?): Boolean {
+        if (player == null) return false
+        val signature = subtitleTrackSignature
+        if (signature.isBlank() || rememberedSubtitleTrackApplied) return false
+        val match = findTrack(player, C.TRACK_TYPE_TEXT, signature) ?: return false
+        rememberedSubtitleTrackApplied = true
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .setOverrideForType(TrackSelectionOverride(match.group.mediaTrackGroup, match.index))
+            .build()
+        Log.i(TAG, "re-applied remembered subtitle track '$signature'")
         return true
     }
 
@@ -513,8 +598,55 @@ internal object PlayerTrackBridge {
 
     fun chooseSubtitleLanguage(context: Context, code: String) {
         subtitleLanguage = code
+        // A language choice means "any track in this language": drop both the
+        // per-show OFF and the more specific track choice so the three cannot
+        // disagree.
+        subtitlesOff = false
+        subtitleTrackSignature = ""
         persist(context)
         applySubtitleLanguage?.invoke(code.ifBlank { globalSubtitleLanguage })
+    }
+
+    /**
+     * The picker's OFF row: an explicit per-show "no subtitles", applied now and
+     * remembered, so the ready-time language pass cannot turn them back on.
+     * Unlike "Auto" (a blank language) this survives the global mode's language
+     * rules.
+     */
+    fun chooseSubtitlesOff(context: Context) {
+        subtitlesOff = true
+        subtitleTrackSignature = ""
+        persist(context)
+        val player = playerProvider?.invoke() ?: return
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            .build()
+    }
+
+    /**
+     * Picks one specific subtitle track from the picker, applies it now, and
+     * remembers it for the show. Mirrors [chooseAudioTrack]: the ready-time
+     * language pass would otherwise replace it with the first track in the
+     * preferred language (the "my subtitle pick reverted" report).
+     */
+    fun chooseSubtitleTrack(context: Context, signature: String) {
+        val player = playerProvider?.invoke()
+        subtitlesOff = false
+        subtitleTrackSignature = signature
+        persist(context)
+        rememberedSubtitleTrackApplied = true
+        if (player == null) return
+        val match = findTrack(player, C.TRACK_TYPE_TEXT, signature)
+        if (match == null) {
+            Log.i(TAG, "chosen subtitle track '$signature' not present in this file")
+            return
+        }
+        player.trackSelectionParameters = player.trackSelectionParameters
+            .buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .setOverrideForType(TrackSelectionOverride(match.group.mediaTrackGroup, match.index))
+            .build()
     }
 
     fun chooseAudioDelay(context: Context, ms: Int) {
@@ -537,6 +669,8 @@ internal object PlayerTrackBridge {
         audioLanguage = ""
         subtitleLanguage = ""
         audioTrackSignature = ""
+        subtitlesOff = false
+        subtitleTrackSignature = ""
         audioDelayMs = 0
         subtitleOffsetMs = 0
         audioDownmix = -1
@@ -557,6 +691,8 @@ internal object PlayerTrackBridge {
             prefs = PlayerTitlePrefs.Prefs(
                 audioLang = audioLanguage,
                 subtitleLang = subtitleLanguage,
+                subtitleOff = subtitlesOff,
+                subtitleTrackSignature = subtitleTrackSignature,
                 subtitleOffsetMs = subtitleOffsetMs,
                 audioDelayMs = audioDelayMs,
                 audioTrackSignature = audioTrackSignature,

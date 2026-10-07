@@ -36,6 +36,24 @@ internal object PlayerTitlePrefs {
     data class Prefs(
         val audioLang: String = "",
         val subtitleLang: String = "",
+        /**
+         * The viewer turned subtitles OFF for this show from the in-player
+         * picker. Deliberately distinct from a blank [subtitleLang], which is
+         * "Auto": Auto follows the global subtitle MODE (and its language),
+         * while this is an explicit per-show refusal that no language pass may
+         * re-arm - the picker's OFF used to last only until the next rebuffer,
+         * when the ready-time language re-application put a track back.
+         */
+        val subtitleOff: Boolean = false,
+        /**
+         * One specific subtitle track in this show's files, as
+         * `language|codecs|channels` (see PlayerTrackBridge.signatureOf), or
+         * blank for "whichever track my language preference picks". Mirrors
+         * [audioTrackSignature]: a hand-picked subtitle row (an SDH or forced
+         * track) is not the first track in that language, and the language pass
+         * would otherwise replace it on the next ready transition.
+         */
+        val subtitleTrackSignature: String = "",
         val subtitleOffsetMs: Int = 0,
         val audioDelayMs: Int = 0,
         /**
@@ -65,6 +83,8 @@ internal object PlayerTitlePrefs {
         val isEmpty: Boolean
             get() = audioLang.isBlank() &&
                 subtitleLang.isBlank() &&
+                !subtitleOff &&
+                subtitleTrackSignature.isBlank() &&
                 subtitleOffsetMs == 0 &&
                 audioDelayMs == 0 &&
                 audioTrackSignature.isBlank() &&
