@@ -114,6 +114,36 @@ data class EpisodeScheme(val kind: SchemeKind, val factor: Int) {
     }
 
     /**
+     * The TMDB episodes 1-based file [fileEp] holds — the inverse of
+     * [fileForTmdbEpisode], in order.
+     *
+     * A file is one episode on most shows, a pair (or more) of segments on a
+     * segmented one, and one of `factor` halves on a split one, so "does this
+     * file hold this episode" is not `file == episode`: it is this set. That
+     * question is what the session watchdog asks (see
+     * [com.kennyb1201.kbstream.ui.player.PlaybackHistoryIds.playbackSessionLine]),
+     * and for a split episode the answer is deliberately several files for one
+     * episode — the second half's file number is not the first half's.
+     */
+    fun tmdbEpisodesOfFile(fileEp: Int): List<Int> = when (kind) {
+        SchemeKind.ONE_TO_ONE -> listOf(fileEp)
+        SchemeKind.SEGMENTS_PER_FILE ->
+            (0 until factor).map { (fileEp - 1) * factor + 1 + it }
+        SchemeKind.FILES_PER_EPISODE -> listOf((fileEp - 1) / factor + 1)
+    }
+
+    /**
+     * True when [fileEp] is one of the files that hold TMDB episode [tmdbEp].
+     *
+     * Under [SchemeKind.FILES_PER_EPISODE] an episode's files are its whole
+     * group, so the SECOND half of a split episode answers true for the same
+     * episode its first half does - a session that moved to it is mapped
+     * correctly, not mismatched.
+     */
+    fun fileHolds(fileEp: Int, tmdbEp: Int): Boolean =
+        fileEp >= 1 && tmdbEp >= 1 && tmdbEp in tmdbEpisodesOfFile(fileEp)
+
+    /**
      * The cursor after a file finished: the next file, and the next TMDB
      * episode to label it with.
      *

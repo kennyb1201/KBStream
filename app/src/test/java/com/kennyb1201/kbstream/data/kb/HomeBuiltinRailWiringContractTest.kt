@@ -132,6 +132,27 @@ class HomeBuiltinRailWiringContractTest {
     }
 
     @Test
+    fun `a renamed add-on-keyed built-in draws the new name`() {
+        // The Top Today rows are built-ins, but their CONTENT is still an add-on
+        // rail, so a rename written from the manager has to reach the add-on
+        // rail's own header - the path that ignores the arrangement today is
+        // the one where the viewer renames a rail and nothing changes.
+        assertTrue(
+            "the add-on rail entry must carry the arrangement's rename",
+            slots.contains("titleOverride = renamedTitle(key)")
+        )
+        assertTrue(
+            "the merge must resolve it from the arrangement",
+            slots.contains("fun renamedTitle(key: String): String?")
+        )
+        assertTrue(
+            "and Home must draw that name over the rail's own",
+            home.contains("e.titleOverride") &&
+                home.contains("?: rail.catalogName")
+        )
+    }
+
+    @Test
     fun `the manager offers built-ins move, hide and rename but no pin`() {
         assertTrue(
             "built-ins must be in the manager's default list",

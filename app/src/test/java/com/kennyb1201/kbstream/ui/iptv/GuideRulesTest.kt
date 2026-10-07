@@ -1,6 +1,11 @@
 package com.kennyb1201.kbstream.ui.iptv
 
+import com.kennyb1201.kbstream.data.iptv.EpgMatchType
+import com.kennyb1201.kbstream.data.iptv.IptvChannel
+import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
+import com.kennyb1201.kbstream.data.iptv.XmltvChannel
+import com.kennyb1201.kbstream.data.iptv.XmltvProgram
 import java.time.LocalDateTime
 import java.time.ZoneOffset
 import java.util.Locale
@@ -375,6 +380,167 @@ class GuideRulesTest {
             emptySet<String>(),
             GuideRequestQueue.clearAnswered(setOf("a", "b"), resolved = setOf("a", "b"))
         )
+    }
+
+    // ------------------------------------------------------------- guide clock
+
+    // The tick that keeps NOW/NEXT current used to re-issue the whole loaded
+    // batch: a lineup query for up to 80 channels x 960 programs every two
+    // minutes, for as long as the guide was open. Almost all of it answered a
+    // question the loaded programs already could, so the cases below are the
+    // boundary where that stops being true - the one place a query is owed.
+
+    /** A one-hour program starting at [hour]:00 on the pinned test day. */
+    private fun hourProgram(channelId: String, hour: Int): XmltvProgram {
+        val start = utc(2026, 10, 7, hour, 0)
+        return XmltvProgram(
+            channelId = channelId,
+            title = "P$hour",
+            description = null,
+            category = null,
+            startUtcMillis = start,
+            endUtcMillis = start + 3_600_000L
+        )
+    }
+
+    /** One loaded guide row, in the shape `IptvRepository.mapChannels` leaves it. */
+    private fun row(
+        channelId: String,
+        now: XmltvProgram?,
+        next: XmltvProgram?,
+        upcoming: List<XmltvProgram> = emptyList()
+    ): IptvChannelWithEpg = IptvChannelWithEpg(
+        channel = IptvChannel(
+            id = channelId,
+            name = channelId,
+            displayName = channelId,
+            streamUrl = "http://example.invalid/$channelId",
+            groupTitle = null,
+            logoUrl = null,
+            tvgId = null,
+            tvgName = null,
+            tvgChno = null,
+            catchup = null,
+            catchupDays = null,
+            catchupSource = null,
+            providerChannelId = null
+        ),
+        epgChannel = XmltvChannel(id = channelId),
+        epgMatchType = EpgMatchType.ID_MATCH,
+        now = now,
+        next = next,
+        upcoming = upcoming
+    )
+
+    @Test
+    fun `a tick inside a program moves nothing at all`() {
+        // 20:40, with 20:00's program on air and the two after it loaded. This
+        // is every tick but one per program: no row is rewritten and nothing is
+        // sent back to the database.
+        val loaded = mapOf(
+            "ch1" to row(
+                "ch1",
+                now = hourProgram("ch1", 20),
+                next = hourProgram("ch1", 21),
+                upcoming = listOf(hourProgram("ch1", 22))
+            )
+        )
+        val step = GuideClockAdvance.step(loaded, utc(2026, 10, 7, 20, 40))
+        assertTrue("an unchanged row must not be rewritten", step.advanced.isEmpty())
+        assertTrue("nothing has run out", step.expiredIds.isEmpty())
+    }
+
+    @Test
+    fun `a tick past a program's end promotes the loaded next in memory`() {
+        // 21:05. The 21:00 program was already loaded as NEXT; it becomes NOW
+        // and the strip behind it shifts up, with no query at all.
+        val loaded = mapOf(
+            "ch1" to row(
+                "ch1",
+                now = hourProgram("ch1", 20),
+                next = hourProgram("ch1", 21),
+                upcoming = listOf(hourProgram("ch1", 22))
+            )
+        )
+        val step = GuideClockAdvance.step(loaded, utc(2026, 10, 7, 21, 5))
+        assertEquals("the database is not needed", emptySet<String>(), step.expiredIds)
+        val moved = step.advanced.getValue("ch1")
+        assertEquals("P21", moved.now?.title)
+        assertEquals("P22", moved.next?.title)
+        assertEquals(emptyList<String>(), moved.upcoming.map { it.title })
+    }
+
+    @Test
+    fun `a row whose next program has ended is reported as run out`() {
+        // The one state a tick cannot answer: the newest program the row holds
+        // started before the clock reached it, so nothing left in memory says
+        // what is next. It is still advanced - here to no program at all, since
+        // the 20:00 one finished 40 minutes ago - so the row stops claiming a
+        // finished program is on air while the query is out.
+        val loaded = mapOf(
+            "ch1" to row("ch1", now = hourProgram("ch1", 20), next = null)
+        )
+        val step = GuideClockAdvance.step(loaded, utc(2026, 10, 7, 21, 40))
+        assertEquals(setOf("ch1"), step.expiredIds)
+        assertNull(step.advanced.getValue("ch1").now)
+    }
+
+    @Test
+    fun `a row that never had a program is left alone, not re-queried`() {
+        // An unmatched channel, or a match with no programs in the window.
+        // "No program data" is a settled answer rather than a stale one, and
+        // asking for it twice a minute is the churn this path removes - a new
+        // import or playlist bump re-requests the window for it anyway.
+        val loaded = mapOf("ch1" to row("ch1", now = null, next = null))
+        val step = GuideClockAdvance.step(loaded, utc(2026, 10, 7, 20, 40))
+        assertTrue(step.advanced.isEmpty())
+        assertTrue(step.expiredIds.isEmpty())
+    }
+
+    @Test
+    fun `a run-out row is only asked again once it can answer the clock`() {
+        // What the ViewModel writes a channel off with. False while the row is
+        // stuck at the end of its listing, true the moment a re-query brings
+        // back a program that has not started yet - which is how a channel that
+        // recovered leaves that set without anything having to track it.
+        val runOut = row("ch1", now = hourProgram("ch1", 20), next = null)
+        assertFalse(GuideClockAdvance.canAnswer(runOut, utc(2026, 10, 7, 20, 40)))
+        assertTrue(GuideClockAdvance.canAnswer(runOut, utc(2026, 10, 7, 19, 40)))
+
+        val refreshed = row(
+            "ch1",
+            now = hourProgram("ch1", 20),
+            next = hourProgram("ch1", 21)
+        )
+        assertTrue(GuideClockAdvance.canAnswer(refreshed, utc(2026, 10, 7, 20, 40)))
+    }
+
+    @Test
+    fun `one tick asks only for the rows that ran out`() {
+        // The point of the whole thing at 21:05: three loaded channels, two of
+        // them moved by the clock in memory, and one query - for the single
+        // channel at the end of its listing.
+        val loaded = mapOf(
+            // Already reading the 21:00 program: nothing to do.
+            "ch1" to row(
+                "ch1",
+                now = hourProgram("ch1", 21),
+                next = hourProgram("ch1", 22)
+            ),
+            // Still reading 20:00 as NOW: advanced here, no query.
+            "ch2" to row(
+                "ch2",
+                now = hourProgram("ch2", 20),
+                next = hourProgram("ch2", 21),
+                upcoming = listOf(hourProgram("ch2", 22))
+            ),
+            // At the end of its listing: the only channel asked about.
+            "ch3" to row("ch3", now = hourProgram("ch3", 20), next = null)
+        )
+        val step = GuideClockAdvance.step(loaded, utc(2026, 10, 7, 21, 5))
+        assertEquals(setOf("ch3"), step.expiredIds)
+        assertEquals(setOf("ch2", "ch3"), step.advanced.keys)
+        assertNull("a run-out row does not keep a program that ended", step.advanced.getValue("ch3").now)
     }
 
     @Test

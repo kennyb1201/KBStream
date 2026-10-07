@@ -268,4 +268,40 @@ class PlaybackRecoveryRulesTest {
             assertFalse("code $code must not retire a cached link", PlaybackRecoveryRules.isLinkFailure(playbackError(code)))
         }
     }
+
+    // --- shouldAdvancePastOpenFailure ---
+    //
+    // The MPV engine's failed-open ladder: the backup engine used to park on its
+    // error card with the whole ranked list untried, which is the wrong place to
+    // give up when this engine is where a session lands BECAUSE its first source
+    // was trouble.
+
+    @Test
+    fun `the first failed open advances while the list has a source left`() {
+        assertTrue(PlaybackRecoveryRules.shouldAdvancePastOpenFailure(1, hasAnotherSource = true))
+        assertTrue(PlaybackRecoveryRules.shouldAdvancePastOpenFailure(2, hasAnotherSource = true))
+        assertTrue(PlaybackRecoveryRules.shouldAdvancePastOpenFailure(3, hasAnotherSource = true))
+    }
+
+    @Test
+    fun `a spent ladder parks on the card instead of cycling the list`() {
+        val past = PlaybackRecoveryRules.MAX_MPV_OPEN_FAILURE_SOURCES + 1
+        assertFalse(
+            "a title whose whole list is dead must end somewhere the viewer can act on",
+            PlaybackRecoveryRules.shouldAdvancePastOpenFailure(past, hasAnotherSource = true)
+        )
+    }
+
+    @Test
+    fun `with no source left there is nothing to advance to`() {
+        assertFalse(PlaybackRecoveryRules.shouldAdvancePastOpenFailure(1, hasAnotherSource = false))
+    }
+
+    @Test
+    fun `the bound is small enough to still be a card`() {
+        // A ladder that walks all 19 sources of a dead title is not a recovery,
+        // it is a slideshow; the card has to stay reachable.
+        assertTrue(PlaybackRecoveryRules.MAX_MPV_OPEN_FAILURE_SOURCES <= 4)
+        assertTrue(PlaybackRecoveryRules.MAX_MPV_OPEN_FAILURE_SOURCES >= 2)
+    }
 }

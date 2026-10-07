@@ -201,23 +201,20 @@ internal fun CatalogManagerDialog(
         // The default order is the contract [mergedHomeRailKeys] documents:
         // Browse rails, then catalogs, then collections.
         //
-        // Rails the loader fixes the position of (the Top Today rows) are not
-        // part of that order at all: Home always draws them first, so they lead
-        // this list as a block of their own and the movable order starts under
-        // them. Listing them inside the order would put them somewhere other
-        // than where Home draws them AND let a neighbouring rail be "moved"
-        // into a slot that does not exist.
+        // Every rail is part of the one order, the Top Today rows included:
+        // they are built-ins now (see KBHomeOrderPrefs.BUILTIN_KEYS), so they
+        // lead this list the way Home draws them and can be moved like anything
+        // else - no rail has a position Home does not let the manager aim at.
         val prefs = KBHomeOrderPrefs.readOrder()
-        val fixedKeys = addonByKey.keys.filter { KBHomeOrderPrefs.isPositionFixedKey(it) }
         // Built-ins lead, exactly as they do in the ViewModel's copy of this
         // list and on Home itself: the manager draws and moves the same merged
         // list Home renders (see mergedHomeRailKeys).
         val movableDefaults = KBHomeOrderPrefs.BUILTIN_KEYS +
             browseRailByKey.keys.toList() +
             customCatalogByKey.keys.toList() +
-            addonByKey.keys.filterNot { KBHomeOrderPrefs.isPositionFixedKey(it) } +
+            addonByKey.keys +
             collectionsState.collections.map { it.key }
-        val orderedKeys = fixedKeys + mergedHomeRailKeys(prefs, movableDefaults)
+        val orderedKeys = mergedHomeRailKeys(prefs, movableDefaults)
 
         orderedKeys.mapNotNull { key ->
             val browseRail = browseRailByKey[key]
@@ -314,14 +311,9 @@ internal fun CatalogManagerDialog(
                     config = config,
                     collectionKey = null,
                     title = config.catalog.displayName.ifBlank { config.catalog.id },
-                    subtitle = if (KBHomeOrderPrefs.isPositionFixedKey(key)) {
-                        "${config.catalog.type} · ${config.addonName} · fixed at the top"
-                    } else {
-                        "${config.catalog.type} · ${config.addonName}"
-                    },
+                    subtitle = "${config.catalog.type} · ${config.addonName}",
                     isPinned = key in prefs.pinned.toSet(),
-                    isHidden = !config.catalog.showOnHome,
-                    isPositionFixed = KBHomeOrderPrefs.isPositionFixedKey(key)
+                    isHidden = !config.catalog.showOnHome
                 )
             }
             // Exact, not a guess: an arrow is offered when pressing it would
@@ -898,7 +890,7 @@ private fun UnifiedManagerRow(
                 } else {
                     Spacer(modifier = Modifier.width(38.dp))
                 }
-                if (!row.isPositionFixed) {
+                run {
                     Spacer(modifier = Modifier.width(10.dp))
                     CatalogIconButton(
                         icon = Icons.Filled.KeyboardDoubleArrowUp,
@@ -979,12 +971,6 @@ private data class CatalogManagerDialogRow(
      * would name the wrong feature.
      */
     val isCustomCatalog: Boolean = false,
-    /**
-     * The loader fixes this rail's position on Home (the Top Today rows), so it
-     * has no slot to arrange: the row shows no reorder controls at all, and
-     * [canMoveTop] and friends are false. Hide and rename still apply.
-     */
-    val isPositionFixed: Boolean = false,
     /**
      * Whether each reorder press would actually change where the rail sits on
      * Home, decided by the same transforms that perform the move.

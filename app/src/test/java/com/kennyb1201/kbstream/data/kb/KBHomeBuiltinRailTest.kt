@@ -31,6 +31,8 @@ class KBHomeBuiltinRailTest {
 
     private val continueWatching = KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING
     private val upcoming = KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE
+    private val topMovies = KBHomeOrderPrefs.BUILTIN_TOP_MOVIES_TODAY
+    private val topShows = KBHomeOrderPrefs.BUILTIN_TOP_SHOWS_TODAY
 
     @Test
     fun `the built-in keys are stable, prefixed and distinct`() {
@@ -43,8 +45,18 @@ class KBHomeBuiltinRailTest {
         assertFalse(KBHomeOrderPrefs.isBuiltinKey("kb:c"))
         assertFalse(KBHomeOrderPrefs.isBuiltinKey("addon:a"))
         assertFalse(KBHomeOrderPrefs.isBuiltinKey(null))
-        // Continue Watching leads: that is the layout being preserved.
-        assertEquals(listOf(continueWatching, upcoming), KBHomeOrderPrefs.BUILTIN_KEYS)
+        // Continue Watching leads, and the two Top Today rows follow Upcoming:
+        // that is the layout being preserved. The Top Today rows are built-ins
+        // now too (they used to be addon rails whose position the loader FIXED,
+        // which is why the manager could never list them).
+        assertEquals(
+            listOf(continueWatching, upcoming, topMovies, topShows),
+            KBHomeOrderPrefs.BUILTIN_KEYS
+        )
+        assertTrue(KBHomeOrderPrefs.isBuiltinKey(topMovies))
+        assertTrue(KBHomeOrderPrefs.isBuiltinKey(topShows))
+        assertEquals("Top Movies Today", KBHomeOrderPrefs.builtinDefaultTitle(topMovies))
+        assertEquals("Top Shows Today", KBHomeOrderPrefs.builtinDefaultTitle(topShows))
     }
 
     @Test
@@ -95,7 +107,16 @@ class KBHomeBuiltinRailTest {
         val moved = moveRailInMergedOrder(KBHomeOrder(), defaults, continueWatching, +1)
 
         assertEquals(
-            listOf(upcoming, continueWatching, "browse:1", "addon:a", "addon:b", "kb:c"),
+            listOf(
+                upcoming,
+                continueWatching,
+                topMovies,
+                topShows,
+                "browse:1",
+                "addon:a",
+                "addon:b",
+                "kb:c"
+            ),
             mergedHomeRailKeys(moved, defaults)
         )
         assertTrue(railMoveChangesOrder(KBHomeOrder(), defaults, continueWatching, +1))

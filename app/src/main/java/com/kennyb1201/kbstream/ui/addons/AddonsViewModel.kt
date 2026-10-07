@@ -236,6 +236,12 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 // only buried the real rails under rows that did nothing, so
                 // they are kept out of the catalog manager entirely.
                 .filterNot { it.catalog.isSearchPlaceholder }
+                // The pinned Top Today feed is not an ordinary catalog rail on
+                // Home: Home fetches it itself and keys it as a built-in row
+                // (see KBHomeOrderPrefs.topTodayBuiltinKey). Leaving it in the
+                // catalog list would list a second rail for the same row under
+                // an "addon:" key Home never draws.
+                .filterNot { KBHomeOrderPrefs.topTodayBuiltinKey(it.catalog.id) != null }
         reloadCollections()
     }
 
@@ -546,13 +552,11 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      * The manager dialog builds the same list from the same rule, so the row a
      * user aims at is the row a move acts on.
      *
-     * Two kinds are left out, both because they have no position to move to:
-     *  - a catalog that is not shown on Home (the manager lists it in its hidden
-     *    section, with no reorder controls);
-     *  - a rail whose position the loader fixes, i.e. the Top Today rows - the
-     *    merge always emits those first, so listing them here would let a rail
-     *    be "moved" into a slot that does not exist, and it would put them
-     *    somewhere in the manager other than where Home draws them.
+     * One kind is left out: a catalog that is not shown on Home (the manager
+     * lists it in its hidden section, with no reorder controls). Every rail
+     * that IS on Home has a position here, the Top Today rows included - they
+     * are built-ins now (see KBHomeOrderPrefs.BUILTIN_KEYS), so the loader no
+     * longer pins them above a slot the manager cannot reach.
      */
     private fun homeRailDefaults(): List<String> {
         val browseKeys = _collections.value.browseRails.map { rail -> rail.key }
@@ -562,6 +566,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
         val urls = manifestUrlByAddonId
         val addonKeys = _catalogConfigurations.value
             .filter { it.catalog.showOnHome }
+            // A Top Today row is keyed by its BUILT-IN key on Home, so listing
+            // it here under its add-on key would create a second, phantom rail
+            // the manager could move and Home could never draw.
+            .filterNot { KBHomeOrderPrefs.topTodayBuiltinKey(it.catalog.id) != null }
             .map {
                 KBHomeOrderPrefs.addonKeyFromManifest(
                     urls[it.addonId],
@@ -569,7 +577,6 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                     it.catalog.id
                 )
             }
-            .filterNot { KBHomeOrderPrefs.isPositionFixedKey(it) }
         val collectionKeys = _collections.value.collections.map { it.key }
         // Hidden built-ins stay in the list on purpose: like a collection,
         // the key has to remain KNOWN so the merged order can still place it

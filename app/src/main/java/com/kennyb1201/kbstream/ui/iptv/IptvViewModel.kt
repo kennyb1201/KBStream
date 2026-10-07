@@ -238,10 +238,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _guideRefreshTick = MutableStateFlow(0)
 
-    // Bumped by the periodic now/next refresh. It is part of the query request
-    // (so a clock refresh can never be conflated away by distinctUntilChanged)
-    // but deliberately NOT part of the guide source key: the loaded programs
-    // are still valid, only "now" moved.
+    // Bumped by the periodic now/next refresh WHEN that refresh has to go back
+    // to the database. It is part of the query request (so a clock refresh can
+    // never be conflated away by distinctUntilChanged) but deliberately NOT part
+    // of the guide source key: the loaded programs are still valid, only "now"
+    // moved. A tick the loaded programs can answer in memory leaves the request
+    // untouched, so distinctUntilChanged() conflates it away and nothing runs.
     private val _guideClockTick = MutableStateFlow(0)
 
     // Persistent "already requested/cached" set. NEVER fed into combine() below —
@@ -259,6 +261,18 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         MutableStateFlow<Map<String, IptvChannelWithEpg>>(emptyMap())
 
     private var loadedGuideSourceKey: String? = null
+
+    /**
+     * Channels whose loaded programs have run out and whose re-query already
+     * came back with nothing better.
+     *
+     * A provider whose listing stops at midnight leaves every channel in that
+     * state for hours, and asking again on the clock's cadence is exactly the
+     * cost [bumpGuideClock] exists to remove. A channel leaves this set as soon
+     * as its rows can answer the clock again - a fresh import clears the set,
+     * and a re-query that lands with a longer listing drops out of it by itself.
+     */
+    private var exhaustedGuideChannelIds: Set<String> = emptySet()
 
     /**
      * [guideWindowFingerprint] of the playlist slice the loaded guide was built
@@ -492,6 +506,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     _guideItemsByChannelId.value = emptyMap()
                     _guideChannelIds.value = emptySet()
                     _pendingGuideChannelIds.value = emptySet()
+                    exhaustedGuideChannelIds = emptySet()
                     loadedGuideSourceKey = null
                     _guideRefreshTick.value += 1
 
@@ -505,10 +520,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * lineup flow computes nowUtcMillis and the query window once per run and
      * only re-runs when playlist/EPG/tick/channel-batch changes -- left alone,
      * a channel whose query ran at 10:00 keeps claiming the 10:00 program
-     * is "on now" well past its end. Re-queuing the already-loaded channel
-     * ids through _pendingGuideChannelIds makes the flow re-run on the same
-     * channels with a fresh clock, and mergeGuideItems() only touches channels
-     * whose now/next actually changed, so unchanged schedules cause no churn.
+     * is "on now" well past its end.
+     *
+     * Each tick advances the loaded programs in memory ([bumpGuideClock]), and
+     * only the channels it cannot advance any further are re-queued through
+     * _pendingGuideChannelIds for a fresh query -- so a tick costs a walk over
+     * the rows already on screen, and the flow itself does not run at all.
      *
      * Periodic while the VM is alive (subscribers stop within STOP_TIMEOUT_MS
      * of leaving the guide, and the VM dies with it) plus one shot on start
@@ -539,14 +556,58 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * One clock tick: move NOW/NEXT forward from the programs the guide has
+     * already loaded, and go back to the database ONLY for the channels whose
+     * loaded programs have run out.
+     *
+     * This used to re-issue the whole loaded batch — a lineup query for up to 80
+     * channels x 960 programs every two minutes, for as long as the guide was
+     * open, which was the heaviest thing the app repeated. It was also almost
+     * entirely wasted: the programs are already in memory, and the clock moving
+     * only changes which of them is "on now". The database is needed exactly
+     * when a channel's next program has already ended, which is a schedule
+     * boundary rather than a two-minute grid (see [GuideClockAdvance]).
+     */
     private fun bumpGuideClock() {
-        val queued = _guideChannelIds.value
-        if (queued.isEmpty()) return
-        // Re-issue the currently loaded channel set as a fresh batch. The set
-        // is usually unchanged, so the clock tick is what actually makes the
-        // re-issued request distinct — without it distinctUntilChanged() would
-        // swallow the refresh and NOW/NEXT would go stale.
-        _pendingGuideChannelIds.value = queued
+        val loaded = _guideItemsByChannelId.value
+        val now = System.currentTimeMillis()
+
+        // Forget every channel that can answer the clock again — a fresh import
+        // landing, or a re-query that brought back a longer listing — and every
+        // channel that is no longer loaded at all.
+        if (exhaustedGuideChannelIds.isNotEmpty()) {
+            exhaustedGuideChannelIds = exhaustedGuideChannelIds
+                .filter { channelId ->
+                    loaded[channelId]?.let { !GuideClockAdvance.canAnswer(it, now) } == true
+                }
+                .toSet()
+        }
+
+        if (loaded.isEmpty()) return
+
+        val step = GuideClockAdvance.step(loaded, now)
+
+        if (step.advanced.isNotEmpty()) {
+            val updated = HashMap(loaded)
+            step.advanced.forEach { (channelId, item) -> updated[channelId] = item }
+            _guideItemsByChannelId.value = updated
+        }
+
+        // A row that has run out is re-queried once, not once per tick.
+        val toRequery = step.expiredIds - exhaustedGuideChannelIds
+        if (toRequery.isEmpty()) return
+
+        exhaustedGuideChannelIds = exhaustedGuideChannelIds + toRequery
+        // ADD to the outstanding set, for the same reason updateGuideChannels()
+        // does: flatMapLatest cancels an in-flight query the moment a newer
+        // batch arrives, and a cancelled query never emits, so replacing the set
+        // would strand whatever was already being answered.
+        _pendingGuideChannelIds.value =
+            GuideRequestQueue.enqueue(_pendingGuideChannelIds.value, toRequery)
+        // The re-issued batch can be the same ids it was last time, so the tick
+        // is what makes the request distinct — without it distinctUntilChanged()
+        // would swallow it and the channel would keep its last known program.
         _guideClockTick.value += 1
     }
 
@@ -1010,7 +1071,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     playlist = playlist,
                     guideUrls = urls,
                     refreshTick = _guideRefreshTick.value + 1
-                )
+                ),
+                // The import swapped its rows in atomically (see
+                // XmltvImporter), so what is on screen is still a real guide -
+                // keep it while the window is re-requested rather than
+                // blanking every row.
+                keepItems = true
             )
             _guideRefreshTick.value += 1
             requestInitialGuideWindow()
@@ -1071,7 +1137,12 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     playlist = merged,
                     guideUrls = guideUrls,
                     refreshTick = _guideRefreshTick.value + 1
-                )
+                ),
+                // A background playlist reload lands here. The channels the
+                // guide already shows are overwhelmingly the ones it will show
+                // again, so blanking them first is what turned a silent refresh
+                // into a visible "back to loading" stall.
+                keepItems = true
             )
             _guideRefreshTick.value += 1
             requestInitialGuideWindow()
@@ -1096,10 +1167,31 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         if (changed) _guideItemsByChannelId.value = updated
     }
 
-    private fun clearGuideMemory(sourceKey: String? = null) {
-        _guideItemsByChannelId.value = emptyMap()
+    /**
+     * Drops the guide's request bookkeeping, and - unless [keepItems] - the
+     * loaded rows too.
+     *
+     * [keepItems] is for the REFRESH paths (a background playlist reload, an
+     * EPG import finishing). Those re-request the window and overwrite the rows
+     * as the new query lands, so dropping the rows first only blanked a guide
+     * that was already correct: every row flipped back to "Loading guide…" for
+     * as long as the rebuild took, which on a large guide is minutes - exactly
+     * the "it is populated, then it goes back to loading for a minute" report.
+     * The rows for channels the new playlist no longer carries simply stop
+     * being drawn (mergePlaylistWithGuide reads the live playlist), so keeping
+     * them can only ever show a program that is about to be replaced.
+     *
+     * The HARD paths (a changed source URL, a profile switch) still drop the
+     * rows: there the old programs belong to a different guide entirely and
+     * must not be shown for a moment.
+     */
+    private fun clearGuideMemory(sourceKey: String? = null, keepItems: Boolean = false) {
+        if (!keepItems) _guideItemsByChannelId.value = emptyMap()
         _guideChannelIds.value = emptySet()
         _pendingGuideChannelIds.value = emptySet()
+        // A new source, import or playlist can hold programs a run-out channel
+        // did not have, so nothing stays written off as exhausted.
+        exhaustedGuideChannelIds = emptySet()
         loadedGuideSourceKey = sourceKey
         // Nothing is loaded any more, so there is no fingerprint to compare a
         // subsequent playlist refresh against (null forces the full reset).

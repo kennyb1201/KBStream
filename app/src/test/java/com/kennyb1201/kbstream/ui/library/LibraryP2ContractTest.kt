@@ -107,6 +107,33 @@ class LibraryP2ContractTest {
     }
 
     @Test
+    fun `the library grid draws the eye badge for a started title`() {
+        // Reported: the Library was the one poster surface with no eye marker -
+        // a show watched halfway looked exactly like one never opened. The
+        // enrichment only ever resolved the finished flag, so the grid had
+        // nothing to draw even though every other screen shows both.
+        val body = functionBody(LIBRARY_VM, "private fun enrich(")
+        val preload = body.indexOf("preloadAndGetPartiallyWatchedKeys(")
+        val read = body.indexOf("isPartiallyWatchedCached(")
+        assertTrue("enrich must preload the partial-watch flag too", preload >= 0)
+        assertTrue("and the preload must precede the per-row read", preload in 0 until read)
+        assertTrue(
+            "a finished title keeps the checkmark: the eye is never claimed for one",
+            body.contains("watched == null &&")
+        )
+
+        val screen = source(LIBRARY_SCREEN)
+        assertTrue(
+            "the grid must hand the eye flag to the shared poster card",
+            screen.contains("isPartiallyWatched = item.watchedKey() in partiallyWatchedKeys")
+        )
+        assertTrue(
+            "and each pane must pass the resolved set through",
+            screen.contains("partiallyWatchedKeys = state.partiallyWatchedKeys")
+        )
+    }
+
+    @Test
     fun `the watchlist fetch follows the pagination cursor`() {
         val body = functionBody(MDBLIST, "suspend fun getWatchlist(")
         assertTrue("the watchlist must page", body.contains("next_cursor"))
@@ -188,6 +215,7 @@ class LibraryP2ContractTest {
 
     private companion object {
         const val LIBRARY_VM = "com/kennyb1201/kbstream/ui/library/LibraryViewModel.kt"
+        const val LIBRARY_SCREEN = "com/kennyb1201/kbstream/ui/library/LibraryScreen.kt"
         const val HIDDEN = "com/kennyb1201/kbstream/data/library/HiddenTitles.kt"
         const val MDBLIST = "com/kennyb1201/kbstream/data/mdblist/MdbListClient.kt"
         const val MODELS = "com/kennyb1201/kbstream/data/library/LibraryModels.kt"

@@ -610,6 +610,17 @@ class MpvPlayerActivity : ComponentActivity() {
     private var fileLoaded = false
 
     /**
+     * Ranked sources this session has already failed to OPEN, for the
+     * open-failure ladder (see [PlaybackRecoveryRules.shouldAdvancePastOpenFailure]).
+     *
+     * A session counter, not per-source state: [switchToSource] resets the
+     * state belonging to the source being left and must NOT reset this one, or
+     * the ladder would walk the whole list forever. It is cleared where a file
+     * actually opens - see [onFileLoaded].
+     */
+    private var openFailureSourcesTried = 0
+
+    /**
      * Set once a launch that reused a cached debrid link has had that link
      * forgotten, so a session that walks several errors forgets at most once.
      * See [invalidateCachedLinkBeforeFirstFrame].
@@ -668,6 +679,13 @@ class MpvPlayerActivity : ComponentActivity() {
     private var streamHeaders: Map<String, String> = emptyMap()
     private var historyParentIdOverride: String? = null
     private var startPositionMs = 0L
+
+    /**
+     * The launch asked for the beginning (Home's long-press "Play from
+     * Beginning"). Kept beside the position it zeroed, because it is the one
+     * flag that must also stop the watch-history resume (see PlaybackResume).
+     */
+    private var startFromBeginning = false
     private var historyId = ""
 
     /** True when ExoPlayer handed this session over (see [EXTRA_MPV_FALLBACK]). */
@@ -732,8 +750,17 @@ class MpvPlayerActivity : ComponentActivity() {
         initBingeScheme()
         // The same line the main player writes: what this session files itself
         // under, next to what the id it plays says (see PlaybackSessionTrace).
+        // The stored scheme goes with it, so the comparison reads the id as the
+        // FILE it is instead of against the TMDB episode (see
+        // PlaybackHistoryIds.playbackSessionLine).
         com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
-            PlaybackHistoryIds.playbackSessionLine(season, episode, episodeStreamId, historyId)
+            PlaybackHistoryIds.playbackSessionLine(
+                season,
+                episode,
+                episodeStreamId,
+                historyId,
+                bingeScheme
+            )
         )
 
         // The same per-title memory the main player keeps, under the same key,
@@ -800,11 +827,46 @@ class MpvPlayerActivity : ComponentActivity() {
             // A cached link that never opened is dead: forget it now, so the
             // next replay resolves fresh instead of looping back into this card.
             invalidateCachedLinkBeforeFirstFrame()
-            showError(
-                message,
-                "The stream may be offline, or the source may have changed. " +
-                    "Switch player to try this in ExoPlayer, or press Back to exit."
-            )
+            // This callback fires only when the file never opened (see
+            // MpvPlayerView's END_FILE handling), which makes the ranked list
+            // the first answer rather than the card: a source that will not
+            // open is exactly what the main player walks past on its own, and
+            // this engine is where a session lands when its FIRST source was
+            // already trouble. Bounded, so a title whose whole list is dead
+            // still ends on the card (see shouldAdvancePastOpenFailure).
+            openFailureSourcesTried += 1
+            val advance =
+                PlaybackRecoveryRules.shouldAdvancePastOpenFailure(
+                    sourcesTried = openFailureSourcesTried,
+                    hasAnotherSource = nextSourceOrNull() != null
+                )
+            if (advance) {
+                Log.w(
+                    TAG,
+                    "Source would not open (${openFailureSourcesTried}/" +
+                        "${PlaybackRecoveryRules.MAX_MPV_OPEN_FAILURE_SOURCES})" +
+                        " \u2014 trying the next one"
+                )
+                // Into the same report ring the failed open itself wrote to:
+                // without this the card's absence is unexplainable from a dump
+                // (see PlaybackEngineTrace).
+                com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+                    com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                        cause = "MPV open failed",
+                        detail = "trying the next source " +
+                            "($openFailureSourcesTried of " +
+                            "${PlaybackRecoveryRules.MAX_MPV_OPEN_FAILURE_SOURCES})"
+                    )
+                )
+                showToast("That source won't open. Trying the next one\u2026")
+                tryNextSource()
+            } else {
+                showError(
+                    message,
+                    "The stream may be offline, or the source may have changed. " +
+                        "Switch player to try this in ExoPlayer, or press Back to exit."
+                )
+            }
         }
         view.onVideoFrameRateChanged = { fps ->
             // The same setting the main player reads, applied from the rate mpv
@@ -879,14 +941,17 @@ class MpvPlayerActivity : ComponentActivity() {
         view.setDialogueBoost(effectiveAudioDialogueBoost())
         view.setVolumeBoostDb(effectiveAudioVolumeBoost())
 
-        view.load(
-            MpvPlayerView.LoadRequest(
-                url = currentUrl,
-                headers = streamHeaders,
-                audioUrl = currentAudioUrl,
-                startPositionMs = startPositionMs
+        fun loadStream() {
+            view.load(
+                MpvPlayerView.LoadRequest(
+                    url = currentUrl,
+                    headers = streamHeaders,
+                    audioUrl = currentAudioUrl,
+                    startPositionMs = startPositionMs
+                )
             )
-        )
+        }
+
         showLoading(
             when {
                 fallbackReason == FALLBACK_REASON_MANUAL -> "Switching to the MPV engine"
@@ -895,6 +960,41 @@ class MpvPlayerActivity : ComponentActivity() {
                 else -> "MPV engine"
             }
         )
+        // Nothing in this launch asked to resume, so ask the watch history: a
+        // source picked from the picker arrives with no position of its own
+        // (see PlaybackResume), and this engine gets one chance at the file -
+        // it is opened once, with the position it is handed, and there is no
+        // seek to a saved point afterwards. Without this, picking a source for
+        // a title Continue Watching has progress on restarted it from the
+        // beginning in MPV while the same press resumed in ExoPlayer. The
+        // splash is already up, so the read happens behind it and the file is
+        // only opened once the position is known - nothing starts at 0 and
+        // jumps. A failed or empty read leaves the launch as it was.
+        if (
+            PlaybackResume.mayResumeFromHistory(
+                startPositionMs = startPositionMs,
+                startFromBeginning = startFromBeginning,
+                historyId = historyId
+            )
+        ) {
+            lifecycleScope.launch {
+                PlaybackResume.savedPositionMs(
+                    context = this@MpvPlayerActivity,
+                    historyId = historyId,
+                    parentId = parentId,
+                    parentType = parentType,
+                    season = season,
+                    episode = episode,
+                    episodeStreamId = episodeStreamId
+                )?.let { saved ->
+                    startPositionMs = saved
+                }
+                if (isFinishing || isDestroyed) return@launch
+                loadStream()
+            }
+        } else {
+            loadStream()
+        }
     }
 
     // --- Intent ------------------------------------------------------------
@@ -969,7 +1069,8 @@ class MpvPlayerActivity : ComponentActivity() {
         castMembers = parseCastJson(intent.getStringExtra("cast_json"))
 
         // A title started "from the beginning" must not become a resume.
-        startPositionMs = if (intent.getBooleanExtra("from_beginning", false)) {
+        startFromBeginning = intent.getBooleanExtra("from_beginning", false)
+        startPositionMs = if (startFromBeginning) {
             0L
         } else {
             intent.getLongExtra("start_position_ms", 0L)
@@ -3514,6 +3615,10 @@ class MpvPlayerActivity : ComponentActivity() {
 
     private fun onFileLoaded(mediaTitle: String?) {
         fileLoaded = true
+        // Something opened, so the open-failure budget starts over: a source
+        // that fails later in the session gets the same tolerance as the first
+        // one, and the ladder only ever bounds a RUN of dead sources.
+        openFailureSourcesTried = 0
         runOnUiThread {
             loadingContainer?.visibility = View.GONE
             updateNowPlayingText()
@@ -3930,8 +4035,12 @@ class MpvPlayerActivity : ComponentActivity() {
             putExtra("stream_url", currentUrl)
             putExtra("audio_url", currentAudioUrl)
             putExtra("start_position_ms", position)
-            // Resume, never restart: the file is already part-way through.
-            putExtra("from_beginning", false)
+            // Resume, never restart: the file is already part-way through -
+            // except for a from-the-beginning launch that never played a frame,
+            // where there is no playhead to carry and dropping the flag would
+            // let the successor's own watch-history resume start the title the
+            // viewer asked to start over. See PlaybackResume.
+            putExtra("from_beginning", position <= 0L && startFromBeginning)
             putExtra(
                 "stream_headers",
                 streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
@@ -3992,7 +4101,11 @@ class MpvPlayerActivity : ComponentActivity() {
             removeExtra(EXTRA_MPV_FALLBACK_REASON)
             putExtra("stream_url", currentUrl)
             putExtra("start_position_ms", position)
-            putExtra("from_beginning", false)
+            // Resume, never restart - except for a from-the-beginning launch
+            // with no playhead yet, which keeps the flag so the wrapper does not
+            // resume the title the viewer asked to start over. See
+            // PlaybackResume.
+            putExtra("from_beginning", position <= 0L && startFromBeginning)
             putExtra(
                 "stream_headers",
                 streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
@@ -4225,10 +4338,13 @@ class MpvPlayerActivity : ComponentActivity() {
     /**
      * The error card's retry on ANOTHER source: it replaces the failed file
      * with the next one in the ranked list, saving the viewer a trip through
-     * the SOURCES picker. Manual on the error path - the one exception is the
-     * repeated-rebuffer downshift (see [onMpvBufferingChanged]), which mirrors
-     * the main player so a source that opens but cannot keep up is not left to
-     * stall forever on this engine.
+     * the SOURCES picker. Driven by the card's button, and by two automatic
+     * recoveries that mirror the main player's: a source that never OPENED
+     * (see the onPlaybackError handler and
+     * [PlaybackRecoveryRules.shouldAdvancePastOpenFailure]) and the
+     * repeated-rebuffer downshift (see [onMpvBufferingChanged]), so a source
+     * that is dead, or one that opens but cannot keep up, is not left to fail
+     * on this engine when the list has another one to try.
      */
     private fun tryNextSource() {
         val next = nextSourceOrNull() ?: return

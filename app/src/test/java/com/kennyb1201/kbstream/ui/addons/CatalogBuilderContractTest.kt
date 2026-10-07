@@ -430,9 +430,12 @@ class CatalogBuilderContractTest {
             "a built rail keys into custom:, not by a fake add-on URL",
             slots.contains("KBHomeOrderPrefs.customCatalogKey(it)")
         )
+        // Every rail on Home is placed by the ONE merged arrangement now (the
+        // hardcoded/app-built block that used to force a null-base-URL rail to
+        // the top is gone), so a built catalog is arranged like anything else.
         assertTrue(
-            "it must be arrangeable, so it cannot fall into the hardcoded block",
-            slots.contains("rail.baseUrl == null && rail.customCatalogId == null")
+            "it must be arrangeable through the shared merged order",
+            slots.contains("mergedHomeRailKeys(arrangement, defaults)")
         )
     }
 

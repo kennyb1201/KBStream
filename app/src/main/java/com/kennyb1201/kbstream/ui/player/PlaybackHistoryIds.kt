@@ -2,6 +2,8 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
 import android.util.Log
+import com.kennyb1201.kbstream.data.player.EpisodeScheme
+import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
@@ -116,6 +118,20 @@ object PlaybackHistoryIds {
      * One diagnostics line naming a session's identity, and whether the id its
      * stream was resolved for agrees with the fields it will file itself under.
      *
+     * The comparison is SCHEME-AWARE, and it has to be: a session's fields name
+     * a TMDB episode while its stream id names the FILE that holds it, which on
+     * a segmented show (Paw Patrol: two TMDB episodes per file) are different
+     * numbers on purpose. Asking the id's number against the raw episode called
+     * every correctly-mapped session of such a show a MISMATCH — a watchdog
+     * that cries wolf on the design it exists to protect. [scheme] is the
+     * session's own detected mapping, so the question asked here is the one that
+     * matters: does the file the id names actually HOLD this episode
+     * ([EpisodeScheme.fileHolds])? Only when it does not is something wrong.
+     *
+     * Under [SchemeKind.ONE_TO_ONE] - no scheme, the state every session starts
+     * in - this reduces to the strict equality it always was, so nothing about
+     * the verdict changes for a show with no mapping.
+     *
      * Deliberately a report and not a repair: rewriting one from the other would
      * be guessing which is wrong, and the whole question is which one is.
      */
@@ -123,15 +139,23 @@ object PlaybackHistoryIds {
         season: Int?,
         episode: Int?,
         episodeStreamId: String?,
-        historyId: String
+        historyId: String,
+        scheme: EpisodeScheme = EpisodeScheme.ONE_TO_ONE
     ): String {
         val base = "s=${season ?: "-"} e=${episode ?: "-"} row=$historyId"
         val fromId = episodeFromId(episodeStreamId) ?: return "$base id=$episodeStreamId"
-        val agrees = fromId.first == season && fromId.second == episode
-        return if (agrees) {
+        val agrees = fromId.first == season &&
+            (episode == null || scheme.fileHolds(fromId.second, episode))
+        return if (!agrees) {
+            "$base id says s=${fromId.first} e=${fromId.second} - MISMATCH"
+        } else if (scheme.kind == SchemeKind.ONE_TO_ONE) {
             "$base id agrees (s=${fromId.first} e=${fromId.second})"
         } else {
-            "$base id says s=${fromId.first} e=${fromId.second} - MISMATCH"
+            // Name the mapping, so a correct split episode is not read as an
+            // off-by-one: "file 16 holds e=8" is the answer to the question
+            // the raw numbers cannot answer (sp = a file holding several,
+            // fe = several files holding one - see EpisodeScheme.encode).
+            "$base id agrees (file ${fromId.second} holds e=$episode, scheme ${scheme.encode()})"
         }
     }
 
@@ -149,10 +173,34 @@ object PlaybackHistoryIds {
         if (parentId.isBlank()) return null
         return withContext(Dispatchers.IO) {
             runCatchingCancellable {
-                TmdbRepository.getInstance(context)
+                val repository = TmdbRepository.getInstance(context)
+                val resolved = repository
                     .fetchEnrichedMetaCached(parentId, parentType)
                     ?.id
+                // Leave the IMDB<->TMDB pair in the resolution cache. This is
+                // how a session that played the title under its "tt..." id
+                // makes the title's "tmdb:<n>" twin resolvable later - offline,
+                // from that disk table - which is what lets a route under the
+                // other flavor find the history row it wrote (see
+                // PlaybackResume.savedPositionMs). The enriched-meta cache this
+                // reads does not record the pair itself, so without this a
+                // tt-first playback left the "tmdb:<n>" direction to a network
+                // resolve that a device with no TMDB key can never complete.
+                if (resolved != null && recordsResolution(parentId, resolved)) {
+                    repository.recordResolution(parentId, resolved, parentType)
+                }
+                resolved
             }.getOrNull()
         }
     }
 }
+
+/**
+ * Whether a resolved pair belongs in the TMDB resolution cache: a real IMDB
+ * parent ("tt...") matched to a positive TMDB id. Anything else - an addon id
+ * TMDB could not match, a synthetic -1 sentinel - is nothing to remember, and
+ * recording it would forge an "tt..."->-1 mapping every later lookup trusts.
+ */
+internal fun recordsResolution(imdbId: String, tmdbId: Int?): Boolean =
+    tmdbId != null && tmdbId > 0 && imdbId.trim().startsWith("tt")
+

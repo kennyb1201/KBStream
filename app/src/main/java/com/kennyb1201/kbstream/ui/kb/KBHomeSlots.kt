@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.data.kb.browseHomeRails
 import com.kennyb1201.kbstream.data.kb.browseRailArrangementOf
 import com.kennyb1201.kbstream.data.kb.browseRowPlacement
 import com.kennyb1201.kbstream.data.kb.chipKey
+import com.kennyb1201.kbstream.data.kb.mergedHomeRailKeys
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -84,12 +85,14 @@ internal fun visibleBuiltinRailKeys(
 ): List<String> = keys.filter { key -> key !in hidden && key in withContent }
 
 /**
- * Placement of imported KB collections among the addon catalog rails on
- * Home. A collection anchors to the addon rail it precedes in the stored
- * merged order (from the Collections manager), pinned collections lead
- * right after the HARDCODED rails (Top Today, or the kids "Top Kids"
- * pair — never above them), and unarranged collections render after the
- * last addon rail.
+ * The merged rail order Home draws: one arrangement for every rail on Home,
+ * assembled from [mergedHomeRailKeys] over the same defaults list the home
+ * manager builds. A rail is placed purely by its arrangement key's slot in
+ * that order - built-ins (Continue Watching, Upcoming, the two Top Today rows),
+ * browse rails, built catalogs, add-on catalogs and imported collections
+ * alike. There is no per-family block any more: that is what let Home draw a
+ * rail (an unarranged built-in, a Top Today row) somewhere the manager could
+ * neither show nor aim at.
  */
 object KBHomeSlots {
 
@@ -207,161 +210,94 @@ object KBHomeSlots {
                 key(context, collection),
                 collection
             )
-        }
-        // A built catalog has no manifest to key against, so it keys by its own
+        }        // A built catalog has no manifest to key against, so it keys by its own
         // id in the `custom:` family and is arranged like any other rail.
-        // Everything else keys by its add-on URL exactly as before.
+        // Everything else keys by its add-on URL exactly as before - EXCEPT a
+        // Top Today row, which keys by its BUILT-IN key (see
+        // KBHomeOrderPrefs.topTodayBuiltinKey). That is what puts it in the one
+        // arrangement with the rest of Home: the manager lists it as a built-in
+        // row, it can be moved, hidden and renamed, and its content still comes
+        // from the feed the loader fetched.
         val addonKeyByRail = rails.associate { rail ->
             rail to (
                 rail.customCatalogId
                     ?.let { KBHomeOrderPrefs.customCatalogKey(it) }
+                    ?: KBHomeOrderPrefs.topTodayBuiltinKey(rail.catalogId)
                     ?: KBHomeOrderPrefs.addonKey(rail.baseUrl, rail.type, rail.catalogId)
-                )
+            )
         }
 
-        // Top Today rails are hard-pinned by the home rail loader
-        // (loadPinnedTopTodayRails) to render ABOVE every addon rail. The
-        // merged arrangement must never demote them into the middle/tail,
-        // or a stored order key for any other rail pushes them to the
-        // bottom. Identify them by the manifest base URL and keep them
-        // first, exactly like HomeViewModel does - and through the shared
-        // predicate the home manager uses to deny them reorder controls, so
-        // the two cannot disagree about which rails have a fixed position.
-        val topTodayKeys = addonEntries
-            .map { entry -> addonKeyByRail[(entry as HomeEntry.AddonRail).rail] }
-            .filter { KBHomeOrderPrefs.isPositionFixedKey(it) }
-            .toSet()
-        val topTodayRails = addonEntries.filter { entry ->
-            addonKeyByRail[(entry as HomeEntry.AddonRail).rail] in topTodayKeys
-        }
+        // The loaded Top Today rails by their built-in key, so the emission
+        // below can draw the fetched rail (its content) at whichever slot the
+        // arrangement gives that key, rather than a bare built-in placeholder.
+        val topTodayAddonByKey = addonEntries
+            .mapNotNull { entry ->
+                val rail = (entry as HomeEntry.AddonRail).rail
+                KBHomeOrderPrefs.topTodayBuiltinKey(rail.catalogId)?.let { it to entry }
+            }
+            .toMap()
 
-        // Hardcoded rails: rows this app builds itself instead of fetching them
-        // from an addon manifest, which is exactly what a null baseUrl means
-        // (the kids-profile "Top Kids Movies / Shows" pair). They have no
-        // manifest to key them against, so they can never be arranged by the
-        // user — and without this they fell through to the tail, where a
-        // PINNED collection displaced them from the top of Home. They belong
-        // with the Top Today rows: hardcoded first, then whatever is pinned.
-        // A built catalog is app-built too (null base URL) but it IS
-        // arrangeable, so the hardcoded test has to exclude it by its custom id
-        // - otherwise every built catalog would be forced to the top like a
-        // hardcoded kids row.
-        val hardcodedRails = addonEntries.filter { entry ->
-            val rail = (entry as HomeEntry.AddonRail).rail
-            rail.baseUrl == null && rail.customCatalogId == null
-        }
-        val hardcodedKeys = hardcodedRails
-            .map { entry -> addonKeyByRail[(entry as HomeEntry.AddonRail).rail] }
-            .toSet()
 
-        // Pinned block: collections first-class, but addon catalog keys can
-        // be pinned too (manager's jump-to-top writes them here). Hidden
-        // keys never render. Top Today rails stay ABOVE this block.
-        val pinned = arrangement.pinned.flatMap { pinKey ->
+        // One list, and the SAME one the home manager draws and the reorder
+        // core moves within (see mergedHomeRailKeys and
+        // AddonsViewModel.homeRailDefaults): built-ins (the two app rows and
+        // the two Top Today rows), then the browse rails, then the built
+        // catalogs, then the add-on catalogs, then the collections. Home no
+        // longer assembles a block of its own per family - that is exactly what
+        // let it draw a rail (an unarranged built-in, a Top Today row) somewhere
+        // the manager could neither show nor aim at.
+        val defaults = buildList {
+            addAll(builtinKeys)
+            // Ordered, not [browseKeys] (a Set): the default order has to be the
+            // same list the manager builds, or two unarranged browse rails swap
+            // places between the two screens.
+            addAll(browseEntries.map { it.key })
+            addAll(addonKeyByRail.values.filter { KBHomeOrderPrefs.isCustomCatalogKey(it) })
+            addAll(addonEntries.map { entry -> addonKeyByRail.getValue((entry as HomeEntry.AddonRail).rail) })
+            addAll(collectionByKey.keys)
+        }
+        val mergedOrder = mergedHomeRailKeys(arrangement, defaults)
+
+        // The manager's rename for one arrangement key, or null when it carries
+        // none. A blank name is treated as "no override" (withRename never
+        // stores one, so this is defensive).
+        fun renamedTitle(key: String): String? =
+            arrangement.renames[key]?.takeIf { it.isNotBlank() }
+
+        return mergedOrder.flatMap { key ->
+            if (key in hidden) return@flatMap emptyList()
             when {
-                pinKey in hidden -> emptyList()
-                // Top Today renders first unconditionally — never also in
-                // the pinned block (would duplicate the rail).
-                pinKey in topTodayKeys -> emptyList()
-                pinKey == legacyBrowseKey || pinKey in browseKeys ->
-                    browseEntriesFor(pinKey)
-                pinKey.startsWith("kb:") ->
-                    listOfNotNull(collectionByKey[pinKey]).map { HomeEntry.Collection(it) }
-                else ->
-                    addonEntries.filter { entry ->
-                        addonKeyByRail[(entry as HomeEntry.AddonRail).rail] == pinKey
-                    }
-            }
-        }
-        val pinnedAddonKeys = arrangement.pinned
-            .filter { it !in collectionByKey }
-            .toSet()
+                // A Top Today row: draw the loaded rail (its content), at the
+                // slot the arrangement gave its built-in key.
+                topTodayAddonByKey.containsKey(key) ->
+                    listOf(
+                        topTodayAddonByKey.getValue(key).copy(
+                            titleOverride = renamedTitle(key)
+                        )
+                    )
 
-        // Walk the stored merged order (pinned handled separately). A
-        // collection key emits a collection entry; an addon key emits every
-        // addon rail matching it (multiple addons can share a catalog id).
-        // Top Today keys are skipped: those rails always lead the list.
-        val middle = mutableListOf<HomeEntry>()
-        for (key in arrangement.order) {
-            if (key in pinnedKeys) continue
-            if (key in topTodayKeys) continue
-            if (key in hardcodedKeys) continue
-            if (key in pinnedAddonKeys) continue
-            if (key == legacyBrowseKey || key in browseKeys) {
-                middle += browseEntriesFor(key)
-                continue
-            }
-            if (key in builtinSet) {
-                if (key in builtinsVisible) middle += HomeEntry.BuiltinRail(key)
-                continue
-            }
-            val collection = collectionByKey[key]
-            if (collection != null) {
-                if (key !in hidden) {
-                    middle += HomeEntry.Collection(collection)
-                }
-            } else {
-                addonEntries.forEachIndexed { index, entry ->
+                key in builtinSet ->
+                    if (key in builtinsVisible) {
+                        listOf(HomeEntry.BuiltinRail(key))
+                    } else {
+                        emptyList()
+                    }
+
+                key == legacyBrowseKey || key in browseKeys -> browseEntriesFor(key)
+
+                collectionByKey.containsKey(key) ->
+                    listOf(HomeEntry.Collection(collectionByKey.getValue(key)))
+
+                else -> addonEntries.mapNotNull { entry ->
                     val addon = entry as HomeEntry.AddonRail
                     if (addonKeyByRail[addon.rail] == key) {
-                        middle += addonEntries[index]
+                        addon.copy(titleOverride = renamedTitle(key))
+                    } else {
+                        null
                     }
                 }
             }
-        }
-
-        // Defaults: addon rails keep their computed order; never-arranged
-        // collections follow them in import order.
-        val placedRails = middle.filterIsInstance<HomeEntry.AddonRail>().toSet()
-        val tail = mutableListOf<HomeEntry>()
-        for (entry in addonEntries) {
-            val railKey = addonKeyByRail[(entry as HomeEntry.AddonRail).rail]
-            if (entry !in placedRails &&
-                railKey !in topTodayKeys &&
-                railKey !in hardcodedKeys &&
-                railKey !in pinnedAddonKeys
-            ) {
-                tail += entry
-            }
-        }
-        val placedCollections = middle.filterIsInstance<HomeEntry.Collection>().toSet()
-        for ((key, collection) in collectionByKey) {
-            if (key !in hidden &&
-                key !in arrangement.pinned.toSet() &&
-                HomeEntry.Collection(collection) !in placedCollections
-            ) {
-                tail += HomeEntry.Collection(collection)
-            }
-        }
-
-        // The browse rails' default spot: with the rest of the unarranged
-        // rails, below everything that has been arranged - and ABOVE the
-        // unarranged catalogs and collections, matching the default order the
-        // home manager lists and moves rows in (see mergedHomeRailKeys). Only
-        // a rail the user has never touched lands here; once it is pinned or
-        // placed in the stored order, the walk above owns where it sits.
-        //
-        // It used to be hoisted directly under the Top Today rows instead,
-        // which put it above pinned rails and above everything arranged - a
-        // position the manager could neither show nor reproduce, so a Browse
-        // rail sat somewhere the user could not aim at and could not be
-        // interleaved with the catalogs. With nothing arranged (the common
-        // case) this still lands them right under the hardcoded rails, so a
-        // chip just added from Browse is still visible without hunting.
-        val defaultBrowse = placedBrowse
-            .filter { (_, placement) -> placement == BrowseRowPlacement.BELOW_TOP_TODAY }
-            .map { (entry, _) -> entry }
-
-        // Built-in rails that have never been arranged: Home's long-standing
-        // layout, above everything else. One that IS arranged took its slot in
-        // the walk above instead, like any other rail in the stored order -
-        // which is also why it is excluded here (never twice).
-        val defaultBuiltins = builtinsVisible
-            .filter { key -> key !in arrangement.order && key !in pinnedKeys }
-            .map { key -> HomeEntry.BuiltinRail(key) }
-
-        return defaultBuiltins + topTodayRails + hardcodedRails +
-            pinned + middle + defaultBrowse + tail
+        }.distinct()
     }
 
     /**
@@ -393,7 +329,18 @@ object KBHomeSlots {
 sealed class HomeEntry {
     // sourceIndex preserves the original rails position so two rails that
     // ever share addon/catalog/type still get unique LazyColumn keys.
-    data class AddonRail(val rail: Rail, val sourceIndex: Int) : HomeEntry()
+    data class AddonRail(
+        val rail: Rail,
+        val sourceIndex: Int,
+        /**
+         * The viewer's rename for this rail, when the arrangement carries one
+         * (the manager offers Rename on a built-in row - among them the Top
+         * Today rows - and on a built catalog). Null means "draw the rail's own
+         * name". An add-on catalog rail has no rename control, so it is always
+         * null there.
+         */
+        val titleOverride: String? = null
+    ) : HomeEntry()
     data class Collection(val collection: KBCollectionProfile) : HomeEntry()
 
     /**

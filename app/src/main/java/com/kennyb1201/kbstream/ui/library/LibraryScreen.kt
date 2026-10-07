@@ -239,7 +239,8 @@ fun LibraryScreen(
                     onItemClick = onItemClick,
                     onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
-                    watchedKeys = state.watchedKeys
+                    watchedKeys = state.watchedKeys,
+                    partiallyWatchedKeys = state.partiallyWatchedKeys
                 )
             }
 
@@ -257,7 +258,8 @@ fun LibraryScreen(
                     onItemClick = onItemClick,
                     onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
-                    watchedKeys = state.watchedKeys
+                    watchedKeys = state.watchedKeys,
+                    partiallyWatchedKeys = state.partiallyWatchedKeys
                 )
             }
 
@@ -281,7 +283,8 @@ fun LibraryScreen(
                     onItemClick = onItemClick,
                     onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
-                    watchedKeys = state.watchedKeys
+                    watchedKeys = state.watchedKeys,
+                    partiallyWatchedKeys = state.partiallyWatchedKeys
                 )
             }
 
@@ -303,7 +306,8 @@ fun LibraryScreen(
                     onItemClick = onItemClick,
                     onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
-                    watchedKeys = state.watchedKeys
+                    watchedKeys = state.watchedKeys,
+                    partiallyWatchedKeys = state.partiallyWatchedKeys
                 )
             }
         }
@@ -530,6 +534,10 @@ private fun ItemGrid(
     onItemLongClick: ((LibraryItem) -> Unit)?,
     ratings: Map<String, Double> = emptyMap(),
     watchedKeys: Set<String> = emptySet(),
+    // Started-but-unfinished rows: the eye badge. Drawn only for keys the
+    // ViewModel did NOT also mark watched, so the checkmark keeps the corner
+    // on a title that was finished after being started.
+    partiallyWatchedKeys: Set<String> = emptySet(),
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
     // The app-wide transient-message channel (see KBFeedback): a card with no
@@ -589,6 +597,7 @@ private fun ItemGrid(
                 sourceLabel = sourceLabel(item),
                 rating = ratings[LocalLibraryStore.dedupeKey(item)],
                 isWatched = item.watchedKey() in watchedKeys,
+                isPartiallyWatched = item.watchedKey() in partiallyWatchedKeys,
                 onClick = {
                     val navigationId = item.navigationId
                     if (navigationId != null) {
@@ -627,7 +636,8 @@ private fun ListsPane(
     onItemClick: (String, String) -> Unit,
     onItemLongClick: (LibraryItem) -> Unit,
     ratings: Map<String, Double>,
-    watchedKeys: Set<String>
+    watchedKeys: Set<String>,
+    partiallyWatchedKeys: Set<String>
 ) {
     var showCreateField by remember { mutableStateOf(false) }
     var newListName by remember { mutableStateOf("") }
@@ -763,6 +773,7 @@ private fun ListsPane(
             onItemLongClick = onItemLongClick,
             ratings = ratings,
             watchedKeys = watchedKeys,
+            partiallyWatchedKeys = partiallyWatchedKeys,
             // Takes the remaining width beside the list rail; fillMaxSize
             // inside a Row measured against the whole row.
             modifier = Modifier.weight(1f)
@@ -776,6 +787,7 @@ private fun LibraryPosterCard(
     sourceLabel: String,
     rating: Double?,
     isWatched: Boolean,
+    isPartiallyWatched: Boolean = false,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)?
 ) {
@@ -795,6 +807,7 @@ private fun LibraryPosterCard(
             posterUrl = item.posterUrl,
             contentDescription = item.title,
             isWatched = isWatched,
+            isPartiallyWatched = isPartiallyWatched,
             onClick = onClick,
             onLongClick = onLongClick,
             posterWidth = posterSize.width,

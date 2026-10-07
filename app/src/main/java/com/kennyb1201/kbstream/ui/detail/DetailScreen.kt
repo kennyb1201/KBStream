@@ -209,6 +209,27 @@ private fun personRowKey(member: TmdbCastMember): String =
     "person${member.id}${member.character.orEmpty()}"
 
 /**
+ * The key the episodes rail gives one episode of a season.
+ *
+ * Deliberately NOT the episode's stream id, which is the obvious choice and was
+ * the one it used: that id is FILE numbering (see
+ * [com.kennyb1201.kbstream.data.player.EpisodeScheme]), so it is not unique on
+ * the shows the scheme exists for. A file holding two TMDB segments gives two
+ * rows the SAME id - `sp2` maps episode 1 and episode 2 of a season onto its
+ * first file - and Compose refuses a repeated LazyRow key with a hard
+ * IllegalArgumentException rather than rendering anything. That is the reported
+ * crash: `Key "tt3121722:4:1" was already used`, thrown as the Detail page
+ * recomposed on return from playback (Sentry ANDROID-T), on a release where the
+ * season listing had just started naming files instead of episodes.
+ *
+ * Season plus episode number is the identity the row actually HAS, and it is
+ * unique per row however the files behind it are numbered - so the rail survives
+ * every scheme, including one detected mid-season.
+ */
+internal fun episodeRowKey(parentId: String, season: Int?, episodeNumber: Int): String =
+    "$parentId:${season ?: "-"}:$episodeNumber"
+
+/**
  * Keys of the rails a drill-down off this page can open from. [GENRE_ROW_KEY]
  * is the one that lives in the fixed header above the detail list rather than
  * as an item of it: it needs a name for the same reason the others do, so the
@@ -2892,8 +2913,18 @@ fun DetailScreen(
                                             ) {
                                                 items(
                                                     items = episodes,
-                                                    key = {
-                                                        it.streamId
+                                                    // The episode's own identity, not its
+                                                    // stream id: the id is the FILE that
+                                                    // holds it and is shared by every
+                                                    // episode of a segmented show (see
+                                                    // episodeRowKey - keying by it is the
+                                                    // "Key ... was already used" crash).
+                                                    key = { ep ->
+                                                        episodeRowKey(
+                                                            id,
+                                                            effectiveSeason,
+                                                            ep.episodeNumber
+                                                        )
                                                     }
                                                 ) { ep ->
                                                     val episodeKey =

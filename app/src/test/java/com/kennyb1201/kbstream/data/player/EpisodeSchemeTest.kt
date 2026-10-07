@@ -134,6 +134,69 @@ class EpisodeSchemeTest {
         }
     }
 
+    // --- file -> the episodes it holds ------------------------------------
+
+    @Test
+    fun `a segmented file holds its pair, and the odd tail holds one`() {
+        val pawPatrol = EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2)
+        assertEquals(listOf(1, 2), pawPatrol.tmdbEpisodesOfFile(1))
+        assertEquals(listOf(11, 12), pawPatrol.tmdbEpisodesOfFile(6))
+        // The last file is a full pair on paper and a single segment in fact:
+        // the season's own episode count is what clamps it (see
+        // coveredTmdbEpisodes at the call sites), so the set may name one
+        // episode past the end.
+        assertEquals(listOf(47, 48), pawPatrol.tmdbEpisodesOfFile(24))
+        assertEquals(false, pawPatrol.fileHolds(24, 8))
+        // The property that makes this usable as a check: every TMDB episode is
+        // held by the file it maps to, which is the inverse of fileForTmdbEpisode.
+        (1..47).forEach { episode ->
+            val file = pawPatrol.fileForTmdbEpisode(episode)
+            assertEquals(
+                "episode $episode must be held by the file it maps to",
+                true,
+                pawPatrol.fileHolds(file, episode)
+            )
+        }
+    }
+
+    @Test
+    fun `a split episode is held by its whole group of files`() {
+        val catDog = EpisodeScheme(SchemeKind.FILES_PER_EPISODE, 2)
+        assertEquals(listOf(1), catDog.tmdbEpisodesOfFile(1))
+        assertEquals(listOf(1), catDog.tmdbEpisodesOfFile(2))
+        assertEquals(listOf(2), catDog.tmdbEpisodesOfFile(3))
+        assertEquals(listOf(2), catDog.tmdbEpisodesOfFile(4))
+        // Both halves of episode 2 are mapped correctly, which is the case a
+        // strict `file == episode` reading would report as a mismatch.
+        assertEquals(true, catDog.fileHolds(3, 2))
+        assertEquals(true, catDog.fileHolds(4, 2))
+        assertEquals(false, catDog.fileHolds(4, 1))
+    }
+
+    @Test
+    fun `one to one holds only its own episode`() {
+        assertEquals(true, EpisodeScheme.ONE_TO_ONE.fileHolds(8, 8))
+        assertEquals(false, EpisodeScheme.ONE_TO_ONE.fileHolds(6, 8))
+        assertEquals(false, EpisodeScheme.ONE_TO_ONE.fileHolds(8, 6))
+    }
+
+    @Test
+    fun `nothing below the first episode or file holds anything`() {
+        // A degenerate id (`:0`, a movie, a negative fragment) must not be
+        // matched by a zero that happens to sit in the set.
+        val schemes = listOf(
+            EpisodeScheme.ONE_TO_ONE,
+            EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2),
+            EpisodeScheme(SchemeKind.FILES_PER_EPISODE, 2)
+        )
+        schemes.forEach { scheme ->
+            assertEquals(false, scheme.fileHolds(0, 1))
+            assertEquals(false, scheme.fileHolds(1, 0))
+            assertEquals(false, scheme.fileHolds(-1, 1))
+            assertEquals(false, scheme.fileHolds(1, -1))
+        }
+    }
+
     // --- the cursor --------------------------------------------------------
 
     @Test

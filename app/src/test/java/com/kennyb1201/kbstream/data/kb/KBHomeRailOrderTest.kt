@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.kb
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -130,25 +131,46 @@ class KBHomeRailOrderTest {
     }
 
     @Test
-    fun `a rail the loader positions reports every move as a no-op`() {
-        // The Top Today rows render first whatever the order says, so an arrow
-        // on one could only ever rewrite an arrangement that Home ignores.
-        val topToday = "addon:https://toptoday.llamayu.com/landscapeTags=true:movie:top"
-        val withFixed = listOf(topToday, "browse:1", "addon:a")
+    fun `a top today row is an ordinary arrangeable built-in`() {
+        // It used to be a rail whose position the loader FIXED, which is exactly
+        // why it never appeared in the manager: a rail with no position to move
+        // from has no row to move. It is a built-in key now, so it takes its
+        // place in the one arrangement with everything else.
+        val movies = requireNotNull(KBHomeOrderPrefs.topTodayBuiltinKey("top_movies_today"))
+        val shows = requireNotNull(KBHomeOrderPrefs.topTodayBuiltinKey("top_shows_today"))
 
-        assertTrue(KBHomeOrderPrefs.isPositionFixedKey(topToday))
-        assertTrue(KBHomeOrderPrefs.isPositionFixedKey("addon:https://toptoday.llamayu.com/x:series:y"))
-        assertTrue(!KBHomeOrderPrefs.isPositionFixedKey("addon:https://toptoday.llamayu.com.example/x:movie:y"))
-        assertTrue(!KBHomeOrderPrefs.isPositionFixedKey("addon:https://other.test/:movie:y"))
-        assertTrue(!KBHomeOrderPrefs.isPositionFixedKey(null))
+        assertEquals(KBHomeOrderPrefs.BUILTIN_TOP_MOVIES_TODAY, movies)
+        assertEquals(KBHomeOrderPrefs.BUILTIN_TOP_SHOWS_TODAY, shows)
+        assertTrue(KBHomeOrderPrefs.isBuiltinKey(movies))
+        assertTrue(KBHomeOrderPrefs.isBuiltinKey(shows))
+        // Only the two feed rows, and never a null/absent id.
+        assertNull(KBHomeOrderPrefs.topTodayBuiltinKey("top_movies_week"))
+        assertNull(KBHomeOrderPrefs.topTodayBuiltinKey(null))
 
+        val withTopToday = KBHomeOrderPrefs.BUILTIN_KEYS + listOf("browse:1", "addon:a")
         val prefs = KBHomeOrder()
-        listOf(Int.MIN_VALUE, -1, +1, Int.MAX_VALUE).forEach { delta ->
-            assertTrue(
-                "a fixed rail must not offer a $delta move",
-                !railMoveChangesOrder(prefs, withFixed, topToday, delta)
+
+        // Every direction changes the order, exactly as it does for any rail.
+        assertTrue(railMoveChangesOrder(prefs, withTopToday, movies, +1))
+        assertTrue(railMoveChangesOrder(prefs, withTopToday, movies, Int.MAX_VALUE))
+        assertTrue(railMoveChangesOrder(prefs, withTopToday, shows, -1))
+
+        // ...and the move really lands where it says: Shops Today climbs above
+        // Top Movies Today, one slot, like any other rail.
+        assertEquals(
+            listOf(
+                KBHomeOrderPrefs.BUILTIN_CONTINUE_WATCHING,
+                KBHomeOrderPrefs.BUILTIN_UPCOMING_SCHEDULE,
+                KBHomeOrderPrefs.BUILTIN_TOP_SHOWS_TODAY,
+                KBHomeOrderPrefs.BUILTIN_TOP_MOVIES_TODAY,
+                "browse:1",
+                "addon:a"
+            ),
+            mergedHomeRailKeys(
+                moveRailInMergedOrder(prefs, withTopToday, shows, -1),
+                withTopToday
             )
-        }
+        )
     }
 
     @Test

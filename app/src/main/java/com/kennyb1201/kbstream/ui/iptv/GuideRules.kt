@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.ui.iptv
 
 import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
+import com.kennyb1201.kbstream.data.iptv.XmltvProgram
 import java.util.Calendar
 import java.util.Locale
 
@@ -165,6 +167,127 @@ internal object GuideRequestQueue {
      */
     fun clearAnswered(pending: Set<String>, resolved: Set<String>): Set<String> =
         pending - resolved
+}
+
+/**
+ * The guide clock: moving the rows the guide has already loaded forward with the
+ * wall clock, without asking the database.
+ *
+ * The guide keeps NOW/NEXT current on a two-minute tick, and that tick used to
+ * re-issue the whole loaded batch - a lineup query for up to 80 channels x 960
+ * programs, every two minutes, for as long as the guide was open. It was the
+ * single heaviest thing the app repeated, and almost all of it was wasted: the
+ * programs were already in memory, and the clock moving only changes WHICH of
+ * them is "on now".
+ *
+ * What is in memory is enough to answer any moment up to the end of the loaded
+ * list. Past that the database is genuinely needed - and that point is a
+ * schedule boundary, not a two-minute grid, so a tick that can be answered in
+ * memory asks for nothing at all.
+ *
+ * Pure, so [GuideRulesTest] can pin the boundary cases (a program ending between
+ * two ticks, a listing that has run out, a row that never had one) without a
+ * Compose test harness, which this module does not carry.
+ */
+internal object GuideClockAdvance {
+
+    /** What one clock tick does to the rows already loaded. */
+    internal data class Step(
+        /** Rows the clock has moved, keyed by playlist channel id. */
+        val advanced: Map<String, IptvChannelWithEpg>,
+        /** Rows whose loaded programs have run out: only a query can move them. */
+        val expiredIds: Set<String>,
+    )
+
+    /**
+     * Every program a loaded row still holds, in schedule order.
+     *
+     * A row carries the program on air, the one after it, and the "coming up"
+     * strip - which together are every program the last query returned for that
+     * channel (see `IptvRepository.mapChannels`), so nothing is invented here.
+     */
+    private fun loadedPrograms(item: IptvChannelWithEpg): List<XmltvProgram> =
+        buildList(2 + item.upcoming.size) {
+            item.now?.let(::add)
+            item.next?.let(::add)
+            addAll(item.upcoming)
+        }.sortedBy { it.startUtcMillis }
+
+    /**
+     * True when [item] can still say what is on now or next at [nowUtcMillis].
+     *
+     * False is the one state a tick cannot fix: the newest program the row
+     * holds started before the clock reached it, so the schedule has run out.
+     * A row that never had a program at all is false too - "no program data" is
+     * a settled answer rather than a stale one, and re-asking would be the
+     * churn this exists to remove.
+     */
+    fun canAnswer(item: IptvChannelWithEpg, nowUtcMillis: Long): Boolean =
+        loadedPrograms(item).any { it.startUtcMillis >= nowUtcMillis }
+
+    /**
+     * [item] re-read at [nowUtcMillis]. Programs that have finished are dropped,
+     * the one on air becomes NOW, and the first one still ahead becomes NEXT.
+     *
+     * Copied rather than mutated so an unchanged row compares equal to itself
+     * and a tick that moved nothing (the common case: a tick inside a program,
+     * which is every tick but one per program) can be left out of the state
+     * entirely instead of forcing a recomposition.
+     */
+    private fun advancePrograms(
+        item: IptvChannelWithEpg,
+        programs: List<XmltvProgram>,
+        nowUtcMillis: Long,
+    ): IptvChannelWithEpg {
+        val now = programs.firstOrNull {
+            nowUtcMillis >= it.startUtcMillis && nowUtcMillis < it.endUtcMillis
+        }
+        val next = programs.firstOrNull { it.startUtcMillis >= nowUtcMillis }
+        return item.copy(
+            now = now,
+            next = next,
+            upcoming = if (next == null) {
+                emptyList()
+            } else {
+                programs.filter { it.startUtcMillis > next.startUtcMillis }
+            },
+        )
+    }
+
+    /**
+     * One tick over every row the guide has loaded.
+     *
+     * A row whose loaded programs have run out is BOTH advanced (so it keeps
+     * saying what is on air instead of claiming a program that ended an hour ago
+     * is still running) and reported as expired, which is the caller's cue to
+     * re-query it - the re-query either restores the rest of its schedule or
+     * confirms there is none, exactly as one batch of the old full re-query did,
+     * but for the handful of channels that needed it rather than all of them.
+     */
+    fun step(
+        loaded: Map<String, IptvChannelWithEpg>,
+        nowUtcMillis: Long,
+    ): Step {
+        if (loaded.isEmpty()) return Step(emptyMap(), emptySet())
+
+        val advanced = LinkedHashMap<String, IptvChannelWithEpg>()
+        val expired = LinkedHashSet<String>()
+
+        loaded.forEach { (channelId, item) ->
+            val programs = loadedPrograms(item)
+            // A row with no programs at all is left alone: an unmatched channel
+            // has nothing to advance, and re-querying it on every tick is the
+            // cost this path removes. A new import or playlist bump re-requests
+            // the window for it anyway.
+            if (programs.isEmpty()) return@forEach
+
+            val moved = advancePrograms(item, programs, nowUtcMillis)
+            if (moved != item) advanced[channelId] = moved
+            if (programs.none { it.startUtcMillis >= nowUtcMillis }) expired += channelId
+        }
+
+        return Step(advanced, expired)
+    }
 }
 
 /**

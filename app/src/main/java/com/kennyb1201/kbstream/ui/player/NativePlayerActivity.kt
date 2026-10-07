@@ -78,7 +78,6 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
 import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
-import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.LanguageMatch
@@ -3317,7 +3316,17 @@ class NativePlayerActivity : ComponentActivity() {
         // the wrong episode - or files the right ones under the wrong row - is
         // this line, and nothing else in the app compares the two.
         com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
-            PlaybackHistoryIds.playbackSessionLine(season, episode, episodeStreamId, historyId)
+            // The stored scheme goes with it: a session's fields name a TMDB
+            // episode and its id names the FILE holding it, so the comparison
+            // must read the id as a file (see
+            // PlaybackHistoryIds.playbackSessionLine).
+            PlaybackHistoryIds.playbackSessionLine(
+                season,
+                episode,
+                episodeStreamId,
+                historyId,
+                bingeScheme
+            )
         )
 
         sources.firstOrNull { it.url == currentUrl }?.let { first ->
@@ -3359,20 +3368,27 @@ class NativePlayerActivity : ComponentActivity() {
         // beginning" is honored as-is, and the player is only created after
         // the read so the load-time seek already carries the position - nothing
         // starts at 0 and jumps. A failed or empty read leaves the launch as it
-        // was.
-        if (!isLiveChannel && startPositionMs <= 0L && !startFromBeginning &&
-            historyId.isNotBlank()
+        // was. The rule itself is shared with the other two engines - see
+        // PlaybackResume.
+        if (
+            !isLiveChannel &&
+            PlaybackResume.mayResumeFromHistory(
+                startPositionMs = startPositionMs,
+                startFromBeginning = startFromBeginning,
+                historyId = historyId
+            )
         ) {
             lifecycleScope.launch {
-                val savedPositionMs = runCatchingCancellable {
-                    withContext(Dispatchers.IO) {
-                        WatchHistoryDatabase.getInstanceScoped(this@NativePlayerActivity)
-                            .watchHistoryDao()
-                            .getById(historyId)
-                            ?.takeIf { !it.isCompleted && it.positionMs > 0L }
-                            ?.positionMs
-                    }
-                }.getOrNull()
+                val savedPositionMs =
+                    PlaybackResume.savedPositionMs(
+                        context = this@NativePlayerActivity,
+                        historyId = historyId,
+                        parentId = parentId,
+                        parentType = parentType,
+                        season = season,
+                        episode = episode,
+                        episodeStreamId = episodeStreamId
+                    )
                 if (savedPositionMs != null) {
                     Log.i(
                         TAG,
@@ -10661,8 +10677,13 @@ class NativePlayerActivity : ComponentActivity() {
             putExtra("audio_url", currentAudioUrl)
             putExtra("start_position_ms", position)
             // The new session resumes where this one stopped; "from the
-            // beginning" would restart the title mid-episode.
-            putExtra("from_beginning", false)
+            // beginning" would restart the title mid-episode. The one case the
+            // flag still means something is a from-the-beginning launch that
+            // never played a frame (the stream died and the viewer pressed
+            // SWITCH): there is no playhead to carry, and dropping the flag
+            // would let the successor's own watch-history resume start the very
+            // title the viewer asked to start over.
+            putExtra("from_beginning", position <= 0L && startFromBeginning)
             putExtra(
                 EXTRA_HEADERS,
                 streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }
@@ -10809,7 +10830,11 @@ class NativePlayerActivity : ComponentActivity() {
             putExtra("stream_url", currentUrl)
             putExtra("start_position_ms", position)
             // Resume, never restart: the title is already part-way through.
-            putExtra("from_beginning", false)
+            // Same exception as the MPV handoff above: a from-the-beginning
+            // launch with no playhead yet keeps the flag, or the wrapper's own
+            // watch-history resume would start the title the viewer asked to
+            // start over.
+            putExtra("from_beginning", position <= 0L && startFromBeginning)
             putExtra(
                 EXTRA_HEADERS,
                 streamHeaders.entries.joinToString("\n") { "${it.key}: ${it.value}" }

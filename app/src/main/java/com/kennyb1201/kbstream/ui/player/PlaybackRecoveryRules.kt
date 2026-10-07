@@ -208,4 +208,38 @@ internal object PlaybackRecoveryRules {
         PlaybackException.ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE -> true
         else -> isUnopenableSource(error)
     }
+
+    /**
+     * How many ranked sources the MPV engine walks through after a file fails
+     * to OPEN before it parks on the error card.
+     *
+     * Bounded for the same reason the main player's unopenable ladder is
+     * ([MAX_UNOPENABLE_RETRY_ATTEMPTS] at its call site): a title whose whole
+     * list is dead must end somewhere the viewer can act on, instead of
+     * cycling through every remaining source. Three covers the ordinary shape
+     * of a bad list - a dead debrid link, its duplicate, and one host that has
+     * gone away - while leaving the card as the outcome when nothing works.
+     */
+    const val MAX_MPV_OPEN_FAILURE_SOURCES = 3
+
+    /**
+     * True when the backup engine should open the NEXT ranked source instead
+     * of showing the failure card.
+     *
+     * ExoPlayer already walks past a source that never opened (see the
+     * unopenable ladder in [com.kennyb1201.kbstream.ui.player.NativePlayerActivity]),
+     * and the MPV engine's failure card was terminal: the viewer got a dead end
+     * with a list of 19 sources behind it. That is the worse half to lose,
+     * because this engine is where a session lands precisely when its first
+     * source was already trouble - a decoder handoff, or a container
+     * ExoPlayer's extractor refused. The engine that exists to rescue a stream
+     * must not be the one that gives up first.
+     *
+     * [sourcesTried] counts the sources this SESSION has already failed to
+     * open, [hasAnotherSource] whether the ranked list has one left. Both are
+     * required: with no source left there is nothing to advance to, and past
+     * the bound the card is the honest outcome.
+     */
+    fun shouldAdvancePastOpenFailure(sourcesTried: Int, hasAnotherSource: Boolean): Boolean =
+        hasAnotherSource && sourcesTried <= MAX_MPV_OPEN_FAILURE_SOURCES
 }

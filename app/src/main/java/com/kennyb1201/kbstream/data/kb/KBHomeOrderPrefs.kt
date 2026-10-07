@@ -218,9 +218,7 @@ internal fun moveRailInMergedOrder(
  *
  * The manager uses this for its arrow buttons' enabled state, so an arrow is
  * offered exactly when pressing it does something: the same transforms decide
- * the answer as perform the move, so the two cannot drift, and a rail whose
- * position is fixed ([KBHomeOrderPrefs.isPositionFixedKey]) reports every move
- * as a no-op rather than showing an arrow that cannot land.
+ * the answer as perform the move, so the two cannot drift.
  *
  * [delta] takes the same values [moveRailInMergedOrder] and [moveRailToEnd]
  * do, with Int.MIN_VALUE meaning "the very top" and Int.MAX_VALUE "the very
@@ -232,10 +230,6 @@ internal fun railMoveChangesOrder(
     key: String,
     delta: Int
 ): Boolean {
-    // A rail the loader positions has nowhere to move to, whatever the stored
-    // order says - and the TOP/BOTTOM transforms would happily rewrite the
-    // order for it, so the guard has to live here rather than in the caller.
-    if (KBHomeOrderPrefs.isPositionFixedKey(key)) return false
     return when (delta) {
         Int.MIN_VALUE -> moveRailToEnd(prefs, key, toTop = true) != prefs
         Int.MAX_VALUE -> moveRailToEnd(prefs, key, toTop = false) != prefs
@@ -391,21 +385,50 @@ object KBHomeOrderPrefs {
      *
      * That order IS their default position: an arrangement that never mentions
      * them falls them back here (see [mergedHomeRailKeys]), which is what keeps
-     * the default Home - Continue Watching first, then Upcoming - byte-
-     * identical for a user who never opens the home manager.
+     * the default Home - Continue Watching first, then Upcoming, then the two
+     * Top Today rows - byte-identical for a user who never opens the home
+     * manager.
+     *
+     * The Top Today rows are built-ins too. They used to be a family of their
+     * own - addon catalogs whose position the loader FIXED above everything -
+     * which is exactly why they could not sit in the manager with the rest: a
+     * rail with no position to move from has no row to move. Keying them here
+     * gives them one arrangement for every rail on Home, so the viewer can move
+     * Continue Watching above them, hide them, or rename them like anything
+     * else. Their content is still the addon feed Home fetches (see
+     * `loadPinnedTopTodayRails`); only their POSITION joins the arrangement.
      */
     val BUILTIN_KEYS: List<String> = listOf(
         builtinKey("continue_watching"),
-        builtinKey("upcoming_schedule")
+        builtinKey("upcoming_schedule"),
+        builtinKey(TOP_TODAY_MOVIES_KEY_ID),
+        builtinKey(TOP_TODAY_SHOWS_KEY_ID)
     )
 
     val BUILTIN_CONTINUE_WATCHING: String = BUILTIN_KEYS[0]
     val BUILTIN_UPCOMING_SCHEDULE: String = BUILTIN_KEYS[1]
+    val BUILTIN_TOP_MOVIES_TODAY: String = BUILTIN_KEYS[2]
+    val BUILTIN_TOP_SHOWS_TODAY: String = BUILTIN_KEYS[3]
+
+    /**
+     * The built-in arrangement key a Top Today catalog is keyed by, or null for
+     * anything that is not one of the two pinned feed rows.
+     *
+     * Matched on the catalog id the feed names, which is stable; the two ids
+     * are this app's own constants, not a manifest's.
+     */
+    fun topTodayBuiltinKey(catalogId: String?): String? = when (catalogId) {
+        TOP_TODAY_MOVIES_KEY_ID -> BUILTIN_TOP_MOVIES_TODAY
+        TOP_TODAY_SHOWS_KEY_ID -> BUILTIN_TOP_SHOWS_TODAY
+        else -> null
+    }
 
     /** The section title a built-in rail draws when the viewer has not renamed it. */
     fun builtinDefaultTitle(key: String): String? = when (key) {
         BUILTIN_CONTINUE_WATCHING -> "Continue Watching"
         BUILTIN_UPCOMING_SCHEDULE -> "Upcoming"
+        BUILTIN_TOP_MOVIES_TODAY -> "Top Movies Today"
+        BUILTIN_TOP_SHOWS_TODAY -> "Top Shows Today"
         else -> null
     }
 
@@ -478,26 +501,9 @@ object KBHomeOrderPrefs {
     fun isPinnableKey(key: String): Boolean =
         isCollectionKey(key) || BrowseHomeShortcuts.isShortcutKey(key)
 
-    /**
-     * Host of the "Top Today" addon, whose rails the home loader forces to the
-     * head of Home (see `loadPinnedTopTodayRails`).
-     *
-     * Those rails are catalogs like any other - hideable, renameable - but they
-     * have no position to arrange: the merge always emits them first, whatever
-     * the stored order says. So the manager offers them no reorder control, and
-     * they are kept out of the merged order entirely, which is what stops a rail
-     * beside one from being "moved" into a slot that does not exist. Matched as
-     * a prefix of the arrangement key because the manifest URL carries a long
-     * query string ahead of "/manifest.json" and only its host is stable.
-     */
-    private const val TOP_TODAY_KEY_PREFIX = "addon:https://toptoday.llamayu.com/"
-
-    /**
-     * True for a rail whose Home position is fixed by the loader rather than by
-     * the stored order - see [TOP_TODAY_KEY_PREFIX].
-     */
-    fun isPositionFixedKey(key: String?): Boolean =
-        key?.startsWith(TOP_TODAY_KEY_PREFIX) == true
+    /** Catalog ids of the two pinned "Top Today" feed rows (see `loadPinnedTopTodayRails`). */
+    private const val TOP_TODAY_MOVIES_KEY_ID = "top_movies_today"
+    private const val TOP_TODAY_SHOWS_KEY_ID = "top_shows_today"
 
     /**
      * Resolves the arrangement key for a collection, honoring history: when

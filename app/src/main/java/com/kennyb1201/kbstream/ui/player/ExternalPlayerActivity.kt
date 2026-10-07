@@ -128,6 +128,14 @@ class ExternalPlayerActivity : ComponentActivity() {
     private var streamHeaders: Map<String, String> = emptyMap()
     private var drmLicenseUrl: String? = null
     private var startPositionMs = 0L
+
+    /**
+     * The launch asked for the beginning (Home's long-press "Play from
+     * Beginning"). The flag travels with the position it zeroes, because it is
+     * the one thing that must also stop the watch-history resume (see
+     * PlaybackResume).
+     */
+    private var startFromBeginning = false
     private var historyId = ""
 
     /**
@@ -407,7 +415,11 @@ class ExternalPlayerActivity : ComponentActivity() {
         // exactly the case a failed hand-off has to retire.
         playedLinkKey = intent.getStringExtra("played_link_key")
         streamHeaders = parseHeaderExtras(intent.getStringExtra("stream_headers").orEmpty())
-        startPositionMs = if (intent.getBooleanExtra("from_beginning", false)) {
+        // Kept beside the position it zeroes: the flag is also what stops the
+        // watch-history resume (see PlaybackResume), because a title asked for
+        // from the beginning has no saved position to fall back to.
+        startFromBeginning = intent.getBooleanExtra("from_beginning", false)
+        startPositionMs = if (startFromBeginning) {
             0L
         } else {
             intent.getLongExtra("start_position_ms", 0L).coerceAtLeast(0L)
@@ -483,18 +495,49 @@ class ExternalPlayerActivity : ComponentActivity() {
             skipIntros = AppPreferences.getAutoSkipIntro(this),
             skipCredits = AppPreferences.getAutoSkipCredits(this)
         )
-        // With both prefs off there is nothing a segment lookup could be used
-        // for, so the stream is handed over at once and a box that never turned
-        // auto-skip on never waits for it.
-        if (isLiveChannel || parentId.isBlank() ||
-            (!skipSettings.skipIntros && !skipSettings.skipCredits)
-        ) {
-            handOff(prompt, target, playerName, startPositionMs, skipped = null)
-            return
-        }
 
-        showHandoffCard(prompt, playerName, skipped = null)
         lifecycleScope.launch {
+            // Nothing in this launch asked to resume, so ask the watch history
+            // before the hand-off: this is the LAST place a resume can be
+            // decided, because the position is handed to another app that
+            // never asks us again (see PlaybackResume). A source picked from
+            // the picker arrives with no position of its own, so without this
+            // a manual pick on a title Continue Watching has progress on was
+            // handed over from the beginning. A failed or empty read leaves
+            // the launch as it was.
+            if (
+                PlaybackResume.mayResumeFromHistory(
+                    startPositionMs = startPositionMs,
+                    startFromBeginning = startFromBeginning,
+                    historyId = historyId
+                )
+            ) {
+                PlaybackResume.savedPositionMs(
+                    context = this@ExternalPlayerActivity,
+                    historyId = historyId,
+                    parentId = parentId,
+                    parentType = parentType,
+                    season = season,
+                    episode = episode,
+                    episodeStreamId = episodeStreamId
+                )?.let { saved ->
+                    startPositionMs = saved
+                    positionMs = saved
+                }
+            }
+            if (isFinishing || isDestroyed) return@launch
+
+            // With both prefs off there is nothing a segment lookup could be used
+            // for, so the stream is handed over at once and a box that never turned
+            // auto-skip on never waits for it.
+            if (isLiveChannel || parentId.isBlank() ||
+                (!skipSettings.skipIntros && !skipSettings.skipCredits)
+            ) {
+                handOff(prompt, target, playerName, startPositionMs, skipped = null)
+                return@launch
+            }
+
+            showHandoffCard(prompt, playerName, skipped = null)
             // Bounded, and bounded generously enough for the second source: a
             // lookup that does not answer in time simply means the segment is
             // not skipped rather than the hand-off never happening.

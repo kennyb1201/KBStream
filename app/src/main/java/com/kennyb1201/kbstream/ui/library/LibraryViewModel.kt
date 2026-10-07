@@ -95,6 +95,11 @@ data class LibraryUiState(
     // genre/actor screens use.
     val watchedKeys: Set<String> = emptyList<String>().toSet(),
 
+    // Started-but-unfinished badges (the eye), the same "type::imdbId" keys.
+    // The checkmark always wins the corner, so a key in both is drawn as
+    // watched (see GlobalPosterCard.isPartiallyWatched).
+    val partiallyWatchedKeys: Set<String> = emptyList<String>().toSet(),
+
     val simklConnected: Boolean = false,
     val mdbListConfigured: Boolean = false
 )
@@ -552,6 +557,7 @@ class LibraryViewModel(
                 val key: String,
                 val rating: Double?,
                 val watched: String?,
+                val partiallyWatched: String?,
                 val poster: String?,
                 val year: Int?
             )
@@ -574,6 +580,17 @@ class LibraryViewModel(
                     if (watchedRepository.isWatchedCached(imdbId, normalizedType)) {
                         watched = "$normalizedType::$imdbId"
                     }
+                }
+
+                // The eye: started but not finished. Skipped when the title is
+                // already fully watched, because the checkmark owns the
+                // corner and a row must never draw both.
+                var partiallyWatched: String? = null
+
+                if (imdbId != null && watched == null &&
+                    watchedRepository.isPartiallyWatchedCached(imdbId, normalizedType)
+                ) {
+                    partiallyWatched = "$normalizedType::$imdbId"
                 }
 
                 // Ratings come from the shared TMDB detail cache
@@ -614,6 +631,7 @@ class LibraryViewModel(
                     key = LocalLibraryStore.dedupeKey(item),
                     rating = rating,
                     watched = watched,
+                    partiallyWatched = partiallyWatched,
                     poster = poster,
                     year = year
                 )
@@ -648,7 +666,9 @@ class LibraryViewModel(
                 posters = posters,
                 years = years,
                 watchedKeys = _uiState.value.watchedKeys +
-                    resolved.mapNotNull { it.watched }.toSet()
+                    resolved.mapNotNull { it.watched }.toSet(),
+                partiallyWatchedKeys = _uiState.value.partiallyWatchedKeys +
+                    resolved.mapNotNull { it.partiallyWatched }.toSet()
             )
             pushDisplay()
         }

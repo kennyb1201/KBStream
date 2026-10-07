@@ -974,6 +974,42 @@ class TmdbRepository private constructor(context: Context) :
         return tmdbId
     }
 
+    /**
+     * Records an already-known IMDB<->TMDB pair in the resolution cache, both
+     * ways, exactly as a successful [resolveTmdbId] would.
+     *
+     * [resolveTmdbId] learns a pair by asking TMDB; this is the same
+     * bookkeeping for a pair a caller ALREADY holds - so a later lookup in
+     * either direction answers from memory or the disk table instead of the
+     * network. Callers that resolve a "tt..." id through a cheaper path (the
+     * enriched-meta cache) use this to leave the same trail behind them, which
+     * is what lets a later "tmdb:<n>" route find the title's history offline
+     * (see PlaybackHistoryIds).
+     */
+    suspend fun recordResolution(imdbId: String, tmdbId: Int, type: String) {
+        val trimmedId = imdbId.trim()
+        if (!trimmedId.startsWith("tt") || tmdbId <= 0) return
+
+        val normalizedType = normalizeType(type)
+        val now = System.currentTimeMillis()
+        val key = imdbResolutionKey(tmdbId, normalizedType)
+
+        tmdbResolutionMemoryCache["$normalizedType::$trimmedId"] = now to tmdbId
+        imdbResolutionMemoryCache[key] = now to trimmedId
+
+        runCatchingCancellable {
+            imdbResolutionDao.upsert(
+                ImdbResolutionEntity(
+                    key = key,
+                    tmdbId = tmdbId,
+                    mediaType = normalizedType,
+                    imdbId = trimmedId,
+                    updatedAt = now
+                )
+            )
+        }
+    }
+
     suspend fun getPerson(personId: Int): TmdbPersonDetail? {
         if (apiKey.isBlank()) return null
         val loaded = api.getPerson(personId, apiKey) ?: return null

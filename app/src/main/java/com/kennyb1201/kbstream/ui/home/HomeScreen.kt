@@ -3694,7 +3694,14 @@ fun HomeScreen(
                                         ) {
                                             SectionTitle(
                                                 homeRailTitle(
-                                                    catalogName = rail.catalogName,
+                                                    // A rename from the home
+                                                    // manager (available on a
+                                                    // built-in row - the Top
+                                                    // Today rows - and on a
+                                                    // built catalog) beats the
+                                                    // rail's own name.
+                                                    catalogName = e.titleOverride
+                                                        ?: rail.catalogName,
                                                     addonName = rail.addonName,
                                                     type = rail.type,
                                                     showType = showRailType,
