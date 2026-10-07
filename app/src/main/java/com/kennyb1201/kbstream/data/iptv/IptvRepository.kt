@@ -1229,29 +1229,58 @@ class IptvRepository(
         val snapshot: GuideSnapshot
     )
 
-    private companion object {
-        const val TAG = "IptvRepository"
-        const val CACHE_PAGE_SIZE = 500
-        const val CHANNEL_QUERY_BATCH_SIZE = 400
-        const val PROGRAM_QUERY_BATCH_SIZE = 8
-        const val PROGRAMS_PER_CHANNEL_TARGET = 12
-        const val MAX_PROGRAM_ROWS_PER_BATCH = 192
-        const val MAX_UPCOMING_PROGRAMS = 12
+    companion object {
+        /**
+         * The one repository the app shares.
+         *
+         * A repository owns the memoized guide state ([guideSnapshots]): every
+         * channel of a guide plus its two lookup maps, which on the playlists
+         * this app is used with is the largest Java-heap structure in the
+         * process. Both the guide screen and the in-player guide resolve
+         * playlist channels against an imported guide, and the player is
+         * launched FROM the guide screen - which stays composed underneath it -
+         * so two instances meant two full copies of the SAME guide in memory at
+         * once. That is why the in-player guide is the surface that loses data:
+         * its own copy is built later, under a heap the guide screen's copy has
+         * already filled, and a resolution that cannot finish leaves every
+         * channel it needed reading "No guide data" while the guide screen -
+         * whose snapshot is already built - is fully populated.
+         *
+         * One instance also means the player's resolution reuses the snapshot
+         * the guide screen has already built, so the in-player guide's first
+         * read is answered from memory instead of a second parse of the guide.
+         */
+        fun shared(context: Context): IptvRepository =
+            sharedInstance ?: synchronized(this) {
+                sharedInstance ?: IptvRepository(context.applicationContext)
+                    .also { sharedInstance = it }
+            }
+
+        @Volatile
+        private var sharedInstance: IptvRepository? = null
+
+        private const val TAG = "IptvRepository"
+        private const val CACHE_PAGE_SIZE = 500
+        private const val CHANNEL_QUERY_BATCH_SIZE = 400
+        private const val PROGRAM_QUERY_BATCH_SIZE = 8
+        private const val PROGRAMS_PER_CHANNEL_TARGET = 12
+        private const val MAX_PROGRAM_ROWS_PER_BATCH = 192
+        private const val MAX_UPCOMING_PROGRAMS = 12
 
         // Program search needs at least this many characters: one letter
         // matches most of the guide and would block the query thread for no
         // useful result.
-        const val MIN_PROGRAM_SEARCH_LENGTH = 2
+        private const val MIN_PROGRAM_SEARCH_LENGTH = 2
 
         /** Bound on memoized lineup windows (the guide paginates 80 at a time). */
-        const val MAX_CACHED_GUIDE_QUERIES = 8
+        private const val MAX_CACHED_GUIDE_QUERIES = 8
 
         /** How long a memoized lineup may be reused before it is recomputed. */
-        const val GUIDE_QUERY_CACHE_TTL_MS = 60_000L
+        private const val GUIDE_QUERY_CACHE_TTL_MS = 60_000L
 
 
-        val importRequestMutex = Mutex()
-        val activeGuideImports =
+        private val importRequestMutex = Mutex()
+        private val activeGuideImports =
             ConcurrentHashMap<String, CompletableDeferred<Result<Unit>>>()
     }
 }

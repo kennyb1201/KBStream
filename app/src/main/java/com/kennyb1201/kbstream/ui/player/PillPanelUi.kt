@@ -179,22 +179,39 @@ internal class PillPanelUi(private val context: Context) {
     fun stylePill(view: TextView, selected: Boolean) {
         view.tag = selected
         // Every state is built from the theme at call time (see
-        // [pillChipBackground]): the fixed XML drawables kept the default brass
+        // [applyPillLook]): the fixed XML drawables kept the default brass
         // on a chosen accent - and their focused variants were layer-lists the
         // accent re-tint walk could not rebuild - so the panels' focused and
-        // selected pills stayed amber. The unselected fill is the theme's own
-        // surface rather than @color/kb_surface, so a pure-black theme cannot
-        // repaint #141A24 over every pill a selection moves off.
-        view.background = pillChipBackground(context, selected, view.isFocused)
-        view.setTextColor(
-            ContextCompat.getColor(
-                context,
-                if (selected) R.color.kb_void else R.color.kb_text_hi
-            )
-        )
+        // selected pills stayed amber.
+        applyPillLook(context, view, selected, view.isFocused)
     }
 
     fun isSelected(view: View): Boolean = view.tag == true
+}
+
+/**
+ * The one pill look: the theme-resolved fill plus the label color that belongs
+ * to it (void on a filled pill, hi on a neutral one).
+ *
+ * Each of the three activities used to hold its own copy and they drifted - the
+ * main player's helper set only the fill, because its callers happened to set
+ * the label color beside it, while the other two set both. So "the pill look"
+ * was three answers to the same question, and a selected pill that reached one
+ * caller and not another kept the neutral label.
+ */
+internal fun applyPillLook(
+    context: Context,
+    view: TextView,
+    selected: Boolean,
+    focused: Boolean
+) {
+    view.background = pillChipBackground(context, selected, focused)
+    view.setTextColor(
+        ContextCompat.getColor(
+            context,
+            if (selected) R.color.kb_void else R.color.kb_text_hi
+        )
+    )
 }
 
 /**
@@ -218,16 +235,28 @@ internal fun pillChipBackground(
     focused: Boolean
 ): android.graphics.drawable.Drawable {
     val density = context.resources.displayMetrics.density
-    val fill = if (selected || focused) {
-        themeAccentColor(context)
-    } else {
-        playerPanelSurfaceColor(context)
+    // Focus is not selection. The old mapping accent-filled a FOCUSED pill too,
+    // so a D-pad crossing the panel turned every pill it touched into "the
+    // chosen one" and the panel's real state vanished as the viewer moved
+    // through it - and the focused NEUTRAL pill came out identical to the
+    // chosen one beside it. A focused but unselected pill now wears the app's
+    // one focus look - the raised panel fill with a 2dp accent stroke, the same
+    // pair @drawable/mpv_control_bg and themedGuideRowBackground draw - and the
+    // accent fill is left to mean "chosen".
+    val fill = when {
+        selected -> themeAccentColor(context)
+        focused -> playerPanelRaisedColor(context)
+        else -> playerPanelSurfaceColor(context)
     }
     val stroke = when {
-        // The XML's white focus ring on a selected pill.
-        selected && focused -> 0xFFFFFFFF.toInt()
-        // The XML's text-color focus border on an unselected pill.
-        focused -> ContextCompat.getColor(context, R.color.kb_text_hi)
+        // Focus on a FILLED pill: the ring is the only thing left that can say
+        // "you are here" without un-choosing the pill, exactly as
+        // accentButtonBackground rings the accent-filled SKIP INTRO control.
+        selected && focused -> ContextCompat.getColor(context, R.color.kb_text_hi)
+        // Focus on a neutral pill: the accent stroke every other focused
+        // surface in the app carries (was a text-colour border, which read as a
+        // second kind of selection).
+        focused -> themeAccentColor(context)
         else -> 0
     }
     return android.graphics.drawable.GradientDrawable().apply {

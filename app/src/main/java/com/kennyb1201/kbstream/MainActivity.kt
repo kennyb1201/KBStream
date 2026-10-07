@@ -604,6 +604,18 @@ private suspend fun recoveredEpisodeAlreadyWatched(
         // back from the player" report cannot attribute.
         recordStartupPhase("startup.preComposition", preCompositionStartedMs)
 
+        // The launch window's own background, before anything is composed.
+        // The theme's static `colorBackground` cannot follow the AMOLED toggle,
+        // so the window used to disagree with the first frame in BOTH
+        // directions - pure black under an ordinary launch (a black window on
+        // every screen, not just Home) and the ordinary void under an AMOLED
+        // one. Match the window to the token the app shell paints.
+        window.setBackgroundDrawable(
+            android.graphics.drawable.ColorDrawable(
+                com.kennyb1201.kbstream.ui.theme.themeVoidWindowColor(this)
+            )
+        )
+
         val composeStartedMs = android.os.SystemClock.elapsedRealtime()
         setContent {
             // Sync the AMOLED toggle into the theme's live state BEFORE the
@@ -1624,7 +1636,6 @@ fun AppRoot(
                         returnTo = Screen.Library
                     )
                 },
-                onBack = { screen = Screen.Home }
             )
         }
 

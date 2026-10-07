@@ -82,7 +82,6 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
-import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
  * Per-row focus anchors for the catalog manager dialog. Reordering a row
@@ -472,12 +471,18 @@ internal fun CatalogManagerDialog(
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
         Column(
+            // The canonical dialog plate (see KBDialogPanel): the app's own
+            // surface rather than KBVoid - this manager is chrome over the
+            // screen the viewer was using, and under the AMOLED toggle a void
+            // fill made it the one dialog that dissolved into the page behind
+            // it - with the shared ring and the shared 22dp padding.
             modifier = Modifier
                 .width(860.dp)
                 .fillMaxHeight(0.88f)
-                .background(KBVoid, KBShapePanel)
+                .background(KBSurface, KBShapePanel)
                 .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
-                .padding(18.dp)
+                .padding(22.dp)
+                .focusGroup()
         ) {
             // Header
             Row(
@@ -488,7 +493,10 @@ internal fun CatalogManagerDialog(
                     Text(
                         text = "HOME MANAGER",
                         color = KBAccent,
-                        style = MaterialTheme.typography.titleLarge,
+                        // The shared dialog heading (headlineSmall SemiBold),
+                        // not titleLarge: every dialog in the app is titled
+                        // with the same weight and size.
+                        style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(

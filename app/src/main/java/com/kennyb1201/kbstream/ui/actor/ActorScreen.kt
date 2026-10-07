@@ -56,6 +56,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
@@ -146,7 +147,8 @@ fun ActorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(top = 36.dp),
-            railCount = 3
+            railCount = 3,
+            shape = posterEdgeShape()
         )
         error != null ->
             KBStatusMessage(

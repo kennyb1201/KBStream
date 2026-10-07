@@ -36,7 +36,10 @@ class EpgRefreshWorker(
             return Result.success()
         }
 
-        val repository = IptvRepository(applicationContext)
+        // The shared instance, so a refresh that lands while the guide screen
+        // (or the player) is holding the snapshot updates the caches that are
+        // actually being read instead of a private copy of them.
+        val repository = IptvRepository.shared(applicationContext)
         var imported = 0
         epgUrls.forEach { url ->
             runCatchingCancellable { repository.importGuide(url) }

@@ -68,7 +68,12 @@ fun KBCard(
             containerColor = KBSurface,
             contentColor = KBTextHi,
             focusedContainerColor = KBSurfaceRaised,
-            focusedContentColor = KBAccent
+            // Focus is spoken by the ring, the lift and the glow - not by the
+            // label. Turning the text accent-colored on focus made a card's
+            // own copy change color every time the D-pad crossed it, and it
+            // left accent-on-accent cards (a chip already tinted accent)
+            // unreadable while selected. Content stays bright in both states.
+            focusedContentColor = KBTextHi
         ),
         // Focus grows the tile and lifts it; press pulls it back toward the
         // plate. Every poster, tile and button that goes through KBCard gets

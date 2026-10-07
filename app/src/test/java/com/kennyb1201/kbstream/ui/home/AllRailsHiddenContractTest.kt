@@ -82,7 +82,7 @@ class AllRailsHiddenCardContractTest {
         )
         assertTrue(
             "and offers the way out",
-            block.contains("actionLabel = \"Manage rails\"") &&
+            block.contains("actionLabel = \"MANAGE RAILS\"") &&
                 block.contains("onRetry = onManageRails")
         )
         assertTrue(
@@ -117,16 +117,17 @@ class AllRailsHiddenCardContractTest {
     fun `the shared status card can label an action that is not a retry`() {
         val card = source(STATUS)
         assertTrue(
-            "the label is overridable, with the retry wording as the default",
-            card.contains("actionLabel: String = \"Press OK to retry.\"")
+            "the label is overridable, with the retry action as the default, in " +
+                "the app's button casing",
+            card.contains("actionLabel: String = \"RETRY\"")
         )
         assertTrue(
             "and the card renders the label it was handed",
             card.contains("Text(actionLabel)")
         )
         assertFalse(
-            "the hardcoded label must be gone, or Manage rails would read as a retry",
-            card.contains("Text(\"Press OK to retry.\")")
+            "the hardcoded label must be gone, or MANAGE RAILS would read as a retry",
+            card.contains("Text(\"RETRY\")")
         )
     }
 

@@ -22,6 +22,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.TextView
+import android.widget.Toast
 import coil3.load
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -211,7 +212,6 @@ class MpvPlayerActivity : ComponentActivity() {
     private var errorSwitchButton: TextView? = null
     private var errorNextSourceButton: TextView? = null
     private var bufferingView: View? = null
-    private var toastView: TextView? = null
     private var controlsContainer: View? = null
     private var loadingBackdropView: ImageView? = null
     private var loadingLogoView: ImageView? = null
@@ -971,12 +971,6 @@ class MpvPlayerActivity : ComponentActivity() {
         errorNextSourceButton = findViewById(R.id.mpv_error_next)
         errorNextSourceButton?.setOnClickListener { tryNextSource() }
         bufferingView = findViewById(R.id.mpv_buffering)
-        toastView = findViewById(R.id.mpv_toast)
-        // The stream-info readout this engine's INFO button brings up - and
-        // every other transient line - on the solid, theme-aware panel fill:
-        // the translucent version it shipped with let the overlay's own
-        // gradient wash through it, and it ignored the AMOLED toggle.
-        toastView?.background = infoPanelDrawable(this)
         loadingBackdropView = findViewById(R.id.mpv_loading_backdrop)
         loadingLogoView = findViewById(R.id.mpv_loading_logo)
         controlsContainer = findViewById(R.id.mpv_controls)
@@ -1068,9 +1062,8 @@ class MpvPlayerActivity : ComponentActivity() {
         // focused pill (the Up Next card focuses PLAY NEXT) stayed the default
         // brass on a chosen accent. The neutral fill stays the theme's own
         // surface, so a pure-black theme cannot repaint #141A24 over a pill a
-        // selection moves off. See [pillChipBackground].
-        view.background = pillChipBackground(this, selected, focused)
-        view.setTextColor(getColor(if (selected) R.color.kb_void else R.color.kb_text_hi))
+        // selection moves off. See [applyPillLook].
+        applyPillLook(this, view, selected, focused)
     }
 
     /**
@@ -1445,7 +1438,7 @@ class MpvPlayerActivity : ComponentActivity() {
             override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
                 if (!fromUser || durationMs <= 0L) return
                 val posMs = durationMs * progress / 1000L
-                positionView?.text = formatClock(posMs)
+                positionView?.text = formatMillis(posMs)
             }
 
             override fun onStartTrackingTouch(bar: SeekBar?) {
@@ -3393,11 +3386,11 @@ class MpvPlayerActivity : ComponentActivity() {
         positionMs = position
         durationMs = duration
         runOnUiThread {
-            durationView?.text = if (durationMs > 0L) formatClock(durationMs) else "--:--"
+            durationView?.text = formatDurationMillis(durationMs)
             // While the seekbar is being dragged it owns the readout, so a
             // progress tick cannot yank the thumb back out from under it.
             if (!scrubbing) {
-                positionView?.text = formatClock(positionMs)
+                positionView?.text = formatMillis(positionMs)
                 if (durationMs > 0L) {
                     val progress = ((positionMs * 1000L) / durationMs).toInt().coerceIn(0, 1000)
                     seekBar?.progress = progress
@@ -4138,11 +4131,24 @@ class MpvPlayerActivity : ComponentActivity() {
     private val controlsVisible: Boolean
         get() = controlsContainer?.visibility == View.VISIBLE
 
+    /**
+     * Transient feedback for this engine's buttons and subtitle flow: the
+     * platform Toast, the same one the native player raises (see
+     * NativePlayerActivity), rather than a TextView in the layout that this
+     * activity had to show and time out itself. The hand-rolled version had a
+     * race - two lines in quick succession left the first one's GONE runnable
+     * armed, and it blanked the second message the moment it fired - and it
+     * had to be re-styled off the theme by hand every time the theme grew a
+     * variant. [durationMs] is kept as the call sites' way of asking for a
+     * long read; it picks the longer platform duration above the short one's
+     * own lifetime.
+     */
     private fun showToast(message: String, durationMs: Long = 2_500L) {
-        val view = toastView ?: return
-        view.text = message
-        view.visibility = View.VISIBLE
-        handler.postDelayed({ view.visibility = View.GONE }, durationMs)
+        Toast.makeText(
+            this,
+            message,
+            if (durationMs > TOAST_SHORT_MAX_MS) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+        ).show()
     }
 
     /**
@@ -4553,18 +4559,6 @@ class MpvPlayerActivity : ComponentActivity() {
         else -> itemName
     }
 
-    private fun formatClock(ms: Long): String {
-        val totalSeconds = (ms / 1000L).coerceAtLeast(0L)
-        val hours = totalSeconds / 3600L
-        val minutes = (totalSeconds % 3600L) / 60L
-        val seconds = totalSeconds % 60L
-        return if (hours > 0L) {
-            "%d:%02d:%02d".format(hours, minutes, seconds)
-        } else {
-            "%d:%02d".format(minutes, seconds)
-        }
-    }
-
     companion object {
         private const val TAG = "PLAYER_MPV"
         private const val STATE_POSITION_MS = "mpv_position_ms"
@@ -4572,6 +4566,13 @@ class MpvPlayerActivity : ComponentActivity() {
         private const val MIN_RESUME_POSITION_MS = 10_000L
         private const val SEEK_STEP_MS = 10_000L
         private const val CONTROLS_TIMEOUT_MS = 8_000L
+
+        /**
+         * Above this a [showToast] call wants the platform's longer duration.
+         * (LENGTH_SHORT is ~2s and LENGTH_LONG ~3.5s, hence the gap between
+         * the 2.5s default and the 4s/5s reads that pass an explicit value.)
+         */
+        private const val TOAST_SHORT_MAX_MS = 3_000L
 
         /** Set when the handoff reason was the box running out of video decoders. */
         const val FALLBACK_REASON_DECODER = "decoder"

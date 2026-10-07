@@ -553,7 +553,10 @@ fun SettingsScreen(
         ) {
                 if (selectedPane == SettingsPane.INTEGRATIONS) {
 
-                    SettingsSectionHeader("Sync", first = true)
+                    // "(Beta)" rides on this caption rather than on a second
+                    // heading inside SyncSection, which stacked two labels on
+                    // the same section.
+                    SettingsSectionHeader("Sync (Beta)", first = true)
 
                     com.kennyb1201.kbstream.ui.settings.SyncSection()
 
@@ -1086,9 +1089,9 @@ fun SettingsScreen(
                 SettingsSectionHeader("History")
 
                 NavigationRow(
-                    label = if (clearingHistory) "Clearing..." else "Clear Continue Watching",
+                    label = if (clearingHistory) "Clearing…" else "Clear Continue Watching",
                     description = if (clearingHistory)
-                        "Erasing local resume positions and watched markers..."
+                        "Erasing local resume positions and watched markers…"
                     else
                         "Reset all resume positions and watched markers (Simkl link is kept)",
                     onClick = {

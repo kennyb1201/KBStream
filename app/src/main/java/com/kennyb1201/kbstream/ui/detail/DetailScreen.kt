@@ -119,6 +119,9 @@ import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBImdbTint
+import com.kennyb1201.kbstream.ui.components.KBProgressBar
+import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.formatRuntimeLabel
@@ -144,8 +147,9 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
+import com.kennyb1201.kbstream.ui.theme.KBFocusButton
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
-import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusNone
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
@@ -511,6 +515,20 @@ fun DetailScreen(
     val chipMenuContext = androidx.compose.ui.platform.LocalContext.current
     var studioChipMenu by remember {
         mutableStateOf<StudioChipMenuTarget?>(null)
+    }
+
+    // The chip that raised the menu. The menu is a focus group drawn over the
+    // page (see PosterContextMenu), so without an explicit hand-back closing it
+    // left nothing focused and the D-pad restarted at the top of the screen.
+    var lastStudioChipFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissStudioChipMenu() {
+        studioChipMenu = null
+        lastStudioChipFocusRequester?.requestFocus()
     }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
 
@@ -1565,6 +1583,18 @@ fun DetailScreen(
                 mutableStateOf(false)
             }
 
+            // Closing this menu used to clear the flag and nothing else: the
+            // menu is drawn over the page in its own focus group (see
+            // PosterContextMenu), so it took focus with it and the D-pad
+            // restarted from the top of the screen. Focus goes back to the
+            // button that raised it, on the action rows and on Back alike -
+            // the same hand-back the poster, season and episode menus already
+            // do (dismissPosterMenu and friends).
+            fun dismissPlayButtonMenu() {
+                playButtonMenu = false
+                playButtonFocusRequester.requestFocus()
+            }
+
             val wantsBeginning =
                 initialTarget?.startFromBeginning == true || startOver
 
@@ -2059,6 +2089,12 @@ fun DetailScreen(
                             // was no way to ask this button to start the title
                             // over.
                             onLongClick = { playButtonMenu = true },
+                            // The three icon-only controls in this row are
+                            // BUTTONS, not cards: a pill edge and the button
+                            // step of the focus scale, so they read the same as
+                            // every other control the viewer presses.
+                            shape = KBShapePill,
+                            focusedScale = KBFocusButton,
                             modifier = Modifier
                                 .padding(end = 8.dp)
                                 .focusRequester(
@@ -2145,6 +2181,8 @@ fun DetailScreen(
                                         )
                                     }
                                 },
+                                shape = KBShapePill,
+                                focusedScale = KBFocusButton,
                                 modifier = Modifier.padding(end = 8.dp)
                             ) {
                                 IconButtonBody(
@@ -2158,7 +2196,9 @@ fun DetailScreen(
                             KBCard(
                                 onClick = {
                                     playTrailer(context)
-                                }
+                                },
+                                shape = KBShapePill,
+                                focusedScale = KBFocusButton
                             ) {
                                 IconButtonBody(
                                     iconRes = R.drawable.ic_detail_trailer,
@@ -2441,7 +2481,7 @@ fun DetailScreen(
                                             glow = ClickableSurfaceDefaults.glow(
                                                 focusedGlow = Glow(
                                                     elevationColor = KBAccent,
-                                                    elevation = KBFocusGlow
+                                                    elevation = KBFocusGlowSmall
                                                 )
                                             ),
                                             modifier = Modifier
@@ -2677,18 +2717,11 @@ fun DetailScreen(
                             seasons.isNotEmpty()
                         ) {
                             item(key = "episodesheader") {
-                                Text(
-                                    episodesHeader,
-                                    maxLines = 1,
-                                    overflow =
-                                        TextOverflow.Ellipsis,
-                                    style =
-                                        MaterialTheme.typography.titleSmall,
-                                    color = KBTextLo,
+                                KBSectionHeader(
+                                    title = episodesHeader,
                                     modifier = Modifier.padding(
-                                        start = 24.dp,
-                                        top = 14.dp,
-                                        bottom = 7.dp
+                                        start = KBScreenEdge,
+                                        top = 14.dp
                                     )
                                 )
                             }
@@ -3236,15 +3269,11 @@ fun DetailScreen(
                                 // the tag rail and the people cards on movies,
                                 // so D-pad scrolling caught on invisible
                                 // "empty space" above the people row.
-                                Text(
-                                    "PEOPLE",
-                                    style =
-                                        MaterialTheme.typography.titleSmall,
-                                    color = KBTextLo,
+                                KBSectionHeader(
+                                    title = "PEOPLE",
                                     modifier = Modifier.padding(
-                                        start = 24.dp,
-                                        top = 14.dp,
-                                        bottom = 7.dp
+                                        start = KBScreenEdge,
+                                        top = 14.dp
                                     )
                                 )
                             }
@@ -3366,15 +3395,11 @@ fun DetailScreen(
                             networks.isNotEmpty()
                         ) {
                             item(key = "networkheader") {
-                                Text(
-                                    "NETWORK",
-                                    style =
-                                        MaterialTheme.typography.titleSmall,
-                                    color = KBTextLo,
+                                KBSectionHeader(
+                                    title = "NETWORK",
                                     modifier = Modifier.padding(
-                                        start = 24.dp,
-                                        top = 14.dp,
-                                        bottom = 7.dp
+                                        start = KBScreenEdge,
+                                        top = 14.dp
                                     )
                                 )
                             }
@@ -3455,6 +3480,8 @@ fun DetailScreen(
                                                 )
                                             },
                                             onLongClick = {
+                                                lastStudioChipFocusRequester =
+                                                    chipFocusRequester
                                                 studioChipMenu =
                                                     StudioChipMenuTarget(
                                                         categoryKey = "services",
@@ -3482,15 +3509,11 @@ fun DetailScreen(
 
                         if (companies.isNotEmpty()) {
                             item(key = "productionheader") {
-                                Text(
-                                    "PRODUCTION",
-                                    style =
-                                        MaterialTheme.typography.titleSmall,
-                                    color = KBTextLo,
+                                KBSectionHeader(
+                                    title = "PRODUCTION",
                                     modifier = Modifier.padding(
-                                        start = 24.dp,
-                                        top = 14.dp,
-                                        bottom = 7.dp
+                                        start = KBScreenEdge,
+                                        top = 14.dp
                                     )
                                 )
                             }
@@ -3537,6 +3560,8 @@ fun DetailScreen(
                                                 )
                                             },
                                             onLongClick = {
+                                                lastStudioChipFocusRequester =
+                                                    chipFocusRequester
                                                 studioChipMenu =
                                                     StudioChipMenuTarget(
                                                         categoryKey = "studios",
@@ -3570,15 +3595,11 @@ fun DetailScreen(
 
                         if (reviews.isNotEmpty()) {
                             item(key = "reviewsheader") {
-                                Text(
-                                    "REVIEWS",
-                                    style =
-                                        MaterialTheme.typography.titleSmall,
-                                    color = KBTextLo,
+                                KBSectionHeader(
+                                    title = "REVIEWS",
                                     modifier = Modifier.padding(
-                                        start = 24.dp,
-                                        top = 14.dp,
-                                        bottom = 7.dp
+                                        start = KBScreenEdge,
+                                        top = 14.dp
                                     )
                                 )
                             }
@@ -3618,16 +3639,12 @@ fun DetailScreen(
 
                         if (collectionParts.isNotEmpty()) {
                             item(key = "collectionheader") {
-                                Text(
-                                    collection?.name?.uppercase()
+                                KBSectionHeader(
+                                    title = collection?.name?.uppercase()
                                         ?: "COLLECTION",
-                                    style =
-                                        MaterialTheme.typography.titleSmall,
-                                    color = KBTextLo,
                                     modifier = Modifier.padding(
-                                        start = 24.dp,
-                                        top = 14.dp,
-                                        bottom = 7.dp
+                                        start = KBScreenEdge,
+                                        top = 14.dp
                                     )
                                 )
                             }
@@ -3757,15 +3774,11 @@ fun DetailScreen(
 
                         if (recs.isNotEmpty()) {
                             item(key = "recsheader") {
-                                Text(
-                                    "MORE LIKE THIS",
-                                    style =
-                                        MaterialTheme.typography.titleSmall,
-                                    color = KBTextLo,
+                                KBSectionHeader(
+                                    title = "MORE LIKE THIS",
                                     modifier = Modifier.padding(
-                                        start = 24.dp,
-                                        top = 14.dp,
-                                        bottom = 7.dp
+                                        start = KBScreenEdge,
+                                        top = 14.dp
                                     )
                                 )
                             }
@@ -3964,11 +3977,11 @@ fun DetailScreen(
                                         )
                                     )
                                 }
-                                studioChipMenu = null
+                                dismissStudioChipMenu()
                             }
                         ),
                         onDismiss = {
-                            studioChipMenu = null
+                            dismissStudioChipMenu()
                         }
                     )
                 }
@@ -4171,7 +4184,7 @@ fun DetailScreen(
                                 description =
                                     "Start this title over, ignoring saved progress"
                             ) {
-                                playButtonMenu = false
+                                dismissPlayButtonMenu()
                                 startOver = true
                                 autoPlayed = false
                             },
@@ -4179,12 +4192,12 @@ fun DetailScreen(
                                 label = "Play Manually",
                                 description = "Pick a source instead of auto-selecting"
                             ) {
-                                playButtonMenu = false
+                                dismissPlayButtonMenu()
                                 manualPick = true
                                 autoPlayed = false
                             }
                         ),
-                        onDismiss = { playButtonMenu = false }
+                        onDismiss = { dismissPlayButtonMenu() }
                     )
                 }
 
@@ -4534,9 +4547,14 @@ private fun SeasonChip(
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    // A chip, not a card: the season row is a strip of interactive chips, so it
+    // follows the chip treatment (10dp corner, 1.06 focus) rather than the
+    // 12dp/1.03 card scale it shared with the posters around it.
     KBCard(
         onClick = onClick,
         onLongClick = onLongClick,
+        focusedScale = KBFocusChip,
+        shape = KBShapeChip,
         modifier = modifier.onFocusChanged {
             if (it.isFocused) {
                 onFocus()
@@ -4793,8 +4811,10 @@ private fun CastCard(
                     shape = CircleShape
                 ),
                 focusedBorder = Border(
+                    // 2dp, the ring every focused surface in the app draws; a
+                    // cast circle is a row-class target, not a heavier one.
                     border = BorderStroke(
-                        3.dp,
+                        2.dp,
                         KBAccent
                     ),
                     shape = CircleShape
@@ -4986,7 +5006,7 @@ private fun EpisodeCard(
                         .background(KBVoid.copy(alpha = 0.94f))
                 )
                 Surface(
-                    shape = RoundedCornerShape(4.dp),
+                    shape = KBShapeChip,
                     colors = SurfaceDefaults.colors(
                         containerColor = KBVoid.copy(alpha = 0.85f)
                     ),
@@ -5026,7 +5046,7 @@ private fun EpisodeCard(
             if (isUnavailable) {
                 Surface(
                     shape =
-                        RoundedCornerShape(4.dp),
+                        KBShapeChip,
                     colors =
                         SurfaceDefaults.colors(
                             containerColor =
@@ -5074,7 +5094,7 @@ private fun EpisodeCard(
                     ) {
                         Surface(
                             shape =
-                                RoundedCornerShape(4.dp),
+                                KBShapeChip,
                             colors =
                                 SurfaceDefaults.colors(
                                     containerColor =
@@ -5105,7 +5125,7 @@ private fun EpisodeCard(
                             text = episodeName,
                             color = KBTextHi,
                             style =
-                                MaterialTheme.typography.bodyMedium,
+                                MaterialTheme.typography.titleSmall,
                             maxLines = 1,
                             overflow =
                                 TextOverflow.Ellipsis
@@ -5186,13 +5206,13 @@ private fun EpisodeCard(
                         ) {
                             Surface(
                                 shape =
-                                    RoundedCornerShape(3.dp),
+                                    KBShapeChip,
+                                // The brand's own yellow, from the shared const
+                                // the MDBList rating chips use (this was a
+                                // second literal of the same value).
                                 colors =
                                     SurfaceDefaults.colors(
-                                        containerColor =
-                                            Color(
-                                                0xFFF5C518
-                                            )
+                                        containerColor = KBImdbTint
                                     )
                             ) {
                                 Box(
@@ -5246,25 +5266,7 @@ private fun EpisodeCard(
                 }
 
                 if (progressFraction > 0f) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(4.dp)
-                            .background(
-                                KBTextLo.copy(alpha = 0.45f),
-                                RoundedCornerShape(2.dp)
-                            )
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth(progressFraction.coerceIn(0f, 1f))
-                                .fillMaxHeight()
-                                .background(
-                                    KBAccent,
-                                    RoundedCornerShape(2.dp)
-                                )
-                        )
-                    }
+                    KBProgressBar(progress = progressFraction)
                 }
             }
         }
@@ -5309,7 +5311,9 @@ private fun GenreChip(
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(
                 elevationColor = KBAccent,
-                elevation = KBFocusGlow
+                // Chip glow, not the card's: this strip is chips (see
+                // KBFocusGlowSmall in Theme.kt).
+                elevation = KBFocusGlowSmall
             )
         )
     ) {
@@ -5379,8 +5383,9 @@ private fun KeywordChip(
     ) {
         Text(
             "#$name",
+            // A chip label, like the genre chip beside it.
             style =
-                MaterialTheme.typography.bodySmall,
+                MaterialTheme.typography.labelMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(

@@ -21,10 +21,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.kennyb1201.kbstream.data.badges.StreamBadge
-import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 
 /** Height of one badge chip row (chips: 20dp image + padding). */
-private val BadgeChipShape = KBShapeSmall
+private val BadgeChipShape = KBShapeChip
 private const val BADGE_ROW_HEIGHT = 22
 
 private fun String.toBadgeColorOrNull(): Color? {

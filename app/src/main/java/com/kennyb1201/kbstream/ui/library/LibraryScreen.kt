@@ -32,10 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Border
@@ -51,6 +49,8 @@ import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
@@ -75,6 +75,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
+import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 /**
  * Library tab: the user's personal lists and watchlists in one screen —
@@ -85,7 +86,6 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 @Composable
 fun LibraryScreen(
     onItemClick: (mediaType: String, id: String) -> Unit,
-    onBack: () -> Unit = {},
     viewModel: LibraryViewModel =
         viewModel()
 ) {
@@ -136,7 +136,11 @@ fun LibraryScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            // The app background, not pure black: Home is the only screen that
+            // paints black on its own, and leaving this one black made Library
+            // the exception the AMOLED toggle could not reach (nothing to
+            // change when the toggle swaps black for black).
+            .background(KBVoid)
             .padding(horizontal = 24.dp, vertical = 18.dp)
     ) {
         // Header. Title on the left, connection health on the right — each on
@@ -230,6 +234,7 @@ fun LibraryScreen(
                             "\"Add to list…\" — My List, watchlists and personal " +
                             "lists all land in this merged view."
                     },
+                    loading = state.loading,
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
                     onItemLongClick = { item -> menuItem = item },
@@ -247,6 +252,7 @@ fun LibraryScreen(
                         "Your list is empty. Long-press any poster on a " +
                             "detail page and choose \"Add to Library\"."
                     },
+                    loading = state.loading,
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
                     onItemLongClick = { item -> menuItem = item },
@@ -270,6 +276,7 @@ fun LibraryScreen(
                             "Watchlist is empty. " + sources.joinToString(" · ")
                         }
                     },
+                    loading = state.loading,
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
                     onItemLongClick = { item -> menuItem = item },
@@ -512,6 +519,12 @@ private fun LibraryFilterChip(
 private fun ItemGrid(
     items: List<LibraryItem>,
     emptyText: String,
+    // Whether the empty grid is "still loading" - the card draws the shared
+    // spinner for it instead of the empty-state icon, exactly as the browse
+    // screens do. The empty COPY stays with the caller: "Loading watchlists…"
+    // and "Nothing here yet" are different sentences, not differently-drawn
+    // states.
+    loading: Boolean = false,
     sourceLabel: (LibraryItem) -> String,
     onItemClick: (String, String) -> Unit,
     onItemLongClick: ((LibraryItem) -> Unit)?,
@@ -524,18 +537,21 @@ private fun ItemGrid(
     val feedback = rememberKBFeedback()
 
     if (items.isEmpty()) {
-        Box(
-            contentAlignment = Alignment.Center,
+        // The app's ONE status card, not a bare centered line: every browse
+        // screen says "nothing here" with this plate, and the Library's empty
+        // states were the last ones drawn as loose text dropped into a pane.
+        //
+        // Deliberately no retry action here. On Home and Detail the retry card
+        // has to take focus itself, because the state it appears in has
+        // nothing else focusable; this screen always has its sort/filter strip
+        // and its list rail, so a focus-grabbing card would take the D-pad
+        // away from a screen that does not need it handed anywhere.
+        KBStatusMessage(
+            message = emptyText,
+            icon = KB_STATUS_ICON_EMPTY,
+            loading = loading,
             modifier = modifier
-        ) {
-            Text(
-                text = emptyText,
-                style = MaterialTheme.typography.bodyLarge,
-                color = KBTextLo,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 48.dp)
-            )
-        }
+        )
         return
     }
 
@@ -741,6 +757,7 @@ private fun ListsPane(
                 else -> "This list is empty. Long-press any poster app-wide " +
                     "and choose \"Add to list…\" to fill it."
             },
+            loading = loading,
             sourceLabel = { it.source.label },
             onItemClick = onItemClick,
             onItemLongClick = onItemLongClick,

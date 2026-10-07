@@ -378,7 +378,10 @@ private fun CollectionHeader(
         ) {
             Text(
                 text = name,
-                style = MaterialTheme.typography.headlineSmall,
+                // A collection hero is a screen title, not a section label:
+                // it was headlineSmall (22sp), so a saga's name read smaller
+                // than the page title of the screen that opened it.
+                style = MaterialTheme.typography.headlineLarge,
                 color = KBTextHi,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 2,

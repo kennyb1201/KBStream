@@ -4,6 +4,7 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:background="@drawable/picker_item_bg"
+    android:addStatesFromChildren="true"
     android:layout_marginVertical="4dp">
 
     <!-- KB-compatible stream badge chips row. Ships ABOVE the file name so the

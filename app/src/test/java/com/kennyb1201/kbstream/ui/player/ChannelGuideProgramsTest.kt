@@ -29,7 +29,8 @@ class ChannelGuideProgramsTest {
         epgUrl: String? = null,
         number: String? = null,
         tvgId: String? = null,
-        tvgName: String? = null
+        tvgName: String? = null,
+        providerChannelId: String? = null
     ) = LiveChannelZapRegistry.ZapChannel(
         channelId = id,
         name = id,
@@ -39,7 +40,8 @@ class ChannelGuideProgramsTest {
         epgChannelId = epgChannelId,
         epgUrl = epgUrl,
         tvgId = tvgId,
-        tvgName = tvgName
+        tvgName = tvgName,
+        providerChannelId = providerChannelId
     )
 
     @Test
@@ -84,8 +86,38 @@ class ChannelGuideProgramsTest {
         )
         assertEquals("key.a", query?.key)
         assertEquals("http://epg/one", query?.epgUrl)
-        assertEquals(listOf("a.us"), query?.idCandidates)
+        // The provider id rides along in the same order the guide screen feeds
+        // the matcher (tvg-id, then the provider's own id), and is null here
+        // because this entry carries none: the matcher skips the blank slots.
+        assertEquals(listOf("a.us", null), query?.idCandidates)
         assertEquals(listOf("Channel A", "Channel A HD"), query?.nameCandidates)
+    }
+
+    @Test
+    fun `an entry whose only id is the provider's own resolves by it`() {
+        // A playlist that leaves tvg-id blank keeps the id in channel-id/id, and
+        // the guide screen matches on it - so a player that only fed the matcher
+        // tvg-id could not resolve these entries at all and read "No guide
+        // data" for them while the guide screen was fully populated.
+        val entry = channel(
+            "a",
+            epgUrl = "http://epg/one",
+            providerChannelId = "12345"
+        )
+
+        assertTrue(needsGuideMatch(entry))
+        assertEquals(
+            listOf(null, "12345"),
+            guideMatchQueryFor(entry)?.idCandidates
+        )
+    }
+
+    @Test
+    fun `an entry with no id at all still falls back to its name`() {
+        assertEquals(
+            listOf(null, null),
+            guideMatchQueryFor(channel("a", epgUrl = "http://epg/one"))?.idCandidates
+        )
     }
 
     @Test

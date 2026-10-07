@@ -53,9 +53,9 @@ import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusButton
-import com.kennyb1201.kbstream.ui.theme.KBFocusCard
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
+import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -463,8 +463,11 @@ private fun OnboardingSourceRow(
             pressedContainerColor = KBSurfaceRaised,
             pressedContentColor = KBAccent
         ),
+        // A row, not a card: it grows by the row step (the seven shared row
+        // surfaces - add-ons, guide, library - all use KBFocusRow), and the
+        // card step here made three stacked rows breathe like posters.
         scale = ClickableSurfaceDefaults.scale(
-            focusedScale = KBFocusCard,
+            focusedScale = KBFocusRow,
             pressedScale = KBFocusPressed
         ),
         border = ClickableSurfaceDefaults.border(

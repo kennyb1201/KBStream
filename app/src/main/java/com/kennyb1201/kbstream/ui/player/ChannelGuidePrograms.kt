@@ -137,8 +137,12 @@ internal fun needsGuideMatch(channel: LiveChannelZapRegistry.ZapChannel): Boolea
  * (no guide source, or no id/name at all).
  *
  * The candidates mirror the guide screen's matcher exactly - ids first
- * (`tvg-id`), then names (`tvg-name`, the display name) - so a channel resolves
- * to the same guide channel whichever side ran the match.
+ * (`tvg-id`, then the provider's own id), then names (`tvg-name`, the display
+ * name) - so a channel resolves to the same guide channel whichever side ran
+ * the match. The provider id matters: a playlist that leaves `tvg-id` blank
+ * keeps its channel id in `channel-id`/`id`/`cuid`, and the guide screen matches
+ * on it, so a player that skipped it left exactly those channels reading
+ * "No guide data" while the guide screen was fully populated.
  */
 internal fun guideMatchQueryFor(
     channel: LiveChannelZapRegistry.ZapChannel
@@ -166,6 +170,7 @@ internal fun guideMatchQueryForSource(
 ): GuideMatchQuery? {
     if (epgUrl.isEmpty()) return null
     if (channel.tvgId.isNullOrBlank() &&
+        channel.providerChannelId.isNullOrBlank() &&
         channel.tvgName.isNullOrBlank() &&
         channel.name.isBlank()
     ) {
@@ -174,7 +179,7 @@ internal fun guideMatchQueryForSource(
     return GuideMatchQuery(
         key = channel.channelId,
         epgUrl = epgUrl,
-        idCandidates = listOf(channel.tvgId),
+        idCandidates = listOf(channel.tvgId, channel.providerChannelId),
         nameCandidates = listOf(channel.tvgName, channel.name)
     )
 }

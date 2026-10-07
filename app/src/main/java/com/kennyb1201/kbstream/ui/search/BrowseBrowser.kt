@@ -39,6 +39,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -67,7 +69,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
-import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.android.awaitFrame
 
 // ---------------------------------------------------------------------------
 // The Search screen's browse browser.
@@ -98,6 +100,13 @@ private val SUBMENU_CHIP_MIN_WIDTH = 216.dp
 // scroll surface, short enough to leave the page above it in view.
 private val SUBMENU_CHIP_MAX_HEIGHT = 360.dp
 
+/**
+ * Frames to keep asking for focus when a closed menu hands it back to a
+ * category tab. The request can land before the strip has attached, and an
+ * unattached request is silently missed - the same retry the status card uses.
+ */
+private const val TAB_RETURN_FOCUS_STEPS = 12
+
 @Composable
 internal fun SearchBrowseBrowser(
     viewModel: SearchViewModel,
@@ -116,6 +125,17 @@ internal fun SearchBrowseBrowser(
      */
     returnChipName: Pair<String, String>? = null,
     onReturnChipNameConsumed: () -> Unit = {},
+    /**
+     * The category TAB to return focus to when a long-press menu opened from
+     * the strip itself was just closed, named by its key.
+     *
+     * [returnChipName] handles the menus opened from a chip in the grid below;
+     * this is the same hand-back for the strip, where the tab's own "Unhide
+     * all" menu lives. Both are consumed once focus has really landed, so
+     * neither can re-grab later.
+     */
+    returnCategoryKey: String? = null,
+    onReturnCategoryKeyConsumed: () -> Unit = {},
     onChipLongPress: ((String, BrowseEntry) -> Unit)? = null,
     onCategoryLongPress: ((BrowseCategory) -> Unit)? = null
 ) {
@@ -143,6 +163,27 @@ internal fun SearchBrowseBrowser(
         ?: viewModel.browseReturnChip
             ?.takeIf { it.first == activeCategory?.key }
             ?.let { (_, index) -> activeCategory?.entries?.getOrNull(index)?.name }
+
+    // One requester per tab, so a closed menu can put focus back on the tab
+    // that raised it. Focus is requested across frames because the request can
+    // land before the strip has attached (this browser enters the tree in the
+    // frame the search settles), and a request for an unattached node is
+    // silently missed - the same retry the status card's action uses.
+    val tabFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+
+    LaunchedEffect(returnCategoryKey) {
+        val key = returnCategoryKey ?: return@LaunchedEffect
+        var focused = false
+        var attempts = 0
+        while (!focused && attempts < TAB_RETURN_FOCUS_STEPS) {
+            awaitFrame()
+            focused = runCatching {
+                tabFocusRequesters[key]?.requestFocus() ?: false
+            }.getOrDefault(false)
+            attempts++
+        }
+        if (focused) onReturnCategoryKeyConsumed()
+    }
 
     // Filtering is per-category: opening another tab starts a clean list.
     var filterQuery by remember(activeCategory?.key) { mutableStateOf("") }
@@ -182,13 +223,17 @@ internal fun SearchBrowseBrowser(
             verticalAlignment = Alignment.Top
         ) {
             categories.forEach { category ->
+                val tabFocusRequester = remember(category.key) { FocusRequester() }
+                tabFocusRequesters[category.key] = tabFocusRequester
+
                 BrowseCategoryTab(
                     category = category,
                     selected = activeCategory?.key == category.key,
                     onClick = { viewModel.selectBrowseCategory(category.key) },
                     onLongClick = onCategoryLongPress?.let { handler ->
                         { handler(category) }
-                    }
+                    },
+                    modifier = Modifier.focusRequester(tabFocusRequester)
                 )
             }
         }
@@ -304,7 +349,7 @@ internal fun SearchBrowseBrowser(
         when {
             submenuLoading && category.entries.isEmpty() -> {
                 Text(
-                    text = "Resolving ${category.label.lowercase()}...",
+                    text = "Resolving ${category.label.lowercase()}…",
                     style = MaterialTheme.typography.bodySmall,
                     color = KBTextLo,
                     modifier = Modifier.padding(
@@ -385,7 +430,8 @@ private fun BrowseCategoryTab(
     category: BrowseCategory,
     selected: Boolean,
     onClick: () -> Unit,
-    onLongClick: (() -> Unit)? = null
+    onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
 ) {
     var focused by remember { mutableStateOf(false) }
 
@@ -451,7 +497,7 @@ private fun BrowseCategoryTab(
                     elevation = KBFocusGlowSmall
                 )
             ),
-            modifier = Modifier
+            modifier = modifier
                 .then(rememberLongPressModifier(onLongClick))
                 .onFocusChanged { focused = it.isFocused }
         ) {
@@ -530,13 +576,19 @@ private fun BrowseActionChip(
     Surface(
         onClick = onClick,
         shape = ClickableSurfaceDefaults.shape(shape = KBShapeChip),
+        // Focus raises the plate and rings it; it does NOT flood the chip with
+        // accent and swap the label to the void tone. That inversion was the
+        // one place in the app where focus changed a surface's colour instead
+        // of lighting its border, so a chip the viewer merely crossed looked
+        // pressed. Accent fill stays reserved for a chip that is SELECTED
+        // (see BrowseCategoryTab).
         colors = ClickableSurfaceDefaults.colors(
             containerColor = KBSurface,
             contentColor = KBTextLo,
-            focusedContainerColor = KBAccent,
-            focusedContentColor = KBVoid,
-            pressedContainerColor = KBAccent,
-            pressedContentColor = KBVoid
+            focusedContainerColor = KBSurfaceRaised,
+            focusedContentColor = KBTextHi,
+            pressedContainerColor = KBAccent.copy(alpha = 0.30f),
+            pressedContentColor = KBTextHi
         ),
         scale = ClickableSurfaceDefaults.scale(
             focusedScale = KBFocusChip,

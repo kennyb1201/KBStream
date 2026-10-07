@@ -39,11 +39,18 @@ class PlayerPillAccentContractTest {
 
         const val HELPER = "pillChipBackground"
 
-        /** The fixed, brass-hard-coded pill drawables the fix replaces. */
+        /**
+         * The fixed, brass-hard-coded pill drawables the fix replaced - and
+         * which are now DELETED rather than left dead: every state is built at
+         * runtime, so the next pill would otherwise be pointed at the one
+         * drawable that cannot follow the accent. Same call as the sweep's
+         * other dead assets (control_button_bg, kb_overlay_scrim).
+         */
         val FIXED_PILL_DRAWABLES = listOf(
-            "R.drawable.pill_chip_selected_focused_bg",
-            "R.drawable.pill_chip_selected_bg",
-            "R.drawable.pill_chip_focused_bg"
+            "pill_chip_selected_focused_bg",
+            "pill_chip_selected_bg",
+            "pill_chip_focused_bg",
+            "button_accent_bg_focused"
         )
     }
 
@@ -90,14 +97,67 @@ class PlayerPillAccentContractTest {
 
     @Test
     fun `every pill site uses the theme-resolved helper`() {
-        listOf(NATIVE_PLAYER, MPV_PLAYER, EXTERNAL_PLAYER, PILL_PANEL_UI)
+        // One look, one implementation: each activity's applyPillBackground is
+        // now a call into the shared applyPillLook, which is the only place
+        // $HELPER is called. Four copies used to exist, and they had already
+        // diverged - the main player's set only the fill, the other two set the
+        // fill and the label color.
+        assertTrue(
+            "$PILL_PANEL_UI must own the one pill look",
+            source(PILL_PANEL_UI).contains("internal fun applyPillLook(")
+        )
+        listOf(NATIVE_PLAYER, MPV_PLAYER, EXTERNAL_PLAYER)
             .forEach { path ->
-                val file = source(path)
                 assertTrue(
-                    "$path must set its pill background through $HELPER",
-                    file.contains("$HELPER(")
+                    "$path must set its pill background through the shared look",
+                    source(path).contains("applyPillLook(this, ")
                 )
             }
+        // And no second copy of the body is left behind anywhere.
+        listOf(NATIVE_PLAYER, MPV_PLAYER, EXTERNAL_PLAYER).forEach { path ->
+            val file = source(path)
+            assertFalse(
+                "$path paints a pill background of its own instead of calling " +
+                    "the shared look",
+                file.contains("view.background = pillChipBackground(")
+            )
+        }
+    }
+
+    @Test
+    fun `focus is not selection on a pill`() {
+        // A focused pill used to be accent-filled as well, so crossing the panel
+        // with the D-pad repainted every pill it touched and the panel's actual
+        // setting disappeared while it was being read. Only the chosen pill
+        // fills; a focused neutral one takes the app's focus look
+        // (raised panel fill + 2dp accent stroke).
+        val shared = source(PILL_PANEL_UI)
+        assertTrue(
+            "the accent fill must hang off `selected` alone",
+            shared.contains("selected -> themeAccentColor(context)")
+        )
+        assertFalse(
+            "and never off selected-or-focused",
+            shared.contains("if (selected || focused)")
+        )
+        assertTrue(
+            "a focused but unselected pill must take the raised panel fill",
+            shared.contains("focused -> playerPanelRaisedColor(context)")
+        )
+        assertTrue(
+            "and the accent stroke - the app's focused-surface outline",
+            shared.contains("focused -> themeAccentColor(context)")
+        )
+        assertFalse(
+            "the hand-written white ring is gone: a focus ring comes from a " +
+                "theme colour, not a literal",
+            shared.contains("0xFFFFFFFF.toInt()")
+        )
+        assertTrue(
+            "while focus on an already-filled pill still rings it, the way the " +
+                "accent-filled SKIP INTRO control is ringed",
+            shared.contains("selected && focused ->")
+        )
     }
 
     @Test
@@ -131,18 +191,41 @@ class PlayerPillAccentContractTest {
     }
 
     @Test
-    fun `no pill site still paints the fixed brass drawables`() {
-        listOf(NATIVE_PLAYER, MPV_PLAYER, EXTERNAL_PLAYER, PILL_PANEL_UI)
-            .forEach { path ->
-                val file = source(path)
-                FIXED_PILL_DRAWABLES.forEach { drawable ->
+    fun `the fixed brass pill drawables are gone`() {
+        FIXED_PILL_DRAWABLES.forEach { drawable ->
+            assertFalse(
+                "$drawable hard-codes @color/kb_accent and (for the focused " +
+                    "variants) is a layer-list the accent walk cannot rebuild, so " +
+                    "it is deleted rather than left for the next pill to pick up",
+                File(sourceRoot, "../res/drawable/$drawable.xml").normalize().exists()
+            )
+            listOf(NATIVE_PLAYER, MPV_PLAYER, EXTERNAL_PLAYER, PILL_PANEL_UI)
+                .forEach { path ->
                     assertFalse(
-                        "$path still references $drawable, which hard-codes " +
-                            "@color/kb_accent and (for the focused variants) is a " +
-                            "layer-list the accent walk cannot rebuild",
-                        file.contains(drawable)
+                        "$path still references $drawable",
+                        source(path).contains(drawable)
                     )
                 }
+        }
+    }
+
+    @Test
+    fun `no layout still points a pill at a fixed brass drawable`() {
+        // The layouts are the other place a pill gets a background: the XML
+        // default a pill wears before the runtime pass touches it. A brass one
+        // there is what the MPV player's SKIP INTRO pill was still wearing.
+        listOf(
+            "../res/layout/activity_player.xml",
+            "../res/layout/activity_mpv_player.xml",
+            "../res/layout/activity_external_player.xml"
+        ).forEach { layout ->
+            val text = File(sourceRoot, layout).normalize().readText()
+            FIXED_PILL_DRAWABLES.forEach { drawable ->
+                assertFalse(
+                    "$layout still defaults a control to @drawable/$drawable",
+                    text.contains("@drawable/$drawable\"")
+                )
             }
+        }
     }
 }

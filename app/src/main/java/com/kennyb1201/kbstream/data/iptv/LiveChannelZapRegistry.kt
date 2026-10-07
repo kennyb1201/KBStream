@@ -57,10 +57,14 @@ object LiveChannelZapRegistry {
          * match yet (the in-player guide, opened before the guide screen's
          * matching finished) can resolve one itself against the imported
          * guide. The matching rules are the guide screen's; these are the same
-         * candidates it feeds them.
+         * candidates it feeds them - [providerChannelId] included, because a
+         * playlist whose `tvg-id` is blank keeps its id in `channel-id`/`id`,
+         * and the guide screen matches on it while a player that only had
+         * `tvg-id` could not.
          */
         val tvgId: String? = null,
-        val tvgName: String? = null
+        val tvgName: String? = null,
+        val providerChannelId: String? = null
     )
 
     /**

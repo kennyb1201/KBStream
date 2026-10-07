@@ -1360,12 +1360,16 @@ class NativePlayerActivity : ComponentActivity() {
     private var guideResolveRevision = -1L
 
     /**
-     * Used only to resolve a missing guide match; reads the guide database and
-     * the revision-cached snapshot, so it holds the same view the guide screen
-     * does without a second copy of the matching rules.
+     * Used to resolve a missing guide match; reads the guide database and the
+     * revision-cached snapshot, so it holds the same view the guide screen does
+     * without a second copy of the matching rules.
+     *
+     * The SHARED instance on purpose: it is the guide screen's, whose snapshot
+     * is already built - a private one would hold a second copy of every
+     * channel of the same guide for as long as the player is up.
      */
     private val iptvRepository by lazy {
-        IptvRepository(applicationContext)
+        IptvRepository.shared(applicationContext)
     }
 
     /**
@@ -1662,8 +1666,10 @@ class NativePlayerActivity : ComponentActivity() {
             zapLogo?.load(channel.logoUrl)
         }
 
-        val epgUrl = channel.epgUrl?.trim().orEmpty()
-        val cacheKey = channel.channelId + "|" + epgUrl
+        // One key per channel and source set, shared with the overlay's
+        // program block: read through the same accessor, so a channel the
+        // banner has already read costs the block nothing.
+        val cacheKey = zapEpgCacheKey(channel)
         val cached = zapEpgCache[cacheKey]
 
         // Synchronous paint with whatever we already know.
@@ -1705,12 +1711,26 @@ class NativePlayerActivity : ComponentActivity() {
     ): ZapEpgInfo {
         val epgSources = guideSourcesOf(channel)
         // The same resolved match the guide overlay uses: a channel clicked
-        // before the guide screen matched it has no epgChannelId of its own,
-        // and would otherwise report "No guide data" on the banner even after
-        // the overlay resolved it.
+        // before the guide screen matched it has no epgChannelId of its own.
+        val publishedId = guideChannelIdFor(channel)
+        // ...and a surface that reads one RESOLVES a missing match itself,
+        // exactly as the overlay's rows do. The guide screen publishes a
+        // channel's match only for the channels it has loaded - it matches them
+        // in batches as they scroll past - so the banner and the overlay's
+        // program block used to report "No guide data" for every OTHER channel
+        // of the same lineup while the guide screen, which matches each channel
+        // it is asked about, was fully populated.
+        if (publishedId.isNullOrBlank() && epgSources.isNotEmpty()) {
+            resolveMissingGuideMatches(listOf(channel))
+        }
         val epgChannelId = guideChannelIdFor(channel)
+        val justResolved = publishedId.isNullOrBlank() && !epgChannelId.isNullOrBlank()
         val now = System.currentTimeMillis()
-        val isFresh = cached != null && now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS
+        val isFresh = cached != null &&
+            now - cached.fetchedAtMillis < ZAP_EPG_TTL_MS &&
+            // An empty snapshot taken before the match was known is not an
+            // answer about this channel, so it may not stand in for one.
+            !(justResolved && cached.now == null)
         val noSource = epgSources.isEmpty() || epgChannelId.isNullOrBlank()
         // isNullOrBlank() above already contract-proved epgChannelId non-null
         // whenever noSource is false, so an explicit null check on the third
@@ -3675,8 +3695,11 @@ class NativePlayerActivity : ComponentActivity() {
             // INTRO kept the default brass on a chosen accent (see
             // [accentButtonBackground]).
             v.background = accentButtonBackground(this, focused)
-            v.scaleX = if (focused) 1.06f else 1f
-            v.scaleY = if (focused) 1.06f else 1f
+            // The button step of the shared focus scale (KBFocusButton),
+            // not the chip's 1.06: this is a button, and it was the only
+            // control in the app that grew by a chip's amount.
+            v.scaleX = if (focused) 1.04f else 1f
+            v.scaleY = if (focused) 1.04f else 1f
         }
         btnSkipIntro.setOnClickListener {
             val stamp = activeIntroStamp ?: return@setOnClickListener
@@ -7493,7 +7516,7 @@ class NativePlayerActivity : ComponentActivity() {
         if (durationMs > 0) {
             seekbar.progress = ((posMs * 10_000L) / durationMs).toInt().coerceIn(0, 10_000)
             currentTime.text = formatMillis(posMs)
-            totalTime.text = formatMillis(durationMs)
+            totalTime.text = formatDurationMillis(durationMs)
     }
 
 }
@@ -7586,8 +7609,9 @@ class NativePlayerActivity : ComponentActivity() {
         // hard-code @color/kb_accent, and their focused variants are
         // layer-lists the accent re-tint walk cannot rebuild, so a selected or
         // focused pill (the Up Next card focuses PLAY NEXT) stayed the default
-        // brass on a chosen accent. See [pillChipBackground].
-        view.background = pillChipBackground(this, selected, focused)
+        // brass on a chosen accent. See [applyPillLook] - the one pill look
+        // all three engines share.
+        applyPillLook(this, view, selected, focused)
     }
 
     /**
@@ -7733,12 +7757,13 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun applyPillState(view: TextView, selected: Boolean) {
+        // Fill and label color both come from the shared pill look, so a
+        // selected pill can no longer end up wearing the neutral pill's label
+        // (this used to set the two separately, right beside a helper that set
+        // only the fill).
         applyPillBackground(view, selected, view.isFocused)
-        view.setTextColor(if (selected) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
         view.setOnFocusChangeListener { v, _ ->
-            val tv = v as TextView
-            applyPillBackground(tv, selected, tv.isFocused)
-            tv.setTextColor(if (selected) getColor(R.color.kb_void) else getColor(R.color.kb_text_hi))
+            applyPillBackground(v as TextView, selected, v.isFocused)
     }
 
 }
@@ -8950,6 +8975,11 @@ class NativePlayerActivity : ComponentActivity() {
         if (revision != guideResolveRevision) {
             guideResolvedChannelIds.clear()
             guideMatchAttempted.clear()
+            // Every now/next snapshot was read before this import, so an empty
+            // one is exactly what the imported guide was missing: drop them
+            // rather than serve "No guide data" from the cache for a TTL after
+            // the data has landed.
+            zapEpgCache.clear()
             guideResolveRevision = revision
         }
         val pending = channels.filter { channel ->
@@ -9059,7 +9089,7 @@ class NativePlayerActivity : ComponentActivity() {
         val attemptLimit = if (unopenable) MAX_UNOPENABLE_RETRY_ATTEMPTS else MAX_RETRY_ATTEMPTS
         if (retryAttempt >= attemptLimit) {
             if (unopenable &&
-                tryNextSource(statusText = "That source won't open. Trying the next one...")
+                tryNextSource(statusText = "That source won't open. Trying the next one…")
             ) {
                 return
             }
@@ -9093,7 +9123,7 @@ class NativePlayerActivity : ComponentActivity() {
             // The counter has wrapped: "Reconnecting... (7/6)" reads as a bug.
             "Reconnecting\u2026"
         } else {
-            "Reconnecting... (${retryAttempt + 1}/$attemptLimit)"
+            "Reconnecting\u2026 (${retryAttempt + 1}/$attemptLimit)"
         }
 
         if (retryAttempt >= RAW_EXTRACTOR_PROBE_ATTEMPT) {
@@ -10052,7 +10082,7 @@ class NativePlayerActivity : ComponentActivity() {
                         currentTime.text = formatMillis(pos)
                     }
                     if (dur > 0 && dur != C.TIME_UNSET) {
-                        totalTime.text = formatMillis(dur)
+                        totalTime.text = formatDurationMillis(dur)
                     }
                 }
 

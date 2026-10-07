@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -33,8 +34,10 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
-import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
@@ -45,6 +48,7 @@ import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
 @Composable
@@ -161,6 +165,14 @@ fun SearchScreen(
         mutableStateOf<BrowseCategory?>(null)
     }
 
+    // The category TAB a just-closed tab menu wants focus back on, by key. The
+    // tab menu is a focus group drawn over the strip (see PosterContextMenu),
+    // so closing it used to leave focus nowhere and bounce the D-pad down into
+    // the grid; this is the same hand-back the chip menus already do.
+    var categoryTabMenuReturn by remember {
+        mutableStateOf<String?>(null)
+    }
+
     var lastPosterFocusRequester by remember {
         mutableStateOf<FocusRequester?>(
             null
@@ -253,10 +265,15 @@ fun SearchScreen(
                             contentPadding = PaddingValues(
                                 top = 2.dp,
                                 bottom = 4.dp,
-                                start = SEARCH_RAIL_EDGE_PADDING,
-                                end = SEARCH_RAIL_EDGE_PADDING
+                                start = KBFocusChipInset,
+                                end = KBFocusChipInset
                             ),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            // The column has already placed this item at the
+                            // screen edge; the inset above is only the row's own
+                            // clip room, cancelled here so the chips line up
+                            // with the heading over them.
+                            modifier = Modifier.offset(x = -KBFocusChipInset)
                         ) {
                             items(
                                 items = suggestions,
@@ -280,10 +297,11 @@ fun SearchScreen(
                             contentPadding = PaddingValues(
                                 top = 2.dp,
                                 bottom = 4.dp,
-                                start = SEARCH_RAIL_EDGE_PADDING,
-                                end = SEARCH_RAIL_EDGE_PADDING
+                                start = KBFocusChipInset,
+                                end = KBFocusChipInset
                             ),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.offset(x = -KBFocusChipInset)
                         ) {
                             items(
                                 items = recentSearches,
@@ -297,7 +315,11 @@ fun SearchScreen(
 
                             item(key = "clear_recent") {
                                 SearchChip(
-                                    label = "Clear recent",
+                                    // A chip label is a control label, so it
+                                    // takes the app's ALL-CAPS casing - the
+                                    // recent-searches strip was the last chip
+                                    // still written in sentence case.
+                                    label = "CLEAR RECENT",
                                     onClick = viewModel::clearRecentSearches,
                                     accent = false
                                 )
@@ -319,6 +341,8 @@ fun SearchScreen(
                         submenuLoading = browseSubmenuLoading,
                         returnChipName = browseChipMenuReturn,
                         onReturnChipNameConsumed = { browseChipMenuReturn = null },
+                        returnCategoryKey = categoryTabMenuReturn,
+                        onReturnCategoryKeyConsumed = { categoryTabMenuReturn = null },
                         onChipLongPress = { categoryKey, entry ->
                             hiddenChipMenu = categoryKey to entry
                         },
@@ -337,12 +361,21 @@ fun SearchScreen(
 
             if (isLoading) {
                 item(key = "loading") {
-                    KBStatusMessage(
-                        loading = true,
-                        message = KB_STATUS_LOADING,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp)
+                    // Poster-shaped placeholders rather than the status card:
+                    // loading is the one state whose shape is known in advance
+                    // (see KBSkeleton), and the results the viewer is waiting on
+                    // are titled rails of poster tiles. The zero horizontal
+                    // padding is deliberate - the LazyColumn has already placed
+                    // this item at the screen edge, so a second inset would sit
+                    // the placeholders 24dp inside the rails that replace them.
+                    val skeletonSize = rememberPosterSize()
+                    KBSkeletonRailStack(
+                        posterWidth = skeletonSize.width,
+                        posterHeight = skeletonSize.height,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        railCount = 2,
+                        horizontalPadding = 0.dp,
+                        shape = posterEdgeShape()
                     )
                 }
             }
@@ -368,9 +401,10 @@ fun SearchScreen(
                             contentPadding = PaddingValues(
                                 top = 2.dp,
                                 bottom = 2.dp,
-                                start = SEARCH_RAIL_EDGE_PADDING,
-                                end = SEARCH_RAIL_EDGE_PADDING
-                            )
+                                start = KBFocusChipInset,
+                                end = KBFocusChipInset
+                            ),
+                            modifier = Modifier.offset(x = -KBFocusChipInset)
                         ) {
                             items(
                                 items = results,
@@ -725,10 +759,16 @@ fun SearchScreen(
                         description = "Bring every hidden chip in this category back"
                     ) {
                         viewModel.unhideAllBrowseChips(category.key)
+                        // Focus goes back to the tab, which the action did not
+                        // move - only its "N hidden" count changed.
+                        categoryTabMenuReturn = category.key
                         categoryChipMenu = null
                     }
                 ),
-                onDismiss = { categoryChipMenu = null }
+                onDismiss = {
+                    categoryTabMenuReturn = category.key
+                    categoryChipMenu = null
+                }
             )
         }
 

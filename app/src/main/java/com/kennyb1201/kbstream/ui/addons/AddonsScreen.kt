@@ -831,7 +831,7 @@ private fun AddAddonDialog(
                 modifier = Modifier.padding(top = 16.dp)
             ) {
                 ActionButton(
-                    label = if (isLoading) "ADDING..." else "ADD",
+                    label = if (isLoading) "ADDING…" else "ADD",
                     icon = Icons.Filled.Add,
                     enabled = !isLoading && url.isNotBlank(),
                     onClick = onAdd

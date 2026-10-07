@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
@@ -201,7 +202,8 @@ fun TagScreen(
                         KBSkeletonRailStack(
                             posterWidth = posterSize.width,
                             posterHeight = posterSize.height,
-                            horizontalPadding = 20.dp
+                            horizontalPadding = 20.dp,
+                            shape = posterEdgeShape()
                         )
                     }
                 }

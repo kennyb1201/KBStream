@@ -2,8 +2,9 @@
 <!-- Row background for the in-player channel guide. A selector rather than a
      ripple: the guide is D-pad driven, and what has to be unmistakable is which
      row currently has focus (a ripple is invisible on a remote). The focused
-     state reuses the accent-stroke convention of mpv_control_bg /
-     pill_chip_focused_bg, so both players' focus language matches.
+     state is the same one every other focused surface in the app draws
+     (mpv_control_bg included): a raised fill behind a 2dp accent stroke, so
+     both players' focus language matches.
      The unfocused selected state marks the channel playing right now: it keeps
      a hairline accent outline so "you are here" survives scrolling away from
      the focused row. -->

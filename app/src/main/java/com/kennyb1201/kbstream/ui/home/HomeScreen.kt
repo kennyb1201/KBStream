@@ -30,7 +30,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlin.math.abs
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
 import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
@@ -113,17 +112,20 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
+import com.kennyb1201.kbstream.ui.components.KBProgressBar
+import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
-import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.landscapeRank
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
+import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.ui.kb.homeTopRailUpHook
@@ -142,6 +144,7 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusNone
 import com.kennyb1201.kbstream.ui.theme.KBPlum
 import com.kennyb1201.kbstream.ui.theme.KBRust
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
+import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBSteel
 import com.kennyb1201.kbstream.ui.theme.KBSuccess
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -299,7 +302,12 @@ private fun TopActionItem(
     ) {
         Text(
             text = label,
-            fontSize = 13.sp,
+            // A chip label, so it takes the chip's text slot rather than a
+            // 13sp literal: no such slot exists in the type scale, and the
+            // whole cluster of 13sp text on this screen (chip, meta line,
+            // separator, resume label) was the last place the app wrote its
+            // own size instead of naming a role.
+            style = MaterialTheme.typography.labelMedium,
             fontWeight = if (focused) FontWeight.Bold else FontWeight.Medium,
             modifier = Modifier.padding(
                 horizontal = 12.dp,
@@ -1259,7 +1267,7 @@ private fun HomeHero(
         )
 
     val heroInfo =
-        heroInfoParts.joinToString("  •  ")
+        heroInfoParts.joinToString(" • ")
 
     // Regular hero description.
     // Prefer TMDB's overview, then addon metadata, then preview metadata.
@@ -1527,7 +1535,7 @@ private fun HomeHero(
                 Text(
                     text = heroInfo,
                     color = KBTextHi.copy(alpha = 0.94f),
-                    fontSize = 13.sp,
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1555,9 +1563,14 @@ private fun HomeHero(
                     heroSecondaryParts.forEachIndexed { index, part ->
                         if (index > 0) {
                             Text(
-                                text = "  •  ",
+                                // One separator spelling app-wide: Detail's
+                                // meta line and this hero line used to split
+                                // the same run of facts with different
+                                // spacing - two spaces around the bullet here,
+                                // one there.
+                                text = " • ",
                                 color = KBTextHi.copy(alpha = 0.94f),
-                                fontSize = 13.sp,
+                                style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
@@ -1580,7 +1593,7 @@ private fun HomeHero(
                             Text(
                                 text = part,
                                 color = KBTextHi.copy(alpha = 0.94f),
-                                fontSize = 13.sp,
+                                style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 softWrap = false,
@@ -1618,7 +1631,7 @@ private fun HomeHero(
                 Text(
                     text = label,
                     color = KBAccent,
-                    fontSize = 13.sp,
+                    style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1626,46 +1639,36 @@ private fun HomeHero(
                 )
 
                 continueProgress?.let { progress ->
-    Box(
-        modifier = Modifier
-            .padding(top = 7.dp)
-            .width(260.dp)
-            .height(4.dp)
-            .background(
-                KBTextHi.copy(alpha = 0.28f),
-                RoundedCornerShape(2.dp)
-            )
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(progress)
-                .height(4.dp)
-                .background(
-                    KBAccent,
-                    RoundedCornerShape(2.dp)
-                )
-        )
-    }
-}
+                    // The shared bar. This was a fourth copy of it: 4dp and the
+                    // 2dp radius were right, but the track was KBTextHi at 28%
+                    // where the same bar under a poster is KBTextLo at 45%, so
+                    // the hero's resume bar read brighter than the card's.
+                    KBProgressBar(
+                        progress = progress,
+                        modifier = Modifier
+                            .padding(top = 7.dp)
+                            .width(260.dp)
+                    )
+                }
 
-continueTimeLeft?.let { label ->
-    Text(
-        text = label,
-        color = KBTextHi.copy(alpha = 0.70f),
-        style = MaterialTheme.typography.labelSmall,
-        maxLines = 1,
-        modifier = Modifier.padding(top = 5.dp)
-    )
-}
+            continueTimeLeft?.let { label ->
+                Text(
+                    text = label,
+                    color = KBTextHi.copy(alpha = 0.70f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 5.dp)
+                )
+            }
 
             continueEpisodeCount?.let { label ->
-    Text(
-        text = label,
-        color = KBTextHi.copy(alpha = 0.70f),
-        style = MaterialTheme.typography.labelSmall,
-        maxLines = 1,
-        modifier = Modifier.padding(top = 5.dp)
-    )
+                Text(
+                    text = label,
+                    color = KBTextHi.copy(alpha = 0.70f),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    modifier = Modifier.padding(top = 5.dp)
+                )
             }
 
             // Upcoming-rail items: the real calendar date under the
@@ -1854,9 +1857,13 @@ private fun UpcomingEpisodeCard(
                             // band across the bottom third instead of a
                             // smooth fade.
                             colors = listOf(
-                                Color.Black.copy(alpha = 0.08f),
-                                Color.Black.copy(alpha = 0.34f),
-                                Color.Black.copy(alpha = 0.80f),
+                                // One scrim vocabulary on KBVoid, like Detail's:
+                                // a black ramp under a card ended on a KBVoid
+                                // stop, so the AMOLED toggle changed the bottom
+                                // of the fade but not the top of it.
+                                KBVoid.copy(alpha = 0.08f),
+                                KBVoid.copy(alpha = 0.34f),
+                                KBVoid.copy(alpha = 0.80f),
                                 KBVoid.copy(alpha = 0.97f)
                             )
                         )
@@ -1881,7 +1888,7 @@ private fun UpcomingEpisodeCard(
                         .padding(6.dp)
                         .background(
                             color = KBPlum,
-                            shape = RoundedCornerShape(4.dp)
+                            shape = KBShapeChip
                         )
                         .padding(horizontal = 5.dp, vertical = 2.dp)
                 )
@@ -1897,7 +1904,7 @@ private fun UpcomingEpisodeCard(
                         .padding(6.dp)
                         .background(
                             color = KBAccent,
-                            shape = RoundedCornerShape(4.dp)
+                            shape = KBShapeChip
                         )
                         .padding(horizontal = 5.dp, vertical = 2.dp)
                 )
@@ -1936,8 +1943,7 @@ private fun UpcomingEpisodeCard(
                 Text(
                     text = upcoming.title,
                     color = KBTextHi,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 1.dp).kbFocusMarquee(focused)
@@ -2362,23 +2368,19 @@ private fun SectionTitle(
     text: String,
     onHeight: ((Int) -> Unit)? = null
 ) {
-    Text(
-        text = text,
-        color = KBTextHi.copy(alpha = 0.94f),
-        style = MaterialTheme.typography.titleMedium,
-        modifier = Modifier
-            // Outermost, so what is reported is the title's whole line box
-            // (glyph line plus its own padding below). The band reserved under
-            // a focused rail for the NEXT rail's title is built from exactly
-            // this, so it stays right at any type scale — see [RailLanding].
-            .then(
-                if (onHeight == null) Modifier
-                else Modifier.onSizeChanged { onHeight(it.height) }
-            )
-            .padding(
-                top = 4.dp,
-                bottom = 2.dp
-            )
+    // Home's rail titles are the app's section heading (KBSectionHeader), not a
+    // style of their own: they were the one place that drew titleMedium at 94%
+    // white with its own padding, so a rail here and the same rail on Detail
+    // named themselves differently. The measurement is Home's own need - the
+    // band reserved under a focused rail for the NEXT rail's title is built
+    // from the heading's real line box, so it stays right at any type scale
+    // (see [RailLanding]) - and it wraps the whole thing, padding included.
+    KBSectionHeader(
+        title = text,
+        modifier = Modifier.then(
+            if (onHeight == null) Modifier
+            else Modifier.onSizeChanged { onHeight(it.height) }
+        )
     )
 }
 
@@ -2509,9 +2511,13 @@ private fun CompactUpNextCard(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.Black.copy(alpha = 0.08f),
-                                Color.Black.copy(alpha = 0.34f),
-                                Color.Black.copy(alpha = 0.80f),
+                                // One scrim vocabulary on KBVoid, like Detail's:
+                                // a black ramp under a card ended on a KBVoid
+                                // stop, so the AMOLED toggle changed the bottom
+                                // of the fade but not the top of it.
+                                KBVoid.copy(alpha = 0.08f),
+                                KBVoid.copy(alpha = 0.34f),
+                                KBVoid.copy(alpha = 0.80f),
                                 KBVoid.copy(alpha = 0.97f)
                             )
                         )
@@ -2530,7 +2536,7 @@ private fun CompactUpNextCard(
                     .padding(6.dp)
                     .background(
                         color = badgeColor,
-                        shape = RoundedCornerShape(4.dp)
+                        shape = KBShapeChip
                     )
                     .padding(
                         horizontal = 6.dp,
@@ -2559,8 +2565,10 @@ private fun CompactUpNextCard(
                 Text(
                     text = item.title,
                     color = KBTextHi,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    // The on-card title slot (titleSmall), matching the
+                    // Upcoming card above it and every other card title: this
+                    // was the sibling that disagreed with its own rail.
+                    style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.kbFocusMarquee(focused)
@@ -2615,7 +2623,11 @@ private fun CompactUpNextCard(
     "$remaining ep. left"
 },
             color = KBTextHi,
-            fontSize = 11.sp,
+            // The two corner chips on this card ("3 ep. left" and "42m
+            // left") are the same chip: one label style, one fill, one
+            // padding. They had drifted to 11sp on a 65% plate and 10sp on a
+            // 55% one, so the same kind of fact read as two kinds.
+            style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.SemiBold,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -2635,7 +2647,7 @@ private fun CompactUpNextCard(
                 )
                 .background(
                     color = KBVoid.copy(alpha = 0.65f),
-                    shape = RoundedCornerShape(4.dp)
+                    shape = KBShapeChip
                 )
                 .padding(
                     horizontal = 6.dp,
@@ -2648,7 +2660,7 @@ private fun CompactUpNextCard(
                 Text(
                     text = label,
                     color = KBTextHi.copy(alpha = 0.90f),
-                    fontSize = 10.sp,
+                    style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -2656,8 +2668,8 @@ private fun CompactUpNextCard(
                         .align(Alignment.TopEnd)
                         .padding(6.dp)
                         .background(
-                            color = KBVoid.copy(alpha = 0.55f),
-                            shape = RoundedCornerShape(4.dp)
+                            color = KBVoid.copy(alpha = 0.65f),
+                            shape = KBShapeChip
                         )
                         .padding(
                             horizontal = 6.dp,
@@ -2671,22 +2683,13 @@ private fun CompactUpNextCard(
                 progress != null &&
                 progress > 0f
             ) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomStart)
-                        .fillMaxWidth()
-                        .height(4.dp)
-                        .background(
-                            KBTextHi.copy(alpha = 0.28f)
-                        )
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(progress)
-                            .height(4.dp)
-                            .background(KBAccent)
-                    )
-                }
+                // The shared bar: this one had its own track tone
+                // (KBTextHi at 28%) and square ends where the detail screen's
+                // was KBTextLo at 45% under a 2dp radius.
+                KBProgressBar(
+                    progress = progress,
+                    modifier = Modifier.align(Alignment.BottomStart)
+                )
             }
         }
     }
@@ -3439,16 +3442,25 @@ fun HomeScreen(
                         // card would otherwise have pushed them off the screen.
                         isLoading && mergedEntries.isEmpty() -> {
                             item(key = "loading") {
-                                // The shared status card -- the same plate the
-                                // browse screens show while they load -- rather
-                                // than a third hand-rolled centered spinner.
-                                // fillParentMaxSize centers it in the rail
-                                // viewport, since an item otherwise sizes to its
-                                // own content height and would sit at the top.
-                                KBStatusMessage(
-                                    message = KB_STATUS_LOADING,
-                                    loading = true,
-                                    modifier = Modifier.fillParentMaxSize()
+                                // Poster-shaped placeholders, not a spinner and
+                                // not the status card: loading is the one state
+                                // whose shape is known in advance (see
+                                // KBSkeleton), so the rails arrive at their REAL
+                                // size instead of the page appearing as a shell
+                                // and then shifting down when the posters land.
+                                //
+                                // Sized from the Poster Size setting and the
+                                // viewer's poster edge, so the placeholders are
+                                // the tiles about to replace them; the 12dp Home
+                                // edge is the documented exception, and the rails
+                                // below use the same gutter.
+                                val skeletonSize = rememberPosterSize()
+                                KBSkeletonRailStack(
+                                    posterWidth = skeletonSize.width,
+                                    posterHeight = skeletonSize.height,
+                                    horizontalPadding = TvSafeAreaHorizontal,
+                                    railCount = 3,
+                                    shape = posterEdgeShape()
                                 )
                             }
                         }
@@ -3465,19 +3477,16 @@ fun HomeScreen(
                             // too, above this line.
                             builtinRailItems()
                             item(key = "error") {
-                                Text(
-                                    text =
-                                        "Error: $error",
-                                    // Muted: a failed background refresh is status
-                                    // above the rails, not a bright
-                                    // default-colored line shouting over them.
-                                    color = KBTextLo,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier =
-                                        Modifier.padding(
-                                            24.dp
-                                        )
+                                // The shared status pill rather than a bare
+                                // Text line: this is the same "something went
+                                // wrong" state every browse screen shows, and
+                                // it was the last one still hand-rolled. No
+                                // onRetry here - the rails below are what the
+                                // viewer is here for, and the pill's retry
+                                // card would take focus off them.
+                                KBStatusMessage(
+                                    message = "Error: $error",
+                                    modifier = Modifier.padding(24.dp)
                                 )
                             }
                         }
@@ -3494,22 +3503,19 @@ fun HomeScreen(
                         rails.isEmpty() && !isLoading -> {
                             builtinRailItems()
                             item(key = "empty") {
-                                // Clicking (OK on the remote) retries the
-                                // rail build immediately - no need to leave
-                                // Home or poke a setting when a cold-start
-                                // load failed.
-                                KBCard(
-                                    onClick = {
-                                        viewModel.refreshRailsOnly()
-                                    },
-                                    modifier = Modifier
-                                        .padding(24.dp)
-                                ) {
-                                    Text(
-                                        text =
-                                            "No catalogs available. Press OK to retry, or add an addon to get started."
-                                    )
-                                }
+                                // The shared status card, with the retry as its
+                                // own focusable action rather than the whole
+                                // plate being one big clickable - OK on the
+                                // remote retries the rail build immediately,
+                                // with no need to leave Home or poke a setting
+                                // when a cold-start load failed.
+                                KBStatusMessage(
+                                    message = "No catalogs available. Add an addon " +
+                                        "to get started.",
+                                    icon = KB_STATUS_ICON_EMPTY,
+                                    onRetry = { viewModel.refreshRailsOnly() },
+                                    modifier = Modifier.fillParentMaxSize()
+                                )
                             }
                         }
 
@@ -3527,7 +3533,7 @@ fun HomeScreen(
                                     message = "All rails are hidden.",
                                     icon = KB_STATUS_ICON_EMPTY,
                                     onRetry = onManageRails,
-                                    actionLabel = "Manage rails",
+                                    actionLabel = "MANAGE RAILS",
                                     modifier = Modifier.fillParentMaxSize()
                                 )
                             }
@@ -3874,12 +3880,8 @@ fun HomeScreen(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.Black.copy(
-                                    alpha = .96f
-                                ),
-                                Color.Black.copy(
-                                    alpha = .72f
-                                ),
+                                KBVoid.copy(alpha = .96f),
+                                KBVoid.copy(alpha = .72f),
                                 Color.Transparent
                             )
                         )

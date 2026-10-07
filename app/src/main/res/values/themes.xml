@@ -1,5 +1,12 @@
 <resources>
+    <!--
+      The window's own background, i.e. the one frame before Compose exists.
+      It is the ordinary void tone; MainActivity re-points it at the AMOLED
+      black at runtime, because a static resource cannot follow the toggle
+      (this window used to be pure black, which put a black surface under
+      every screen at launch - not just Home, the app's one black screen).
+    -->
     <style name="Theme.KBStream" parent="android:Theme.Material.NoActionBar">
-        <item name="android:colorBackground">#000000</item>
+        <item name="android:colorBackground">#0A0E14</item>
     </style>
 </resources>

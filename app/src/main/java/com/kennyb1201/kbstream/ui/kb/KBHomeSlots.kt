@@ -56,6 +56,7 @@ import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.tmdb.BrowseShortcutArt
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.posterBorderModifier
 import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
@@ -498,11 +499,13 @@ fun KBHomeCollectionRail(
             bottom = 8.dp
         )
     ) {
-        Text(
-            text = collection.title.ifBlank { "Collections" },
-            color = KBTextHi.copy(alpha = 0.94f),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+        // The app's rail heading, not a fourth treatment of its own: this was a
+        // raw titleMedium at 94% white with its own padding, so a collection's
+        // title sat a little smaller and tighter than the same rail's title on
+        // every other Home row (see KBSectionHeader).
+        KBSectionHeader(
+            title = collection.title.ifBlank { "Collections" },
+            modifier = Modifier.padding(top = 4.dp)
         )
 
         // The SAME gutter a catalog rail uses (HomeScreen's TvSafeAreaHorizontal

@@ -36,31 +36,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
-import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
-import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBButton
+import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
-import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusTile
-import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
-import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -231,12 +227,8 @@ fun ProfileEditScreen(
             }
         }
 
-        Text(
-            text = if (editing == null) "New profile" else "Edit profile",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold,
-            color = KBTextHi
-        )
+        // The screen's name, through the shared page title (Batch F item 38).
+        KBPageTitle(text = if (editing == null) "New profile" else "Edit profile")
 
         KBTextField(
             value = name,
@@ -540,7 +532,15 @@ fun ProfileEditScreen(
                                 ),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text(text = "＋", fontSize = 26.sp, color = KBTextHi)
+                            // ASCII plus, like the Library's "+ NEW LIST" tile:
+                            // the full-width form was the app's only U+FF0B, and
+                            // it renders differently from the ASCII plus beside
+                            // it depending on the font fallback that wins.
+                            Text(
+                                text = "+",
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = KBTextHi
+                            )
                         }
                     }
                 }
@@ -574,12 +574,22 @@ fun ProfileEditScreen(
                             .size(72.dp)
                             .padding(8.dp)
                             .clip(CircleShape)
-                            .background(Color(bg)),
+                            .background(Color(bg))
+                            // The chosen color keeps its ring whether or not
+                            // focus is on it - the picker's tiles already do
+                            // this, and here the ring only ever appeared while
+                            // the D-pad was sitting on the tile.
+                            .border(
+                                width = if (selected) 3.dp else 0.dp,
+                                color = KBTextHi,
+                                shape = CircleShape
+                            ),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             text = name.take(1).uppercase().ifBlank { "?" },
-                            fontSize = 26.sp,
+                            // Oswald via the type scale, not the platform font.
+                            style = MaterialTheme.typography.headlineMedium,
                             fontWeight = FontWeight.Bold,
                             color = Color(fg)
                         )
@@ -635,8 +645,8 @@ fun ProfileEditScreen(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier.padding(top = 32.dp)
         ) {
-            ProfileActionButton(
-                label = "Save",
+            KBButton(
+                label = "SAVE",
                 enabled = name.isNotBlank()
             ) {
                 // PIN validation before anything else — on failure keep the
@@ -663,7 +673,7 @@ fun ProfileEditScreen(
                             },
                             isError = true
                         )
-                        return@ProfileActionButton
+                        return@KBButton
                     }
                 }
                 // Precedence: typed URL > uploaded image > color/clear.
@@ -725,16 +735,16 @@ fun ProfileEditScreen(
                 onDone()
             }
 
-            ProfileActionButton(
-                label = "Cancel",
+            KBButton(
+                label = "CANCEL",
                 enabled = true
             ) {
                 onDone()
             }
 
             if (shownCustomUrl != null) {
-                ProfileActionButton(
-                    label = "Remove photo",
+                KBButton(
+                    label = "REMOVE PHOTO",
                     enabled = true
                 ) {
                     pendingAvatarUrl = null
@@ -747,8 +757,8 @@ fun ProfileEditScreen(
             }
 
             if (editing != null && profiles.size > 1) {
-                ProfileActionButton(
-                    label = "Delete",
+                KBButton(
+                    label = "DELETE",
                     enabled = true,
                     danger = true
                 ) {
@@ -848,41 +858,3 @@ private fun ProfileChip(
     }
 }
 
-/** TV-focusable action button (mirrors SyncSection's SyncActionButton).
- *  [danger] tints the label KBDanger (destructive-action affordance, same
- *  convention as PosterContextMenu's destructive rows). */
-@Composable
-private fun ProfileActionButton(
-    label: String,
-    enabled: Boolean,
-    danger: Boolean = false,
-    onClick: () -> Unit
-) {
-    if (enabled) {
-        KBCard(onClick = onClick) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = if (danger) KBDanger else Color.Unspecified,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-            )
-        }
-    } else {
-        Surface(
-            shape = KBShapeCard,
-            colors = SurfaceDefaults.colors(
-                containerColor = KBSurface.copy(alpha = 0.50f),
-                contentColor = KBTextLo.copy(alpha = 0.50f)
-            )
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = KBTextLo.copy(alpha = 0.50f),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-            )
-        }
-    }
-}

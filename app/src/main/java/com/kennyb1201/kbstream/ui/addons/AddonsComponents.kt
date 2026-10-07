@@ -180,7 +180,7 @@ internal fun AddonListCard(
                 Text(
                     text = addon.resources
                         .map { it.uppercase() }
-                        .joinToString("  •  ")
+                        .joinToString(" • ")
                         .ifBlank { "NO RESOURCES" },
                     style = MaterialTheme.typography.labelSmall,
                     color = KBTextLo,
@@ -446,7 +446,7 @@ internal fun AddonDetails(
                 modifier = Modifier.weight(1f)
             )
             SmallAction(
-                label = if (refreshing) "REFRESHING..." else "REFRESH",
+                label = if (refreshing) "REFRESHING…" else "REFRESH",
                 icon = Icons.Filled.Refresh,
                 enabled = !refreshing,
                 onClick = onRefresh,

@@ -8,7 +8,6 @@
     <color name="kb_text_hi">#FFF3EFE4</color>
     <color name="kb_text_lo">#FF8891A0</color>
     <color name="kb_danger">#FFB0453C</color>
-    <color name="kb_overlay_scrim">#C00A0E14</color>
     <color name="kb_overlay_gradient_top">#EB0A0E14</color>
     <color name="kb_overlay_gradient_mid">#2E0A0E14</color>
     <color name="kb_overlay_gradient_bottom">#F50A0E14</color>

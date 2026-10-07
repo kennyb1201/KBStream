@@ -442,7 +442,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         if (!ExternalPlayer.isAvailable(this)) {
             showRefused(
                 "No external player found",
-                "Install any video player app (VLC, MX Player, Kodi, Just Player, ...) " +
+                "Install any video player app (VLC, MX Player, Kodi, Just Player, …) " +
                     "and pick it in Settings, or play this title in KBStream's own player."
             )
             return
@@ -1153,12 +1153,11 @@ class ExternalPlayerActivity : ComponentActivity() {
         finish()
     }
 
-    /** The pick pills' look, matching both in-app engines'. */
+    /** The pick pills' look, matching both in-app engines' - literally: they all
+     * call the one shared look (see [applyPillLook]), so the end-credits picker
+     * cannot drift from the two in-app players' pills. */
     private fun applyPillBackground(view: TextView, selected: Boolean, focused: Boolean) {
-        // Theme-resolved so a themed install does not show the default brass on
-        // a selected/focused pill (see [pillChipBackground]).
-        view.background = pillChipBackground(this, selected, focused)
-        view.setTextColor(getColor(if (selected) R.color.kb_void else R.color.kb_text_hi))
+        applyPillLook(this, view, selected, focused)
     }
 
     // ── Watch history ───────────────────────────────────────────────────────
@@ -1529,8 +1528,13 @@ class ExternalPlayerActivity : ComponentActivity() {
          */
         private const val SEGMENT_LOOKUP_TIMEOUT_MS = 1_500L
 
-        /** Next Up's unattended-advance countdown, the same as both engines'. */
-        private const val NEXT_UP_COUNTDOWN_SECONDS = 10
+        /**
+         * Next Up's unattended-advance countdown. It is the package-level
+         * [NEXT_UP_COUNTDOWN_SECONDS] both engines share, not a private copy:
+         * the hand-off used to count ten seconds where the native and MPV
+         * players counted five, so the same end-of-episode card sat for twice
+         * as long on the one engine that raised it.
+         */
         private const val NEXT_UP_HOLD_THRESHOLD_MS = 60_000L
 
         /**

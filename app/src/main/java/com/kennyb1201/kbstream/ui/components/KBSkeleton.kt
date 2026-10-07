@@ -84,7 +84,12 @@ fun KBSkeletonRail(
     modifier: Modifier = Modifier,
     itemCount: Int = 6,
     horizontalPadding: Dp = 20.dp,
-    titleWidth: Dp = 168.dp
+    titleWidth: Dp = 168.dp,
+    // The poster's own edge (see posterEdgeShape): a placeholder that is
+    // rounded while the real tile is a pill promises the wrong thing and makes
+    // the rail jump in shape as the posters land, which is the one jolt a
+    // skeleton exists to prevent.
+    shape: androidx.compose.ui.graphics.Shape = KBShapeCard
 ) {
     val alpha = rememberSkeletonAlpha()
     Column(
@@ -104,7 +109,12 @@ fun KBSkeletonRail(
             modifier = Modifier.padding(start = horizontalPadding, end = horizontalPadding)
         ) {
             repeat(itemCount) {
-                KBSkeletonTile(width = posterWidth, height = posterHeight, alpha = alpha)
+                KBSkeletonTile(
+                    width = posterWidth,
+                    height = posterHeight,
+                    alpha = alpha,
+                    shape = shape
+                )
             }
         }
     }
@@ -118,7 +128,8 @@ fun KBSkeletonRailStack(
     modifier: Modifier = Modifier,
     railCount: Int = 3,
     itemCount: Int = 6,
-    horizontalPadding: Dp = 20.dp
+    horizontalPadding: Dp = 20.dp,
+    shape: androidx.compose.ui.graphics.Shape = KBShapeCard
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
         repeat(railCount) {
@@ -126,7 +137,8 @@ fun KBSkeletonRailStack(
                 posterWidth = posterWidth,
                 posterHeight = posterHeight,
                 itemCount = itemCount,
-                horizontalPadding = horizontalPadding
+                horizontalPadding = horizontalPadding,
+                shape = shape
             )
         }
     }
@@ -141,7 +153,8 @@ fun KBSkeletonGrid(
     modifier: Modifier = Modifier,
     rows: Int = 2,
     horizontalPadding: Dp = 20.dp,
-    verticalSpacing: Dp = 14.dp
+    verticalSpacing: Dp = 14.dp,
+    shape: androidx.compose.ui.graphics.Shape = KBShapeCard
 ) {
     val alpha = rememberSkeletonAlpha()
     Column(
@@ -153,7 +166,12 @@ fun KBSkeletonGrid(
         repeat(rows) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 repeat(columns) {
-                    KBSkeletonTile(width = cellWidth, height = cellHeight, alpha = alpha)
+                    KBSkeletonTile(
+                        width = cellWidth,
+                        height = cellHeight,
+                        alpha = alpha,
+                        shape = shape
+                    )
                 }
             }
         }

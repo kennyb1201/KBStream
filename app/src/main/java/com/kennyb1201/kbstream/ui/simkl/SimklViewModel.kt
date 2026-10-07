@@ -116,7 +116,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.value = _uiState.value.copy(
                 isLoading = true,
                 errorMessage = null,
-                statusMessage = "Requesting Simkl code..."
+                statusMessage = "Requesting Simkl code…"
             )
 
             runCatchingCancellable { repository.createPinCode() }
@@ -173,14 +173,14 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
                         } else {
                             _uiState.value = _uiState.value.copy(
                                 isLoading = false,
-                                statusMessage = "Waiting for authorization..."
+                                statusMessage = "Waiting for authorization…"
                             )
                         }
                     }
                     .onFailure {
                         _uiState.value = _uiState.value.copy(
                             isLoading = false,
-                            statusMessage = "Waiting for authorization..."
+                            statusMessage = "Waiting for authorization…"
                         )
                     }
             }
@@ -243,7 +243,7 @@ class SimklViewModel(app: Application) : AndroidViewModel(app) {
             _uiState.value = _uiState.value.copy(
                 isLoadingWatching = true,
                 errorMessage = null,
-                statusMessage = "Refreshing Simkl data..."
+                statusMessage = "Refreshing Simkl data…"
             )
 
             runCatchingCancellable { repository.getContinueWatching(forceRefresh = true) }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,7 +31,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
@@ -64,8 +64,6 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -95,14 +93,21 @@ import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.notifications.ReminderRules
 import com.kennyb1201.kbstream.work.ReminderWorker
+import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
+import com.kennyb1201.kbstream.ui.components.KBProgressBar
+import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
 import com.kennyb1201.kbstream.ui.components.voiceSearchAvailable
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBRust
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -416,7 +421,8 @@ fun GuideScreen(
                     epgUrl = guideSourceUrls.firstOrNull(),
                     epgUrls = guideSourceUrls,
                     tvgId = item.channel.tvgId,
-                    tvgName = item.channel.tvgName
+                    tvgName = item.channel.tvgName,
+                    providerChannelId = item.channel.providerChannelId
                 )
             }
 
@@ -1098,27 +1104,25 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                 true
             }
     ) {
+        // The screen's root is the app's void, not a gradient that fades into
+        // it: the gradient's top stop was a third background tone that ignored
+        // the AMOLED palette (its mid-screen fade is what made the guide look
+        // like a different app from the browse screens behind it). See
+        // KBVoid in Theme.kt - and note the guide's own rows and panels still
+        // sit on their own raised surfaces.
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            KBSurface.copy(alpha = 0.92f),
-                            KBVoid.copy(alpha = 0.98f),
-                            KBVoid
-                        )
-                    )
-                )
+                .background(KBVoid)
         )
 
         when {
             isLoading && playlist == null -> {
-                CenterMessage(
+                KBStatusMessage(
                     title = "Loading guide",
-                    message = "Fetching playlist and program data...",
-                    modifier = Modifier.fillMaxSize(),
-                    showSpinner = true
+                    message = "Fetching playlist and program data…",
+                    loading = true,
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 
@@ -1159,12 +1163,15 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         if (groups.isNotEmpty()) {
                             LazyRow(
     state = groupRowState,
-    // Start padding keeps the first chip (and any chip the auto-reveal
-    // snaps to the left edge) from sitting flush where its focused
-    // border/glow clips.
-    contentPadding = PaddingValues(start = 8.dp, end = 8.dp),
+    // The side room the focused chip's border and glow need INSIDE the row's
+    // own clip (see KBFocusChipInset), cancelled by the matching offset below
+    // so the chips still line up with the content above them instead of
+    // sitting 8dp in from it. The old 8dp start padding was not enough room
+    // for the glow and pushed the strip in from its own column.
+    contentPadding = PaddingValues(horizontal = KBFocusChipInset),
     horizontalArrangement = Arrangement.spacedBy(8.dp),
     modifier = Modifier
+        .offset(x = -KBFocusChipInset)
         .focusGroup()
         .onPreviewKeyEvent { event ->
             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -1372,17 +1379,20 @@ Spacer(modifier = Modifier.height(14.dp))
                                             horizontalAlignment = Alignment.CenterHorizontally,
                                             modifier = Modifier.fillMaxSize()
                                         ) {
-                                            CenterMessage(
+                                            KBStatusMessage(
                                                 title = if (groupedChannels.isEmpty()) {
                                                     "No channels in \"$selectedGroup\""
                                                 } else {
                                                     "No channel selected"
                                                 },
                                                 message = if (groupedChannels.isEmpty()) {
-                                                    "This view has nothing to show right now."
+                                                    "This view has nothing to show " +
+                                                        "right now."
                                                 } else {
-                                                    "Choose a channel from the list to view program details."
+                                                    "Choose a channel from the list to " +
+                                                        "view program details."
                                                 },
+                                                icon = KB_STATUS_ICON_EMPTY,
                                                 modifier = Modifier.weight(1f).fillMaxWidth()
                                             )
                                             if (groupedChannels.isEmpty()) {
@@ -1980,7 +1990,7 @@ private fun SetupPanel(
             // when the panel has lost it entirely (see the recovery block).
             KBCard(onClick = onLoad, modifier = Modifier.focusRequester(recoveryFocusRequester)) {
                 Text(
-                    text = if (isLoading) "LOADING..." else "LOAD",
+                    text = if (isLoading) "LOADING…" else "LOAD",
                     color = KBTextHi,
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
@@ -1999,7 +2009,7 @@ private fun SetupPanel(
             if (epgUrl.isNotBlank() || extraEpgUrls.isNotBlank()) {
                 KBCard(onClick = onImportGuide) {
                     Text(
-                        text = if (isImportingGuide) "IMPORTING..." else "IMPORT EPG",
+                        text = if (isImportingGuide) "IMPORTING…" else "IMPORT EPG",
                         color = KBTextHi,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
@@ -2083,7 +2093,7 @@ private fun GuideHeader(
             val meta = buildList {
                 add("$channelCount channels")
                 if (selectedGroup.isNotBlank()) add(selectedGroup)
-            }.joinToString("  •  ")
+            }.joinToString(" • ")
 
             Text(
                 text = meta,
@@ -2171,9 +2181,14 @@ private fun GroupChip(
     onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ){
+    // A chip, not a card: the group strip is a run of interactive chips, so it
+    // takes the chip corner and focus scale (10dp / 1.06) rather than the
+    // 12dp / 1.03 card treatment (see KBShapeChip in Theme.kt).
     KBCard(
     onClick = onClick,
     onLongClick = onLongClick,
+    focusedScale = KBFocusChip,
+    shape = KBShapeChip,
     modifier = modifier.onFocusChanged {
         if (it.isFocused) onFocus()
     }
@@ -2260,11 +2275,6 @@ private fun ChannelRowCard(
                         else -> KBSurface
                     }
                 )
-                .border(
-                    width = if (isFocused) 1.dp else 0.dp,
-                    color = if (isFocused) KBAccent.copy(alpha = 0.32f) else Color.Transparent,
-                    shape = rowShape
-                )
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -2312,8 +2322,11 @@ private fun ChannelRowCard(
                 // to read "No program data" as well, which made every group
                 // switch (and first entry) look like the guide had lost all
                 // its data for the second the query took to land.
+                // The row and the panel below it now say the same thing for the
+                // same absence: this one read "No program data" while the card
+                // read "No guide data".
                 val nowTitle = item.now?.title
-                    ?: if (guidePending) "Loading guide..." else "No program data"
+                    ?: if (guidePending) "Loading guide…" else "No guide data"
                 Text(
                     text = nowTitle,
                     color = when {
@@ -2330,7 +2343,7 @@ private fun ChannelRowCard(
 
             item.channel.tvgChno?.takeIf { it.isNotBlank() }?.let { chno ->
                 Surface(
-                    shape = RoundedCornerShape(5.dp),
+                    shape = KBShapeChip,
                     colors = SurfaceDefaults.colors(
                         containerColor = if (isFocused) KBVoid.copy(alpha = 0.54f) else KBVoid.copy(alpha = 0.44f),
                         contentColor = KBTextLo.copy(alpha = if (isFocused) 0.9f else 0.78f)
@@ -2340,7 +2353,7 @@ private fun ChannelRowCard(
                             1.dp,
                             if (isFocused) KBAccent.copy(alpha = 0.18f) else KBTextLo.copy(alpha = 0.08f)
                         ),
-                        shape = RoundedCornerShape(5.dp)
+                        shape = KBShapeChip
                     )
                 ) {
                     Text(
@@ -2459,18 +2472,25 @@ private fun GuideDetailPanel(
             modifier = Modifier.fillMaxWidth()
         ) {
             if (upcoming.isEmpty()) {
-                CenterMessage(
+                KBStatusMessage(
                     title = when {
-                        guidePending -> "Loading guide..."
-                        item.epgMatchType == EpgMatchType.NO_MATCH -> "Guide not matched"
+                        guidePending -> "Loading guide…"
+                        item.epgMatchType == EpgMatchType.NO_MATCH ->
+                            "Guide not matched"
                         else -> "No guide data"
                     },
                     message = when {
-                        guidePending -> "Program information for this channel is still loading."
+                        guidePending ->
+                            "Program information for this channel is still loading."
                         item.epgMatchType == EpgMatchType.NO_MATCH ->
-                            "This channel did not match the XMLTV guide. Check tvg-id, tvg-name, or channel name alignment."
-                        else -> "Program information is not available for this channel."
+                            "This channel did not match the XMLTV guide. Check " +
+                                "tvg-id, tvg-name, or channel name alignment."
+                        else ->
+                            "Program information is not available for this " +
+                                "channel."
                     },
+                    loading = guidePending,
+                    icon = KB_STATUS_ICON_EMPTY,
                     modifier = Modifier.fillMaxWidth().padding(top = 24.dp)
                 )
             } else {
@@ -2547,7 +2567,7 @@ private fun NowNextPanel(
         ProgramCard(
             label = "NOW",
             title = item.now?.title
-                ?: if (guidePending) "Loading guide..." else "Nothing airing right now",
+                ?: if (guidePending) "Loading guide…" else "Nothing airing right now",
             time = item.now?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
             badge = nowProgram?.let { formatRemainingLabel(it.endUtcMillis - nowMillis) },
             progress = nowProgress,
@@ -2558,7 +2578,7 @@ private fun NowNextPanel(
         ProgramCard(
             label = "NEXT",
             title = item.next?.title
-                ?: if (guidePending) "Loading guide..." else "No next program listed",
+                ?: if (guidePending) "Loading guide…" else "No next program listed",
             time = item.next?.let { formatTimeRange(it.startUtcMillis, it.endUtcMillis) },
             badge = item.next?.let { formatStartsInLabel(it.startUtcMillis - nowMillis) },
             description = item.next?.description,
@@ -2618,22 +2638,14 @@ private fun ProgramCard(
             }
 
             progress?.let { fraction ->
-                Box(
-                    modifier = Modifier
-                        .padding(top = 8.dp)
-                        .fillMaxWidth()
-                        .height(3.dp)
-                        .clip(KBShapePill)
-                        .background(KBVoid.copy(alpha = 0.55f))
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(fraction.coerceIn(0.02f, 1f))
-                            .fillMaxHeight()
-                            .clip(KBShapePill)
-                            .background(KBAccent)
-                    )
-                }
+                // The shared bar (this one was 3dp on a capsule clip with a
+                // KBVoid track, where the same bar under a poster is 4dp with
+                // a KBTextLo track). The 2% floor is kept: a program that has
+                // only just started should still show that it has.
+                KBProgressBar(
+                    progress = fraction.coerceIn(0.02f, 1f),
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
 
             description?.takeIf { it.isNotBlank() }?.let {
@@ -2646,46 +2658,6 @@ private fun ProgramCard(
                     modifier = Modifier.padding(top = 6.dp)
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun CenterMessage(
-    title: String,
-    message: String,
-    modifier: Modifier = Modifier,
-    showSpinner: Boolean = false
-) {
-    Box(
-        modifier = modifier,
-        contentAlignment = Alignment.Center
-    ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .background(KBSurface, KBShapePanel)
-                .padding(horizontal = 22.dp, vertical = 18.dp)
-        ) {
-            if (showSpinner) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = KBAccent,
-                    strokeWidth = 2.dp
-                )
-                Spacer(modifier = Modifier.height(10.dp))
-            }
-            Text(
-                text = title,
-                color = KBTextHi,
-                style = MaterialTheme.typography.titleLarge
-            )
-            Text(
-                text = message,
-                color = KBTextLo,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 8.dp)
-            )
         }
     }
 }
@@ -2763,47 +2735,58 @@ private fun ChannelActionsDialog(
     reminderActive: Boolean = false
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(430.dp)
-                .background(KBSurfaceRaised, KBShapePanel)
-                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+        // Heading, then the channel it acts on. Before this the panel had no
+        // heading at all: the channel name sat where one belongs and the
+        // dialog's own name ("Channel options") was a small gray line under it.
+        KBDialogPanel(
+            title = "Channel options",
+            subtitle = item.channel.displayName,
+            width = 430.dp
         ) {
-            Text(item.channel.displayName, color = KBTextHi, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("Channel options", color = KBTextLo, style = MaterialTheme.typography.bodyMedium)
             if (hasCatchup) {
-                KBCard(onClick = onOpenCatchup, modifier = Modifier.fillMaxWidth()) {
-                    Text("CATCH-UP TV", color = KBTextHi, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
-                }
+                KBButton(
+                    label = "CATCH-UP TV",
+                    onClick = onOpenCatchup,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
             onToggleReminder?.let { toggle ->
-                KBCard(onClick = toggle, modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        if (reminderActive) "REMOVE REMINDER" else "REMIND ME: ${item.next?.title ?: "next program"}",
-                        color = KBTextHi,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                    )
-                }
+                KBButton(
+                    label = if (reminderActive) {
+                        "REMOVE REMINDER"
+                    } else {
+                        "REMIND ME: ${item.next?.title ?: "next program"}"
+                    },
+                    onClick = toggle,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
-            KBCard(onClick = onToggleFavorite, modifier = Modifier.fillMaxWidth()) {
-                Text(if (item.isFavorite) "REMOVE FROM FAVORITES" else "ADD TO FAVORITES", color = KBTextHi, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
-            }
-            KBCard(onClick = onHideChannel, modifier = Modifier.fillMaxWidth()) {
-                Text("HIDE CHANNEL", color = KBTextHi, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
-            }
+            KBButton(
+                label = if (item.isFavorite) {
+                    "REMOVE FROM FAVORITES"
+                } else {
+                    "ADD TO FAVORITES"
+                },
+                onClick = onToggleFavorite,
+                modifier = Modifier.fillMaxWidth()
+            )
+            KBButton(
+                label = "HIDE CHANNEL",
+                onClick = onHideChannel,
+                modifier = Modifier.fillMaxWidth()
+            )
             item.channel.groupTitle?.trim()?.takeIf { it.isNotBlank() }?.let { group ->
-                KBCard(onClick = onHideGroup, modifier = Modifier.fillMaxWidth()) {
-                    Text("HIDE GROUP: $group", color = KBTextHi, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
-                }
+                KBButton(
+                    label = "HIDE GROUP: $group",
+                    onClick = onHideGroup,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
-            KBCard(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
-                Text("CANCEL", color = KBTextLo, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp))
-            }
+            KBButton(
+                label = "CANCEL",
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            )
         }
     }
 }
@@ -2823,27 +2806,7 @@ private fun CatchupDialog(
     onPlay: (CatchupProgram) -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(560.dp)
-                .background(KBSurfaceRaised, KBShapePanel)
-                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "CATCH-UP TV",
-                color = KBAccent,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
-            Text(
-                text = channelName,
-                color = KBTextHi,
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+        KBDialogPanel(title = "Catch-up TV", subtitle = channelName) {
 
             if (loading) {
                 Row(
@@ -3004,20 +2967,7 @@ private fun ChannelSearchDialog(
     }
 
     Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(560.dp)
-                .background(KBSurfaceRaised, KBShapePanel)
-                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Text(
-                text = "SEARCH GUIDE",
-                color = KBAccent,
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+        KBDialogPanel(title = "Search guide") {
             KBTextField(
                 value = query,
                 onValueChange = onQueryChanged,
@@ -3303,12 +3253,18 @@ private fun HiddenItemsDialog(
 
     Dialog(onDismissRequest = onDismiss) {
         Column(
+            // The canonical dialog plate: the shared 38% accent ring (this
+            // was the only dialog left at 45%) and the shared 22dp padding,
+            // with the same heading every other panel draws. It stays a
+            // hand-built Column rather than KBDialogPanel because it is the
+            // one dialog with a fixed height and its own scrolling tab body.
             modifier = Modifier
                 .width(720.dp)
                 .height(650.dp)
                 .background(KBSurface, KBShapePanel)
-                .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
-                .padding(20.dp)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
+                .padding(22.dp)
+                .focusGroup()
         ) {
             Text(
                 text = "HIDDEN ITEMS",
@@ -3431,9 +3387,10 @@ private fun HiddenGroupsTab(
         Spacer(modifier = Modifier.height(12.dp))
 
         if (allGroups.isEmpty()) {
-            CenterMessage(
+            KBStatusMessage(
                 title = "No groups found",
                 message = "Load a playlist to manage its groups.",
+                icon = KB_STATUS_ICON_EMPTY,
                 modifier = Modifier.weight(1f).fillMaxWidth()
             )
         } else {
@@ -3465,9 +3422,10 @@ private fun HiddenChannelsTab(
     onUnhideChannel: (String) -> Unit
 ) {
     if (hiddenChannelItems.isEmpty()) {
-        CenterMessage(
+        KBStatusMessage(
             title = "No hidden channels",
             message = "Individually hidden channels will appear here.",
+            icon = KB_STATUS_ICON_EMPTY,
             modifier = Modifier.fillMaxSize()
         )
     } else {

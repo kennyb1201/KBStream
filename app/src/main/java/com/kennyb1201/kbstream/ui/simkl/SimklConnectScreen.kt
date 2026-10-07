@@ -27,6 +27,7 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.simkl.SimklWatchedCounts
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -80,12 +81,12 @@ fun SimklConnectScreen(
                     .padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Text(
-                    text = "SIMKL CONNECT",
-                    color = KBAccent,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold
-                )
+                // The screen's name, through the shared page title (Batch F
+                // item 38), accent-colored like Library's: it was a labelLarge
+                // caption, so this screen - the one place the app asks the
+                // viewer to connect an account - named itself smaller than a
+                // rail heading did.
+                KBPageTitle(text = "SIMKL CONNECT", color = KBAccent)
 
                 Text(
                     text = "Connect your Simkl account to sync activity and continue watching data.",
@@ -194,7 +195,7 @@ fun SimklConnectScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         KBCard(onClick = vm::generateCode) {
                             Text(
-                                text = if (uiState.isLoading) "WORKING..." else "GENERATE CODE",
+                                text = if (uiState.isLoading) "WORKING…" else "GENERATE CODE",
                                 color = KBTextHi,
                                 style = MaterialTheme.typography.titleMedium,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)

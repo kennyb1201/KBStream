@@ -739,13 +739,20 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     fun applySubtitleAppearance(size: Int, background: Int, position: Int) {
         // --sub-font-size is mpv's own scale (55 is its default), so the three
-        // steps are that +/-20%.
+        // steps are that +/-20% - the same neutral the main player's 14sp step
+        // sits at, so a title does not change size when it is handed over.
         val font = when (size) {
             0 -> 44.0
             2 -> 66.0
             else -> 55.0
         }
         styleOption("sub-font-size", font.toString())
+        // The three fills are the main player's three, to the byte
+        // (NativePlayerActivity.renderText paints 0x80000000, 0xE5000000 and
+        // 0xB3000000): the same subtitle in the same app cannot come out 90%
+        // black in one engine and opaque in the other, and "Text" is a 70%
+        // plate rather than the outlined-text look it used to be - the outline
+        // is a DVD-era look the app never uses anywhere else.
         when (background) {
             // Semi and Solid are a fill behind the text, with no outline.
             1 -> {
@@ -753,13 +760,13 @@ class MpvPlayerView @JvmOverloads constructor(
                 styleOption("sub-border-size", "0")
             }
             2 -> {
-                styleOption("sub-back-color", "#FF000000")
+                styleOption("sub-back-color", "#E5000000")
                 styleOption("sub-border-size", "0")
             }
-            // Text: outlined text with no fill (the old DVD look).
+            // Text: the tight glyph-hugging plate, not an outline.
             3 -> {
-                styleOption("sub-back-color", "#00000000")
-                styleOption("sub-border-size", "2.4")
+                styleOption("sub-back-color", "#B3000000")
+                styleOption("sub-border-size", "0")
             }
             // None: no fill and no outline, just the shadow mpv already draws.
             else -> {

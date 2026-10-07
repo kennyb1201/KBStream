@@ -12,22 +12,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.tv.material3.MaterialTheme
-import androidx.tv.material3.Surface
-import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
-import com.kennyb1201.kbstream.ui.components.KBCard
-import com.kennyb1201.kbstream.ui.components.KBSectionHeader
+import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBDanger
-import com.kennyb1201.kbstream.ui.theme.KBShapeCard
-import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
@@ -56,7 +49,9 @@ fun SyncSection() {
         busy = authState is SupabaseSync.AuthState.SigningIn
     }
 
-    KBSectionHeader(title = "Sync (Beta)")
+    // The pane above this section already draws its "SYNC (BETA)" heading (see
+    // SettingsScreen's Integrations pane), so a second heading here stacked two
+    // labels on the same section.
 
     val credentialsValid =
         email.isNotBlank() && password.length >= 6
@@ -89,18 +84,15 @@ fun SyncSection() {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(top = 8.dp)
             ) {
-                SyncActionButton(
-                    label = "Sync now",
+                KBButton(
+                    label = "SYNC NOW",
+                    onClick = { SupabaseSync.syncNow(context) },
                     enabled = !busy
-                ) {
-                    SupabaseSync.syncNow(context)
-                }
-                SyncActionButton(
-                    label = "Sign out",
-                    enabled = true
-                ) {
-                    SupabaseSync.signOut(context)
-                }
+                )
+                KBButton(
+                    label = "SIGN OUT",
+                    onClick = { SupabaseSync.signOut(context) }
+                )
             }
 
             Text(
@@ -151,18 +143,16 @@ fun SyncSection() {
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(top = 6.dp)
             ) {
-                SyncActionButton(
-                    label = if (busy) "Signing in…" else "Sign in",
+                KBButton(
+                    label = if (busy) "SIGNING IN…" else "SIGN IN",
+                    onClick = { SupabaseSync.signIn(context, email, password) },
                     enabled = !busy && credentialsValid
-                ) {
-                    SupabaseSync.signIn(context, email, password)
-                }
-                SyncActionButton(
-                    label = "Create account",
+                )
+                KBButton(
+                    label = "CREATE ACCOUNT",
+                    onClick = { SupabaseSync.signUp(context, email, password) },
                     enabled = !busy && credentialsValid
-                ) {
-                    SupabaseSync.signUp(context, email, password)
-                }
+                )
             }
 
             Text(
@@ -175,44 +165,5 @@ fun SyncSection() {
     }
 }
 
-/**
- * One TV-focusable pill button for the Sync section. Follows the app-wide
- * ActionButton pattern: a KBCard when enabled (D-pad focusable, OK fires
- * onClick), a dimmed non-focusable Surface when disabled. Text inherits the
- * card's content color (bright when idle, accent when focused).
- */
-@Composable
-private fun SyncActionButton(
-    label: String,
-    enabled: Boolean,
-    onClick: () -> Unit
-) {
-    if (enabled) {
-        KBCard(onClick = onClick) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-            )
-        }
-    } else {
-        Surface(
-            shape = KBShapeCard,
-            colors = SurfaceDefaults.colors(
-                containerColor = KBSurface.copy(alpha = 0.50f),
-                contentColor = KBTextLo.copy(alpha = 0.50f)
-            )
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.SemiBold,
-                color = KBTextLo.copy(alpha = 0.50f),
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
-            )
-        }
-    }
-}
 
 

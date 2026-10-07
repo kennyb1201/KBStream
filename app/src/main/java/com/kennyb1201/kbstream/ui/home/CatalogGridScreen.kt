@@ -40,6 +40,7 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
@@ -54,6 +55,7 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import kotlinx.coroutines.delay
@@ -158,7 +160,8 @@ fun CatalogGridScreen(
                 cellWidth = posterSize.width,
                 cellHeight = posterSize.height,
                 columns = 6,
-                rows = 2
+                rows = 2,
+                shape = posterEdgeShape()
             )
         }
         return
@@ -227,8 +230,8 @@ fun CatalogGridScreen(
                     state = gridState,
                     columns = GridCells.Fixed(6),
                     contentPadding = PaddingValues(
-                        start = 20.dp,
-                        end = 20.dp,
+                        start = KBScreenEdge,
+                        end = KBScreenEdge,
                         top = 4.dp,
                         bottom = 24.dp
                     ),

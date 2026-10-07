@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,10 +57,13 @@ import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusCard
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
+import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import com.kennyb1201.kbstream.ui.theme.KBSpacing
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -180,7 +184,7 @@ internal fun SearchHero(
         KBTextField(
             value = query,
             onValueChange = onQueryChanged,
-            placeholder = "Search titles, people, collections...",
+            placeholder = "Search titles, people, collections…",
             modifier = Modifier
                 .padding(top = 12.dp)
                 .fillMaxWidth(),
@@ -218,7 +222,8 @@ internal fun SearchHero(
         }
 
         val statusText = when {
-            isLoading -> "Searching..."
+            // "…", not "...": one glyph, and the app's own spelling.
+            isLoading -> "Searching…"
             query.isBlank() -> ""
             totalCount == 1 -> "1 match"
             totalCount > 1 -> "$totalCount matches"
@@ -258,9 +263,22 @@ internal fun SearchHero(
 // contentPadding. Living in contentPadding (rather than a parent modifier
 // padding) keeps the ends of each rail inside the LazyRow's clip bounds so
 // focused poster borders + glow never get cut off at the first/last item.
-internal val SEARCH_RAIL_EDGE_PADDING = 20.dp
+//
+// It is the app's screen edge (KBScreenEdge), not a 20dp of its own: Search
+// and the discover grids used to sit 4dp inside every other screen.
+internal val SEARCH_RAIL_EDGE_PADDING = KBScreenEdge
 
-
+/**
+ * One titled rail of the search screen's results, on the app's vertical rhythm.
+ *
+ * The row's horizontal inset is [KBFocusChipInset], not the column's edge: the
+ * LazyColumn this sits in has already placed the item at the screen edge, so a
+ * second full inset put these tiles 4dp inside every other rail in the app (and
+ * 20dp inside their own section heading). The room is taken inside the row's
+ * own clip and immediately cancelled with `offset(x = -KBFocusChipInset)`, so
+ * the tiles line up with the heading above them and the focused poster's border
+ * and glow still have somewhere to grow.
+ */
 @Composable
 internal fun SearchRail(
     title: String,
@@ -269,13 +287,14 @@ internal fun SearchRail(
     Column {
         KBSectionHeader(title = title)
         LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            horizontalArrangement = Arrangement.spacedBy(KBSpacing.md),
             contentPadding = PaddingValues(
                 top = 2.dp,
                 bottom = 2.dp,
-                start = SEARCH_RAIL_EDGE_PADDING,
-                end = SEARCH_RAIL_EDGE_PADDING
-            )
+                start = KBFocusChipInset,
+                end = KBFocusChipInset
+            ),
+            modifier = Modifier.offset(x = -KBFocusChipInset)
         ) {
             content()
         }

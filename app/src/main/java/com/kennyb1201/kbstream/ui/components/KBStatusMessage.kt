@@ -15,12 +15,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
+import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import kotlinx.coroutines.android.awaitFrame
 
@@ -53,15 +55,25 @@ import kotlinx.coroutines.android.awaitFrame
 @Composable
 fun KBStatusMessage(
     message: String,
+    // An optional heading over the pill, for the states that have two things to
+    // say: WHAT happened ("No guide data") and the one line of detail under it
+    // ("program information is not available for this channel"). It lives here
+    // rather than in a second component because the guide's own title-plus-plate
+    // panel was exactly that second component - it said the same thing as this
+    // card in a different voice, which is what made "nothing here" read
+    // differently on the guide than on every browse screen. Null (the common
+    // case) renders the pill alone, as before.
+    title: String? = null,
     loading: Boolean = false,
     icon: String = "⚠️",
     onRetry: (() -> Unit)? = null,
-    // The action's label. Overridable because the action is not always a retry
-    // - Home's "all rails hidden" card offers "Manage rails" - and a second
-    // copy of the focus-grabbing card below would be the thing that drifts.
-    // The callback keeps its onRetry name so retry-only call sites need no
-    // change.
-    actionLabel: String = "Press OK to retry.",
+    // The action's label, in the app's button casing (ALL CAPS - the same
+    // convention the guide's SHOW/HIDE and the feedback toast's UNDO use).
+    // Overridable because the action is not always a retry - Home's "all rails
+    // hidden" card offers MANAGE RAILS - and a second copy of the
+    // focus-grabbing card below would be the thing that drifts. The callback
+    // keeps its onRetry name so retry-only call sites need no change.
+    actionLabel: String = "RETRY",
     modifier: Modifier = Modifier.fillMaxSize()
 ) {
     val retryRequester = remember { FocusRequester() }
@@ -96,6 +108,16 @@ fun KBStatusMessage(
 
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            title?.takeIf { it.isNotBlank() }?.let { heading ->
+                Text(
+                    text = heading,
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+            }
+
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier

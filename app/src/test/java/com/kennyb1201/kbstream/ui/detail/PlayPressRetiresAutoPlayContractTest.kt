@@ -67,7 +67,7 @@ class PlayPressRetiresAutoPlayContractTest {
         // navigate themselves, so the effect has to be free to run again.
         val start = source.indexOf("if (playButtonMenu) {")
         assertTrue("the play button menu not found", start >= 0)
-        val end = source.indexOf("onDismiss = { playButtonMenu = false }", start)
+        val end = source.indexOf("onDismiss = { dismissPlayButtonMenu() }", start)
         assertTrue("the play button menu end not found", end > start)
         val menu = source.substring(start, end)
         assertTrue("Play from Beginning must re-arm the effect", menu.contains("startOver = true"))

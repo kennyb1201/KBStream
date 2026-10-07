@@ -46,7 +46,10 @@ internal data class RatingChipSource(
 // icon carries the recognition and the value stays the accent-colored number.
 // MyAnimeList is lifted from its #2E51A2, which is nearly invisible on the
 // dark chip surface; the rest are the brands' own colors.
-private val ImdbTint = Color(0xFFF5C518)
+// The brand's own yellow. Shared rather than retyped: the detail screen's IMDb
+// rating chip paints the same plate, and the two had drifted into two
+// literals of the same value in two files (see DetailScreen).
+internal val KBImdbTint = Color(0xFFF5C518)
 private val RottenTomatoesTint = Color(0xFFFA320A)
 private val TmdbTint = Color(0xFF01B4E4)
 private val MetacriticTint = Color(0xFFFFCC34)
@@ -68,7 +71,7 @@ internal fun mdbListRatingSources(
     tmdbFallback: Double? = null
 ): List<RatingChipSource> = listOfNotNull(
     ratings?.imdb?.let {
-        RatingChipSource("IMDb", it, R.drawable.ic_rating_imdb, ImdbTint)
+        RatingChipSource("IMDb", it, R.drawable.ic_rating_imdb, KBImdbTint)
     },
     ratings?.rottenTomatoes?.let {
         RatingChipSource("Rotten Tomatoes", it, R.drawable.ic_rating_rt, RottenTomatoesTint)

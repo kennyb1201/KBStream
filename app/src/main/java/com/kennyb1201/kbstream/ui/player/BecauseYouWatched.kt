@@ -501,10 +501,11 @@ internal fun themedGuideRowBackground(context: Context, accent: Int): Drawable {
  *
  * @drawable/button_accent_bg is a ripple whose content is an accent
  * GradientDrawable, so the chrome walk ([refillPlayerChromeView]) re-tints it -
- * but its FOCUSED twin @drawable/button_accent_bg_focused is a LAYER-LIST,
- * which the walk (matching a GradientDrawable's own fill) cannot rebuild. A
- * focused SKIP INTRO therefore kept the default brass under every other
- * accent, exactly like the pill chips. Built here, the fill and ring follow
+ * but its FOCUSED twin was a LAYER-LIST, which the walk (matching a
+ * GradientDrawable's own fill) cannot rebuild. A focused SKIP INTRO therefore
+ * kept the default brass under every other accent, exactly like the pill
+ * chips - and that twin has since been deleted, because this function is the
+ * only thing that ever drew it. Built here, the fill and ring follow
  * [themeAccentColor], and the unfocused state keeps the XML's press flash.
  */
 internal fun accentButtonBackground(context: Context, focused: Boolean): Drawable {

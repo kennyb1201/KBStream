@@ -582,6 +582,11 @@
                         android:textSize="11sp"
                         android:text="00:00" />
 
+                    <!-- Starts as the app's one "duration not known yet" glyph, not
+                         "00:00": the player paints this view before it has a
+                         duration, and 00:00 read as a zero-length title until the
+                         first tick corrected it. The position beside it really is
+                         zero at that point, so it keeps 00:00. -->
                     <TextView
                         android:id="@+id/total_time"
                         android:layout_width="wrap_content"
@@ -589,7 +594,7 @@
                         android:fontFamily="@font/oswald_medium"
                         android:textColor="@color/kb_text_hi"
                         android:textSize="11sp"
-                        android:text="00:00" />
+                        android:text="--:--" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -609,9 +614,10 @@
                     android:layout_width="64dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="10dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_semibold"
                     android:nextFocusUp="@id/seekbar"
                     android:gravity="center"
                     android:text="CH ▲"
@@ -624,9 +630,10 @@
                     android:layout_width="64dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="10dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_semibold"
                     android:nextFocusUp="@id/seekbar"
                     android:gravity="center"
                     android:text="CH ▼"
@@ -643,10 +650,11 @@
                     android:layout_width="64dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="10dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Channel guide"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_semibold"
                     android:gravity="center"
                     android:nextFocusUp="@id/seekbar"
                     android:text="GUIDE"
@@ -659,7 +667,7 @@
                     android:id="@+id/btn_play_pause"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:nextFocusUp="@id/seekbar"
@@ -677,7 +685,7 @@
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginStart="10dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Next episode"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
@@ -702,10 +710,11 @@
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Change source"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_sources"
@@ -717,10 +726,11 @@
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Audio track"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_audio"
@@ -732,10 +742,11 @@
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Subtitles"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_subtitle"
@@ -750,10 +761,11 @@
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:fontFamily="@font/oswald_medium"
+                    android:nextFocusUp="@id/seekbar"
                     android:gravity="center"
                     android:text="1x"
                     android:textColor="@color/kb_text_hi"
@@ -769,10 +781,11 @@
                     android:layout_width="48dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
                     android:fontFamily="@font/oswald_medium"
+                    android:nextFocusUp="@id/seekbar"
                     android:gravity="center"
                     android:text="Fit"
                     android:textColor="@color/kb_text_hi"
@@ -790,7 +803,7 @@
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Switch player"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
@@ -812,7 +825,7 @@
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Play in another app"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
@@ -828,10 +841,11 @@
                     android:layout_width="40dp"
                     android:layout_height="40dp"
                     android:layout_marginEnd="8dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Stream info"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_info" />
@@ -841,10 +855,11 @@
                     android:id="@+id/btn_settings"
                     android:layout_width="40dp"
                     android:layout_height="40dp"
-                    android:background="@drawable/control_button_bg"
+                    android:background="@drawable/mpv_control_bg"
                     android:contentDescription="Playback settings"
                     android:focusable="true"
                     android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/seekbar"
                     android:padding="8dp"
                     android:scaleType="fitCenter"
                     android:src="@drawable/ic_player_settings" />
@@ -1237,7 +1252,7 @@
                 android:layout_marginTop="6dp"
                 android:fontFamily="@font/oswald_medium"
                 android:text="Size"
-                android:textColor="#FF8891A0"
+                android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
 
             <LinearLayout
@@ -1255,7 +1270,7 @@
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Small"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="11sp"
                     android:focusable="true" />
 
@@ -1269,7 +1284,7 @@
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Normal"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="11sp"
                     android:focusable="true" />
 
@@ -1283,7 +1298,7 @@
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Large"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="11sp"
                     android:focusable="true" />
             </LinearLayout>
@@ -1294,7 +1309,7 @@
                 android:layout_marginTop="8dp"
                 android:fontFamily="@font/oswald_medium"
                 android:text="Background"
-                android:textColor="#FF8891A0"
+                android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
 
             <LinearLayout
@@ -1312,7 +1327,7 @@
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="None"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="11sp"
                     android:focusable="true" />
 
@@ -1326,7 +1341,7 @@
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Semi"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="11sp"
                     android:focusable="true" />
 
@@ -1340,7 +1355,7 @@
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Solid"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="11sp"
                     android:focusable="true" />
 
@@ -1354,7 +1369,7 @@
                     android:paddingHorizontal="12dp"
                     android:paddingVertical="6dp"
                     android:text="Text"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="11sp"
                     android:focusable="true" />
             </LinearLayout>
@@ -1365,7 +1380,7 @@
                 android:layout_marginTop="8dp"
                 android:fontFamily="@font/oswald_medium"
                 android:text="Offset"
-                android:textColor="#FF8891A0"
+                android:textColor="@color/kb_text_lo"
                 android:textSize="11sp" />
 
             <LinearLayout
@@ -1383,7 +1398,7 @@
                     android:fontFamily="@font/oswald_medium"
                     android:gravity="center"
                     android:text="-"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="16sp"
                     android:focusable="true" />
 
@@ -1395,7 +1410,7 @@
                     android:gravity="center"
                     android:fontFamily="@font/oswald_medium"
                     android:text="0ms"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="12sp" />
 
                 <TextView
@@ -1406,7 +1421,7 @@
                     android:fontFamily="@font/oswald_medium"
                     android:gravity="center"
                     android:text="+"
-                    android:textColor="#FFF3EFE4"
+                    android:textColor="@color/kb_text_hi"
                     android:textSize="16sp"
                     android:focusable="true" />
             </LinearLayout>

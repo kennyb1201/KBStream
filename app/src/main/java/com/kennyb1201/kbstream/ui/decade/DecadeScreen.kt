@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.ui.components.GenreChipRow
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
@@ -68,6 +69,7 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.tag.RailPagingState
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -215,7 +217,8 @@ fun DecadeScreen(
                         KBSkeletonRailStack(
                             posterWidth = posterSize.width,
                             posterHeight = posterSize.height,
-                            horizontalPadding = 20.dp
+                            horizontalPadding = 20.dp,
+                            shape = posterEdgeShape()
                         )
                     }
                 }
@@ -516,16 +519,16 @@ private fun DecadeRailRow(
             text = section.title,
             style = MaterialTheme.typography.titleMedium,
             color = KBTextLo,
-            // Aligned with the posters' 20dp rail inset instead of sitting
-            // flush against the screen edge.
-            modifier = Modifier.padding(start = 20.dp, bottom = 8.dp)
+            // Aligned with the posters' rail inset - the app's screen edge -
+            // instead of sitting flush against the screen edge.
+            modifier = Modifier.padding(start = KBScreenEdge, bottom = 8.dp)
         )
 
         LazyRow(
             state = rowState,
             contentPadding = PaddingValues(
-                start = 20.dp,
-                end = 20.dp
+                start = KBScreenEdge,
+                end = KBScreenEdge
             ),
             modifier = Modifier.focusGroup()
         ) {

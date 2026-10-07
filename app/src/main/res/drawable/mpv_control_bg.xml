@@ -2,8 +2,8 @@
 <!-- Control-button background for the MPV backup player. A selector rather
      than a ripple: this player is driven by a D-pad, and what has to be
      unmistakable is which button currently has focus (a plain ripple is
-     invisible on a TV remote). The focused state reuses the accent stroke
-     convention of button_accent_bg_focused / pill_chip_focused_bg. -->
+     invisible on a TV remote). The focused state is the app's one focus look:
+     the raised panel fill behind a 2dp accent stroke. -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android">
     <item android:state_focused="true">
         <shape android:shape="rectangle">

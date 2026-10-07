@@ -339,7 +339,7 @@ class SettingsSearchContractTest {
     fun `every content pane is broken into clusters by a heading`() {
         val text = screen()
         listOf(
-            "SettingsSectionHeader(\"Sync\", first = true)",
+            "SettingsSectionHeader(\"Sync (Beta)\", first = true)",
             "SettingsSectionHeader(\"Backup & Restore\", first = true)",
             "SettingsSectionHeader(\"Audio\", first = true)",
             "SettingsSectionHeader(\"Notifications\", first = true)",

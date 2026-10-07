@@ -1,10 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Picker row background: the same two languages the player's control
+     chrome speaks - a raised plate with a 2dp accent stroke while focused,
+     the flat surface otherwise - with the press ripple kept on top.
+
+     It was a ripple with a single shape and no focused state at all, and the
+     focus lands on the row's TextView while the background is painted by the
+     row's root, so nothing ever lit up as the D-pad crossed a source list:
+     the viewer could not tell which source OK would pick. The root takes
+     `addStatesFromChildren` (see picker_item.xml) so the child's focus
+     reaches this drawable without moving focus off the text. -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
     android:color="@color/kb_accent">
     <item>
-        <shape android:shape="rectangle">
-            <solid android:color="@color/kb_surface" />
-            <corners android:radius="8dp" />
-        </shape>
+        <selector>
+            <item android:state_focused="true">
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/kb_surface_raised" />
+                    <stroke
+                        android:width="2dp"
+                        android:color="@color/kb_accent" />
+                    <corners android:radius="8dp" />
+                </shape>
+            </item>
+            <item>
+                <shape android:shape="rectangle">
+                    <solid android:color="@color/kb_surface" />
+                    <corners android:radius="8dp" />
+                </shape>
+            </item>
+        </selector>
     </item>
 </ripple>

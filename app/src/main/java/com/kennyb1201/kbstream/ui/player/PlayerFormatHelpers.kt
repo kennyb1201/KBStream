@@ -51,6 +51,21 @@ internal fun resolveMimeType(url: String): String? {
     }
 }
 
+/**
+ * The one glyph for "there is no duration yet". Both players paint their clock
+ * labels before a duration has arrived, and "00:00" there claimed the title was
+ * zero seconds long until the first progress tick corrected it.
+ */
+internal const val UNKNOWN_DURATION_CLOCK = "--:--"
+
+/**
+ * Duration readout: an unknown or unset duration is [UNKNOWN_DURATION_CLOCK],
+ * never a lying 00:00. Positions call [formatMillis] directly - a position of
+ * zero really is zero.
+ */
+internal fun formatDurationMillis(ms: Long): String =
+    if (ms <= 0L) UNKNOWN_DURATION_CLOCK else formatMillis(ms)
+
 internal fun formatMillis(ms: Long): String {
     if (ms <= 0L) return "00:00"
     val totalSeconds = ms / 1000

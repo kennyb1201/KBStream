@@ -73,6 +73,20 @@ fun themeAccentColor(context: Context): Int =
         ?.toArgb()
         ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color.toArgb()
 
+/**
+ * The background tone for the launch WINDOW, for the layer that paints before
+ * Compose exists.
+ *
+ * The theme's `colorBackground` is a static resource, so it could only ever
+ * match one of the two palettes: an AMOLED-enabled launch flashed the ordinary
+ * void first, and an ordinary launch flashed pure black under every screen that
+ * is not Home. Mirrors [KBVoid] instead. Reads the STORED toggle, like
+ * [themeAccentColor], because it is called from an Activity that has not
+ * composed yet.
+ */
+fun themeVoidWindowColor(context: Context): Int =
+    if (AppPreferences.getAmoledBlack(context)) KBVoidAmoled.toArgb() else KBVoidDefault.toArgb()
+
 private val pureBlackActive: Boolean
     get() = kbAmoledBlackState.value && kbPureBlackSurfaceState.value
 
@@ -178,6 +192,43 @@ val KBShapePill = RoundedCornerShape(999.dp) // avatars, fully-round pills
 // corner instead, so a pill poster reads as "more curved than rounded" rather
 // than as a lozenge.
 val KBShapeSoftPill = RoundedCornerShape(20.dp)
+
+// The screen edge: the one inset a screen lines its own content up to.
+//
+// Like the corner scale, this had drifted - Search and the two discover grids
+// inset their rails by 20dp while the rest of the app used 24dp - and because
+// the drift was only ever a few dp it never read as a mistake, just as screens
+// that did not quite line up when the viewer walked from one to the next. Home
+// is the documented exception and keeps its 12dp edge (see
+// [TvSafeAreaHorizontal] in HomeScreen): its hero is full-bleed by design.
+val KBScreenEdge = 24.dp
+
+/**
+ * The spacing scale.
+ *
+ * Gaps had drifted the same way the corners and the focus scales did: two
+ * rails of the same posters spaced 10dp on one screen and 12dp on the next, a
+ * list ending 16dp above the rail under it and 24dp above the one after that.
+ * Four dp is invisible at ten feet, so nothing was gained by the drift - only
+ * unpredictability. Everything comes from these five steps; a gap that needs
+ * its own value needs its own comment saying why.
+ */
+object KBSpacing {
+    /** Between a label and the thing it labels. */
+    val xs = 4.dp
+
+    /** Between chips inside one row. */
+    val sm = 8.dp
+
+    /** Between items in a row or a grid - the default gap. */
+    val md = 12.dp
+
+    /** Between a section and the section after it. */
+    val lg = 16.dp
+
+    /** A screen's own padding, and the space past the end of a list. */
+    val xl = 24.dp
+}
 
 // The focus scale. D-pad focus is the app's most-touched feedback — a viewer
 // crosses a rail in twenty focus steps — and like the corner radii it had

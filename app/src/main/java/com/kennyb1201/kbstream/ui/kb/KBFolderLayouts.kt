@@ -46,6 +46,7 @@ import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
+import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
@@ -576,7 +577,8 @@ private fun FollowHomeLayout(
                     else FolderPosterWidth,
                     posterHeight = if (showLandscapeCards) FolderLandscapeHeight
                     else FolderPosterHeight,
-                    horizontalPadding = FolderSafeHorizontal
+                    horizontalPadding = FolderSafeHorizontal,
+                    shape = posterEdgeShape()
                 )
             state.error != null -> FolderStatus(state.error.orEmpty())
             visibleRails.isEmpty() ->
@@ -668,7 +670,8 @@ private fun RowsLayout(
                     else FolderPosterWidth,
                     posterHeight = if (showLandscapeCards) FolderLandscapeHeight
                     else FolderPosterHeight,
-                    horizontalPadding = FolderSafeHorizontal
+                    horizontalPadding = FolderSafeHorizontal,
+                    shape = posterEdgeShape()
                 )
             state.error != null -> FolderStatus(state.error.orEmpty())
             visibleRails.isEmpty() ->
@@ -756,7 +759,8 @@ private fun GridLayout(
                     cellWidth = FolderPosterWidth,
                     cellHeight = FolderPosterHeight,
                     columns = 6,
-                    horizontalPadding = FolderSafeHorizontal
+                    horizontalPadding = FolderSafeHorizontal,
+                    shape = posterEdgeShape()
                 )
             state.error != null -> FolderStatus(state.error.orEmpty())
             gridItems.isEmpty() ->

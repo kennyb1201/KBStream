@@ -29,7 +29,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -141,7 +141,7 @@ fun LandscapeCard(
                             ?: fallbackTitle
                             ?: "No Image",
                         color = KBTextLo,
-                        fontSize = 12.sp,
+                        style = MaterialTheme.typography.bodySmall,
                         maxLines = 3
                     )
                 }
@@ -229,10 +229,13 @@ fun LandscapeCard(
             // dead-logo case, which is where it always was, plus the load the
             // logo has not finished (see showTitle).
             if (showTitle && !fallbackTitle.isNullOrBlank()) {
+                // The on-card title slot, like every other card title: this was
+                // the last card title still written at a 13sp literal, a size
+                // the type scale does not have.
                 Text(
                     text = fallbackTitle,
                     color = KBTextHi,
-                    fontSize = 13.sp,
+                    style = MaterialTheme.typography.titleSmall,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier

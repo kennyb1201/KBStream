@@ -30,14 +30,12 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Border
 import androidx.tv.material3.ClickableSurfaceDefaults
+import androidx.tv.material3.Glow
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Surface
@@ -47,13 +45,15 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.sync.ProfileManager
-import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBButton
+import com.kennyb1201.kbstream.ui.components.KBDialogPanel
+import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBFocusTile
-import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -98,12 +98,10 @@ fun ProfilePickerScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(
-            text = "Who's watching?",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = KBTextHi
-        )
+        // The screen's name, through the shared page title (Batch F item 38):
+        // it was a headlineMedium+Bold of its own, so walking in from Library
+        // or Add-ons changed the size of the app's name for the screen.
+        KBPageTitle(text = "Who's watching?")
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -160,7 +158,10 @@ fun ProfilePickerScreen(
                     }
                 )
             } + PickerTile(
-                name = "Manage",
+                // A control label in the same slot as the names: ALL CAPS is how
+                // every other chip and button in the app is written, so the one
+                // tile that is an action rather than a person reads as one.
+                name = "MANAGE",
                 avatarIndex = -1,
                 customAvatarUrl = null,
                 selected = false,
@@ -212,30 +213,21 @@ fun ProfilePickerScreen(
                 pinError = false
             }
         ) {
-            Column(
-                modifier = Modifier
-                    .width(420.dp)
-                    .background(KBSurfaceRaised, KBShapePanel)
-                    .border(1.dp, KBAccent.copy(alpha = 0.45f), KBShapePanel)
-                    .padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+            // The shared dialog plate: heading, then the profile it is asking
+            // about. The exit-gate case keeps its own explanation line rather
+            // than encoding it in the heading, which has to stay short.
+            KBDialogPanel(
+                title = if (isExitGate) "Profile PIN" else "Enter PIN",
+                subtitle = pinProfile.name,
+                width = 420.dp
             ) {
-                Text(
-                    text = pinProfile.name,
-                    color = KBTextHi,
-                    style = MaterialTheme.typography.titleLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = if (isExitGate) {
-                        "Enter this profile's PIN to leave it"
-                    } else {
-                        "Enter PIN"
-                    },
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodyMedium
-                )
+                if (isExitGate) {
+                    Text(
+                        text = "Enter this profile's PIN to leave it",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
                 KBTextField(
                     value = pinEntry,
                     onValueChange = {
@@ -253,21 +245,14 @@ fun ProfilePickerScreen(
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
-                KBCard(
-                    onClick = {
-                        pinTarget = null
-                        exitGateAction = null
-                        pinEntry = ""
-                        pinError = false
-                    },
+                KBButton(
+                    label = "CANCEL",
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        "CANCEL",
-                        color = KBTextLo,
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                    )
+                    pinTarget = null
+                    exitGateAction = null
+                    pinEntry = ""
+                    pinError = false
                 }
             }
         }
@@ -349,9 +334,19 @@ private fun ProfileAvatarTile(
             ),
             border = ClickableSurfaceDefaults.border(
                 focusedBorder = Border(
-                    border = androidx.compose.foundation.BorderStroke(3.dp, KBAccent),
+                    // 2dp - the ring every other focused surface draws. A tile
+                    // that carries its own 3dp ring is not "more focused", it
+                    // is a second focus language.
+                    border = androidx.compose.foundation.BorderStroke(2.dp, KBAccent),
                     shape = CircleShape
                 )
+            ),
+            // The avatar tiles are the biggest targets on this screen and they
+            // were the only focusable surface in the app with no glow at all,
+            // so crossing them lit a ring and nothing else. 8dp: a tile's glow
+            // is the chip's, not the card's 12dp - see KBFocusGlowSmall.
+            glow = ClickableSurfaceDefaults.glow(
+                focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
             ),
             scale = ClickableSurfaceDefaults.scale(
                 focusedScale = KBFocusTile,
@@ -402,8 +397,10 @@ private fun ProfileAvatarTile(
                     ) {
                         Text(
                             text = name.take(1).uppercase(),
-                            fontSize = 34.sp,
-                            fontWeight = FontWeight.Bold,
+                            // Oswald through the type scale, like every other
+                            // letter in the app (displayMedium is the 34sp Bold
+                            // this literal was standing in for).
+                            style = MaterialTheme.typography.displayMedium,
                             color = Color(fg)
                         )
                     }
@@ -429,7 +426,7 @@ private fun ProfileAvatarTile(
         Text(
             text = name,
             color = if (focused) KBTextHi else KBTextLo,
-            fontSize = 15.sp,
+            style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp)
         )

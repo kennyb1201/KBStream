@@ -44,7 +44,10 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
 
-    private val repository = IptvRepository(app.applicationContext)
+    // Shared with the player: the in-player guide resolves matches against the
+    // same memoized guide snapshot this screen reads, instead of building a
+    // second copy of the whole guide (see IptvRepository.shared).
+    private val repository = IptvRepository.shared(app)
     private val prefs
         get() = app.getSharedPreferences(
             com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(

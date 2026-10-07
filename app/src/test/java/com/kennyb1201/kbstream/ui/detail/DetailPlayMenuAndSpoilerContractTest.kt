@@ -95,8 +95,9 @@ class DetailPlayMenuAndSpoilerContractTest {
             menu.contains("label = \"Play Manually\",")
         )
         assertTrue(
-            "dismissing the menu must clear the gate",
-            menu.contains("playButtonMenu = false")
+            "dismissing the menu must clear the gate through the one hand-back " +
+                "that also returns focus to the button",
+            menu.contains("onDismiss = { dismissPlayButtonMenu() }")
         )
     }
 
@@ -110,13 +111,13 @@ class DetailPlayMenuAndSpoilerContractTest {
         // the target is rebuilt at position 0 before the effect navigates.
         assertTrue(
             "Play from Beginning must set the start-over flag",
-            menu.contains("playButtonMenu = false\nstartOver = true\nautoPlayed = false")
+            menu.contains("dismissPlayButtonMenu()\nstartOver = true\nautoPlayed = false")
         )
         // Play Manually: the flag the effect turns into a keyed
         // ManualSourceSelection request for this exact target.
         assertTrue(
             "Play Manually must set the manual-pick flag",
-            menu.contains("playButtonMenu = false\nmanualPick = true\nautoPlayed = false")
+            menu.contains("dismissPlayButtonMenu()\nmanualPick = true\nautoPlayed = false")
         )
     }
 
