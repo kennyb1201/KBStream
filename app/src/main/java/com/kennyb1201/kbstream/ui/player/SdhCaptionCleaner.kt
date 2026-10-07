@@ -20,8 +20,21 @@ package com.kennyb1201.kbstream.ui.player
  */
 internal object SdhCaptionCleaner {
 
-    /** Sound descriptions, in any of the three shapes captions use. */
-    private val description = Regex("""\[[^\]]*]|\{[^}]*}|\([^)]*\)""")
+    /**
+     * Sound descriptions, in any of the three shapes captions use.
+     *
+     * Both braces are escaped, and the closing one is the one that matters:
+     * Android's regex engine is ICU, and ICU reads an unescaped `}` (or a `{`
+     * that opens no repetition) as rule syntax and refuses the WHOLE pattern.
+     * The throw happens inside this object's initializer, so the first cue a
+     * viewer sees with clean SDH on is an ExceptionInInitializerError - a
+     * fatal, not a caption that stays dirty (Sentry ANDROID-W).
+     *
+     * The JVM's own parser accepts a bare `}` as a literal, so a unit test on
+     * the desktop never sees this; [IcuSafeRegexContractTest] pins the rule for
+     * every pattern in the app instead.
+     */
+    private val description = Regex("""\[[^\]]*]|\{[^}]*\}|\([^)]*\)""")
 
     /**
      * A leading speaker label, with any dialogue dash kept: "JOHN: ", "- MAN: ",

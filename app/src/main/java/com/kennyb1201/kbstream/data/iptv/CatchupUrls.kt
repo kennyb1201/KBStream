@@ -78,7 +78,14 @@ object CatchupUrls {
         return out
     }
 
-    private val LEFTOVER_PLACEHOLDER = Regex("""\{[^{}]+}""")
+    /**
+     * The closing brace is escaped on purpose: ICU (Android's regex engine)
+     * rejects a bare `}` as rule syntax, and this pattern is built in an object
+     * initializer, so an unescaped one is a fatal crash on the first catch-up
+     * URL rather than a template that quietly declines. See
+     * [IcuSafeRegexContractTest].
+     */
+    private val LEFTOVER_PLACEHOLDER = Regex("""\{[^{}]+\}""")
 
     /** How many days of DVR the channel advertises (0 = unknown/unlimited). */
     fun daysSupported(catchupDays: String?): Int =
