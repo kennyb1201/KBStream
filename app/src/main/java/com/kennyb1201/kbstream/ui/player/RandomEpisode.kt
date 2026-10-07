@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
+import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.Dispatchers
@@ -141,9 +142,11 @@ suspend fun randomAiredEpisode(
     val pick = chooseRandomEpisode(gathered, excludeSeason, excludeEpisode)
         ?: return@withContext null
     // The TMDB row carries the Stremio-style id when the app already knows it;
-    // build one otherwise so every caller has a playable id.
+    // build one otherwise so every caller has a playable id - in FILE numbering,
+    // like the listing it came from, because that is what the addons resolve and
+    // what the watch-history row is filed under (see EpisodeScheme).
     pick.copy(
         streamId = pick.streamId.takeIf { it.isNotBlank() }
-            ?: "$showId:${pick.season}:${pick.episode}"
+            ?: fileEpisodeStreamId(context, showId, tmdbId, pick.season, pick.episode)
     )
 }

@@ -11,6 +11,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Typography
 import androidx.tv.material3.darkColorScheme
@@ -58,6 +59,8 @@ fun refreshThemeMirrors(context: Context) {
     kbPureBlackSurfaceState.value = AppPreferences.getPureBlackSurface(context)
     kbAccentIndexState.value =
         AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX)
+    kbCustomAccentState.value =
+        customAccentColorOrNull(AppPreferences.getCustomAccent(context))
 }
 
 /**
@@ -66,12 +69,18 @@ fun refreshThemeMirrors(context: Context) {
  * Reads the STORED index, not the live state: it is called from activities
  * that read their theming straight from prefs.
  */
-fun themeAccentColor(context: Context): Int =
-    KBAccentPalette
-        .getOrNull(AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX))
+fun themeAccentColor(context: Context): Int {
+    val index = AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX)
+    if (index == CUSTOM_ACCENT_INDEX) {
+        customAccentColorOrNull(AppPreferences.getCustomAccent(context))
+            ?.let { return it.toArgb() }
+    }
+    return KBAccentPalette
+        .getOrNull(index)
         ?.color
         ?.toArgb()
         ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color.toArgb()
+}
 
 /**
  * The background tone for the launch WINDOW, for the layer that paints before
@@ -149,16 +158,136 @@ const val DEFAULT_ACCENT_INDEX = 0
 val kbAccentIndexState = mutableStateOf(DEFAULT_ACCENT_INDEX)
 
 /**
+ * The index that means "the viewer's own colour" rather than a palette entry.
+ *
+ * It sits one past the end of [KBAccentPalette], so every index an existing
+ * install already stored keeps meaning exactly what it meant before, and an
+ * index read back from a newer build on an older one lands out of range and
+ * falls back to the default rather than throwing.
+ */
+val CUSTOM_ACCENT_INDEX = KBAccentPalette.size
+
+/**
+ * Backing state for the custom accent: null when the viewer has not set one.
+ *
+ * Mirrored from the pref by [refreshThemeMirrors] like the index above, so a
+ * colour typed in Settings repaints every screen at once.
+ */
+val kbCustomAccentState = mutableStateOf<Color?>(null)
+
+/**
+ * The accent colour a stored index resolves to.
+ *
+ * The custom sentinel resolves to [custom] when the viewer has set one, and to
+ * the palette default when they have not - an index synced from a device that
+ * has a custom colour must not leave this one with no accent at all. Any other
+ * out-of-range index falls back the same way. Pure, so [ThemeAccentTest] can
+ * pin the resolution without a composition.
+ */
+fun accentForIndex(index: Int, custom: Color?): Color =
+    if (index == CUSTOM_ACCENT_INDEX) {
+        custom ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color
+    } else {
+        KBAccentPalette.getOrNull(index)?.color
+            ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color
+    }
+
+/**
  * The one accent, app-wide. Every Compose call site reads this getter, so
- * changing [kbAccentIndexState] recomposes the whole UI - the same mechanism
- * the AMOLED surface tokens above use. The palette is never empty, so the
- * default is always a real colour.
+ * changing [kbAccentIndexState] or [kbCustomAccentState] recomposes the whole
+ * UI - the same mechanism the AMOLED surface tokens above use. The palette is
+ * never empty, so the default is always a real colour.
  */
 val KBAccent: Color
-    get() = KBAccentPalette
-        .getOrNull(kbAccentIndexState.value)
-        ?.color
-        ?: KBAccentPalette[DEFAULT_ACCENT_INDEX].color
+    get() = accentForIndex(kbAccentIndexState.value, kbCustomAccentState.value)
+
+/**
+ * The stored custom accent as a colour, or null when none is set.
+ *
+ * `0` is the stored "unset" sentinel: ARGB 0x00000000 is fully transparent
+ * black, which is not a colour anybody could pick as a visible accent.
+ */
+fun customAccentColorOrNull(argb: Int): Color? =
+    if (argb == 0) null else Color(argb)
+
+/**
+ * A colour split into the custom picker's three bars.
+ *
+ * [hue] is in degrees (0 until 360), [saturation] and [brightness] are
+ * fractions (0..1). This is the model the picker edits: a television has no
+ * free pointer and no colour wheel, and almost nobody can recite a colour
+ * code, so the accent is MIXED on three D-pad bars instead of typed.
+ */
+data class KBHsv(val hue: Float, val saturation: Float, val brightness: Float)
+
+/**
+ * Splits an ARGB int into the picker's three bars.
+ *
+ * Deliberately pure Kotlin rather than android.graphics.Color's conversions:
+ * the JVM unit tests run against the android.jar stub
+ * (`unitTests.isReturnDefaultValues = true`), where those calls return their
+ * default values instead of doing anything, which would make the picker's
+ * maths impossible to pin. A grey has no hue and reports 0.
+ */
+fun hsvFromArgb(argb: Int): KBHsv {
+    val r = ((argb shr 16) and 0xFF) / 255f
+    val g = ((argb shr 8) and 0xFF) / 255f
+    val b = (argb and 0xFF) / 255f
+    val max = maxOf(r, g, b)
+    val min = minOf(r, g, b)
+    val delta = max - min
+    val hue = when {
+        delta == 0f -> 0f
+        max == r -> 60f * (((g - b) / delta) % 6f)
+        max == g -> 60f * (((b - r) / delta) + 2f)
+        else -> 60f * (((r - g) / delta) + 4f)
+    }
+    return KBHsv(
+        hue = if (hue < 0f) hue + 360f else hue,
+        saturation = if (max == 0f) 0f else delta / max,
+        brightness = max
+    )
+}
+
+/**
+ * Rebuilds an opaque ARGB int from the picker's three bars.
+ *
+ * The inverse of [hsvFromArgb], rounded to the nearest byte so a colour taken
+ * out to the bars and put back home is unchanged - otherwise reopening
+ * Settings would darken the viewer's accent by a notch every time. Out-of-range
+ * input is clamped and the hue wraps (370 degrees is 10), so a caller can hand
+ * in the result of an arithmetic step without pre-sorting it.
+ */
+fun argbFromHsv(hue: Float, saturation: Float, brightness: Float): Int {
+    val h = ((hue % 360f) + 360f) % 360f
+    val s = saturation.coerceIn(0f, 1f)
+    val v = brightness.coerceIn(0f, 1f)
+    val c = v * s
+    val x = c * (1f - kotlin.math.abs((h / 60f) % 2f - 1f))
+    val m = v - c
+    val (r1, g1, b1) = when {
+        h < 60f -> Triple(c, x, 0f)
+        h < 120f -> Triple(x, c, 0f)
+        h < 180f -> Triple(0f, c, x)
+        h < 240f -> Triple(0f, x, c)
+        h < 300f -> Triple(x, 0f, c)
+        else -> Triple(c, 0f, x)
+    }
+    val r = ((r1 + m) * 255f).roundToInt().coerceIn(0, 255)
+    val g = ((g1 + m) * 255f).roundToInt().coerceIn(0, 255)
+    val b = ((b1 + m) * 255f).roundToInt().coerceIn(0, 255)
+    return (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+}
+
+/**
+ * The stored custom accent as `#RRGGBB` for the picker's read-out, or blank
+ * when unset. Shown, never typed into: it is there for the viewer who does
+ * know colour codes, not as the way to choose one.
+ */
+fun customAccentHexText(argb: Int): String {
+    if (argb == 0) return ""
+    return "#" + Integer.toHexString(argb and 0xFFFFFF).padStart(6, '0').uppercase()
+}
 val KBTextHi = Color(0xFFF3EFE4)
 val KBTextLo = Color(0xFF8891A0)
 val KBDanger = Color(0xFFB0453C)

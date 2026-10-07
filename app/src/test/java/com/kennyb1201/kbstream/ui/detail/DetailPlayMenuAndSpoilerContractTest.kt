@@ -144,10 +144,17 @@ class DetailPlayMenuAndSpoilerContractTest {
             "the accessibility description must not leak the name either",
             normalizedDetail.contains("contentDescription = listedTitle,")
         )
-        // The still: blurred where the platform can, covered where it cannot.
+        // The still: covered by an opaque scrim on EVERY API level.
         assertTrue(
-            "the still must be blurred when hidden",
-            normalizedDetail.contains("posterBlurRadius = if (hidesSpoiler) 18.dp else 0.dp,")
+            "the still must be covered by an opaque scrim when hidden",
+            normalizedDetail.contains("KBVoid.copy(alpha = 0.94f)")
+        )
+        // The per-frame RenderEffect blur is gone: it re-evaluated on every
+        // frame of an episode-row scroll, and under the 94% scrim it was not
+        // visible. The scrim above is what holds, so the blur must not return.
+        assertFalse(
+            "the per-frame blur must not come back",
+            normalizedDetail.contains("posterBlurRadius")
         )
         assertTrue(
             "the still must be labelled as hidden",

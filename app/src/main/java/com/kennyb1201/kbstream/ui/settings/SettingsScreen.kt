@@ -8,10 +8,12 @@ import android.content.ActivityNotFoundException
 import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.size
@@ -25,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -69,8 +72,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -93,6 +103,7 @@ import com.kennyb1201.kbstream.ui.player.SubtitleModeRules
 import com.kennyb1201.kbstream.ui.player.FrameRateDiagnostics
 import com.kennyb1201.kbstream.ui.player.FrameRateMatch
 import com.kennyb1201.kbstream.ui.player.displayReport
+import com.kennyb1201.kbstream.ui.theme.CUSTOM_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBAccentPalette
@@ -106,8 +117,14 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.argbFromHsv
+import com.kennyb1201.kbstream.ui.theme.customAccentColorOrNull
+import com.kennyb1201.kbstream.ui.theme.customAccentHexText
+import com.kennyb1201.kbstream.ui.theme.hsvFromArgb
+import com.kennyb1201.kbstream.ui.theme.kbCustomAccentState
 import com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
@@ -246,6 +263,7 @@ fun SettingsScreen(
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
     var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
     var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
+    var cleanSdh by remember { mutableStateOf(AppPreferences.getCleanSdhCaptions(context)) }
     var subtitlePosition by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitlePosition(context)) }
     var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
     var nextEpisodePopup by remember {
@@ -2462,9 +2480,38 @@ fun SettingsScreen(
                         }
                     }
                 }
+
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = "Lifts captions above letterbox bars or burned-in signage.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Clean SDH",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Off", "On").forEachIndexed { index, label ->
+                        KBCard(onClick = {
+                            cleanSdh = index == 1
+                            AppPreferences.setCleanSdhCaptions(context, index == 1)
+                        }) {
+                            PillChip(label, cleanSdh == (index == 1))
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "A caption track for the deaf and hard of hearing also " +
+                        "describes the soundtrack and names who is speaking. On " +
+                        "keeps the dialogue and drops [sound effects], ♪ lyrics ♪ " +
+                        "and SPEAKER: names.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall
                 )
@@ -3544,11 +3591,33 @@ private fun PillChip(label: String, selected: Boolean) {
     )
 }
 
+// ── The custom accent picker ──────────────────────────────────────
+// Degrees / percent per D-pad step. Sized so the whole range is reachable by
+// TAPPING - 30 presses for the hue wheel, 20 for each fraction - so that a
+// remote which emits no key repeats at all is still usable. A remote that does
+// repeat accelerates instead (see KBColorSlider).
+private const val CUSTOM_ACCENT_HUE_STEP = 12
+private const val CUSTOM_ACCENT_PERCENT_STEP = 5
+
+/** The hue bar's sweep: the colour wheel, flattened to a bar, red to red. */
+private val CustomAccentHueBrush = Brush.horizontalGradient(
+    listOf(
+        Color(0xFFFF0000),
+        Color(0xFFFFFF00),
+        Color(0xFF00FF00),
+        Color(0xFF00FFFF),
+        Color(0xFF0000FF),
+        Color(0xFFFF00FF),
+        Color(0xFFFF0000)
+    )
+)
+
 /**
  * The global theme accent: a grid of the palette's colours, applied the moment
- * one is picked. The choice is stored - and synced - as an INDEX; the live
- * theme state is refreshed here so every screen repaints at once instead of
- * waiting for the next launch or profile switch.
+ * one is picked, plus a custom colour MIXED on three D-pad bars. The choice is
+ * stored - and synced - as an INDEX; the live theme state is refreshed here so
+ * every screen repaints at once instead of waiting for the next launch or
+ * profile switch.
  */
 @Composable
 private fun AccentColorPicker() {
@@ -3556,6 +3625,45 @@ private fun AccentColorPicker() {
     var selectedIndex by remember {
         mutableStateOf(AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX))
     }
+    // The colour being mixed, as its three bars. Seeded once - from the stored
+    // custom colour when there is one, and otherwise from the accent in force
+    // right now - so the bars open where the viewer left off, or at the colour
+    // they already like, rather than at black.
+    val seed = remember {
+        hsvFromArgb(
+            (
+                customAccentColorOrNull(AppPreferences.getCustomAccent(context))
+                    ?: KBAccent
+                ).toArgb()
+        )
+    }
+    var hue by remember { mutableIntStateOf(seed.hue.roundToInt().coerceIn(0, 359)) }
+    var saturation by remember {
+        mutableIntStateOf((seed.saturation * 100f).roundToInt().coerceIn(0, 100))
+    }
+    var brightness by remember {
+        mutableIntStateOf((seed.brightness * 100f).roundToInt().coerceIn(0, 100))
+    }
+    val customColor = kbCustomAccentState.value
+
+    // The three bars as the colour they add up to. A function rather than a
+    // value read at composition: a key handler must apply the state it just
+    // wrote, not the frame it is still drawing.
+    fun mixedColor(): Int = argbFromHsv(hue.toFloat(), saturation / 100f, brightness / 100f)
+
+    // A bar step IS choosing the colour: it stores the mixed ARGB, moves the
+    // accent to the custom sentinel and re-mirrors the live theme state, so
+    // every screen repaints at that step - the same call the AMOLED toggles and
+    // the palette swatches depend on. Mixing with no colour stored yet leaves
+    // nothing behind: the sentinel resolves to the palette default until then
+    // (see ui.theme.accentForIndex), so the app is never accentless.
+    fun applyCustom() {
+        AppPreferences.setCustomAccent(context, mixedColor())
+        AppPreferences.setAccentIndex(context, CUSTOM_ACCENT_INDEX)
+        selectedIndex = CUSTOM_ACCENT_INDEX
+        refreshThemeMirrors(context)
+    }
+
     Column {
         Text(
             text = "Accent Color",
@@ -3571,15 +3679,187 @@ private fun AccentColorPicker() {
         Spacer(modifier = Modifier.height(8.dp))
         AccentColorGrid(
             selectedIndex = selectedIndex,
+            customColor = customColor,
             onSelect = { index ->
                 selectedIndex = index
                 AppPreferences.setAccentIndex(context, index)
+                // Picking the Custom swatch adopts whatever the bars currently
+                // show, so the entry is never a no-op that leaves the previous
+                // accent in place.
+                if (index == CUSTOM_ACCENT_INDEX) {
+                    AppPreferences.setCustomAccent(context, mixedColor())
+                }
                 // The pref alone paints nothing: the live theme state is the
                 // one the Compose tokens read, so it is re-mirrored here - the
                 // same call the AMOLED toggles depend on.
                 refreshThemeMirrors(context)
             }
         )
+        Spacer(modifier = Modifier.height(12.dp))
+        // The custom entry. There is no colour wheel and no free pointer on a
+        // television, and almost nobody can recite a colour code, so the value
+        // is MIXED on three bars - each focused with up/down and nudged with
+        // left/right - and applies on every step.
+        Text(
+            text = "Custom color",
+            color = KBTextHi,
+            style = MaterialTheme.typography.titleSmall
+        )
+        Text(
+            text = "Nudge the bars with left and right until the highlight looks " +
+                "right - no color code needed.",
+            color = KBTextLo,
+            style = MaterialTheme.typography.bodySmall
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(22.dp)
+                    .background(Color(mixedColor()), KBShapePill)
+            )
+            Text(
+                text = customAccentHexText(mixedColor()),
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+            Text(
+                text = if (selectedIndex == CUSTOM_ACCENT_INDEX) {
+                    "In use"
+                } else {
+                    "Move a bar to apply"
+                },
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        KBColorSlider(
+            label = "Hue",
+            valueText = "$hue\u00B0",
+            fraction = hue / 360f,
+            brush = CustomAccentHueBrush,
+            onStep = { steps ->
+                hue = (hue + steps * CUSTOM_ACCENT_HUE_STEP).coerceIn(0, 359)
+                applyCustom()
+            }
+        )
+        KBColorSlider(
+            label = "Saturation",
+            valueText = "$saturation%",
+            fraction = saturation / 100f,
+            brush = Brush.horizontalGradient(
+                listOf(
+                    Color(argbFromHsv(hue.toFloat(), 0f, brightness / 100f)),
+                    Color(argbFromHsv(hue.toFloat(), 1f, brightness / 100f))
+                )
+            ),
+            onStep = { steps ->
+                saturation = (saturation + steps * CUSTOM_ACCENT_PERCENT_STEP).coerceIn(0, 100)
+                applyCustom()
+            }
+        )
+        KBColorSlider(
+            label = "Brightness",
+            valueText = "$brightness%",
+            fraction = brightness / 100f,
+            brush = Brush.horizontalGradient(
+                listOf(
+                    Color(argbFromHsv(hue.toFloat(), saturation / 100f, 0f)),
+                    Color(argbFromHsv(hue.toFloat(), saturation / 100f, 1f))
+                )
+            ),
+            onStep = { steps ->
+                brightness = (brightness + steps * CUSTOM_ACCENT_PERCENT_STEP).coerceIn(0, 100)
+                applyCustom()
+            }
+        )
+    }
+}
+
+/**
+ * One bar of the custom-colour picker.
+ *
+ * Hand-rolled rather than tv-material3's Slider: that control is built for a
+ * touch pointer, and a television needs left/right to mean "one step" on the
+ * focused bar while up/down still means "next bar". A preview key event gives
+ * this first refusal on the arrow keys, so a horizontal press steps the value
+ * and is consumed here instead of moving focus off the bar.
+ *
+ * The track is the colour being chosen (see the caller's gradients), so the
+ * viewer sees what each bar does without reading a number.
+ */
+@Composable
+private fun KBColorSlider(
+    label: String,
+    valueText: String,
+    fraction: Float,
+    brush: Brush,
+    onStep: (Int) -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { event ->
+                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val direction = when (event.key) {
+                    Key.DirectionLeft -> -1
+                    Key.DirectionRight -> 1
+                    else -> return@onPreviewKeyEvent false
+                }
+                // Remotes that DO emit repeats raise repeatCount while the
+                // button is held, so a hold sweeps the bar instead of inching.
+                // One tap is always exactly one step.
+                onStep(direction * (1 + event.nativeKeyEvent.repeatCount.coerceIn(0, 4)))
+                true
+            }
+            .focusable()
+            .padding(vertical = 6.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = label,
+                color = if (focused) KBAccent else KBTextHi,
+                style = MaterialTheme.typography.labelSmall
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            Text(
+                text = valueText,
+                color = KBTextLo,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        BoxWithConstraints(
+            contentAlignment = Alignment.CenterStart,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(26.dp)
+        ) {
+            val thumb = 22.dp
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(brush, KBShapePill)
+                    .border(
+                        width = if (focused) 3.dp else 1.dp,
+                        color = if (focused) KBAccent else KBTextLo.copy(alpha = 0.35f),
+                        shape = KBShapePill
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .offset(x = (maxWidth - thumb) * fraction.coerceIn(0f, 1f))
+                    .size(thumb)
+                    .background(KBTextHi, KBShapePill)
+                    .border(2.dp, KBVoid, KBShapePill)
+            )
+        }
     }
 }
 
@@ -3587,6 +3867,7 @@ private fun AccentColorPicker() {
 @Composable
 private fun AccentColorGrid(
     selectedIndex: Int,
+    customColor: Color?,
     onSelect: (Int) -> Unit
 ) {
     FlowRow(
@@ -3601,6 +3882,15 @@ private fun AccentColorGrid(
                     selected = selectedIndex == index
                 )
             }
+        }
+        // The custom entry, last: its chip shows the colour currently set, or a
+        // neutral one until the viewer types a value.
+        KBCard(onClick = { onSelect(CUSTOM_ACCENT_INDEX) }) {
+            AccentSwatch(
+                name = "Custom",
+                color = customColor ?: KBTextLo,
+                selected = selectedIndex == CUSTOM_ACCENT_INDEX
+            )
         }
     }
 }

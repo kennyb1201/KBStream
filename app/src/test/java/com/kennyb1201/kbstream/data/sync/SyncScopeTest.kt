@@ -46,6 +46,23 @@ class SyncScopeTest {
     }
 
     @Test
+    fun `the custom accent colour syncs with the palette accent`() {
+        // A colour mixed on one TV is a viewing preference: the other TV should
+        // come up wearing it rather than making the viewer mix it again. The
+        // index synced already; this is the colour that index points at, so a
+        // key missing from the allow-list is the silent no-op push this class
+        // exists to catch - and it would leave the other TV on the default.
+        assertTrue(
+            "custom_accent_color must sync",
+            "custom_accent_color" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        )
+        assertFalse(
+            "custom_accent_color must not be excluded",
+            "custom_accent_color" in PrefsPayloadBuilder.EXCLUDED_PREF_KEYS
+        )
+    }
+
+    @Test
     fun `decoder and playback prefs stay per-device`() {
         // A Fire TV Stick and a projector need different decoders: not one of
         // these may ride the sync payload. The list lives beside the allow-list

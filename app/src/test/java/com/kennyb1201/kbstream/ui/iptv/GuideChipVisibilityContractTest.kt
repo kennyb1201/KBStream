@@ -128,6 +128,44 @@ class GuideChipVisibilityContractTest {
     }
 
     @Test
+    fun `a move-to-list transit re-anchors on the list requester, which outlives the swap`() {
+        val src = source()
+        assertTrue(
+            "the channel list must carry its own requester",
+            src.contains("val channelListFocusRequester = remember { FocusRequester() }")
+        )
+        assertTrue(
+            "and the list must be the node that requester points at",
+            src.contains(".focusRequester(channelListFocusRequester)")
+        )
+        val block = effectBlock(src, "LaunchedEffect(moveFocusToChannelList, groupedChannels) {")
+        assertTrue(
+            "the re-anchor must aim at the LIST first: a row's requester is " +
+                "destroyed by the group change, so a request aimed at it can be " +
+                "granted and cleared in the same frame, stranding focus on the chips",
+            block.contains("channelListFocusRequester.requestFocus()")
+        )
+        assertTrue(
+            "and it must still fall back to the first row",
+            block.contains("firstChannelFocusRequester.requestFocus()")
+        )
+    }
+
+    @Test
+    fun `chips are unfocusable while a move-to-list transit is pending`() {
+        val src = source()
+        assertTrue(
+            "a chip must refuse focus during the transit, so default focus " +
+                "resolution cannot land on the first chip and adopt its group",
+            src.contains("canFocus = chipRowAcceptsFocus(moveFocusToChannelList)")
+        )
+        assertTrue(
+            "the gate must route through the pure rule",
+            src.contains(".focusProperties {")
+        )
+    }
+
+    @Test
     fun `a group change from the list cannot send focus up to the chips`() {
         val src = source()
         val start = src.indexOf("state = channelListState")

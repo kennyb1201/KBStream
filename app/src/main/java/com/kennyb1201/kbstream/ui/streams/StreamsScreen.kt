@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -207,6 +208,18 @@ fun StreamsScreen(
             streams
         }
 
+    // The list's own scroll position, owned here so a provider switch can put
+    // the new list back at its first source. The chips are a filter over ONE
+    // list, so a viewer who was part way down the old provider's sources would
+    // otherwise land in the middle of the new provider's list, with the sources
+    // that provider ranks best scrolled off the top - the part of the switch
+    // they were actually looking for. Keyed on the tab AND the request: a
+    // reload is a new list too.
+    val streamListState = rememberLazyListState()
+    LaunchedEffect(selectedAddonTab, loadedKey) {
+        streamListState.scrollToItem(0)
+    }
+
     // The one case where auto-play deliberately starts nothing: every playable
     // source declares another episode of this season. Said in words, because a
     // picker that opens for no visible reason reads as a bug of its own.
@@ -284,6 +297,7 @@ fun StreamsScreen(
             }
 
             LazyColumn(
+                state = streamListState,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(
                     start = 8.dp,
@@ -596,9 +610,14 @@ private fun Stream.displayText(): String {
 
 /**
  * The add-on filter chips: "All" then one per answering stream add-on. Only
- * rendered when at least two add-ons answered (see [StreamsScreen]). Pressing a
- * chip swaps the list below it; the chips scroll horizontally so a viewer with
- * many installed add-ons can still reach every one.
+ * rendered when at least two add-ons answered (see [StreamsScreen]). Moving ONTO
+ * a chip swaps the list below it - the whole point of the row is to show what
+ * each provider offers, and making the viewer press Select on a chip they are
+ * already sitting on reads as a chip that does nothing; the chips scroll
+ * horizontally so a viewer with many installed add-ons can still reach every
+ * one.
+ *
+ * Select still works: it lands on the tab that was adopted when focus arrived.
  */
 @Composable
 private fun AddonTabs(
@@ -616,26 +635,40 @@ private fun AddonTabs(
         StreamTabChip(
             label = "All",
             selected = selectedIndex == ALL_ADDONS_TAB,
-            onClick = { onSelect(ALL_ADDONS_TAB) }
+            onSelect = { onSelect(ALL_ADDONS_TAB) }
         )
         addonNames.forEachIndexed { index, name ->
             StreamTabChip(
                 label = name,
                 selected = selectedIndex == index,
-                onClick = { onSelect(index) }
+                onSelect = { onSelect(index) }
             )
         }
     }
 }
 
-/** One add-on filter chip, glass-styled to match the source cards below it. */
+/**
+ * One add-on filter chip, glass-styled to match the source cards below it.
+ *
+ * [onSelect] fires on focus as well as on the press: the chip row is a picker,
+ * and the screen it picks for is the list below it. The chips are NOT the list
+ * being swapped - they are a sibling row above it - so adopting a tab changes
+ * only the LazyColumn's items and cannot take focus off the chip the viewer is
+ * on. A press still lands on the tab focus already adopted.
+ */
 @Composable
 private fun StreamTabChip(
     label: String,
     selected: Boolean,
-    onClick: () -> Unit
+    onSelect: () -> Unit
 ) {
-    KBCard(onClick = onClick) {
+    KBCard(
+        onClick = onSelect,
+        // Focus on a KBCard lives on the Card's own focus target, so a
+        // focus observer has to sit on the modifier handed to the Card - the
+        // same shape the source cards below use to read their own focus.
+        modifier = Modifier.onFocusChanged { if (it.isFocused) onSelect() }
+    ) {
         Box(
             modifier = Modifier
                 .background(

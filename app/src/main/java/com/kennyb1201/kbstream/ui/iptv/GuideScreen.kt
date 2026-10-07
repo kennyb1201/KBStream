@@ -168,6 +168,10 @@ fun GuideScreen(
 
     val channelListState = rememberLazyListState()
     val firstChannelFocusRequester = remember { FocusRequester() }
+    // The channel LIST's own requester. Unlike a row's, this node outlives a
+    // group change: a row is keyed by channel, so a new group destroys the row
+    // that had focus and recreates its requester with it.
+    val channelListFocusRequester = remember { FocusRequester() }
     val allTabFocusRequester = remember { FocusRequester() }
     val groupChipFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
     val latestOnPlayChannel by rememberUpdatedState(onPlayChannel)
@@ -959,29 +963,45 @@ LaunchedEffect(channelListState, groupedChannelIds) {
   }
 
   LaunchedEffect(moveFocusToChannelList, groupedChannels) {
-    if (moveFocusToChannelList && groupedChannels.isNotEmpty()) {
-        selectedChannelId = groupedChannels.first().channel.id
-        channelListState.scrollToItem(0)
+    if (!moveFocusToChannelList) return@LaunchedEffect
+    // No list to land on (an empty group, or a playlist still loading): drop
+    // the transit so the chips do not stay unfocusable behind it.
+    if (groupedChannels.isEmpty()) {
+        moveFocusToChannelList = false
+        return@LaunchedEffect
+    }
 
-        // Switching groups swaps the entire channel list's content (a
-        // heavier layout pass than the down-from-tabs case), so a single
-        // awaitFrame() isn't always enough for the new top row to have
-        // attached yet -- requestFocus() would then silently miss its
-        // target and focus escapes somewhere else entirely (often back up
-        // into the tabs row). Retry across a few frames instead of
-        // assuming one is enough.
-        var focused = false
-        var attempts = 0
-        while (!focused && attempts < 5) {
-            awaitFrame()
+    selectedChannelId = groupedChannels.first().channel.id
+    channelListState.scrollToItem(0)
+
+    // Switching groups swaps the entire channel list's content (a heavier
+    // layout pass than the down-from-tabs case), so a single awaitFrame()
+    // isn't always enough for the new top row to have attached yet.
+    //
+    // The request goes to the LIST's own requester first, not a row's: a
+    // group change destroys the focused row and its FocusRequester with it,
+    // and a request aimed at that dying node can be granted and then cleared
+    // in the same frame, leaving focus nowhere. The next D-pad press then
+    // falls to default focus resolution, which lands on the group chips -- and
+    // a chip's onFocus adopts its group, so the walk snapped back to "All"
+    // after a press or two. The list's requester is stable across the swap and
+    // lands focus on the first row that exists.
+    var focused = false
+    var attempts = 0
+    while (!focused && attempts < 8) {
+        awaitFrame()
+        focused = runCatching {
+            channelListFocusRequester.requestFocus()
+        }.getOrDefault(false)
+        if (!focused) {
             focused = runCatching {
                 firstChannelFocusRequester.requestFocus()
             }.getOrDefault(false)
-            attempts++
         }
-
-        moveFocusToChannelList = false
+        attempts++
     }
+
+    moveFocusToChannelList = false
 }
 
   // Channel-number entry: digits accumulate in digitEntry and resolve after
@@ -1224,6 +1244,18 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         base
                     }
                 }
+                // While a move-to-list transit is pending the chips refuse
+                // focus. The group change they started swaps every keyed row
+                // of the channel list, so focus is briefly cleared, and
+                // default focus resolution used to land it back on the first
+                // chip -- whose onFocus adopted that chip's group, resetting
+                // the walk to "All" and (because it also cleared the transit
+                // flag) cancelling the very re-anchor meant to prevent it.
+                // Unfocusable chips cannot be that target, so the re-anchor is
+                // the only thing that runs and the walked group sticks.
+                .focusProperties {
+                    canFocus = chipRowAcceptsFocus(moveFocusToChannelList)
+                }
         )
     }
 }
@@ -1242,6 +1274,7 @@ Spacer(modifier = Modifier.height(14.dp))
                                     modifier = Modifier
                                         .width(348.dp)
                                         .fillMaxHeight()
+                                        .focusRequester(channelListFocusRequester)
                                         .focusGroup()
                                         // A Left/Right group change swaps the
                                         // WHOLE list (every row is keyed, so a

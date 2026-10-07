@@ -23,8 +23,11 @@ import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.player.EpisodeScheme
+import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
+import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -107,6 +110,20 @@ class ExternalPlayerActivity : ComponentActivity() {
     private var overview: String? = null
     private var totalEpisodesInSeason: Int? = null
     private var runtimeMinutes: Int? = null
+
+    /*
+     * One file is not one TMDB episode (see EpisodeScheme).
+     *
+     * This engine has a persisted scheme and nothing more: the stream plays in
+     * another app, so there is no duration to DETECT from - the runtime this
+     * session knows is the episode's own TMDB runtime, not the file's, and
+     * comparing one against itself would answer 1:1 every time. The scheme the
+     * in-app engines detected for this show still applies, which is what keeps a
+     * binge that reaches this engine stepping the file cursor correctly; a show
+     * only ever played here keeps today's one-file-one-episode behavior.
+     */
+    private var bingeScheme: EpisodeScheme = EpisodeScheme.ONE_TO_ONE
+    private var schemeStoreKey: String? = null
     private var historyParentIdOverride: String? = null
     private var streamHeaders: Map<String, String> = emptyMap()
     private var drmLicenseUrl: String? = null
@@ -265,6 +282,11 @@ class ExternalPlayerActivity : ComponentActivity() {
         // custom global accent has to be re-applied over the whole tree.
         retintAccentChrome(findViewById(android.R.id.content), this)
         historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
+        // The scheme a previous session detected for this show, if any. The imdb
+        // parent id answers it here; a tmdb-only parent is re-keyed from tmdbId()
+        // on the first suspend path that needs the scheme (see loadBingeScheme).
+        schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, null)
+        bingeScheme = EpisodeSchemeStore.get(this, schemeStoreKey)
         setupBecauseYouWatched()
         setupEndOfEpisodeHandlers()
 
@@ -821,6 +843,7 @@ class ExternalPlayerActivity : ComponentActivity() {
         if (endPanelsShown) return
         endPanelsShown = true
         lifecycleScope.launch {
+            loadBingeScheme()
             val target = airedNextEpisodeTarget(
                 context = this@ExternalPlayerActivity,
                 target = nextEpisodeTarget(),
@@ -839,17 +862,82 @@ class ExternalPlayerActivity : ComponentActivity() {
         }
     }
 
-    /** The next episode to chain into, or null for a film / a finished series. */
+    /**
+     * The scheme for this show, resolved through tmdbId() when the parent id
+     * alone could not key it. Called from the coroutine that raises the end
+     * panels, so the store is read at most once.
+     */
+    private suspend fun loadBingeScheme() {
+        if (schemeStoreKey == null) {
+            schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, tmdbId())
+            bingeScheme = EpisodeSchemeStore.get(this, schemeStoreKey)
+        }
+    }
+
+    /**
+     * The FILE episode the session is on now: the trailing number of
+     * [episodeStreamId], which the id invariant keeps in file numbering. Mirrors
+     * the in-app engines' own reader.
+     */
+    private fun currentFileEpisode(): Int? {
+        val showEpisode = episode ?: return null
+        episodeStreamId
+            ?.substringAfterLast(':')
+            ?.trim()
+            ?.toIntOrNull()
+            ?.takeIf { it >= 1 }
+            ?.let { return it }
+        return bingeScheme.fileForTmdbEpisode(showEpisode)
+    }
+
+    /**
+     * The TMDB episodes the file that played covered: one for every scheme but
+     * SEGMENTS_PER_FILE, which holds its own factor. Mirrors the in-app engines
+     * (see NativePlayerActivity.coveredTmdbEpisodes).
+     */
+    private fun coveredTmdbEpisodes(tmdbEpisode: Int): List<Int> {
+        if (bingeScheme.kind != SchemeKind.SEGMENTS_PER_FILE) return listOf(tmdbEpisode)
+        val maxEpisodes = totalEpisodesInSeason
+        return (0 until bingeScheme.factor)
+            .map { tmdbEpisode + it }
+            .filter { maxEpisodes == null || it <= maxEpisodes }
+            .ifEmpty { listOf(tmdbEpisode) }
+    }
+
+    /**
+     * The next episode to chain into, or null for a film / a finished series.
+     *
+     * The file cursor is advanced through the detected scheme, exactly as the
+     * two in-app engines do, so a binge that reaches this engine keeps stepping
+     * by files rather than by TMDB episodes.
+     */
     private fun nextEpisodeTarget(): Pair<Int, Int>? {
         val showSeason = season ?: return null
         val showEpisode = episode ?: return null
-        val nextEpisode = showEpisode + 1
+        val fileEpisode = currentFileEpisode() ?: showEpisode
+        val nextEpisode = bingeScheme.advance(fileEpisode, showEpisode).second
         val maxEpisodes = totalEpisodesInSeason
         return if (maxEpisodes != null && nextEpisode > maxEpisodes) {
             (showSeason + 1) to 1
         } else {
             showSeason to nextEpisode
         }
+    }
+
+    /**
+     * The FILE number for a target the labels call [targetEpisode]: the file
+     * cursor's own next when the target is the arithmetic one, and the file that
+     * HOLDS that TMDB episode otherwise. Mirrors the in-app engines.
+     */
+    private fun nextFileEpisodeFor(targetSeason: Int, targetEpisode: Int): Int {
+        val showSeason = season
+        val showEpisode = episode
+        if (showSeason != null && showEpisode != null && targetSeason == showSeason) {
+            val fileEpisode = currentFileEpisode() ?: showEpisode
+            val (nextFile, nextEpisode) = bingeScheme.advance(fileEpisode, showEpisode)
+            if (nextEpisode == targetEpisode) return nextFile
+        }
+        return bingeScheme.fileForTmdbEpisode(targetEpisode)
     }
 
     private fun showNextUpPanel(targetSeason: Int, targetEpisode: Int) {
@@ -1004,7 +1092,7 @@ class ExternalPlayerActivity : ComponentActivity() {
             season = targetSeason,
             episode = targetEpisode,
             title = label,
-            streamId = nextStreamId(targetSeason, targetEpisode),
+            streamId = nextStreamId(targetSeason, nextFileEpisodeFor(targetSeason, targetEpisode)),
             runtimeMinutes = null,
             bingeGroup = null,
             addonName = null,
@@ -1025,15 +1113,19 @@ class ExternalPlayerActivity : ComponentActivity() {
         finish()
     }
 
-    /** The episode id's own prefix, the same rule every engine uses. */
-    private fun nextStreamId(targetSeason: Int, targetEpisode: Int): String {
+    /**
+     * The episode id's own prefix, the same rule every engine uses.
+     * [targetFileEpisode] is FILE numbering - the identity the addons resolve
+     * (see [nextFileEpisodeFor]).
+     */
+    private fun nextStreamId(targetSeason: Int, targetFileEpisode: Int): String {
         val prefix = episodeStreamId.orEmpty()
             .substringBeforeLast(':')
             .substringBeforeLast(':')
         return if (prefix.isNotBlank()) {
-            "$prefix:$targetSeason:$targetEpisode"
+            "$prefix:$targetSeason:$targetFileEpisode"
         } else {
-            "$parentId:$targetSeason:$targetEpisode"
+            "$parentId:$targetSeason:$targetFileEpisode"
         }
     }
 
@@ -1441,13 +1533,22 @@ class ExternalPlayerActivity : ComponentActivity() {
                         val showSeason = season
                         val showEpisode = episode
                         if (showSeason != null && showEpisode != null) {
-                            simkl.pushWatchedEpisode(
-                                showImdbId = parentId,
-                                season = showSeason,
-                                episode = showEpisode,
-                                title = itemName,
-                                tmdbId = tmdb
-                            )
+                            // One file can cover several TMDB episodes (see
+                            // coveredTmdbEpisodes): every one of them is marked,
+                            // or the second segment of a doubled file stays
+                            // unwatched on the tracker.
+                            var pushed = true
+                            coveredTmdbEpisodes(showEpisode).forEach { coveredEpisode ->
+                                val ok = simkl.pushWatchedEpisode(
+                                    showImdbId = parentId,
+                                    season = showSeason,
+                                    episode = coveredEpisode,
+                                    title = itemName,
+                                    tmdbId = tmdb
+                                )
+                                if (!ok) pushed = false
+                            }
+                            pushed
                         } else {
                             false
                         }

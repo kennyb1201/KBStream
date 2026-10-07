@@ -218,6 +218,25 @@ internal fun chipFocusState(
 )
 
 /**
+ * Whether a group chip may take focus right now.
+ *
+ * A Left/Right on the channel list (or Down on a chip) starts a move-to-list
+ * transit, and that transit swaps every keyed row of the list, so focus is
+ * cleared for a frame before the re-anchor lands. The chips are the nearest
+ * focusables and default resolution used to drop focus back onto the first one;
+ * its focus handler then adopted that chip's group and cancelled the transit
+ * flag, so the walk reset to "All" after a press or two. Refusing focus for the
+ * duration of the transit leaves the re-anchor as the only thing that runs, and
+ * the chips are reachable again the moment it settles -- the deliberate Up-from
+ * -list path sets a different flag and is never blocked by this.
+ *
+ * Pure so [GuideRulesTest] can pin the rule without a Compose test harness,
+ * which this module does not carry.
+ */
+internal fun chipRowAcceptsFocus(listTransitPending: Boolean): Boolean =
+    !listTransitPending
+
+/**
  * Which row inherits the selection when the selected row is removed from the
  * channel list.
  *

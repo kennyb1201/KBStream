@@ -163,6 +163,24 @@ object AppPreferences {
         syncDisplayPrefsBlob(context)
     }
 
+    // ── Clean SDH captions ───────────────────────────────────────────
+    // Drops the parts of a deaf/hard-of-hearing caption that serve the
+    // soundtrack rather than the dialogue - the sound descriptions, the lyric
+    // lines and the speaker labels - leaving the words (see
+    // ui.player.SdhCaptionCleaner). OFF by default: it is lossy on purpose, so
+    // it is opted into rather than applied to every caption track unasked.
+    // Synced: "stop captioning the explosions" is a statement about how the
+    // viewer wants to watch, and it should hold on their other TV too.
+    private const val KEY_CLEAN_SDH_CAPTIONS = "clean_sdh_captions"
+
+    fun getCleanSdhCaptions(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_CLEAN_SDH_CAPTIONS, false)
+
+    fun setCleanSdhCaptions(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_CLEAN_SDH_CAPTIONS, enabled).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
     // ── Auto-skip intros / credits ───────────────────────────────────
     fun getAutoSkipIntro(context: Context): Boolean =
         prefs(context).getBoolean(KEY_AUTO_SKIP_INTRO, false)
@@ -1149,6 +1167,27 @@ object AppPreferences {
 
     fun setAccentIndex(context: Context, index: Int) {
         prefs(context).edit().putInt(KEY_ACCENT_INDEX, index).apply()
+        syncDisplayPrefsBlob(context)
+    }
+
+    // ── Custom accent colour (the "Custom" swatch) ─────────────────────
+    // The ARGB the picker holds when the accent index is the custom sentinel
+    // (see ui.theme.CUSTOM_ACCENT_INDEX); `0` means "no custom colour yet",
+    // which is safe because fully transparent black is not a usable accent.
+    //
+    // SYNCED, like the palette index beside it: a colour mixed on one TV is a
+    // viewing preference - the viewer wants the other TV to come up wearing it,
+    // not to be told to mix it again - so it rides the same display blob. That
+    // is also why the reader goes through readIntPref: the sync applier writes
+    // every numeric pref with putLong, and a raw getInt throws
+    // ClassCastException on the receiving device.
+    private const val KEY_CUSTOM_ACCENT = "custom_accent_color"
+
+    fun getCustomAccent(context: Context): Int =
+        readIntPref(context, KEY_CUSTOM_ACCENT, 0)
+
+    fun setCustomAccent(context: Context, argb: Int) {
+        prefs(context).edit().putInt(KEY_CUSTOM_ACCENT, argb).apply()
         syncDisplayPrefsBlob(context)
     }
 

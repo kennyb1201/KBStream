@@ -949,6 +949,19 @@ class MpvPlayerView @JvmOverloads constructor(
             position = AppPreferences.getDefaultSubtitlePosition(context)
         )
 
+        // Clean SDH: mpv's own equivalent of the main player's caption filter,
+        // and the only way this engine gets one - libmpv draws its own cues, so
+        // the app has no text to filter on this side. It drops the speaker
+        // labels and the bracketed sound descriptions, which is exactly what
+        // the setting says. An OPTION, set before init(), because a subtitle
+        // filter is applied as a track is loaded: turning it on afterwards
+        // would leave the track already on screen unfiltered. runCatching
+        // guards an mpv build without the filter (it is ignored rather than
+        // failing the file), the same way sub-forced-only is guarded above.
+        if (AppPreferences.getCleanSdhCaptions(context)) {
+            runCatching { mpv.setOptionString("sub-filter-sdh", "yes") }
+        }
+
         // ASS/SSA styling is deliberately left alone: none of the options that
         // would let libass be overridden is set, which is what keeps a fansub's
         // typesetting intact. The look controls above apply to text tracks;

@@ -161,6 +161,20 @@ private val HomeLandscapeWidth = 210.dp
 private val HomeLandscapeHeight = 118.dp
 private val HomeRailGap = 12.dp
 
+/**
+ * How long a focused card must stay focused before the hero META resolve runs.
+ *
+ * Holding the D-pad fires the hero effect once per card crossed, and the
+ * resolve is not cheap: it cancels the previous coroutine, writes several
+ * StateFlows in HomeViewModel, and starts a fresh backdrop request. The dwell
+ * is what the viewer actually sees, so the resolve waits out this debounce
+ * first - the effect re-launches on every focus change, so a fast scroll
+ * collapses onto the card the viewer settles on and one resolve runs instead of
+ * twenty. Long enough to swallow a held D-pad's repeat rate, short enough that a
+ * deliberate single step still resolves immediately.
+ */
+private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
+
 private val HomeHeroHeight = 300.dp
 
 private val RailTopContentPadding = 0.dp
@@ -1412,7 +1426,12 @@ private fun HomeHero(
             model = remember(backdrop) {
                 ImageRequest.Builder(context)
                     .data(backdrop)
-                    .size(Size(1920, 1080))
+                    // 1280x720, not 1920x1080: the hero draws at roughly
+                    // 1150x520, so the extra pixels were never on screen -
+                    // they only doubled the bitmap (8 MB of ARGB_8888) and the
+                    // decode/upload for every new backdrop a settled focus
+                    // brought in. Visually identical at the size it renders.
+                    .size(Size(1280, 720))
                     // The Home hero backdrop is the one image the whole
                     // screen is built around, so it keeps the fade.
                     .crossfade(true)
@@ -2058,9 +2077,18 @@ private fun HomeHeroHost(
     ) {
         heroTrailerReady = false
 
+        val dwellMs = AppPreferences.getHeroTrailerDelayMs(context)
         focusedItem.value?.let {
+            // Debounce the RESOLVE only. The hero's text is drawn from the
+            // already-known MetaPreview, so it still tracks focus instantly;
+            // what waits is the work this effect would otherwise do once per
+            // card crossed (see HERO_RESOLVE_DEBOUNCE_MS).
+            delay(HERO_RESOLVE_DEBOUNCE_MS)
             onResolveHeroMeta(it)
-            delay(AppPreferences.getHeroTrailerDelayMs(context))
+            // The trailer dwell still measures from focus: the debounce is
+            // inside it, so the trailer arms at the same instant it always
+            // did rather than one debounce later.
+            delay((dwellMs - HERO_RESOLVE_DEBOUNCE_MS).coerceAtLeast(0L))
             heroTrailerReady = true
         }
     }
@@ -3025,14 +3053,31 @@ fun HomeScreen(
                 size: Float,
                 containerSize: Float
             ): Float {
-                val currentLeadingEdge = offset
+                // What arrives here is the focused CARD, not its rail: `offset`
+                // is the card's leading edge and `size` the card's own height
+                // (Compose's TV guide calls these "Item's initial position" /
+                // "Item's size" - the item that asked to be brought into view).
+                // A card sits some way below its rail's top, by a different
+                // amount in every rail, so a landing built from the card lands
+                // a different line in each row - and on the Upcoming rail, whose
+                // card is inset furthest (~52dp of title + row padding + the box
+                // that reserves the glow), the 40dp inset put the rail's OWN top
+                // 12dp above the viewport and ate the top of its title. Every
+                // number below is about the RAIL: map the card back to the
+                // LazyColumn item containing it (see [railItemContaining]).
+                val rail = railItemContaining(
+                    childLeadingEdgePx = offset,
+                    visibleItems = railListState.layoutInfo.visibleItemsInfo
+                )
+                val currentLeadingEdge = rail?.offset?.toFloat() ?: offset
+                val railSize = rail?.size?.toFloat() ?: abs(size)
                 // Landing line, pulled up when the focused rail is too tall to
                 // leave the reveal band below it — a poster rail always is, so
                 // it lands on the floor and the next rail's title is fitted
-                // into what remains. Depends only on the row's size, so every
-                // child of a row still returns the same distance (no bounce
+                // into what remains. Depends only on the RAIL's size, so every
+                // child of a rail still returns the same distance (no bounce
                 // mid-flight). See [RailLanding] for the packing this closes.
-                val revealTarget = containerSize - abs(size) - revealBandPx
+                val revealTarget = containerSize - railSize - revealBandPx
                 val targetLeadingEdge = railLandingTarget(
                     topInsetPx = topInsetPx,
                     floorPx = headerFloorPx,
@@ -3419,7 +3464,7 @@ fun HomeScreen(
                             RailSectionGap
                         )
                 ) {
-                    item(key = "hero_spacer") {
+                    item(key = "hero_spacer", contentType = "spacer") {
                         // Opaque spacer that prevents CW progress bar
                         // from peeking below the hero gradient.
                         Box(
@@ -3441,7 +3486,7 @@ fun HomeScreen(
                         // - those are drawn by the branches below, where this
                         // card would otherwise have pushed them off the screen.
                         isLoading && mergedEntries.isEmpty() -> {
-                            item(key = "loading") {
+                            item(key = "loading", contentType = "skeleton") {
                                 // Poster-shaped placeholders, not a spinner and
                                 // not the status card: loading is the one state
                                 // whose shape is known in advance (see
@@ -3476,7 +3521,7 @@ fun HomeScreen(
                             // rows (see builtinRailItems). Base drew them here
                             // too, above this line.
                             builtinRailItems()
-                            item(key = "error") {
+                            item(key = "error", contentType = "status") {
                                 // The shared status pill rather than a bare
                                 // Text line: this is the same "something went
                                 // wrong" state every browse screen shows, and
@@ -3502,7 +3547,7 @@ fun HomeScreen(
                         // most in.
                         rails.isEmpty() && !isLoading -> {
                             builtinRailItems()
-                            item(key = "empty") {
+                            item(key = "empty", contentType = "status") {
                                 // The shared status card, with the retry as its
                                 // own focusable action rather than the whole
                                 // plate being one big clickable - OK on the
@@ -3528,7 +3573,7 @@ fun HomeScreen(
                         // nothing else: no hint, and no way back to the manager
                         // that did the hiding.
                         mergedEntries.isEmpty() && !isLoading -> {
-                            item(key = "all-hidden") {
+                            item(key = "all-hidden", contentType = "status") {
                                 KBStatusMessage(
                                     message = "All rails are hidden.",
                                     icon = KB_STATUS_ICON_EMPTY,
@@ -3567,6 +3612,24 @@ fun HomeScreen(
                                             "builtin|" + entry.key.removePrefix(
                                                 "builtin:"
                                             )
+                                    }
+                                },
+                                // One content type per rail KIND: the column
+                                // mixes these with spacers and status cards, and
+                                // Compose can only reuse a composition slot
+                                // between items of the same type. Without this,
+                                // inserting, removing or reordering a rail
+                                // rebuilt every rail below it from scratch.
+                                contentType = { _, entry ->
+                                    when (entry) {
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.AddonRail ->
+                                            "addon-rail"
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
+                                            "kb-collection"
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.BrowseRail ->
+                                            "browse-rail"
+                                        is com.kennyb1201.kbstream.ui.kb.HomeEntry.BuiltinRail ->
+                                            "builtin-rail"
                                     }
                                 }
                             ) { entryIndex, entry ->

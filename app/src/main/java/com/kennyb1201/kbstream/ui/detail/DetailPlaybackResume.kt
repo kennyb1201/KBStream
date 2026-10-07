@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import android.app.Application
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklPlaybackItem
 import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
@@ -178,10 +179,18 @@ internal object DetailPlaybackResume {
             season = season,
             episode = episode,
             // Same "imdbId:season:episode" convention TMDB-resolved
-            // rows use, so the per-episode progress bar binds.
+            // rows use, so the per-episode progress bar binds - and in FILE
+            // numbering, like those rows, so the card this row resumes is the
+            // one the addons resolve for the episode (see EpisodeScheme).
             episodeStreamId =
                 if (normalizedType == "series" && season != null && episode != null) {
-                    "$id:$season:$episode"
+                    fileEpisodeStreamId(
+                        context = vm.getApplication(),
+                        rootId = id,
+                        tmdbId = tmdbId,
+                        season = season,
+                        tmdbEpisode = episode
+                    )
                 } else {
                     null
                 },
@@ -300,10 +309,18 @@ internal object DetailPlaybackResume {
             season = season,
             episode = episode,
             // Same "imdbId:season:episode" convention TMDB-resolved
-            // rows use, so the per-episode progress bar binds.
+            // rows use, so the per-episode progress bar binds - and in FILE
+            // numbering, like those rows, so the card this row resumes is the
+            // one the addons resolve for the episode (see EpisodeScheme).
             episodeStreamId =
                 if (normalizedType == "series" && season != null && episode != null) {
-                    "$id:$season:$episode"
+                    fileEpisodeStreamId(
+                        context = vm.getApplication(),
+                        rootId = id,
+                        tmdbId = tmdbId,
+                        season = season,
+                        tmdbEpisode = episode
+                    )
                 } else {
                     null
                 },

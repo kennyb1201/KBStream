@@ -22,6 +22,7 @@ import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
+import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
@@ -1525,7 +1526,17 @@ for ((metaAddon, response, error) in probeResults) {
                             )
                                 ?: return@mapNotNull null
                         ResolvedEpisode(
-                            streamId = "$parentId:${season}:$episodeNumber",
+                            // FILE numbering - the same convention the TMDB
+                            // season listing builds, so a synthetic title's
+                            // cards and its history rows keep binding (see
+                            // EpisodeScheme). The episode number stays TMDB's.
+                            streamId = fileEpisodeStreamId(
+                                context = getApplication(),
+                                rootId = parentId,
+                                tmdbId = _tmdbDetail.value?.id,
+                                season = season,
+                                tmdbEpisode = episodeNumber
+                            ),
                             episodeNumber = episodeNumber,
                             name = v.title,
                             overview = v.overview ?: v.description,

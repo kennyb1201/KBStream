@@ -95,16 +95,52 @@ internal object SubtitleTrackRules {
         else -> null
     }
 
-    /** How a picker row should read: the language, plus the format when known. */
-    fun pickerLabel(language: String?, mimeType: String?, fallback: String): String {
+    /**
+     * The note a picker row carries when THIS engine cannot draw the track, and
+     * null when it can.
+     *
+     * The track is still listed - it is in the file, and `supported` is this
+     * build's answer about its own renderers, not about the file - but a row
+     * that draws nothing is the one bug viewers cannot report precisely: the
+     * selection arms, produces no cue, and raises no error anywhere. Naming it
+     * in the row is what makes "the first rows don't work" answerable, and the
+     * note is also the condition the picker uses to hand the track to the
+     * engine that CAN draw it (MPV demuxes PGS/VobSub/DVB itself).
+     *
+     * A bitmap format is called out as needing MPV even if a future media3
+     * reports it as supported, for the same reason [choose] excludes them on
+     * their own evidence - see [isBitmapFormat].
+     */
+    fun cannotDrawNote(mimeType: String?, supported: Boolean): String? = when {
+        isBitmapFormat(mimeType) -> "needs MPV"
+        !supported -> "not supported here"
+        else -> null
+    }
+
+    /**
+     * How a picker row should read: the language, the KIND the track names
+     * (see [SubtitleKindRules]), and the format when known.
+     *
+     * [title] is the track's own name - the container's title for an embedded
+     * track, or the label the app set for an add-on's sidecar - which is the
+     * only place an SDH, forced or commentary track says so. [forced] is the
+     * container's forced flag. Both are optional, and a row with neither reads
+     * exactly as it did before they existed: the language plus the format.
+     */
+    fun pickerLabel(
+        language: String?,
+        mimeType: String?,
+        fallback: String,
+        title: String? = null,
+        forced: Boolean = false
+    ): String {
         val lang = language?.trim()?.uppercase()?.takeIf { it.isNotEmpty() }
         val format = formatLabel(mimeType)
-        return when {
-            lang != null && format != null -> "$lang \u00b7 $format"
-            lang != null -> lang
-            format != null -> format
-            else -> fallback
-        }
+        val forcedTag = if (forced) SubtitleKindRules.FORCED else null
+        val kinds = SubtitleKindRules.tagText(title)
+        return listOfNotNull(lang, forcedTag, kinds, format)
+            .joinToString(" \u00b7 ")
+            .ifBlank { fallback }
     }
 
     /**

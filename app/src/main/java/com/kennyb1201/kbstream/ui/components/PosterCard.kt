@@ -17,13 +17,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.Icon
@@ -126,16 +124,6 @@ fun PosterCard(
     modifier: Modifier = Modifier,
     isPartiallyWatched: Boolean = false,
     onPosterError: ((Throwable?) -> Unit)? = null,
-    /**
-     * Softens the artwork only (not the tile's content), for the one caller
-     * that has a reason to: the episode list under spoiler-free mode, where a
-     * frame from an unwatched episode is itself the spoiler.
-     *
-     * Compose's blur is a RenderEffect and is a no-op below API 31, so it is
-     * an enhancement and never the guarantee - the caller also covers the
-     * artwork, which is what holds on a Fire OS 7 box.
-     */
-    posterBlurRadius: Dp = 0.dp,
     overlayContent: (@Composable BoxScope.() -> Unit)? = null 
 ) {
     val context = LocalContext.current
@@ -176,21 +164,15 @@ fun PosterCard(
                     // cost on a 1.7 GB box for a tile the user is about to
                     // scroll past. The hero (and the few full-screen art
                     // surfaces) opt back into crossfade on their own request.
-                    model = ImageRequest.Builder(context)
-                        .data(posterUrl)
-                        .crossfade(false)
-                        .build(),
+                    model = remember(posterUrl) {
+                        ImageRequest.Builder(context)
+                            .data(posterUrl)
+                            .crossfade(false)
+                            .build()
+                    },
                     contentDescription = contentDescription,
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(
-                            if (posterBlurRadius > 0.dp) {
-                                Modifier.blur(posterBlurRadius)
-                            } else {
-                                Modifier
-                            }
-                        ),
+                    modifier = Modifier.fillMaxSize(),
                     onSuccess = { posterPainted = true },
                     onError = { state -> 
                         hasError = true

@@ -120,10 +120,12 @@ fun LandscapeCard(
 
             if (!effectiveUrl.isNullOrBlank() && !hasError) {
                 AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(effectiveUrl)
-                        .crossfade(false)
-                        .build(),
+                    model = remember(effectiveUrl) {
+                        ImageRequest.Builder(context)
+                            .data(effectiveUrl)
+                            .crossfade(false)
+                            .build()
+                    },
                     contentDescription = contentDescription,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -207,10 +209,12 @@ fun LandscapeCard(
 
             if (showLogo) {
                 AsyncImage(
-                    model = ImageRequest.Builder(context)
-                        .data(logoUrl)
-                        .crossfade(false)
-                        .build(),
+                    model = remember(logoUrl) {
+                        ImageRequest.Builder(context)
+                            .data(logoUrl)
+                            .crossfade(false)
+                            .build()
+                    },
                     // The corner clearlogo is artwork, not text; give it the
                     // title it stands in for so it is not an unlabeled image.
                     contentDescription = fallbackTitle?.takeIf { it.isNotBlank() },

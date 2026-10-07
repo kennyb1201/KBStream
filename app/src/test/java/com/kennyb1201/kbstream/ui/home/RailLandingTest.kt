@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.ui.home
 
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -11,6 +14,16 @@ import org.junit.Test
  * title under the hero; flooring it at "a whole title's worth" then bought the
  * focused heading back at the cost of the next rail's heading, which became a
  * row of white dots at the bottom of the panel.
+ *
+ * A third, the same mistake one level down, is pinned here too: the spec was
+ * handed the focused CARD and the landing was computed from the card's bounds,
+ * so a rail's own top landed wherever its card's inset put it. Every rail on
+ * Home insets its card by ~39-42dp and the landing inset is 40dp, so nothing
+ * showed until the Upcoming rail, whose card is inset ~52dp and whose title came
+ * out with its top third above the viewport. The RAIL is what a landing is about
+ * - its title is at its top, and its height is what the band below it is charged
+ * against - so the request is mapped back to its item first
+ * (see [railItemContaining]).
  *
  * The device these numbers are tight on is a 1080p TV at xhdpi: 540dp of
  * screen, the hero capped at 48% of it, and ~281dp of rails viewport left
@@ -34,6 +47,17 @@ class RailLandingTest {
 
     /** One line of a section title at the default type scale. */
     private val titleLine = 25f
+
+    /**
+     * A built-in rail (Continue Watching / Upcoming): the title, then a row of
+     * its own with 10dp of top and 12dp of bottom padding around a card box that
+     * reserves 24dp of focus headroom - 30 + 10 + 170 + 12.
+     */
+    private val builtinRail = 222f
+
+    /** The focused card of a built-in rail, and how far into its rail it starts. */
+    private val builtinCard = 146f
+    private val builtinCardInset = 52f
 
     private val floor get() = RailLanding.HeaderFloor.value
     private val inset get() = RailLanding.HeaderInset.value
@@ -123,6 +147,81 @@ class RailLandingTest {
     }
 
     @Test
+    fun `the Upcoming rail lands by its own top, so its title is never clipped`() {
+        // The reported bug. Its card is inset furthest of any rail (title 30dp,
+        // the row's 10dp top padding, 12dp of box centering), and a landing
+        // built from the CARD aligns that card on the 40dp inset - which leaves
+        // the rail's own top above the viewport, eating the top of its title.
+        val cardAligned = railLandingTarget(
+            topInsetPx = inset,
+            floorPx = floor,
+            revealTargetPx = panel - builtinCard - band(titleLine)
+        )
+        assertTrue(
+            "the card-aligned landing ($cardAligned) is the bug: it puts this " +
+                "rail's top at ${cardAligned - builtinCardInset}dp, above the viewport",
+            cardAligned - builtinCardInset < 0f
+        )
+
+        // From the RAIL, the same screen lands it on screen with the title in
+        // full - and still leaves the next rail its line.
+        val landed = landing(builtinRail)
+        assertTrue("the Upcoming title must clear the viewport top, got $landed dp", landed > 0f)
+        assertTrue(
+            "the next title must still fit below it",
+            landed + builtinRail + gap + titleLine <= panel
+        )
+    }
+
+    @Test
+    fun `a focused card's leading edge maps back to its own rail`() {
+        // The rail column as laid out: the hero spacer, the rails 12dp apart.
+        val spacer = fakeItem(index = 0, offset = 0, size = 2)
+        val upcoming = fakeItem(index = 1, offset = 14, size = builtinRail.toInt())
+        val below = fakeItem(
+            index = 2,
+            offset = (14 + builtinRail + gap).toInt(),
+            size = posterRail.toInt()
+        )
+        val items = listOf(spacer, upcoming, below)
+
+        // A card 52dp into its rail belongs to THAT rail, and so does a card in
+        // the last one - the mapping is what keeps the landing off the card.
+        assertEquals(
+            upcoming,
+            railItemContaining(upcoming.offset.toFloat() + builtinCardInset, items)
+        )
+        assertEquals(below, railItemContaining(below.offset.toFloat() + 39f, items))
+
+        // The gap between two rails belongs to neither, so the caller keeps the
+        // child's own bounds rather than inventing a rail.
+        assertNull(railItemContaining((upcoming.offset + upcoming.size + 4).toFloat(), items))
+    }
+
+    @Test
+    fun `Home's spec maps each bring-into-view request back to its rail`() {
+        // Pinned on the source because this is a wiring decision that compiles
+        // cleanly either way - and it was wrong for as long as it was wrong.
+        val home = read(HOME_SOURCE)
+        val mapping = home.indexOf("railItemContaining(")
+        val landing = home.indexOf("railLandingTarget(")
+        assertTrue(
+            "the rail spec must map the focused card back to its LazyColumn item " +
+                "BEFORE computing the landing: a landing built from the card puts " +
+                "a rail's title wherever that rail's card inset puts it",
+            mapping in 1 until landing
+        )
+        assertTrue(
+            "the mapping needs the rail column's own layout",
+            home.contains("visibleItems = railListState.layoutInfo.visibleItemsInfo")
+        )
+        assertTrue(
+            "the RAIL's height must replace the focused card's in the landing",
+            home.contains("val railSize = rail?.size?.toFloat() ?: abs(size)")
+        )
+    }
+
+    @Test
     fun `the sliver of the next rail's cards is the first thing given up`() {
         // Only the title has to fit; the cards behind it are the reserve. On a
         // panel where the band does not fit, the landing is floored, so what
@@ -133,5 +232,43 @@ class RailLandingTest {
             "the title line must come before the sliver, but $visibleCards dp should still show",
             visibleCards > 0f && visibleCards <= RailLanding.NextTitleSliver.value + 0.01f
         )
+    }
+
+    private fun fakeItem(
+        index: Int,
+        offset: Int,
+        size: Int
+    ): LazyListItemInfo = object : LazyListItemInfo {
+        override val index = index
+        override val key = "item$index"
+        override val offset = offset
+        override val size = size
+    }
+
+    private fun read(relative: String): String {
+        val file = File(sourceRoot, relative)
+        assertTrue("source missing: $file", file.isFile)
+        return file.readText()
+    }
+
+    private val sourceRoot: File by lazy { findSourceRoot() }
+
+    private fun findSourceRoot(): File {
+        val prefixes = listOf("", "app/")
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (dir != null) {
+            prefixes.forEach { prefix ->
+                val candidate = File(dir, "${prefix}src/main/java")
+                if (candidate.isDirectory) return candidate
+            }
+            dir = dir.parentFile
+        }
+        throw AssertionError(
+            "main source root not found walking up from " + System.getProperty("user.dir")
+        )
+    }
+
+    private companion object {
+        const val HOME_SOURCE = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
     }
 }

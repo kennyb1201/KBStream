@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.home
 
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.ui.unit.dp
 
 /**
@@ -82,6 +83,36 @@ internal object RailLanding {
 
     /** Stand-in for the title height until a rail has reported its own. */
     val FallbackTitleHeight = 32.dp
+}
+
+/**
+ * The rail a bring-into-view request belongs to: the LazyColumn item whose bounds
+ * contain the leading edge of the child that asked for the scroll.
+ *
+ * The spec below is handed the child REQUESTING focus, which on Home is a card
+ * inside a rail's own LazyRow - Compose's TV guide names the parameters "offset -
+ * Item's initial position, size - Item's size", and the item in question is the
+ * one that asked. Every number a landing needs belongs to the RAIL instead: its
+ * section title sits at its very top, and its total height is what the band left
+ * for the next rail's title is charged against. A card sits some way into its
+ * rail - the title, any row top padding, and the card box that reserves the focus
+ * glow - and by a different amount per rail, so a landing computed from the card
+ * aligns a different line in every row on screen. That is what clipped the
+ * Upcoming rail's title: its card is inset furthest (~52dp), so the 40dp inset
+ * that reads as a sane card landing put the rail's OWN top 12dp above the
+ * viewport.
+ *
+ * [visibleItems] is a LazyListState's `layoutInfo.visibleItemsInfo`. Its item
+ * offsets share this frame - both measure from the start of the viewport, and
+ * Home's rail column carries no top content padding - so the two are directly
+ * comparable. Returns null when no item contains the edge (the rail is not laid
+ * out yet), and the caller then falls back to the child's own bounds.
+ */
+internal fun railItemContaining(
+    childLeadingEdgePx: Float,
+    visibleItems: List<LazyListItemInfo>
+): LazyListItemInfo? = visibleItems.firstOrNull { item ->
+    childLeadingEdgePx >= item.offset && childLeadingEdgePx < item.offset + item.size
 }
 
 /**

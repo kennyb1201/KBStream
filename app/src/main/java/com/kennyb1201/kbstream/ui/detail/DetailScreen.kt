@@ -98,6 +98,7 @@ import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts
 import com.kennyb1201.kbstream.data.airdates.AirDateCorrection
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
+import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
@@ -1662,6 +1663,28 @@ fun DetailScreen(
                         initialTarget?.episode != null &&
                         !isResumingHere
 
+                // The last resort - no resolved row, no resume, no incoming
+                // target - names the episode from its TMDB number, so it is
+                // mapped to the FILE the addons resolve: on a show whose files
+                // hold two segments each, the TMDB number is not a file (see
+                // EpisodeScheme). Read once per target rather than per
+                // recomposition, because the store is a prefs lookup.
+                val fallbackStreamId = remember(
+                    context,
+                    id,
+                    targetSeason,
+                    targetEpisode,
+                    tmdbDetail?.id
+                ) {
+                    fileEpisodeStreamId(
+                        context = context,
+                        rootId = id,
+                        tmdbId = tmdbDetail?.id,
+                        season = targetSeason,
+                        tmdbEpisode = targetEpisode
+                    )
+                }
+
                 val targetStreamId =
                     resolvedTargetEpisode?.streamId
                         ?: resumeStreamId?.takeIf {
@@ -1671,7 +1694,7 @@ fun DetailScreen(
                             initialTarget.season == targetSeason &&
                                 initialTarget.episode == targetEpisode
                         }
-                        ?: "$id:$targetSeason:$targetEpisode"
+                        ?: fallbackStreamId
 
                 playLabel = when {
                     isDeepLinkedHere ->
@@ -2393,7 +2416,7 @@ fun DetailScreen(
                             top = 6.dp
                         )
                     ) {
-                        item(key = "infoblock") {
+                        item(key = "infoblock", contentType = "infoblock") {
                             Column(
                                 modifier = Modifier.padding(
                                     start = 24.dp,
@@ -2585,7 +2608,7 @@ fun DetailScreen(
                                 ?.voteAverage
                                 ?.takeIf { it > 0.0 }
                         if (mdbListRatings?.hasAny == true || tmdbScore != null) {
-                            item(key = "ratingsrow") {
+                            item(key = "ratingsrow", contentType = "section-row") {
                                 MdbListRatingsStrip(
                                     ratings = mdbListRatings,
                                     tmdbFallback = tmdbScore
@@ -2594,7 +2617,7 @@ fun DetailScreen(
                         }
 
                         if (detailFacts.isNotEmpty()) {
-                            item(key = "detailfacts") {
+                            item(key = "detailfacts", contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
                                         PaddingValues(
@@ -2625,7 +2648,7 @@ fun DetailScreen(
                         }
 
                         if (keywords.isNotEmpty()) {
-                            item(key = "keywordsrow") {
+                            item(key = "keywordsrow", contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
                                         PaddingValues(
@@ -2716,7 +2739,7 @@ fun DetailScreen(
                             normalizedType == "series" &&
                             seasons.isNotEmpty()
                         ) {
-                            item(key = "episodesheader") {
+                            item(key = "episodesheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = episodesHeader,
                                     modifier = Modifier.padding(
@@ -2726,7 +2749,7 @@ fun DetailScreen(
                                 )
                             }
 
-                            item(key = "seasonrow") {
+                            item(key = "seasonrow", contentType = "section-row") {
                                 SeasonRow(
                                     state = seasonRowState,
                                     seasons = seasons,
@@ -3261,7 +3284,7 @@ fun DetailScreen(
 
 
                         if (peopleItems.isNotEmpty()) {
-                            item(key = "peopleheader") {
+                            item(key = "peopleheader", contentType = "section-header") {
                                 // Plain label, NOT focusable: the movie DOWN
                                 // path (keywords row) jumps straight into the
                                 // people rail instead. A focusable label here
@@ -3278,7 +3301,7 @@ fun DetailScreen(
                                 )
                             }
 
-                            item(key = "peoplerow") {
+                            item(key = "peoplerow", contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
                                         PaddingValues(
@@ -3354,7 +3377,7 @@ fun DetailScreen(
                                 }
                             }
                         } else if (!m.cast.isNullOrEmpty()) {
-                            item(key = "castfallback") {
+                            item(key = "castfallback", contentType = "status") {
                                 Text(
                                     "Cast ${m.cast.orEmpty().joinToString(", ")}",
                                     modifier = Modifier.padding(
@@ -3368,7 +3391,7 @@ fun DetailScreen(
                             m.director
                                 ?.takeIf { it.isNotEmpty() }
                                 ?.let { directors ->
-                                    item(key = "directorfallback") {
+                                    item(key = "directorfallback", contentType = "status") {
                                         Text(
                                             "Director ${directors.joinToString(", ")}",
                                             color = KBTextLo,
@@ -3394,7 +3417,7 @@ fun DetailScreen(
                             normalizedType == "series" &&
                             networks.isNotEmpty()
                         ) {
-                            item(key = "networkheader") {
+                            item(key = "networkheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "NETWORK",
                                     modifier = Modifier.padding(
@@ -3404,7 +3427,7 @@ fun DetailScreen(
                                 )
                             }
 
-                            item(key = "networkrow") {
+                            item(key = "networkrow", contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
                                         PaddingValues(
@@ -3508,7 +3531,7 @@ fun DetailScreen(
                         }
 
                         if (companies.isNotEmpty()) {
-                            item(key = "productionheader") {
+                            item(key = "productionheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "PRODUCTION",
                                     modifier = Modifier.padding(
@@ -3518,7 +3541,7 @@ fun DetailScreen(
                                 )
                             }
 
-                            item(key = "productionrow") {
+                            item(key = "productionrow", contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
                                         PaddingValues(
@@ -3594,7 +3617,7 @@ fun DetailScreen(
                             .ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
 
                         if (reviews.isNotEmpty()) {
-                            item(key = "reviewsheader") {
+                            item(key = "reviewsheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "REVIEWS",
                                     modifier = Modifier.padding(
@@ -3605,7 +3628,7 @@ fun DetailScreen(
                             }
 
 
-                            item(key = "reviewsrow") {
+                            item(key = "reviewsrow", contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
                                         PaddingValues(
@@ -3638,7 +3661,7 @@ fun DetailScreen(
 
 
                         if (collectionParts.isNotEmpty()) {
-                            item(key = "collectionheader") {
+                            item(key = "collectionheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = collection?.name?.uppercase()
                                         ?: "COLLECTION",
@@ -3649,7 +3672,7 @@ fun DetailScreen(
                                 )
                             }
 
-                            item(key = "collectionrow") {
+                            item(key = "collectionrow", contentType = "section-row") {
                                 LazyRow(
                                     // Poster rails need an explicit gap: without
                                     // one the 124dp tiles sit flush and captions
@@ -3773,7 +3796,7 @@ fun DetailScreen(
                         val recs = recommendations
 
                         if (recs.isNotEmpty()) {
-                            item(key = "recsheader") {
+                            item(key = "recsheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "MORE LIKE THIS",
                                     modifier = Modifier.padding(
@@ -3783,7 +3806,7 @@ fun DetailScreen(
                                 )
                             }
 
-                            item(key = "recsrow") {
+                            item(key = "recsrow", contentType = "section-row") {
                                 LazyRow(
                                     // Poster rails need an explicit gap: without
                                     // one the 124dp tiles sit flush and captions
@@ -3909,7 +3932,7 @@ fun DetailScreen(
                             }
                         }
 
-                        item(key = "bottomspacer") {
+                        item(key = "bottomspacer", contentType = "spacer") {
                             Box(
                                 modifier = Modifier.height(40.dp)
                             )
@@ -4977,10 +5000,11 @@ private fun EpisodeCard(
         // Never the real name when hidden: a screen reader announcing "The
         // Funeral" is the same spoiler the visible title is.
         contentDescription = listedTitle,
-        // Blur is a RenderEffect and a no-op below API 31, so the cover drawn
-        // over the artwork in the content below is what actually holds on a
-        // Fire OS 7 box; this softens it on the boxes that can.
-        posterBlurRadius = if (hidesSpoiler) 18.dp else 0.dp,
+        // The spoiler cover below (a 0.94-alpha void scrim over the artwork)
+        // is what guarantees an unwatched episode's frame is never legible, on
+        // every API level. The per-frame RenderEffect blur that used to soften
+        // it on API 31+ is gone: it re-evaluated while this episode row
+        // scrolled, and under a 94% scrim it was not visible anyway.
         isWatched = isWatched,
         // An unaired episode still draws the UNAVAILABLE badge; it must not
         // also be playable. Clicking it used to launch source resolution for an

@@ -41,12 +41,15 @@ import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.device.DeviceCapability
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
+import com.kennyb1201.kbstream.data.player.EpisodeScheme
+import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.PlayerTitlePrefs
 import com.kennyb1201.kbstream.data.player.PlayerTrackMemory
+import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
@@ -637,6 +640,31 @@ class MpvPlayerActivity : ComponentActivity() {
     private var backdropUrl: String? = null
     private var overview: String? = null
     private var totalEpisodesInSeason: Int? = null
+
+    /*
+     * One file is not one TMDB episode (see EpisodeScheme).
+     *
+     * The main player's field comment carries the long version; what matters
+     * here is that this engine WALKS THE SAME MAPPING, because a binge that
+     * starts in ExoPlayer and finishes here would otherwise renumber the show
+     * halfway through. `season`/`episode` stay TMDB numbering, and the file the
+     * viewer is on is the trailing number of [episodeStreamId] (see
+     * currentFileEpisode).
+     */
+    private var bingeScheme: EpisodeScheme = EpisodeScheme.ONE_TO_ONE
+
+    /** The file detection already ran against, so it runs once per file. */
+    private var schemeDetectedForFileId: String? = null
+
+    /** The scheme store's key for this show, resolved once per session. */
+    private var schemeStoreKey: String? = null
+
+    /** The launch's own TMDB runtime for this episode, in minutes. */
+    private var launchRuntimeMinutes: Int? = null
+
+    /** TMDB's runtime for THIS episode, resolved when the launch carried none. */
+    private var currentEpisodeRuntimeMinutes: Int? = null
+    private var currentEpisodeRuntimePrefetched = false
     private var streamHeaders: Map<String, String> = emptyMap()
     private var historyParentIdOverride: String? = null
     private var startPositionMs = 0L
@@ -701,6 +729,7 @@ class MpvPlayerActivity : ComponentActivity() {
         readIntent(savedInstanceState)
         bindViews()
         historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
+        initBingeScheme()
         // The same line the main player writes: what this session files itself
         // under, next to what the id it plays says (see PlaybackSessionTrace).
         com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
@@ -892,6 +921,9 @@ class MpvPlayerActivity : ComponentActivity() {
         overview = intent.getStringExtra("item_overview")
         totalEpisodesInSeason =
             intent.getIntExtra("total_episodes_in_season", -1).takeIf { it > 0 }
+        // The launch's TMDB runtime for the episode being played: the scheme
+        // detector's reference, so it needs no lookup of its own.
+        launchRuntimeMinutes = intent.getIntExtra("runtime_minutes", -1).takeIf { it > 0 }
         historyParentIdOverride = intent.getStringExtra(EXTRA_HISTORY_PARENT_ID)
         isFallbackSession = intent.getBooleanExtra(EXTRA_MPV_FALLBACK, false)
         fallbackReason = intent.getStringExtra(EXTRA_MPV_FALLBACK_REASON)
@@ -1357,11 +1389,11 @@ class MpvPlayerActivity : ComponentActivity() {
             keepControlsVisible()
         }
         nextButton?.setOnClickListener {
-            val showSeason = season
-            val showEpisode = episode
-            if (showSeason != null && showEpisode != null) {
-                launchNextEpisode(showSeason, showEpisode + 1)
-            }
+            // The scheme-aware target, not `episode + 1`: on a show whose files
+            // hold two segments each, adding one lands on the middle of a file
+            // the viewer is already inside.
+            val target = nextEpisodeTarget() ?: return@setOnClickListener
+            launchNextEpisode(target.first, target.second)
         }
         playerSwitchButton?.setOnClickListener {
             keepControlsVisible()
@@ -1961,7 +1993,11 @@ class MpvPlayerActivity : ComponentActivity() {
      */
     private fun addonSubtitleLabel(offer: SubtitleEntry): String {
         val lang = offer.lang?.uppercase()?.takeIf { it.isNotBlank() }
-        val label = offer.label?.takeIf { it.isNotBlank() }
+        // The label already carries the kind the offer's URL names, when the
+        // offer's own label named none (see [addonSubtitleRowLabel]) - so a row
+        // here reads "EN \u00b7 English \u00b7 SDH" rather than three rows that
+        // all read "EN \u00b7 English".
+        val label = addonSubtitleRowLabel(offer)
         return listOfNotNull(lang, label).distinct().joinToString(" \u00b7 ")
             .ifBlank { "Addon subtitle" }
     }
@@ -2031,14 +2067,21 @@ class MpvPlayerActivity : ComponentActivity() {
      * so the SUBTITLE picker can offer them next to the embedded tracks and
      * the file/online paths. The main player merges the same offers as sidecar
      * tracks; here each is downloaded on tap (see [downloadAddonSubtitle]).
+     *
+     * The id asked about is the session's own episode id - the video the stream
+     * was resolved with - through the shared [addonSubtitleVideoId], so this
+     * engine and the native one cannot end up asking about different files.
      */
     private fun loadAddonSubtitleOffers() {
         if (parentType == "channel") return
-        val videoId = if (parentType == "series" && season != null && episode != null) {
-            "$parentId:$season:$episode"
-        } else {
-            parentId.takeIf { it.isNotBlank() }
-        } ?: return
+        val videoId = addonSubtitleVideoId(
+            context = this,
+            parentId = parentId,
+            parentType = parentType,
+            sessionStreamId = episodeStreamId,
+            season = season,
+            episode = episode
+        ) ?: return
         val contentType = if (parentType == "series") "series" else "movie"
         addonSubtitleFetchJob = lifecycleScope.launch {
             val offers = withContext(Dispatchers.IO) {
@@ -2821,20 +2864,152 @@ class MpvPlayerActivity : ComponentActivity() {
     }
 
     /**
+     * The FILE episode the session is on now: the trailing number of
+     * [episodeStreamId], which the id invariant keeps in file numbering. A
+     * session with no stream id falls back to the TMDB episode mapped through
+     * the detected scheme - exact for every kind but a split episode's second
+     * file, where the id is the only thing that knows both halves are one
+     * episode. Mirrors NativePlayerActivity.currentFileEpisode().
+     */
+    private fun currentFileEpisode(): Int? {
+        val showEpisode = episode ?: return null
+        episodeStreamId
+            ?.substringAfterLast(':')
+            ?.trim()
+            ?.toIntOrNull()
+            ?.takeIf { it >= 1 }
+            ?.let { return it }
+        return bingeScheme.fileForTmdbEpisode(showEpisode)
+    }
+
+    /**
+     * Reads the show's detected scheme (see NativePlayerActivity.initBingeScheme):
+     * a show this device has played before starts on the right file instead of
+     * re-learning the mapping from whichever file it happens to open.
+     */
+    private fun initBingeScheme() {
+        schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, resolvedTmdbId)
+        bingeScheme = EpisodeSchemeStore.get(this, schemeStoreKey)
+    }
+
+    /**
+     * The TMDB runtime of the episode playing now, in milliseconds, or null when
+     * nothing trustworthy says: the launch's own runtime, TMDB's `runtime` for
+     * this episode, or the show's average `episode_run_time`. Resolved at most
+     * once per session - this is reached from the progress tick, and a runtime
+     * that is unknown now is unknown a second later too.
+     */
+    private suspend fun currentEpisodeTmdbRuntimeMs(): Long? {
+        launchRuntimeMinutes?.let { return it * 60_000L }
+        val showSeason = season ?: return null
+        val showEpisode = episode ?: return null
+        if (currentEpisodeRuntimePrefetched) {
+            return currentEpisodeRuntimeMinutes?.takeIf { it > 0 }?.let { it * 60_000L }
+        }
+        currentEpisodeRuntimePrefetched = true
+        val minutes = withContext(Dispatchers.IO) {
+            val repo = TmdbRepository.getInstance(this@MpvPlayerActivity)
+            val tmdb = tmdbId()
+            val fromSeason = tmdb?.let { id ->
+                runCatchingCancellable {
+                    repo.getSeasonEpisodes(id, showSeason, parentId)
+                }.getOrNull()
+                    ?.firstOrNull { it.episodeNumber == showEpisode }
+                    ?.runtimeMinutes
+                    ?.takeIf { it > 0 }
+            }
+            fromSeason ?: runCatchingCancellable {
+                repo.fetchEnrichedMetaCached(parentId, parentType, full = false)
+                    ?.episodeRunTime
+                    ?.firstOrNull { it > 0 }
+            }.getOrNull()
+        }
+        currentEpisodeRuntimeMinutes = minutes
+        return minutes?.takeIf { it > 0 }?.let { it * 60_000L }
+    }
+
+    /**
+     * Reads the file that is playing against the episode TMDB says it is, and
+     * remembers what that says about the show (see EpisodeScheme.detect). Runs
+     * from the progress tick, so it does nothing until a duration and a runtime
+     * both exist, and at most once per file. Mirrors
+     * NativePlayerActivity.maybeDetectScheme().
+     */
+    private fun maybeDetectScheme() {
+        val sid = episodeStreamId ?: return
+        if (schemeDetectedForFileId == sid) return
+        val fileMs = durationMs
+        if (fileMs <= 0L) return
+        lifecycleScope.launch {
+            if (schemeStoreKey == null) {
+                schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, tmdbId())
+                bingeScheme = EpisodeSchemeStore.get(this@MpvPlayerActivity, schemeStoreKey)
+            }
+            val tmdbMs = currentEpisodeTmdbRuntimeMs() ?: return@launch
+            // The tick that started this coroutine may have been for a file the
+            // session has already left, so the guard is re-read inside.
+            if (schemeDetectedForFileId == sid) return@launch
+            val detected = EpisodeScheme.detect(fileMs, tmdbMs)
+            bingeScheme = detected
+            EpisodeSchemeStore.put(this@MpvPlayerActivity, schemeStoreKey, detected)
+            schemeDetectedForFileId = sid
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "scheme ${detected.encode() ?: "1:1"} for $sid " +
+                    "(file=${fileMs}ms tmdb=${tmdbMs}ms)"
+            )
+        }
+    }
+
+    /**
+     * The TMDB episodes the file that just finished covered: one for every
+     * scheme but SEGMENTS_PER_FILE, which holds its own factor. Without this the
+     * second segment of a doubled file is never marked and the tracker keeps
+     * offering it. Mirrors NativePlayerActivity.coveredTmdbEpisodes().
+     */
+    private fun coveredTmdbEpisodes(tmdbEpisode: Int): List<Int> {
+        if (bingeScheme.kind != SchemeKind.SEGMENTS_PER_FILE) return listOf(tmdbEpisode)
+        val maxEpisodes = totalEpisodesInSeason
+        return (0 until bingeScheme.factor)
+            .map { tmdbEpisode + it }
+            .filter { maxEpisodes == null || it <= maxEpisodes }
+            .ifEmpty { listOf(tmdbEpisode) }
+    }
+
+    /**
      * The episode the end of a session should chain into: the next one, or the
      * first of the next season when this was the season's last. Mirrors
-     * NativePlayerActivity.nextEpisodeTarget() so both engines chain alike.
+     * NativePlayerActivity.nextEpisodeTarget() so both engines chain alike,
+     * including the detected episode scheme's own arithmetic.
      */
     private fun nextEpisodeTarget(): Pair<Int, Int>? {
         val showSeason = season ?: return null
         val showEpisode = episode ?: return null
-        val nextEpisode = showEpisode + 1
+        val fileEpisode = currentFileEpisode() ?: showEpisode
+        val nextEpisode = bingeScheme.advance(fileEpisode, showEpisode).second
         val maxEpisodes = totalEpisodesInSeason
         return if (maxEpisodes != null && nextEpisode > maxEpisodes) {
             (showSeason + 1) to 1
         } else {
             showSeason to nextEpisode
         }
+    }
+
+    /**
+     * The FILE number for a target the labels call [targetEpisode]. The
+     * arithmetic next episode is wherever the file cursor goes (the second half
+     * of the episode already playing, when two files share one); any other
+     * target is the file that HOLDS that TMDB episode. Mirrors
+     * NativePlayerActivity.nextFileEpisodeFor().
+     */
+    private fun nextFileEpisodeFor(targetSeason: Int, targetEpisode: Int): Int {
+        val showSeason = season
+        val showEpisode = episode
+        if (showSeason != null && showEpisode != null && targetSeason == showSeason) {
+            val fileEpisode = currentFileEpisode() ?: showEpisode
+            val (nextFile, nextEpisode) = bingeScheme.advance(fileEpisode, showEpisode)
+            if (nextEpisode == targetEpisode) return nextFile
+        }
+        return bingeScheme.fileForTmdbEpisode(targetEpisode)
     }
 
     /** Fills and shows the card, then arms its countdown. */
@@ -3385,6 +3560,11 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun onProgress(position: Long, duration: Long) {
         positionMs = position
         durationMs = duration
+        // The file the viewer is watching may hold two TMDB episodes, or be half
+        // of one: read that from the file's own duration against the episode's
+        // TMDB runtime, once per file. Cheap and non-blocking - it does nothing
+        // until both numbers exist.
+        maybeDetectScheme()
         runOnUiThread {
             durationView?.text = formatDurationMillis(durationMs)
             // While the seekbar is being dragged it owns the readout, so a
@@ -3497,6 +3677,10 @@ class MpvPlayerActivity : ComponentActivity() {
      * instead of being marked watched.
      */
     private fun fileEpisodeForHandoff() {
+        // Backstop for a file a viewer sat through without the progress tick
+        // ever seeing a duration: the scheme has to be known BEFORE the handoff
+        // decides what to chain into.
+        maybeDetectScheme()
         val pos = runCatching { surface?.positionMs() ?: 0L }.getOrDefault(0L)
         val dur = runCatching { surface?.durationMs() ?: 0L }.getOrDefault(0L)
         // Reached only from launchNextEpisode, which IS an advance of the
@@ -3558,7 +3742,7 @@ class MpvPlayerActivity : ComponentActivity() {
             season = targetSeason,
             episode = targetEpisode,
             title = "S$targetSeason\u2009E$targetEpisode",
-            streamId = nextStreamId(targetSeason, targetEpisode),
+            streamId = nextStreamId(targetSeason, nextFileEpisodeFor(targetSeason, targetEpisode)),
             runtimeMinutes = null,
             bingeGroup = currentBingeGroup,
             addonName = currentAddonName,
@@ -3586,15 +3770,19 @@ class MpvPlayerActivity : ComponentActivity() {
         finish()
     }
 
-    /** Mirrors NativePlayerActivity.nextStreamId: the episode id's own prefix. */
-    private fun nextStreamId(targetSeason: Int, targetEpisode: Int): String {
+    /**
+     * Mirrors NativePlayerActivity.nextStreamId: the episode id's own prefix,
+     * with [targetFileEpisode] in FILE numbering - the identity the addons
+     * resolve (see [nextFileEpisodeFor]).
+     */
+    private fun nextStreamId(targetSeason: Int, targetFileEpisode: Int): String {
         val prefix = episodeStreamId.orEmpty()
             .substringBeforeLast(':')
             .substringBeforeLast(':')
         return if (prefix.isNotBlank()) {
-            "$prefix:$targetSeason:$targetEpisode"
+            "$prefix:$targetSeason:$targetFileEpisode"
         } else {
-            "$parentId:$targetSeason:$targetEpisode"
+            "$parentId:$targetSeason:$targetFileEpisode"
         }
     }
 
@@ -3926,13 +4114,22 @@ class MpvPlayerActivity : ComponentActivity() {
                         val showSeason = season
                         val showEpisode = episode
                         if (showSeason != null && showEpisode != null) {
-                            simkl.pushWatchedEpisode(
-                                showImdbId = parentId,
-                                season = showSeason,
-                                episode = showEpisode,
-                                title = itemName,
-                                tmdbId = tmdb
-                            )
+                            // One file can cover several TMDB episodes (see
+                            // coveredTmdbEpisodes): every one of them is marked,
+                            // or the second segment of a doubled file stays
+                            // unwatched on the tracker.
+                            var pushed = true
+                            coveredTmdbEpisodes(showEpisode).forEach { coveredEpisode ->
+                                val ok = simkl.pushWatchedEpisode(
+                                    showImdbId = parentId,
+                                    season = showSeason,
+                                    episode = coveredEpisode,
+                                    title = itemName,
+                                    tmdbId = tmdb
+                                )
+                                if (!ok) pushed = false
+                            }
+                            pushed
                         } else {
                             false
                         }

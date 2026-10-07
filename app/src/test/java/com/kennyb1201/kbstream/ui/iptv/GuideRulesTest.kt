@@ -402,6 +402,24 @@ class GuideRulesTest {
     }
 
     @Test
+    fun `chips refuse focus while a move-to-list transit is pending`() {
+        // The reported walk bug: a Left/Right from the channel list changes the
+        // group, the keyed rows swap, focus is cleared for a frame, and default
+        // resolution landed it on the first chip -- whose onFocus adopted that
+        // chip's group and reset the walk to "All". Refusing focus for the
+        // duration of the transit makes the re-anchor the only thing that runs.
+        assertFalse(chipRowAcceptsFocus(listTransitPending = true))
+    }
+
+    @Test
+    fun `chips take focus again once no transit is pending`() {
+        // Both deliberate chip paths must still work: walking the chips row,
+        // and Up from the list's top row (which sets its own flag, not this
+        // one).
+        assertTrue(chipRowAcceptsFocus(listTransitPending = false))
+    }
+
+    @Test
     fun `a program hit key is unique across overlapping EPG entries`() {
         // Same channel + same start, different end: two EPG sources for one
         // channel. The old channel|start key collided and Compose threw

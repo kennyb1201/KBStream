@@ -13,6 +13,7 @@ import androidx.media3.ui.PlayerView
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
+import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -122,16 +123,21 @@ class AddonSubtitleController(
     private var assOffersByKey: Map<String, String> = emptyMap()
 
     /**
-     * Starts discovery for [parentId] and re-attaches tracks to every
-     * player attached to [view] from now on. Safe to call repeatedly; the
+     * Starts discovery for the video being played and re-attaches tracks to
+     * every player attached to [view] from now on. Safe to call repeatedly; the
      * fetch happens once per video id.
+     *
+     * [episodeStreamId] is the session's own episode id, which is what the
+     * stream was resolved with and therefore the video the add-ons know this
+     * file by (see [addonSubtitleVideoId]).
      */
     fun bind(
         view: KBPlayerView,
         parentId: String,
         parentType: String,
         season: Int?,
-        episode: Int?
+        episode: Int?,
+        episodeStreamId: String? = null
     ) {
         view.onPlayerAttached = { player ->
             onPlayerAttached(player)
@@ -140,11 +146,14 @@ class AddonSubtitleController(
             release()
         }
 
-        val videoId = if (parentType == "series" && season != null && episode != null) {
-            "$parentId:$season:$episode"
-        } else {
-            parentId.takeIf { it.isNotBlank() }
-        } ?: return
+        val videoId = addonSubtitleVideoId(
+            context = appContext,
+            parentId = parentId,
+            parentType = parentType,
+            sessionStreamId = episodeStreamId,
+            season = season,
+            episode = episode
+        ) ?: return
 
         fetchIfNeeded(videoId, parentType)
     }
@@ -229,7 +238,7 @@ class AddonSubtitleController(
             val ambiguousAssKeys = mutableSetOf<String>()
             val configs = offers.mapNotNull { offer ->
                 val uri = downloadCache[offer.url] ?: download(offer.url) ?: return@mapNotNull null
-                val label = offer.label ?: offer.lang?.uppercase()
+                val label = addonSubtitleRowLabel(offer)
                 val mime = resolveAddonSubtitleMime(offer.url, uri)
                 val builder = MediaItem.SubtitleConfiguration.Builder(uri)
                     .setMimeType(mime)
@@ -335,9 +344,10 @@ internal object AddonSubtitleSource {
 
     /**
      * Subtitle offers for [videoId] ("tt…" for movies, "tt…:S:E" for series
-     * episodes), from every installed addon that declares the Stremio
-     * "subtitles" resource. A dead addon contributes nothing rather than
-     * sinking the rest. Empty when no addon offers them.
+     * episodes, in the same file numbering the stream was resolved with - see
+     * [addonSubtitleVideoId]), from every installed addon that declares the
+     * Stremio "subtitles" resource. A dead addon contributes nothing rather
+     * than sinking the rest. Empty when no addon offers them.
      */
     suspend fun discover(
         context: Context,
@@ -410,6 +420,28 @@ internal object AddonSubtitleSource {
 }
 
 /**
+ * What one add-on subtitle is CALLED, for a picker row.
+ *
+ * The add-on's own label first, and - when that label does not already name it -
+ * the kind the offer's URL names. The URL is the one piece of evidence the
+ * picker cannot recover later: media3 carries a label and a language on the
+ * track, and no field for the URL, so an offer whose label says only "English"
+ * would otherwise lose the ".sdh." in its own file name and read as a plain
+ * track next to two others that read the same.
+ *
+ * Null only when the offer names itself nowhere - the shape this returned
+ * before, and the one the picker's own fallback exists for.
+ */
+internal fun addonSubtitleRowLabel(offer: SubtitleEntry): String? {
+    val base = offer.label ?: offer.lang?.uppercase()
+    val urlKind = SubtitleKindRules.tagText(offer.url)
+        ?.takeIf { base == null || SubtitleKindRules.tagText(base) == null }
+    return listOfNotNull(base, urlKind)
+        .joinToString(" \u00b7 ")
+        .takeIf { it.isNotBlank() }
+}
+
+/**
  * Maps a downloaded addon subtitle to the Media3 MIME type it actually holds.
  *
  * The URL's extension is the first answer and the cheap one - but it is not
@@ -455,3 +487,47 @@ private fun readSubtitleProbe(uri: Uri): String = runCatching {
         if (read <= 0) "" else String(buffer, 0, read)
     }
 }.getOrDefault("")
+
+/**
+ * The video id a subtitles add-on is asked for: the SAME id the stream was
+ * resolved with.
+ *
+ * An add-on publishes its subtitles against the video it was asked to resolve,
+ * and that id is FILE numbering (see EpisodeScheme): on a show whose files hold
+ * two TMDB segments each, the TMDB episode's own number names a file that does
+ * not hold it, so the lookup answers with a different episode's subtitles - or
+ * with none at all.
+ *
+ * [sessionStreamId] is the session's own episode id, which is exactly that file
+ * id, so it is used as it stands. A session without one - a deep link, an older
+ * handoff - falls back to the TMDB episode mapped through the show's stored
+ * scheme, and to the plain TMDB id when even that is unknown. A film answers
+ * with [parentId], the id an add-on already keys it by.
+ *
+ * One function for both engines: the native player binds its controller with
+ * it, the MPV engine builds its own offers with it (see MpvPlayerActivity),
+ * and the two cannot drift into asking about different videos.
+ */
+internal fun addonSubtitleVideoId(
+    context: Context,
+    parentId: String,
+    parentType: String,
+    sessionStreamId: String?,
+    season: Int?,
+    episode: Int?
+): String? {
+    if (parentType != "series" || season == null || episode == null) {
+        return parentId.takeIf { it.isNotBlank() }
+    }
+    sessionStreamId
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+        ?.let { return it }
+    return fileEpisodeStreamId(
+        context = context,
+        rootId = parentId,
+        tmdbId = null,
+        season = season,
+        tmdbEpisode = episode
+    )
+}

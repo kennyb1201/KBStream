@@ -13,6 +13,8 @@ import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheMaintenance
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.evictOldest
+import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
+import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileManager
 import com.squareup.moshi.JsonAdapter
@@ -1379,7 +1381,15 @@ class TmdbRepository private constructor(context: Context) :
         // Continue-watching resolution scans many seasons per show (and does so
         // once per history/Simkl row), so cache each (show, season) lookup in
         // memory with a TTL instead of hitting TMDB every time.
-        val key = "$tvId:$season:$imdbId"
+        //
+        // The show's detected episode scheme is PART of the key, because it is
+        // part of every stream id in the list: keyed without it, a season
+        // cached before the scheme was detected would keep naming the file the
+        // old mapping chose - for up to a week, on disk - and the detail screen
+        // would hand the player a file that does not hold the episode (see
+        // EpisodeScheme). A scheme change is a new key, so the next lookup
+        // rebuilds the list instead of aging out the old one.
+        val key = "$tvId:$season:$imdbId:${episodeSchemeTag(imdbId, tvId)}"
         val now = System.currentTimeMillis()
         pruneMemoryCaches()
         val cached = seasonEpisodesCache[key]
@@ -1420,7 +1430,18 @@ class TmdbRepository private constructor(context: Context) :
             .filter { ep -> namedEpisodeNumber(ep.episodeNumber) != null }
             .map { ep ->
             ResolvedEpisode(
-                streamId = "$imdbId:$season:${ep.episodeNumber}",
+                // FILE numbering, not TMDB's: on a show whose files hold two
+                // segments each, this is the file that HOLDS the episode (see
+                // EpisodeScheme), which is what the addons resolve and what
+                // the watch-history row is filed under. The episode number
+                // itself stays TMDB's, on the field below.
+                streamId = fileEpisodeStreamId(
+                    context = appContext,
+                    rootId = imdbId,
+                    tmdbId = tvId,
+                    season = season,
+                    tmdbEpisode = ep.episodeNumber
+                ),
                 episodeNumber = ep.episodeNumber,
                 name = ep.name,
                 overview = ep.overview,
@@ -1440,6 +1461,15 @@ class TmdbRepository private constructor(context: Context) :
             cacheJson(diskKey, seasonEpisodesJsonAdapter.toJson(episodes), now)
         }
         return episodes
+    }
+
+    /**
+     * The show's detected episode scheme as a cache-key part: `1:1` when there
+     * is none, `sp2` / `fe3` otherwise (see [EpisodeSchemeStore.encode]).
+     */
+    private fun episodeSchemeTag(imdbId: String, tvId: Int): String {
+        val stable = EpisodeSchemeStore.stableShowId(imdbId, tvId) ?: return "1:1"
+        return EpisodeSchemeStore.get(appContext, stable).encode() ?: "1:1"
     }
 
     suspend fun getEpisodeRating(

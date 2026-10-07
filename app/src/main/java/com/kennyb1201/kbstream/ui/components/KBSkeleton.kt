@@ -17,8 +17,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.State
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -38,14 +41,23 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
  * the [KBStatusMessage] card.** A skeleton says "this is coming"; the card
  * says "there is nothing here" or "this failed", and those must not look alike.
  */
+/**
+ * The skeleton pulse, as a State rather than a plain Float.
+ *
+ * It is deliberately NOT read in composition: a plain value forces every
+ * placeholder on screen to recompose at ~60fps for the whole loading window -
+ * exactly while the page is also composing the content arriving behind it. The
+ * caller reads this inside `Modifier.graphicsLayer { }`, which defers the read
+ * to the draw phase, so the pulse animates without a single recomposition.
+ */
 @Composable
-private fun rememberSkeletonAlpha(): Float {
+private fun rememberSkeletonAlpha(): State<Float> {
     // Reduced motion: hold a single mid tone instead of pulsing. The
     // placeholders still read as placeholders, they just do not breathe.
-    if (rememberReducedMotion()) return 0.55f
+    if (rememberReducedMotion()) return remember { mutableStateOf(0.55f) }
 
     val transition = rememberInfiniteTransition(label = "skeleton")
-    val alpha by transition.animateFloat(
+    return transition.animateFloat(
         initialValue = 0.34f,
         targetValue = 0.72f,
         animationSpec = infiniteRepeatable(
@@ -54,21 +66,24 @@ private fun rememberSkeletonAlpha(): Float {
         ),
         label = "skeletonAlpha"
     )
-    return alpha
 }
 
 @Composable
 private fun KBSkeletonTile(
     width: Dp,
     height: Dp,
-    alpha: Float,
+    alpha: State<Float>,
     modifier: Modifier = Modifier,
     shape: androidx.compose.ui.graphics.Shape = KBShapeCard
 ) {
     Box(
         modifier = modifier
             .size(width = width, height = height)
-            .background(KBSurfaceRaised.copy(alpha = alpha), shape)
+            // graphicsLayer BEFORE the background, so the layer wraps the fill
+            // it pulses. Reading [alpha] here (and not in composition) is what
+            // keeps the pulse off the recomposition path.
+            .graphicsLayer { this.alpha = alpha.value }
+            .background(KBSurfaceRaised, shape)
     )
 }
 
@@ -102,7 +117,8 @@ fun KBSkeletonRail(
                 .padding(start = horizontalPadding, bottom = 10.dp)
                 .width(titleWidth)
                 .height(18.dp)
-                .background(KBSurfaceRaised.copy(alpha = alpha), KBShapeSmall)
+                .graphicsLayer { this.alpha = alpha.value }
+                .background(KBSurfaceRaised, KBShapeSmall)
         )
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
