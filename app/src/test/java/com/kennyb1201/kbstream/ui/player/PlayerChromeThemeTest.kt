@@ -62,6 +62,7 @@ class PlayerChromeThemeTest {
         val PURE_BLACK_SURFACE = 0xFF000000.toInt()
         val PURE_BLACK_RAISED = 0xFF050505.toInt()
 
+        const val CHROME_THEME = "com/kennyb1201/kbstream/ui/player/PlayerChromeTheme.kt"
         const val NATIVE_PLAYER = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
         const val MPV_PLAYER = "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
         const val EXTERNAL_PLAYER =
@@ -333,6 +334,83 @@ class PlayerChromeThemeTest {
         }
     }
 
+    // ── the state list, with and without the API-29 accessors ────────────
+
+    /**
+     * `StateListDrawable.getStateCount()` is API 29 and this app ships minSdk
+     * 26, so the states are read where the platform has them and probed where it
+     * does not. The two paths must end at the SAME states, or a Fire TV on API 28
+     * would rebuild a different D-pad focus ring than a newer box.
+     */
+    @Test
+    fun `the probe recovers the states the platform's own list reports`() {
+        listOf(R.drawable.mpv_control_bg, R.drawable.channel_guide_item_bg).forEach { res ->
+            val selector = ContextCompat.getDrawable(context, res) as StateListDrawable
+
+            assertStates(
+                chromeSelectorStates(selector),
+                probeSelectorStates(selector),
+                "$res must rebuild identically with and without the API-29 list"
+            )
+        }
+    }
+
+    @Test
+    fun `a state the selector does not declare is not invented`() {
+        val button = ContextCompat.getDrawable(context, R.drawable.mpv_control_bg)
+            as StateListDrawable
+
+        assertStates(
+            listOf(intArrayOf(android.R.attr.state_focused), intArrayOf()),
+            probeSelectorStates(button),
+            "mpv_control_bg declares no selected state, so the probe must not add " +
+                "one - that would draw a selection outline on the control bar's " +
+                "buttons that the XML never had"
+        )
+
+        val guide = ContextCompat.getDrawable(context, R.drawable.channel_guide_item_bg)
+            as StateListDrawable
+
+        assertStates(
+            listOf(
+                intArrayOf(android.R.attr.state_focused),
+                intArrayOf(android.R.attr.state_selected),
+                intArrayOf()
+            ),
+            probeSelectorStates(guide),
+            "the guide's \"this is the channel playing now\" state has to survive"
+        )
+    }
+
+    @Test
+    fun `the API-29 state accessors are never called outside their guard`() {
+        val source = source(CHROME_THEME)
+        val readerStart = source.indexOf("@RequiresApi(Build.VERSION_CODES.Q)")
+        assertTrue(
+            "the exact read must stay behind a version annotation, which is what " +
+                "lint's NewApi requires on an app that ships minSdk 26",
+            readerStart >= 0
+        )
+        val reader = source.substring(readerStart).substringBefore("\n/**")
+        listOf("selector.stateCount", "selector.getStateSet(").forEach { call ->
+            assertEquals(
+                "$call must be called exactly once, and only in the guarded reader",
+                1,
+                Regex(Regex.escape(call)).findAll(source).count()
+            )
+            assertTrue("$call must sit inside the @RequiresApi reader", reader.contains(call))
+        }
+        assertFalse(
+            "the per-state drawables come from setState/current (API 1) now, not " +
+                "from getStateDrawable()",
+            source.contains("getStateDrawable(")
+        )
+        assertTrue(
+            "and the read is gated where it is chosen",
+            source.contains("Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q")
+        )
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     /** The focused plate of a chrome selector, after the pass has run over it. */
@@ -348,6 +426,17 @@ class PlayerChromeThemeTest {
         val plate = selector.current as? GradientDrawable
         assertTrue("$drawableRes must resolve to a plate for that state", plate != null)
         return plate!!
+    }
+
+    /** The two state lists, in order, compared element by element. */
+    private fun assertStates(expected: List<IntArray>, actual: List<IntArray>, message: String) {
+        assertEquals("$message (state count)", expected.size, actual.size)
+        expected.indices.forEach { index ->
+            assertTrue(
+                "$message (state $index)",
+                expected[index].contentEquals(actual[index])
+            )
+        }
     }
 
     private fun source(path: String): String {

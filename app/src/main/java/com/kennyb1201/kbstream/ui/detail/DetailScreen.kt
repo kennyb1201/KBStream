@@ -441,10 +441,22 @@ private fun IconButtonBody(
             contentAlignment = Alignment.CenterStart
         ) {
             if (progress != null) {
-                // Focus-aware: the card's content color is KBTextHi while
-                // idle and KBAccent while focused, so the bar highlights with
-                // the card it sits in.
-                val barColor = androidx.tv.material3.LocalContentColor.current
+                // The bar follows the THEME, not the button's content color.
+                // It used to paint with LocalContentColor, on the theory that
+                // the card's content color is KBAccent while focused - but
+                // KBCard keeps its content bright in BOTH states on purpose
+                // (KBTextHi idle and focused, see its colors block), so this
+                // bar sat there as plain white: the one progress bar in the
+                // app that did not move with the viewer's accent, beside
+                // poster tiles and Up Next cards that do (see KBProgressBar,
+                // whose fill is this same token).
+                //
+                // Read HERE, inside the composable, rather than through a
+                // top-level val: [KBAccent] is live state that an accent or
+                // profile switch changes, and capturing it once is exactly how
+                // the watch markers froze on the first-loaded theme (see
+                // WatchMarkerAccentContractTest).
+                val barColor = KBAccent
                 val barShape = KBShapePill
 
                 Box(

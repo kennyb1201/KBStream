@@ -57,10 +57,20 @@ class MpvOpenFailureAdvanceContractTest {
         return rest.substring(0, end)
     }
 
+    /**
+     * The handler's whole body, up to the line that closes the lambda.
+     *
+     * Extracted to the closing brace rather than through a fixed character
+     * window: the handler has grown since (the addon outcome it now records),
+     * and a budget silently cut `tryNextSource()` out of the slice - which
+     * failed this pin for a reason that had nothing to do with what it pins.
+     */
     private val errorHandler: String by lazy {
         val start = activity.indexOf("view.onPlaybackError = {")
         assertTrue("MpvPlayerActivity must handle the view's playback error", start >= 0)
-        activity.substring(start, minOf(start + 2_600, activity.length))
+        val rest = activity.substring(start)
+        val end = Regex("\\n {8}}").find(rest)?.range?.first ?: rest.length
+        rest.substring(0, end)
     }
 
     @Test

@@ -812,7 +812,19 @@ class MpvPlayerActivity : ComponentActivity() {
                 "Switch player to try this in ExoPlayer, or press Back to exit."
             )
         }
-        view.onFileLoaded = { title -> onFileLoaded(title) }
+        view.onFileLoaded = { title ->
+            // A file that actually OPENED is this addon working for this
+            // title, so the next episode's list leads with it instead of with
+            // whichever addon the ranker happened to put first (see
+            // SourceAddonMemory). No live guard is needed on this engine: it
+            // has no live-TV path (see the class docs).
+            com.kennyb1201.kbstream.data.player.SourceAddonMemory.rememberWorked(
+                this@MpvPlayerActivity,
+                parentId,
+                currentAddonName
+            )
+            onFileLoaded(title)
+        }
         view.onProgress = { position, duration -> onProgress(position, duration) }
         view.onPausedChanged = { paused -> onPausedChanged(paused) }
         view.onBufferingChanged = { buffering ->
@@ -824,6 +836,17 @@ class MpvPlayerActivity : ComponentActivity() {
             // A cached link that never opened is dead: forget it now, so the
             // next replay resolves fresh instead of looping back into this card.
             invalidateCachedLinkBeforeFirstFrame()
+            // This callback fires only when the file never opened, so this
+            // addon's link is the thing that failed: remember it against this
+            // TITLE, so the next episode's list - and the picker's own order -
+            // stop heading with it (see SourceAddonMemory). A decoder or
+            // container failure cannot land here, so a good link is never
+            // demoted for this box's limits.
+            com.kennyb1201.kbstream.data.player.SourceAddonMemory.rememberFailed(
+                this@MpvPlayerActivity,
+                parentId,
+                currentAddonName
+            )
             // This callback fires only when the file never opened (see
             // MpvPlayerView's END_FILE handling), which makes the ranked list
             // the first answer rather than the card: a source that will not

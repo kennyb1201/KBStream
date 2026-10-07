@@ -7,8 +7,10 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.graphics.drawable.StateListDrawable
+import android.os.Build
 import android.view.View
 import android.view.ViewGroup
+import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -184,7 +186,7 @@ private fun themedShape(context: Context, shape: GradientDrawable): GradientDraw
  * A selector rebuilt state by state.
  *
  * This is the branch the focus rings needed. The state sets and their ORDER are
- * copied as they are - so the focused state stays first, and the in-player
+ * taken as they are - so the focused state stays first, and the in-player
  * guide's third "this is the channel playing now" state survives - while each
  * state's plate is rebuilt from the app's own focus / selection conventions,
  * resolved from the CURRENT theme:
@@ -200,17 +202,16 @@ private fun themedShape(context: Context, shape: GradientDrawable): GradientDraw
  * not invent a look for a state it does not know.
  */
 private fun themedSelector(context: Context, selector: StateListDrawable): StateListDrawable? {
-    if (selector.stateCount == 0) return null
+    val states = chromeSelectorStates(selector)
+    if (states.isEmpty()) return null
     var changed = false
     val rebuilt = StateListDrawable()
-    for (index in 0 until selector.stateCount) {
-        val states = runCatching { selector.getStateSet(index) }.getOrNull()
+    for (state in states) {
         // addState() refuses a null drawable, so a state that does not resolve
         // means leaving the whole selector as it was rather than half-rebuilding
         // it around a hole.
-        val stateDrawable = runCatching { selector.getStateDrawable(index) }.getOrNull()
-            ?: return null
-        val spec = chromePlateSpec(context, states)
+        val stateDrawable = resolvedForState(selector, state) ?: return null
+        val spec = chromePlateSpec(context, state)
         val themed = when {
             spec != null -> themedPlate(context, stateDrawable, spec)
 
@@ -219,16 +220,123 @@ private fun themedSelector(context: Context, selector: StateListDrawable): State
             // so whatever else that state carried (the hairline outline the
             // picker rows do not have, the radius they all do) is left as it
             // was.
-            states == null || states.isEmpty() ->
+            state.isEmpty() ->
                 (stateDrawable as? GradientDrawable)?.let { themedShape(context, it) }
 
             else -> null
         }
         if (themed != null) changed = true
-        rebuilt.addState(states, themed ?: stateDrawable)
+        rebuilt.addState(state, themed ?: stateDrawable)
     }
     return if (changed) rebuilt else null
 }
+
+/**
+ * The states a chrome selector is rebuilt from, in the order it declares them,
+ * or an empty list when it has nothing to rebuild.
+ *
+ * The platform's own list - [StateListDrawable.getStateCount] and its per-state
+ * accessors - is API 29 and this app ships minSdk 26 (a Fire TV stick reports 26
+ * to 28), so the states are READ where the platform offers it and PROBED where
+ * it does not. The probe asks the selector for each state the chrome's focus
+ * language is written in and keeps the ones it actually answers differently
+ * from its default plate, which is what stops this from inventing a focus ring
+ * for a selector that never declared one.
+ *
+ * Both paths end with the default entry, because the default entry is the one
+ * that has to be there: it matches when nothing else does.
+ */
+internal fun chromeSelectorStates(selector: StateListDrawable): List<IntArray> =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        readSelectorStates(selector)
+    } else {
+        probeSelectorStates(selector)
+    }
+
+/**
+ * The selector's own states, in its own order (API 29+).
+ *
+ * A null state set is the default entry, which the platform hands back as an
+ * EMPTY set rather than null; a state that cannot be read at all drops out
+ * rather than failing the whole rebuild.
+ */
+@RequiresApi(Build.VERSION_CODES.Q)
+private fun readSelectorStates(selector: StateListDrawable): List<IntArray> {
+    val count = runCatching { selector.stateCount }.getOrNull() ?: return emptyList()
+    if (count <= 0) return emptyList()
+    return (0 until count).mapNotNull { index ->
+        runCatching { selector.getStateSet(index) }.getOrNull()
+    }
+}
+
+/**
+ * The same states, recovered without the API-29 accessors.
+ *
+ * Only public [Drawable] API is used: the selector is put into a state and asked
+ * what it resolves to ([Drawable.current]), and its own state is put back
+ * afterwards - the probe moves the live drawable while it looks. A state it
+ * answers exactly as it answers its default plate is not one its XML declares,
+ * so it is left out: that is what keeps a button plate (focused + default) from
+ * growing a selection outline it never had, and it is why both chrome selectors
+ * rebuild identically on this path and on the read path.
+ *
+ * [CHROME_SELECTOR_STATES] is the vocabulary this pass knows how to theme, plus
+ * the one non-themed state worth carrying over so a pressed plate is not lost.
+ * A state outside it is not carried over on these API levels - the default
+ * plate answers it, which is the safe reading of "not declared".
+ */
+internal fun probeSelectorStates(selector: StateListDrawable): List<IntArray> {
+    val defaultDrawable = resolvedForState(selector, intArrayOf())
+    val states = CHROME_SELECTOR_STATES.filter { state ->
+        val resolved = resolvedForState(selector, state)
+        resolved != null && !answersLikeDefault(resolved, defaultDrawable)
+    }.toMutableList()
+    states.add(intArrayOf())
+    return states
+}
+
+/**
+ * Whether the selector answers [state] the way it answers its default plate.
+ *
+ * Compared on the class and the fill, which is all a shape exposes - the
+ * platform has no getter for a stroke, so a state that differs only in its ring
+ * colour reads as "not declared" here. That is the safe way to be wrong: the
+ * state is left out and the default plate answers it, rather than a ring being
+ * invented for a selector that never drew one.
+ */
+private fun answersLikeDefault(stateDrawable: Drawable, defaultDrawable: Drawable?): Boolean {
+    if (defaultDrawable == null) return false
+    if (stateDrawable.javaClass != defaultDrawable.javaClass) return false
+    val fill = (stateDrawable as? GradientDrawable)?.color?.defaultColor ?: return true
+    val defaultFill = (defaultDrawable as? GradientDrawable)?.color?.defaultColor
+    return fill == defaultFill
+}
+
+/** What the selector resolves to for [state], with its own state restored after. */
+private fun resolvedForState(selector: StateListDrawable, state: IntArray): Drawable? {
+    val original = selector.state
+    return try {
+        selector.setState(state)
+        selector.current
+    } finally {
+        selector.setState(original)
+    }
+}
+
+/**
+ * The states the chrome's selectors are written in (see `mpv_control_bg` and
+ * `channel_guide_item_bg`): the focused plate, the guide's "this is the channel
+ * playing now" selection, and the pressed plate - the last one carried over
+ * unthemed so a selector that has it keeps it.
+ *
+ * Deliberately only the states [chromePlateSpec] speaks plus that one: a state
+ * this pass could not theme is not one it should be probing for.
+ */
+private val CHROME_SELECTOR_STATES = listOf(
+    intArrayOf(android.R.attr.state_focused),
+    intArrayOf(android.R.attr.state_selected),
+    intArrayOf(android.R.attr.state_pressed)
+)
 
 /** One chrome state's plate, resolved from the current theme. */
 internal data class ChromePlateSpec(

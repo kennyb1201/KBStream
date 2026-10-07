@@ -887,8 +887,13 @@ fun AppRoot(
         // the sources so group/addon matches win (see BingeGroupResolver).
         // Fallback OFF additionally collapses the list to nothing so the
         // picker is shown instead of silently playing a different provider.
+        // Either half of the handoff is context enough: the group is what a
+        // tagging provider continues with, and the addon is the fallback for
+        // one that stopped tagging consecutive files - the case where the
+        // viewer sees a different, working addon being forgotten every
+        // episode. Requiring a group skipped the resolver entirely there.
         val ordered =
-            if (pending.bingeGroup.isNullOrBlank()) {
+            if (pending.bingeGroup.isNullOrBlank() && pending.addonName.isNullOrBlank()) {
                 streams
             } else {
                 BingeGroupResolver.orderedForNextEpisode(

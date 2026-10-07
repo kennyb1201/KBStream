@@ -12,9 +12,11 @@ import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
 import com.kennyb1201.kbstream.data.device.DeviceCapability
 import com.kennyb1201.kbstream.data.player.PlayerEngine
+import com.kennyb1201.kbstream.data.player.SourceAddonMemory
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
+import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -229,9 +231,35 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             } else {
                 allStreams
             }
+
+        // What this TITLE's addons last did (see [SourceAddonMemory]). The
+        // reported case: a show whose every AIOStreams link sat dead while
+        // another addon played it - so the next episode put the same
+        // unplayable links back at the head of the list, which is also the
+        // copy the picker's All tab showed first and auto-play took. An addon
+        // that opened a file here now leads, one whose link would not open
+        // goes behind everything else, and an addon nothing is known about is
+        // left exactly where the ranker put it. Applied to the ranked list
+        // itself, so the picker, the tabs' parent list and auto-play all see
+        // the same order. It only reorders - nothing is hidden, and a failure
+        // expires on its own ([SourceAddonMemory.TTL_MS]).
+        val addonByStream =
+            results
+                .filterIsInstance<AddonLoadResult.Success>()
+                .flatMap { result ->
+                    result.streams.map { stream -> streamKey(stream) to result.addonName }
+                }
+                .toMap()
+        val preferredStreams =
+            SourceAddonPreference.ordered(
+                streams = preppedStreams,
+                addonOf = { stream -> addonByStream[streamKey(stream)] },
+                outcomes = SourceAddonMemory.outcomes(getApplication(), streamId)
+            )
+
         // KB-compatible badge packs: attach matched badge chips before
         // the list reaches the UI.
-        val withBadges = StreamBadgeEngine.apply(preppedStreams, getApplication())
+        val withBadges = StreamBadgeEngine.apply(preferredStreams, getApplication())
 
         // Which copies the viewer's own debrid account already holds (see
         // TorBoxClient): a cached hash starts instantly off the CDN, with no

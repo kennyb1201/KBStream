@@ -5844,6 +5844,19 @@ class NativePlayerActivity : ComponentActivity() {
             // alive and made the next replay re-resolve for nothing.
             if (PlaybackRecoveryRules.isLinkFailure(error)) {
                 invalidateCachedLinkBeforeFirstFrame()
+                // The link itself is the thing that failed, so this addon is
+                // the one to stop heading this title's list (see
+                // SourceAddonMemory). Only a link failure counts: a decoder,
+                // container or track failure says something about this box,
+                // and demoting a good addon for it would put a working copy
+                // behind a broken one on the next episode.
+                if (!isLiveChannel) {
+                    com.kennyb1201.kbstream.data.player.SourceAddonMemory.rememberFailed(
+                        this@NativePlayerActivity,
+                        parentId,
+                        currentAddonName
+                    )
+                }
             }
             lastPlaybackError = error
             var msg = friendlyErrorMessage(error, hostOf(currentUrl))
@@ -6427,6 +6440,20 @@ class NativePlayerActivity : ComponentActivity() {
         if (firstFrameRendered) return
         firstFrameRendered = true
         firstFrameRenderedAtMs = System.currentTimeMillis()
+        // A frame actually rendered, so THIS addon works for this title: the
+        // next episode's list and the picker's own order start with it instead
+        // of with whichever addon the ranker happened to put first (see
+        // SourceAddonMemory). Recorded here rather than at hand-off, because
+        // handing a link to the player says nothing about whether it opens -
+        // which is the whole reported problem. Live channels have no next
+        // episode and no addon to carry over.
+        if (!isLiveChannel) {
+            com.kennyb1201.kbstream.data.player.SourceAddonMemory.rememberWorked(
+                this,
+                parentId,
+                currentAddonName
+            )
+        }
         // A live channel is watched FROM here: the keep-alive's clock starts on
         // the first painted frame, so a launch that legitimately takes a while
         // is the startup watchdog's business and not a stall.

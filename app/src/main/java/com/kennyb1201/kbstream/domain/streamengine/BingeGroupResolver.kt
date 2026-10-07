@@ -23,9 +23,12 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  *    stream so autoplay never dead-ends; when OFF, autoplay stops and the
  *    picker is shown instead.
  *
- * When no binge context exists (previous group blank, "Auto-play Next
- * Episode" content unrelated to the just-finished stream, or every toggle
- * off) the list is returned untouched — the normal ranker order applies.
+ * When no binge context exists (BOTH the previous group and the previous
+ * addon are blank, "Auto-play Next Episode" content unrelated to the
+ * just-finished stream, or every toggle off) the list is returned untouched —
+ * the normal ranker order applies. A blank group on its own is still enough
+ * to run the reuse tier: the providers that tier covers are the ones that
+ * stopped tagging consecutive files.
  */
 object BingeGroupResolver {
 
@@ -53,7 +56,16 @@ object BingeGroupResolver {
         if (!prefer && !reuse && !fallback) return streams
 
         val group = previousBingeGroup?.trim().orEmpty()
-        if (group.isEmpty()) return streams
+        val addon = normalizeAddon(previousAddonName)
+
+        // Neither a group nor an addon: no context, so the normal ranker order
+        // is the answer (unchanged). ONE of the two is enough, though. The
+        // reuse tier exists for providers that stop tagging consecutive files
+        // - and those streams are exactly the ones that arrive with a blank
+        // group, so bailing out on a blank group made that tier unreachable
+        // for the case it was written for. That is the reported "it played
+        // fine from my other addon, why does the next episode not remember".
+        if (group.isEmpty() && addon.isEmpty()) return streams
 
         val groupMatch = streams.filter {
             !it.bingeGroup.isNullOrBlank() && it.bingeGroup.equals(group, ignoreCase = true)
@@ -66,7 +78,6 @@ object BingeGroupResolver {
 
         // Tier 2 — same addon (parsed from the stream title), when reuse is on.
         if (reuse) {
-            val addon = normalizeAddon(previousAddonName)
             if (addon.isNotEmpty()) {
                 val addonMatch = streams.filter { normalizeAddon(titleAddonName(it)) == addon }
                 if (addonMatch.isNotEmpty()) {
