@@ -243,6 +243,7 @@ internal fun decodeScreen(
             "guide" -> Screen.Guide
             "library" -> Screen.Library
             "settings" -> Screen.Settings
+            "stats" -> Screen.Stats
             "detail" -> Screen.Detail(
                 type = json.optString("type", "movie"),
                 id = json.optString("id"),
@@ -415,6 +416,8 @@ internal val Screen.navDepth: Int
         // shallower depth here (Add-ons is 1) would have made it animate like
         // a step BACK to the Add-ons screen it is sitting on top of.
         is Screen.CatalogBuilder -> 2
+        // Reached through Settings, so it slides forward like the builder.
+        is Screen.Stats -> 2
         is Screen.ProfileEdit,
         is Screen.Actor,
         is Screen.Studio,
@@ -436,6 +439,7 @@ internal fun Screen.typeName(): String = when (this) {
     is Screen.Guide -> "guide"
     is Screen.Library -> "library"
     is Screen.Settings -> "settings"
+    is Screen.Stats -> "stats"
     is Screen.Detail -> "detail"
     is Screen.Actor -> "actor"
     is Screen.Studio -> "studio"

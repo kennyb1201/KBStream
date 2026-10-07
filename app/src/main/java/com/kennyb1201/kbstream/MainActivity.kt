@@ -172,6 +172,14 @@ sealed class Screen {
 
     object Settings : Screen()
 
+    /**
+     * The viewing-stats page, opened from Settings' Data pane. A screen of its
+     * own rather than a pane: its numbers are read from the profile's own
+     * history and its list can be long, so it scrolls independently and Back
+     * returns to Settings the same way Catalog Builder does.
+     */
+    object Stats : Screen()
+
     data class Detail(
         val type: String,
         val id: String,
@@ -1537,7 +1545,14 @@ fun AppRoot(
                 },
                 onOpenCatalogBuilder = {
                     screen = Screen.CatalogBuilder(returnTo = Screen.Settings)
-                }
+                },
+                onOpenStats = { screen = Screen.Stats }
+            )
+        }
+
+        is Screen.Stats -> {
+            com.kennyb1201.kbstream.ui.settings.StatsScreen(
+                onBack = { screen = Screen.Settings }
             )
         }
 

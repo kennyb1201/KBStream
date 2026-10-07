@@ -231,6 +231,13 @@ class MpvPlayerActivity : ComponentActivity() {
         }
     }
     private var seekBar: SeekBar? = null
+    // The same view as [seekBar], typed so the chapter ticks can be set on it,
+    // plus the chapter strip. MPV-only for now: mpv reports the file's
+    // chapters natively, while ExoPlayer cannot read them at all.
+    private var chapterBar: ChapterSeekBar? = null
+    private var chapterRow: View? = null
+    private var chapterNow: TextView? = null
+    private var chapterMarks: List<ChapterMark> = emptyList()
     private var playPauseButton: ImageView? = null
     // Icon buttons, like the main player's bar (see NativePlayerActivity): this
     // one used to draw "⏭" and "⇄" as font glyphs while SOURCE beside them was a
@@ -453,6 +460,15 @@ class MpvPlayerActivity : ComponentActivity() {
     private var audioDelayMs = 0
     private var subtitleOffsetMs = 0
     private var audioTrackSignature = ""
+    /**
+     * Explicit per-show "no subtitles" (the picker's OFF), remembered like the
+     * main player's bridge does: a blank subtitle language means "Auto, follow
+     * the global MODE", so the refusal has to be its own fact or the next file
+     * open re-arms a track the viewer turned off.
+     */
+    private var subtitlesOff = false
+    /** One specific subtitle track in this show's files ("language|codec|0"). */
+    private var subtitleTrackSignature = ""
 
     // --- End of episode, mirroring the main player ---------------------------
     private var nextUpPanel: LinearLayout? = null
@@ -1147,6 +1163,29 @@ class MpvPlayerActivity : ComponentActivity() {
         playerClock = findViewById(R.id.mpv_player_clock)
         endsAtClock = findViewById(R.id.mpv_ends_at_clock)
         seekBar = findViewById(R.id.mpv_seekbar)
+        chapterBar = findViewById(R.id.mpv_seekbar)
+        chapterRow = findViewById(R.id.mpv_chapter_row)
+        chapterNow = findViewById(R.id.mpv_chapter_now)
+        findViewById<TextView>(R.id.mpv_chapter_prev)?.let { prev ->
+            prev.setOnClickListener {
+                surface?.addChapter(-1)
+                refreshChapterTitle(positionMs)
+            }
+            prev.setOnFocusChangeListener { view, focused ->
+                applyPillBackground(view as TextView, selected = false, focused = focused)
+            }
+            applyPillBackground(prev, selected = false, focused = false)
+        }
+        findViewById<TextView>(R.id.mpv_chapter_next)?.let { next ->
+            next.setOnClickListener {
+                surface?.addChapter(1)
+                refreshChapterTitle(positionMs)
+            }
+            next.setOnFocusChangeListener { view, focused ->
+                applyPillBackground(view as TextView, selected = false, focused = focused)
+            }
+            applyPillBackground(next, selected = false, focused = false)
+        }
         playPauseButton = findViewById(R.id.mpv_btn_play_pause)
         nextButton = findViewById(R.id.mpv_btn_next)
         playerSwitchButton = findViewById(R.id.mpv_btn_player_switch)
@@ -1784,9 +1823,7 @@ class MpvPlayerActivity : ComponentActivity() {
                     label = "OFF",
                     isSelected = tracks.none { it.selected } && externalSubtitleUri == null,
                     onClick = {
-                        surface?.clearSubtitles()
-                        clearExternalSubtitle()
-                        refreshSettings()
+                        chooseSubtitlesOff()
                         dismissPicker()
                     }
                 )
@@ -1809,6 +1846,13 @@ class MpvPlayerActivity : ComponentActivity() {
                             label = track.label,
                             isSelected = track.selected,
                             onClick = {
+                                // A hand-picked row (an SDH or forced track) is
+                                // not the first track in its language, so it is
+                                // remembered by signature or the next file open
+                                // replaces it.
+                                subtitlesOff = false
+                                subtitleTrackSignature = track.signature
+                                persistTitlePreferences()
                                 surface?.selectSubtitleTrack(track.id)
                                 clearExternalSubtitle()
                                 refreshSettings()
@@ -2518,12 +2562,17 @@ class MpvPlayerActivity : ComponentActivity() {
         audioDelayMs = remembered?.audioDelayMs ?: 0
         subtitleOffsetMs = remembered?.subtitleOffsetMs ?: 0
         audioTrackSignature = remembered?.audioTrackSignature.orEmpty()
+        subtitlesOff = remembered?.subtitleOff == true
+        subtitleTrackSignature = remembered?.subtitleTrackSignature.orEmpty()
         audioDownmix = remembered?.audioDownmix ?: -1
         audioDialogueBoost = remembered?.audioDialogueBoost ?: -1
         audioVolumeBoostDb = remembered?.audioVolumeBoostDb ?: -1
 
         playbackSpeed = 1f
-        resizeModeIndex = AppPreferences.getDefaultAspectRatio(this)
+        // Aspect is per-title now: this show's own override wins, and every
+        // title without one keeps following Settings' default.
+        resizeModeIndex = remembered?.aspectRatio?.takeIf { it >= 0 }
+            ?: AppPreferences.getDefaultAspectRatio(this)
         subtitleSize = AppPreferences.getDefaultSubtitleSize(this)
         subtitleBackground = AppPreferences.getDefaultSubtitleBackground(this)
         subtitlePosition = AppPreferences.getDefaultSubtitlePosition(this)
@@ -2531,6 +2580,10 @@ class MpvPlayerActivity : ComponentActivity() {
 
     private fun persistTitlePreferences() {
         val key = titleKey ?: return
+        // The aspect override is written by chooseAspect (it is not part of the
+        // panel state this method carries), so preserve whatever is stored
+        // instead of resetting it to "follow global" on the next track change.
+        val storedAspect = PlayerTitlePrefs.get(this, key)?.aspectRatio ?: -1
         PlayerTitlePrefs.remember(
             context = this,
             key = key,
@@ -2540,9 +2593,12 @@ class MpvPlayerActivity : ComponentActivity() {
                 subtitleOffsetMs = subtitleOffsetMs,
                 audioDelayMs = audioDelayMs,
                 audioTrackSignature = audioTrackSignature,
+                subtitleOff = subtitlesOff,
+                subtitleTrackSignature = subtitleTrackSignature,
                 audioDownmix = audioDownmix,
                 audioDialogueBoost = audioDialogueBoost,
-                audioVolumeBoostDb = audioVolumeBoostDb
+                audioVolumeBoostDb = audioVolumeBoostDb,
+                aspectRatio = storedAspect
             )
         )
     }
@@ -2555,13 +2611,20 @@ class MpvPlayerActivity : ComponentActivity() {
         } else {
             view.selectAudioLanguage(effectiveAudioLanguage())
         }
-        // The subtitle MODE owns the subtitle track when it is not On: the
-        // open-time pass already left Off deselected and Forced on the forced
-        // cues only, and this runs on every file open (a source rebuild
-        // included) - re-selecting by language here put a full track back, the
-        // "subtitles turn themselves on again" report. Only the On mode
-        // re-asserts the remembered language.
-        if (SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this)) ==
+        // Subtitle priority, the same order the main player's bridge uses. An
+        // explicit per-show OFF wins over everything, so the next episode of a
+        // show whose subtitles were turned off opens with sid=no even when the
+        // global mode is On. Then the specific track the viewer picked (an SDH
+        // or forced row is not the first track in its language, so a
+        // language-only pass would replace it - the "my subtitle pick reverted"
+        // report). Only then does the global On mode re-assert a language. OFF
+        // wins over a remembered sidecar too: the external subtitle is attached
+        // before this runs, and clearSubtitles (sid=no) deselects it.
+        if (subtitlesOff) {
+            view.clearSubtitles()
+        } else if (subtitleTrackSignature.isNotBlank()) {
+            view.applyRememberedSubtitleTrack(subtitleTrackSignature)
+        } else if (SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(this)) ==
             SubtitleModeRules.ON
         ) {
             view.selectSubtitleLanguage(effectiveSubtitleLanguage())
@@ -2636,10 +2699,25 @@ class MpvPlayerActivity : ComponentActivity() {
 
     internal fun chooseSubtitleLanguage(code: String) {
         subtitleLanguage = code
+        // A language choice means "any track in this language": drop the more
+        // specific OFF and track pick so the two cannot disagree, exactly like
+        // the main player's bridge.
+        subtitlesOff = false
+        subtitleTrackSignature = ""
         persistTitlePreferences()
         val effective = effectiveSubtitleLanguage()
         surface?.setLanguagePreferences(effectiveAudioLanguage(), effective)
         surface?.selectSubtitleLanguage(effective)
+        refreshSettings()
+    }
+
+    /** The picker's OFF row: explicit per-show "no subtitles", remembered. */
+    internal fun chooseSubtitlesOff() {
+        subtitlesOff = true
+        subtitleTrackSignature = ""
+        persistTitlePreferences()
+        surface?.clearSubtitles()
+        clearExternalSubtitle()
         refreshSettings()
     }
 
@@ -2741,7 +2819,14 @@ class MpvPlayerActivity : ComponentActivity() {
     internal fun chooseAspect(index: Int) {
         resizeModeIndex = index
         surface?.setAspectMode(index)
-        AppPreferences.setDefaultAspectRatio(this, index)
+        // Per title, like the languages: Settings' aspect row stays the global
+        // default for shows without an override.
+        PlayerTitlePrefs.remember(
+            this,
+            titleKey,
+            (PlayerTitlePrefs.get(this, titleKey) ?: PlayerTitlePrefs.Prefs())
+                .copy(aspectRatio = index)
+        )
         updateControlsInfo()
         refreshSettings()
     }
@@ -2763,9 +2848,15 @@ class MpvPlayerActivity : ComponentActivity() {
         PlayerTitlePrefs.forget(this, titleKey)
         audioLanguage = ""
         subtitleLanguage = ""
+        subtitlesOff = false
+        subtitleTrackSignature = ""
         audioTrackSignature = ""
         audioDelayMs = 0
         subtitleOffsetMs = 0
+        // The aspect override is dropped with the rest, so the picture goes
+        // back to the global default.
+        resizeModeIndex = AppPreferences.getDefaultAspectRatio(this)
+        surface?.setAspectMode(resizeModeIndex)
         // Audio tuning goes back to the global defaults with the rest: the
         // three knobs belong to this title and nothing else here.
         audioDownmix = -1
@@ -3554,6 +3645,9 @@ class MpvPlayerActivity : ComponentActivity() {
 
     private fun onFileLoaded(mediaTitle: String?) {
         fileLoaded = true
+        // The file is open, so mpv can report its chapters; resync (and hide
+        // the strip for a file that has none) before the first frame.
+        syncChapters()
         // Something opened, so the open-failure budget starts over: a source
         // that fails later in the session gets the same tolerance as the first
         // one, and the ladder only ever bounds a RUN of dead sources.
@@ -3618,7 +3712,15 @@ class MpvPlayerActivity : ComponentActivity() {
                 if (durationMs > 0L) {
                     val progress = ((positionMs * 1000L) / durationMs).toInt().coerceIn(0, 1000)
                     seekBar?.progress = progress
-                }            }
+                }
+                // Keep the chapter ticks in step with a duration that arrives
+                // after the first file-loaded tick, and move the readout to the
+                // chapter the playhead is now inside.
+                if (chapterMarks.isNotEmpty()) {
+                    chapterBar?.setChapters(chapterMarks, durationMs)
+                    refreshChapterTitle(positionMs)
+                }
+            }
 
             // The card opens as the credits roll, exactly as it does in the main
             // player, instead of waiting for the file to end.
@@ -4424,7 +4526,17 @@ class MpvPlayerActivity : ComponentActivity() {
     // The calls below are `super`, from an override of the same method: the
     // ordinary way to see a key before the view tree does, and the D-pad rules
     // in the doc above depend on being ahead of it.
-    @SuppressLint("RestrictedApi")
+    //
+    // GestureBackNavigation: the KEYCODE_BACK arm below belongs to the player's
+    // overlay - it decides whether Back exits playback or only closes what is
+    // open - and it is deliberately handled here, ahead of the view tree, so a
+    // Back press cannot fall through to the seek bar underneath. The activity
+    // also registers an OnBackPressedCallback (the API-36 registration lint
+    // asks for) that makes the same decision when the press reaches the
+    // dispatcher; this override only pre-empts it for the live player chrome.
+    // Migrating the chrome's Back handling onto the dispatcher is a
+    // device-tested change, tracked with the API-36 behavior pass.
+    @SuppressLint("RestrictedApi", "GestureBackNavigation")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // The settings panel is a side panel, not a takeover: while it is up the
         // focus system owns the D-pad (BACK still reaches the activity, which
@@ -4628,6 +4740,8 @@ class MpvPlayerActivity : ComponentActivity() {
             // release.
             surface?.release()
             surface = null
+            // The file is gone with the surface, so the chapter strip goes too.
+            clearChapters()
         } else {
             // Pause rather than tear down: the native instance is released in
             // onDestroy, and a backgrounded player that kept playing would be a
@@ -4648,6 +4762,43 @@ class MpvPlayerActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) abandonAudioFocus()
     }
 
+    // --- Chapters (MPV only) -------------------------------------------------
+    //
+    // mpv reports the file's chapters natively (see MpvPlayerView.readChapters);
+    // the ExoPlayer engine has no chapter API, so this strip is MPV-only for
+    // now and says so on screen. The marks are paint-only - they never change
+    // what the bar seeks to - so a file without chapters looks exactly as it
+    // did before.
+
+    /** Reads the open file's chapters and shows or hides the strip. */
+    private fun syncChapters() {
+        chapterMarks = surface?.readChapters().orEmpty()
+        chapterRow?.visibility = if (chapterMarks.isEmpty()) View.GONE else View.VISIBLE
+        chapterBar?.setChapters(chapterMarks, durationMs)
+        refreshChapterTitle(positionMs)
+    }
+
+    /** Updates the strip's readout to the chapter the playhead is inside. */
+    private fun refreshChapterTitle(position: Long) {
+        val label = chapterNow ?: return
+        label.text = currentChapterTitle(position).orEmpty()
+    }
+
+    /**
+     * The title of the chapter containing [position], or null when the file has
+     * no chapters (or none has started yet - the strip stays blank until the
+     * first mark).
+     */
+    private fun currentChapterTitle(position: Long): String? =
+        chapterMarks.lastOrNull { it.timeMs <= position }?.title
+
+    /** Drops the chapter strip; the file that carried it is gone. */
+    private fun clearChapters() {
+        chapterMarks = emptyList()
+        chapterRow?.visibility = View.GONE
+        chapterBar?.setChapters(emptyList(), 0L)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         // Safety net for a player that never reached onStop: leaving this
@@ -4665,6 +4816,7 @@ class MpvPlayerActivity : ComponentActivity() {
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
         surface?.release()
         surface = null
+        clearChapters()
     }
 
     // --- Sleep timer ---------------------------------------------------------

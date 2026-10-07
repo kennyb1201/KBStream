@@ -685,6 +685,11 @@ internal object PlayerTrackBridge {
 
     private fun persist(context: Context) {
         val key = titleKey ?: return
+        // The aspect override is written by the player's own aspect control
+        // (it is not bridge state), so carry whatever is already stored
+        // through this write instead of resetting it to "follow global" on
+        // the next track change.
+        val storedAspect = PlayerTitlePrefs.get(context, key)?.aspectRatio ?: -1
         PlayerTitlePrefs.remember(
             context = context,
             key = key,
@@ -698,7 +703,8 @@ internal object PlayerTrackBridge {
                 audioTrackSignature = audioTrackSignature,
                 audioDownmix = audioDownmix,
                 audioDialogueBoost = audioDialogueBoost,
-                audioVolumeBoostDb = audioVolumeBoostDb
+                audioVolumeBoostDb = audioVolumeBoostDb,
+                aspectRatio = storedAspect
             )
         )
     }

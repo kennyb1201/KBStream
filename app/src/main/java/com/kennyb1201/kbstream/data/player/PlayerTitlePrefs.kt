@@ -77,7 +77,15 @@ internal object PlayerTitlePrefs {
         /** Dialogue/center lift override, or -1 for the global setting. */
         val audioDialogueBoost: Int = -1,
         /** Volume-boost override in dB, or -1 for the global setting. */
-        val audioVolumeBoostDb: Int = -1
+        val audioVolumeBoostDb: Int = -1,
+        /**
+         * Aspect/zoom override for this show, or -1 for "follow the global
+         * setting". Set from either in-player aspect control so a show that
+         * needs Fill or 16:9 keeps it across episodes, while Settings' aspect
+         * row stays the default for everything without an override - the same
+         * split the languages already use.
+         */
+        val aspectRatio: Int = -1
     ) {
         /** True when nothing differs from the global defaults. */
         val isEmpty: Boolean
@@ -90,7 +98,8 @@ internal object PlayerTitlePrefs {
                 audioTrackSignature.isBlank() &&
                 audioDownmix < 0 &&
                 audioDialogueBoost < 0 &&
-                audioVolumeBoostDb < 0
+                audioVolumeBoostDb < 0 &&
+                aspectRatio < 0
     }
 
     @Serializable

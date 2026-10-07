@@ -999,6 +999,10 @@ class NativePlayerActivity : ComponentActivity() {
     private var carryPositionMs = 0L
     private var playbackSpeed = 1f
     private var resizeModeIndex = 0
+    // This session's per-title key (the show's own id, else the history row's
+    // id), resolved once from the launch intent. Null for a live channel, which
+    // remembers nothing - the same rule the track bridge applies.
+    private var titleKey: String? = null
     // internal: PlayerPanelSection reads this — the panel's own ± offset
     // buttons change it without going through the track bridge.
     internal var subtitleOffsetMs = 0
@@ -2894,6 +2898,13 @@ class NativePlayerActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    // GestureBackNavigation: this method wires the controls overlay's Back arm,
+    // which closes the overlay a focused panel sits in rather than leaving the
+    // film. An OnBackPressedCallback registered here makes the same decision
+    // when the press reaches the dispatcher (see below); the view-level arm
+    // pre-empts it for the live chrome. Moving the chrome's Back handling onto
+    // the dispatcher is a device-tested change, tracked with the API-36 pass.
+    @SuppressLint("GestureBackNavigation")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The window behind and around the picture. The theme's static
@@ -3105,7 +3116,16 @@ class NativePlayerActivity : ComponentActivity() {
         streamHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS).orEmpty())
         drmLicenseUrl = intent.getStringExtra(EXTRA_DRM_LICENSE_URL)
         drmHeaders = parseHeaders(intent.getStringExtra(EXTRA_DRM_HEADERS).orEmpty())
-        resizeModeIndex = AppPreferences.getDefaultAspectRatio(this)
+        titleKey = if (isLiveChannel) {
+            null
+        } else {
+            PlayerTitlePrefs.titleKeyFor(parentId, historyId)
+        }
+        // Aspect is per-title like the languages: this show's own override
+        // wins, and every title without one keeps following Settings' default.
+        resizeModeIndex = PlayerTitlePrefs.get(this, titleKey)?.aspectRatio
+            ?.takeIf { it >= 0 }
+            ?: AppPreferences.getDefaultAspectRatio(this)
         // Applied in createPlayer(); no-op until the content frame exists.
         enableTunneling = AppPreferences.getEnableTunneling(this)
         bufferMode = AppPreferences.getDefaultBufferMode(this)
@@ -3136,9 +3156,7 @@ class NativePlayerActivity : ComponentActivity() {
         PlayerTrackBridge.setSubtitleMode(AppPreferences.getSubtitleMode(this))
         PlayerTrackBridge.loadFor(
             context = this,
-            titleKey =
-                if (isLiveChannel) null
-                else PlayerTitlePrefs.titleKeyFor(parentId, historyId),
+            titleKey = titleKey,
             globalAudioLanguage = globalAudioLang,
             globalSubtitleLanguage = globalSubtitleLang
         )
@@ -3544,6 +3562,12 @@ class NativePlayerActivity : ComponentActivity() {
         subtitleText.translationY = lift * resources.displayMetrics.density
     }
 
+    // GestureBackNavigation: the settings sheet, picker and channel guide each
+    // close on a Back press made while one of them holds focus. The registered
+    // OnBackPressedCallback dismisses the same panels when the press reaches
+    // the dispatcher; these view listeners pre-empt it so the focused row keeps
+    // the press first. Device-tested migration, tracked with the API-36 pass.
+    @SuppressLint("GestureBackNavigation")
     private fun bindViews() {
         playerView = findViewById(R.id.player_view)
         subtitleText = findViewById(R.id.custom_subtitle_text)
@@ -3789,6 +3813,9 @@ class NativePlayerActivity : ComponentActivity() {
         applyPlayerChromeTheme()
     }
 
+    // GestureBackNavigation: the info panel closes on Back (and OK) while it
+    // holds focus. The dispatcher callback handles it too; see bindViews.
+    @SuppressLint("GestureBackNavigation")
     private fun setupListeners() {
         // Play/Pause
         btnPlayPause.setOnClickListener { togglePlayPause() }
@@ -3907,7 +3934,12 @@ class NativePlayerActivity : ComponentActivity() {
             resizeModeIndex = (resizeModeIndex + 1) % ASPECT_MODES.size
             applyAspectMode(resizeModeIndex)
             btnAspect.text = ASPECT_MODES[resizeModeIndex]
-            AppPreferences.setDefaultAspectRatio(this, resizeModeIndex)
+            PlayerTitlePrefs.remember(
+                this,
+                titleKey,
+                (PlayerTitlePrefs.get(this, titleKey) ?: PlayerTitlePrefs.Prefs())
+                    .copy(aspectRatio = resizeModeIndex)
+            )
             scheduleAutoHide()
         }
         btnAspect.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
@@ -4071,7 +4103,12 @@ class NativePlayerActivity : ComponentActivity() {
             applyAspectMode(resizeModeIndex)
             updateControlsInfo()
             updateSettingsPanelState()
-            AppPreferences.setDefaultAspectRatio(this, resizeModeIndex)
+            PlayerTitlePrefs.remember(
+                this,
+                titleKey,
+                (PlayerTitlePrefs.get(this, titleKey) ?: PlayerTitlePrefs.Prefs())
+                    .copy(aspectRatio = resizeModeIndex)
+            )
         }
         btnAspectFit.setOnClickListener(aspectClick)
         btnAspectZoom.setOnClickListener(aspectClick)
@@ -4246,6 +4283,11 @@ class NativePlayerActivity : ComponentActivity() {
         return walk(playerView)
     }
 
+    // GestureBackNavigation: this key handler consumes Back while a panel,
+    // picker or the info panel is open, so the press closes what is open
+    // instead of being swallowed by the panel's focused child. The dispatcher
+    // callback makes the same decision; see bindViews.
+    @SuppressLint("GestureBackNavigation")
     private fun setupKeyboardHandler() {
         playerView.isFocusable = true
         playerView.isClickable = true

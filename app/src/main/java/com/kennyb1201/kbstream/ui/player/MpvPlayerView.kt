@@ -675,6 +675,24 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     /**
+     * Applies a subtitle signature remembered for this title
+     * ("language|codec|0"). Falls back to the first track in the signature's
+     * language, so a track that is not in this episode's file still lands on a
+     * track in the language the viewer chose. False when neither matches,
+     * leaving mpv's own choice alone.
+     */
+    fun applyRememberedSubtitleTrack(signature: String): Boolean {
+        if (!initialized || signature.isBlank()) return false
+        val tracks = subtitleTracks()
+        val language = signature.split('|').getOrNull(0).orEmpty()
+        val match = tracks.firstOrNull { it.signature == signature }
+            ?: tracks.firstOrNull { LanguageMatch.matches(language, it.language) }
+            ?: return false
+        runCatching { mpv.setPropertyInt("sid", match.id) }
+        return true
+    }
+
+    /**
      * Aspect ratio, by the main player's own mode list (Fit / Zoom / Fill /
      * 16:9 / 4:3), so the button and the panel read the same in both engines.
      */
@@ -1406,6 +1424,43 @@ class MpvPlayerView @JvmOverloads constructor(
     /** Offers [videoFrameRate] to the observer, when it has a value yet. */
     private fun publishVideoFrameRate() {
         videoFrameRate()?.let { fps -> post { onVideoFrameRateChanged?.invoke(fps) } }
+    }
+
+    /**
+     * The chapters mpv found in the open file, via its own indexed property
+     * paths - the same shape the track list is read in (`chapters` for the
+     * count, `chapter-list/<i>/time` in seconds, `chapter-list/<i>/title`).
+     *
+     * Empty for a file with no chapters, for a file that has not opened, and
+     * for a build that does not expose the properties: `chapters` missing or 0
+     * both read as "no markers" rather than as an error.
+     *
+     * Called by the player when the file loads; MpvPlayerView keeps no chapter
+     * state of its own, so there is nothing to clear when the file unloads.
+     */
+    fun readChapters(): List<ChapterMark> {
+        if (!initialized || released) return emptyList()
+        val count = getPropertyIntOrNull("chapters") ?: return emptyList()
+        if (count <= 0) return emptyList()
+        return (0 until count).mapNotNull { index ->
+            val time = getPropertyDoubleOrNull("chapter-list/$index/time")
+                ?: return@mapNotNull null
+            ChapterMark(
+                timeMs = (time * 1000.0).toLong(),
+                title = getPropertyStringOrNull("chapter-list/$index/title")
+            )
+        }
+    }
+
+    /**
+     * Steps mpv's current chapter by [delta] (-1 previous, +1 next), the same
+     * mpv command path the rest of the view drives. A file with no chapters
+     * simply does nothing.
+     */
+    fun addChapter(delta: Int) {
+        if (!initialized || released) return
+        runCatching { mpv.command(arrayOf("add", "chapter", delta.toString())) }
+            .onFailure { Log.w(TAG, "chapter step failed", it) }
     }
 
     /**

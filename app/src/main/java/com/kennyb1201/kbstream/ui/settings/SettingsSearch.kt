@@ -411,6 +411,13 @@ internal object SettingsSearchIndex {
             "backup import restore file settings addons watched"
         ),
         SettingSearchEntry(
+            "data.viewing-stats",
+            SettingsPane.DATA,
+            "Viewing stats",
+            "stats statistics viewing finished runtime streak episodes movies hours watched " +
+                "history"
+        ),
+        SettingSearchEntry(
             "data.clear-continue-watching",
             SettingsPane.DATA,
             "Clear Continue Watching",

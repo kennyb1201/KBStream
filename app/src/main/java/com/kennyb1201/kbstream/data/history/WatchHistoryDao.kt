@@ -497,4 +497,60 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
 
     @Query("DELETE FROM watch_history")
     suspend fun clearAll()
+
+    // ── Viewing stats (read-only) ─────────────────────────────────────────────
+    //
+    // One row is updated in place per episode, so exact watch time is NOT
+    // recoverable - a rewatch or a scrub overwrites the row. What these read is
+    // the part the table honestly supports: finished runtime is the sum of the
+    // durations of COMPLETED rows, and in-progress runtime is the saved
+    // position of the rows still open. Nothing here writes.
+
+    /** Titles (shows or movies) with at least one completed row. */
+    @Query("SELECT COUNT(DISTINCT parentId) FROM watch_history WHERE isCompleted = 1")
+    suspend fun finishedTitleCount(): Int
+
+    @Query("SELECT COUNT(*) FROM watch_history WHERE isCompleted = 1 AND type = 'episode'")
+    suspend fun completedEpisodeCount(): Int
+
+    @Query("SELECT COUNT(*) FROM watch_history WHERE isCompleted = 1 AND type = 'movie'")
+    suspend fun completedMovieCount(): Int
+
+    /** Runtime of everything completed: Σ durationMs over `isCompleted` rows. */
+    @Query("SELECT COALESCE(SUM(durationMs), 0) FROM watch_history WHERE isCompleted = 1")
+    suspend fun finishedRuntimeMs(): Long
+
+    /**
+     * Every completion timestamp, newest first. The streak is computed in
+     * Kotlin from these (see ViewingStats.streakDays) rather than in SQL, so
+     * the UTC-day bucketing rule is pinned by a unit test.
+     */
+    @Query(
+        """
+        SELECT completedAt FROM watch_history
+        WHERE isCompleted = 1 AND completedAt IS NOT NULL
+        ORDER BY completedAt DESC
+        """
+    )
+    suspend fun completionTimes(): List<Long>
+
+    /**
+     * The ten titles with the most runtime: finished duration for a completed
+     * row, the saved position for one still in progress, so a show being watched
+     * now still ranks rather than only completed ones.
+     */
+    @Query(
+        """
+        SELECT parentId,
+               name,
+               poster,
+               COALESCE(SUM(CASE WHEN isCompleted = 1 THEN durationMs ELSE positionMs END), 0) AS ms,
+               COUNT(CASE WHEN isCompleted = 1 THEN 1 END) AS done
+        FROM watch_history
+        GROUP BY parentId
+        ORDER BY ms DESC
+        LIMIT 10
+        """
+    )
+    suspend fun topShows(): List<TopShow>
 }

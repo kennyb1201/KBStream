@@ -256,7 +256,9 @@ fun SettingsScreen(
      */
     onOpenCatalogManager: () -> Unit = {},
     /** Opens the Catalog Builder: the rule-based "smart catalog" editor. */
-    onOpenCatalogBuilder: () -> Unit = {}
+    onOpenCatalogBuilder: () -> Unit = {},
+    /** Opens the read-only Viewing stats screen (finished watches). */
+    onOpenStats: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -1105,6 +1107,13 @@ fun SettingsScreen(
                 )
 
                 SettingsSectionHeader("History")
+
+                NavigationRow(
+                    label = "Viewing stats",
+                    description = "Finished episodes, movies, runtime and your streak, " +
+                        "counted from this profile's history",
+                    onClick = onOpenStats
+                )
 
                 NavigationRow(
                     label = if (clearingHistory) "Clearing…" else "Clear Continue Watching",

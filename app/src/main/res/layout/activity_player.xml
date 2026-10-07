@@ -552,7 +552,12 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
-                <SeekBar
+                <!-- Same chapter-capable bar as the MPV player's, so the two
+                     engines draw the same track. ExoPlayer cannot read a
+                     container's chapters, so no ticks appear on this engine
+                     yet - a bar with no chapters draws exactly like the stock
+                     SeekBar it replaces. -->
+                <com.kennyb1201.kbstream.ui.player.ChapterSeekBar
                     android:id="@+id/seekbar"
                     android:layout_width="match_parent"
                     android:layout_height="48dp"
