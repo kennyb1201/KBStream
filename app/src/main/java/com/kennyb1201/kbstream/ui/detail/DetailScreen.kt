@@ -637,6 +637,14 @@ fun DetailScreen(
     val recsRowState = rememberLazyListState()
     val railFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
     val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
+    // One ordered slot per COLUMN of the narrow chip rails whose vertical
+    // neighbours are decided here (the NETWORK, PRODUCTION and PEOPLE rails),
+    // the row key naming the rail and the list index being the column: what a
+    // vertical press steps by. A column nothing has been laid out for is null,
+    // so a press into a rail that is not composing falls through rather than
+    // pulling the focus out of the page.
+    val chipColumnRequesters =
+        remember { mutableMapOf<String, MutableList<FocusRequester?>>() }
 
     /**
      * Where a card of the rail keyed [rowKey] sits right now: the record a
@@ -663,6 +671,48 @@ fun DetailScreen(
      */
     fun rememberReturnTarget(rowKey: String, targetKey: String, itemIndex: Int) {
         DetailReturnFocus.record(returnTargetFor(rowKey, targetKey, itemIndex))
+    }
+
+    /**
+     * Files a chip's [requester] under its COLUMN in the rail named [rowKey]
+     * (see [focusChipColumn]). Called as the rail composes, so an index the
+     * rail has not reached yet - or one a separator takes - stays null.
+     */
+    fun registerChipColumn(rowKey: String, column: Int, requester: FocusRequester) {
+        if (column < 0) {
+            return
+        }
+
+        val slots = chipColumnRequesters.getOrPut(rowKey) { mutableListOf() }
+        while (slots.size <= column) {
+            slots.add(null)
+        }
+        slots[column] = requester
+    }
+
+    /**
+     * Hands focus to the chip in the same COLUMN of [rowKey], and reports
+     * whether that chip took it.
+     *
+     * Every one of these rails carries a focusRestorer, so a vertical press
+     * that is left to the default search - or to that rail's restorer - lands
+     * on the chip that rail was LAST left on. That is the reported bug: DOWN
+     * from the leftmost NETWORK chip reached a PRODUCTION chip several columns
+     * to its right, because the production rail still remembered one. Asking
+     * for the column directly is the whole fix; the rails cannot be trusted to
+     * agree on geometry, and they are measured independently.
+     *
+     * A rail that is not composed at all, or a column nothing has been laid out
+     * for yet, answers false so the press falls through to the default search
+     * rather than going nowhere. A rail SHORTER than the one the press came
+     * from clamps to its last chip ([DetailChipColumns.columnFor]).
+     */
+    fun focusChipColumn(rowKey: String, fromColumn: Int): Boolean {
+        val slots =
+            chipColumnRequesters[rowKey]?.takeIf { it.isNotEmpty() } ?: return false
+        val column = DetailChipColumns.columnFor(fromColumn, slots.size) ?: return false
+        val requester = slots[column] ?: return false
+        return runCatching { requester.requestFocus() }.isSuccess
     }
 
     // The card a drill-down off this page was opened from, read once as the
@@ -882,6 +932,24 @@ fun DetailScreen(
                 add(PeopleRowItem.Separator)
             }
             addAll(castItems)
+        }
+    }
+
+    // The COLUMN each people item occupies, by its index in [peopleItems]: the
+    // writer, the director and the cast number 0, 1, 2, ... down the rail, and
+    // the separators between the groups take none. This is what the network and
+    // production chips below step by, so "the chip directly above this one" is
+    // the writer/actor directly above it rather than the card the rail was last
+    // left on.
+    val peopleColumns = remember(peopleItems) {
+        var column = -1
+        peopleItems.map { item ->
+            if (item is PeopleRowItem.Person) {
+                column += 1
+                column
+            } else {
+                null
+            }
         }
     }
 
@@ -3380,6 +3448,21 @@ fun DetailScreen(
                                                     }
                                                 railFocusRequesters[cardKey] =
                                                     cardFocusRequester
+                                                // The card's COLUMN in the rail
+                                                // (a separator has none), which
+                                                // is what the chips below step
+                                                // by.
+                                                val column =
+                                                    peopleColumns.getOrNull(
+                                                        personIndex
+                                                    )
+                                                if (column != null) {
+                                                    registerChipColumn(
+                                                        PEOPLE_ROW_KEY,
+                                                        column,
+                                                        cardFocusRequester
+                                                    )
+                                                }
 
                                                 CastCard(
                                                     member =
@@ -3398,6 +3481,38 @@ fun DetailScreen(
                                                         .focusRequester(
                                                             cardFocusRequester
                                                         )
+                                                        // DOWN keeps its column
+                                                        // into the chips below:
+                                                        // the networks on a
+                                                        // series, the production
+                                                        // companies on a movie
+                                                        // (which has no network
+                                                        // rail). Left to the
+                                                        // default search this
+                                                        // landed on whichever
+                                                        // chip that rail was
+                                                        // last left on.
+                                                        .onPreviewKeyEvent {
+                                                            keyEvent ->
+                                                            if (
+                                                                column == null ||
+                                                                keyEvent.type !=
+                                                                    KeyEventType.KeyDown ||
+                                                                keyEvent.key !=
+                                                                    Key.DirectionDown
+                                                            ) {
+                                                                false
+                                                            } else {
+                                                                focusChipColumn(
+                                                                    NETWORK_ROW_KEY,
+                                                                    column
+                                                                ) ||
+                                                                    focusChipColumn(
+                                                                        PRODUCTION_ROW_KEY,
+                                                                        column
+                                                                    )
+                                                            }
+                                                        }
                                                 )
                                             }
 
@@ -3473,40 +3588,17 @@ fun DetailScreen(
                                         )
                                         .focusGroup()
                                         .focusRestorer()
-                                        // UP belongs to PEOPLE, the rail
-                                        // directly above (the same fix the
-                                        // episodes rail already makes for its
-                                        // own UP). The default search is
-                                        // geometric: a chip that sits to the
-                                        // right of the cast rail's last card
-                                        // finds nothing above it and lands two
-                                        // rows up on an episode card instead.
-                                        // Asking for the people rail directly
-                                        // lets its focusRestorer land on the
-                                        // card the viewer last had there, or
-                                        // the first one - never the episodes.
-                                        .onPreviewKeyEvent {
-                                            keyEvent ->
-                                            if (
-                                                keyEvent.type !=
-                                                    KeyEventType.KeyDown ||
-                                                keyEvent.key !=
-                                                    Key.DirectionUp
-                                            ) {
-                                                false
-                                            } else {
-                                                // Only when the rail is
-                                                // composed (there is a cast
-                                                // list); otherwise the request
-                                                // throws and the press falls
-                                                // through to the default
-                                                // search.
-                                                runCatching {
-                                                    movieDetailsFocusRequester
-                                                        .requestFocus()
-                                                }.isSuccess
-                                            }
-                                        }
+                                        // No UP handler on the ROW any more.
+                                        // UP and DOWN are decided by the chip
+                                        // itself (see its own key handler
+                                        // below), because this rail's
+                                        // focusRestorer - and the default
+                                        // search behind it - answers a vertical
+                                        // press with the chip or card that rail
+                                        // was LAST left on rather than the one
+                                        // in the column the viewer is actually
+                                        // in. A row-level handler cannot know
+                                        // that column; a chip can.
                                 ) {
                                     itemsIndexed(
                                         networks,
@@ -3517,6 +3609,11 @@ fun DetailScreen(
                                             remember(n.id) { FocusRequester() }
                                         railFocusRequesters[chipKey] =
                                             chipFocusRequester
+                                        registerChipColumn(
+                                            NETWORK_ROW_KEY,
+                                            networkIndex,
+                                            chipFocusRequester
+                                        )
 
                                         StudioChip(
                                             name = n.name,
@@ -3555,6 +3652,55 @@ fun DetailScreen(
                                                 .focusRequester(
                                                     chipFocusRequester
                                                 )
+                                                // UP and DOWN keep the COLUMN:
+                                                // the people card directly
+                                                // above this chip, and the
+                                                // production chip directly
+                                                // below it. Neither rail is
+                                                // asked to remember where it
+                                                // was - that memory is what
+                                                // sent a press on the leftmost
+                                                // chip to a chip several
+                                                // columns to its right.
+                                                .onPreviewKeyEvent {
+                                                    keyEvent ->
+                                                    if (
+                                                        keyEvent.type !=
+                                                            KeyEventType.KeyDown
+                                                    ) {
+                                                        false
+                                                    } else {
+                                                        when (keyEvent.key) {
+                                                            Key.DirectionUp ->
+                                                                focusChipColumn(
+                                                                    PEOPLE_ROW_KEY,
+                                                                    networkIndex
+                                                                ) ||
+                                                                    // No cast and
+                                                                    // no writer at
+                                                                    // all: the rail
+                                                                    // above is not
+                                                                    // composed, so
+                                                                    // keep the old
+                                                                    // fallback -
+                                                                    // never the
+                                                                    // episodes row
+                                                                    // two rows up.
+                                                                    runCatching {
+                                                                        movieDetailsFocusRequester
+                                                                            .requestFocus()
+                                                                    }.isSuccess
+
+                                                            Key.DirectionDown ->
+                                                                focusChipColumn(
+                                                                    PRODUCTION_ROW_KEY,
+                                                                    networkIndex
+                                                                )
+
+                                                            else -> false
+                                                        }
+                                                    }
+                                                }
                                         )
                                     }
                                 }
@@ -3597,6 +3743,11 @@ fun DetailScreen(
                                             remember(c.id) { FocusRequester() }
                                         railFocusRequesters[chipKey] =
                                             chipFocusRequester
+                                        registerChipColumn(
+                                            PRODUCTION_ROW_KEY,
+                                            companyIndex,
+                                            chipFocusRequester
+                                        )
 
                                         StudioChip(
                                             name = c.name,
@@ -3635,6 +3786,32 @@ fun DetailScreen(
                                                 .focusRequester(
                                                     chipFocusRequester
                                                 )
+                                                // UP keeps its column too: the
+                                                // network chips on a series,
+                                                // and on a movie - which has no
+                                                // network row - the people
+                                                // cards, which is the rail
+                                                // directly above this one.
+                                                .onPreviewKeyEvent {
+                                                    keyEvent ->
+                                                    if (
+                                                        keyEvent.type !=
+                                                            KeyEventType.KeyDown ||
+                                                        keyEvent.key !=
+                                                            Key.DirectionUp
+                                                    ) {
+                                                        false
+                                                    } else {
+                                                        focusChipColumn(
+                                                            NETWORK_ROW_KEY,
+                                                            companyIndex
+                                                        ) ||
+                                                            focusChipColumn(
+                                                                PEOPLE_ROW_KEY,
+                                                                companyIndex
+                                                            )
+                                                    }
+                                                }
                                         )
                                     }
                                 }

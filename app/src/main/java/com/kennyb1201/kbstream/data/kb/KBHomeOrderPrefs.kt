@@ -423,6 +423,37 @@ object KBHomeOrderPrefs {
         else -> null
     }
 
+    /**
+     * The built-in rails a profile with this Kids Mode ceiling can actually
+     * draw on Home, in their default order.
+     *
+     * Every built-in is profile-independent except the two "Top ... Today"
+     * rows: Home does not load them for a kids profile at all - it swaps its
+     * pinned batch for the ceiling-filtered kids rails instead (see the pinned
+     * branch of HomeViewModel's rail load) - so a kids profile never draws
+     * them.
+     *
+     * Listing them in the home manager would offer rows for rails that are not
+     * there, and every arrow on those rows would be worse than inert: a move
+     * would be computed against a rail the viewer cannot see, so the rail they
+     * DID press on would jump two slots at once. Both the manager's list and
+     * the ViewModel's arrangement defaults therefore ask this, not
+     * [BUILTIN_KEYS].
+     *
+     * [BUILTIN_KEYS] stays the full list on purpose: the arrangement still has
+     * to know those two keys, so a profile that later loses its ceiling comes
+     * back to an arrangement that names them (a rename or hide written while
+     * kids mode was off is honoured again).
+     */
+    fun builtinKeysFor(kidsMaxAge: Int?): List<String> =
+        if (kidsMaxAge == null) {
+            BUILTIN_KEYS
+        } else {
+            BUILTIN_KEYS.filterNot {
+                it == BUILTIN_TOP_MOVIES_TODAY || it == BUILTIN_TOP_SHOWS_TODAY
+            }
+        }
+
     /** The section title a built-in rail draws when the viewer has not renamed it. */
     fun builtinDefaultTitle(key: String): String? = when (key) {
         BUILTIN_CONTINUE_WATCHING -> "Continue Watching"

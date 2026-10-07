@@ -115,6 +115,14 @@ internal fun CatalogManagerDialog(
     configurations: List<CatalogConfiguration>,
     collectionsState: com.kennyb1201.kbstream.ui.addons.AddonsViewModel.CollectionUiState,
     homeOrderVersion: Int,
+    /**
+     * The active profile's Kids Mode ceiling (null = off). A kids profile
+     * does not draw the two "Top ... Today" built-ins - Home swaps them for
+     * the ceiling-filtered kids rails - so this list leaves them out too (see
+     * KBHomeOrderPrefs.builtinKeysFor): a row a kid can neither see nor
+     * arrange is a row that only misfires.
+     */
+    kidsMaxAge: Int?,
     collectionUrlInput: String,
     onCollectionUrlChange: (String) -> Unit,
     onImportCollectionUrl: () -> Unit,
@@ -209,7 +217,12 @@ internal fun CatalogManagerDialog(
         // Built-ins lead, exactly as they do in the ViewModel's copy of this
         // list and on Home itself: the manager draws and moves the same merged
         // list Home renders (see mergedHomeRailKeys).
-        val movableDefaults = KBHomeOrderPrefs.BUILTIN_KEYS +
+        //
+        // They are the PROFILE's built-ins, not the full registry: a kids
+        // profile has no Top Today rows on Home at all, so they are not rails
+        // its manager can aim at (see KBHomeOrderPrefs.builtinKeysFor) - an
+        // arrow next to a rail nobody can see would move it two drawn slots.
+        val movableDefaults = KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge) +
             browseRailByKey.keys.toList() +
             customCatalogByKey.keys.toList() +
             addonByKey.keys +

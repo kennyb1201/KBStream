@@ -29,6 +29,8 @@ class PlayPauseThemeContractTest {
     private companion object {
         const val BECAUSE_YOU_WATCHED =
             "com/kennyb1201/kbstream/ui/player/BecauseYouWatched.kt"
+        const val PLAYER_CHROME_THEME =
+            "com/kennyb1201/kbstream/ui/player/PlayerChromeTheme.kt"
         const val NATIVE_PLAYER =
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
         const val MPV_PLAYER =
@@ -91,22 +93,22 @@ class PlayPauseThemeContractTest {
 
     @Test
     fun `the chrome walk swaps a surface button's accent press ripple`() {
-        listOf(NATIVE_PLAYER, MPV_PLAYER).forEach { path ->
-            val player = source(path)
-            assertTrue(
-                "a surface-fill button whose own ripple is the XML accent must have " +
-                    "that ripple rebuilt in the chosen accent ($path)",
-                player.contains(
-                    "rippled && accent != xmlAccent && fill == getColor(R.color.kb_surface)"
-                )
-            )
-            assertFalse(
-                "the retint must not call RippleDrawable#getEffectColor(), which needs " +
-                    "API 31 while this app ships minSdk 26 (lint's NewApi fails the " +
-                    "release build) ($path)",
-                player.contains(".getEffectColor()")
-            )
-        }
+        // The walk itself now lives in one place, shared by all three engines
+        // (PlayerChromeTheme.kt) - see PlayerChromeThemeTest for the rule pinned
+        // as values. What is pinned HERE is the policy that rule must keep.
+        val walk = source(PLAYER_CHROME_THEME)
+        assertTrue(
+            "a surface-fill button's press flash must be the chosen accent, not the " +
+                "brass the XML resolved",
+            walk.contains("themeAccentColor(context)")
+        )
+        val callers = walk + listOf(NATIVE_PLAYER, MPV_PLAYER).joinToString("\n") { source(it) }
+        assertFalse(
+            "and nothing here may call RippleDrawable#getEffectColor(), which needs " +
+                "API 31 while this app ships minSdk 26 (lint's NewApi fails the " +
+                "release build)",
+            callers.contains(".getEffectColor()")
+        )
     }
 
     @Test

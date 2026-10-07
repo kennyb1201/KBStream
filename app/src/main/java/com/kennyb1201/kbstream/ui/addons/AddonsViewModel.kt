@@ -556,7 +556,10 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
      * lists it in its hidden section, with no reorder controls). Every rail
      * that IS on Home has a position here, the Top Today rows included - they
      * are built-ins now (see KBHomeOrderPrefs.BUILTIN_KEYS), so the loader no
-     * longer pins them above a slot the manager cannot reach.
+     * longer pins them above a slot the manager cannot reach. The exception is
+     * a kids profile, whose Home has no Top Today rows at all: they are gone
+     * from this list too, so the arrows cannot act on rails nobody can see
+     * (see KBHomeOrderPrefs.builtinKeysFor).
      */
     private fun homeRailDefaults(): List<String> {
         val browseKeys = _collections.value.browseRails.map { rail -> rail.key }
@@ -578,11 +581,18 @@ class AddonsViewModel(application: Application) : AndroidViewModel(application) 
                 )
             }
         val collectionKeys = _collections.value.collections.map { it.key }
+        // Which built-ins belong to THIS profile: a kids profile does not
+        // draw the two Top Today rows (Home swaps its pinned batch for the
+        // kids rails), so they are not rails its arrangement can aim at -
+        // otherwise every arrow near them moves a rail the viewer cannot see
+        // (see KBHomeOrderPrefs.builtinKeysFor).
+        val kidsMaxAge = com.kennyb1201.kbstream.data.sync.ProfileManager
+            .activeProfile.value?.kidsMaxAge
         // Hidden built-ins stay in the list on purpose: like a collection,
         // the key has to remain KNOWN so the merged order can still place it
         // (and so a show/hide leaves the arrangement otherwise untouched).
         // A hidden rail is filtered out by the hidden set, not by omission.
-        return KBHomeOrderPrefs.BUILTIN_KEYS +
+        return KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge) +
             browseKeys + customKeys + addonKeys + collectionKeys
     }
 

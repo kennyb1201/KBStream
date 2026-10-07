@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.ui.player
 
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDate
@@ -18,9 +20,10 @@ class NextEpisodeAiringTest {
 
     private fun episode(
         number: Int,
-        airDate: String?
+        airDate: String?,
+        season: Int = 2
     ): ResolvedEpisode = ResolvedEpisode(
-        streamId = "tt1000000:2:$number",
+        streamId = "tt1000000:$season:$number",
         episodeNumber = number,
         name = "Episode $number",
         overview = null,
@@ -82,6 +85,93 @@ class NextEpisodeAiringTest {
         assertFalse("an unparseable date is aired", isUnaired("not-a-date", today))
         assertFalse("today is out", isUnaired("2026-09-21", today))
         assertFalse(isUnaired(null, today))
+    }
+
+    // ── the season boundary ────────────────────────────────────────────────
+    //
+    // An arithmetic next episode ABSENT from its own season's listing is a
+    // finale, whichever launch route it came from - and a finale whose next
+    // season has aired must chain into it rather than fall through to the
+    // recommendations. The reported case: Animal Control's S4 finale showed
+    // Because-you-watched while S5E1/E2 were already out, from the routes
+    // that never carried the season's episode count.
+
+    /** A season that aired in full, 10 episodes. */
+    private fun airedSeason(season: Int, count: Int = 10): List<ResolvedEpisode> =
+        (1..count).map { episode(it, "2026-08-10", season = season) }
+
+    /** S5's first two episodes, both aired before [today]. */
+    private val airedSeasonFive = listOf(
+        episode(1, "2026-09-14", season = 5),
+        episode(2, "2026-09-21", season = 5)
+    )
+
+    @Test
+    fun `a finale chains into the next season when its opener has aired`() {
+        assertEquals(
+            "(4, 11) is not in S4 at all, so the S4 finale chains into S5E1",
+            5 to 1,
+            airedChainTarget(4 to 11, airedSeason(4), airedSeasonFive, today)
+        )
+    }
+
+    @Test
+    fun `a finale does not chain into a season that has not been listed`() {
+        assertNull(
+            "nothing of S5 exists to play, so this stays a finished-series finale",
+            airedChainTarget(4 to 11, airedSeason(4), emptyList(), today)
+        )
+    }
+
+    @Test
+    fun `a listed but unaired next episode is never jumped over`() {
+        // The invariant the fallback must not break: S4E5 exists but airs in a
+        // fortnight. The answer is recommendations - NOT S5E1, even though S5
+        // is listed and aired. "Not out yet" is not "the season is over".
+        val s4 = airedSeason(4, count = 4) + episode(5, "2026-10-05", season = 4)
+        assertNull(
+            "S4E5 is unaired, so nothing chains",
+            airedChainTarget(4 to 5, s4, airedSeasonFive, today)
+        )
+    }
+
+    @Test
+    fun `a failed season lookup keeps the arithmetic target`() {
+        // Unknown != unaired: a transport hiccup must not lose the panel.
+        assertEquals(
+            "a failed listing is not evidence the episode is unaired",
+            4 to 11,
+            airedChainTarget(4 to 11, null, airedSeasonFive, today)
+        )
+        assertEquals(
+            "...even when the next-season lookup failed too",
+            4 to 11,
+            airedChainTarget(4 to 11, null, null, today)
+        )
+    }
+
+    @Test
+    fun `a failed next-season lookup answers null like the unlisted case`() {
+        // Before the fallback existed, an unlisted target always answered null.
+        // A lookup that fails at that same boundary must not invent a chain.
+        assertNull(
+            "no new failure mode: an unlisted target with no S+1 answer stays null",
+            airedChainTarget(4 to 11, airedSeason(4), null, today)
+        )
+    }
+
+    @Test
+    fun `a mid-season chain is untouched by the fallback`() {
+        // Listed and aired: the target itself, byte-identical to the rule the
+        // gate had before the season boundary was folded in.
+        assertEquals(
+            4 to 5,
+            airedChainTarget(4 to 5, airedSeason(4), null, today)
+        )
+        assertNull(
+            "and a listed episode airing later still answers null",
+            airedChainTarget(4 to 5, airedSeason(4, count = 4) + episode(5, "2026-09-28", season = 4), null, today)
+        )
     }
 
     @Test

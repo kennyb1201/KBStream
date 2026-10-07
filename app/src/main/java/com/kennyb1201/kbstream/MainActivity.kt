@@ -1892,6 +1892,12 @@ fun AppRoot(
                             clearLogoUrl = clearLogoUrl,
                             overview = overview,
                             cast = cast,
+                            // The detail route carries the season's episode
+                            // count on its target; forward it so the player's
+                            // own season-boundary arithmetic (and the TMDB
+                            // tail clamp) works here too, not just on the
+                            // routes that already set it.
+                            totalEpisodesInSeason = target.totalEpisodesInSeason,
                             returnTo = stableReturnTo
                         )
                     } else {

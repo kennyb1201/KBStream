@@ -59,7 +59,6 @@ import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
-import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.themeAccentColor
 import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.StreamBehaviorHints
@@ -290,12 +289,6 @@ private const val INFO_ENGINE_CHIP_TAG = "info_engine_chip"
 
 /** One press of the settings panel's own subtitle-offset pads, in ms. */
 private const val SUBTITLE_OFFSET_STEP_MS = 500
-
-/**
- * The fill of `@drawable/circle_avatar_bg`, the oval behind a cast card's
- * headshot (see [NativePlayerActivity.refillPlayerChromeView]).
- */
-private val AVATAR_PLACEHOLDER_FILL: Int = 0xFF1D2530.toInt()
 
 /**
  * What that chip reads. This activity IS the ExoPlayer engine - the MPV engine
@@ -756,8 +749,8 @@ class NativePlayerActivity : ComponentActivity() {
             panel = becauseYouWatchedPanel,
             title = bywTitle,
             row = bywRow,
-            surfaceColor = { panelSurfaceColor() },
-            raisedColor = { panelRaisedColor() },
+            surfaceColor = { playerPanelSurfaceColor(this) },
+            raisedColor = { playerPanelRaisedColor(this) },
             applyPill = { pill, selected, focused ->
                 applyPillBackground(pill, selected, focused)
             },
@@ -2253,6 +2246,25 @@ class NativePlayerActivity : ComponentActivity() {
     private var lastPolledPos = -1L
     private var posStallTicks = 0
 
+    /**
+     * True once this session's player declared the episode over, and never
+     * cleared again for the life of the activity.
+     *
+     * [playbackEndedHandled] is the PLAY guard, and it is deliberately cleared
+     * by a seek so a viewer who rewinds the ending can press play and watch it
+     * again (PB-P2-1). The fact that the EPISODE finished is not the same fact,
+     * and riding on that flag is what lost it the moment the playhead moved: a
+     * press that reached the controls underneath the credits panel scrubbed the
+     * finished episode backwards, the seek cleared the guard, and the exit then
+     * filed a RESUME row over the completion. That is the reported "it didn't
+     * mark it as watched since it started over" - and it is also what put the
+     * finished episode straight back on Continue Watching. This is the sticky
+     * half: the completion verdict below is written in terms of it, so within
+     * one session a rewatch of an episode that already ended leaves the row
+     * completed. A fresh session is a fresh activity, so nothing is inherited.
+     */
+    private var playbackEndReached = false
+
     // Earliest-end trigger: the Up Next / Because-you-watched panel now opens
     // during the end credits (or shortly before the end) instead of waiting
     // for STATE_ENDED, which many streams never fire. Set once the panel is
@@ -2795,25 +2807,66 @@ class NativePlayerActivity : ComponentActivity() {
             }
             return true
         }
-        if (plainPlaybackForeground() && horizontal) {
-            if (creditsPanelForeground()) {
-                // The credits recommendations own LEFT/RIGHT for as long as
-                // they are up, so the press must never reach the scrub - which
-                // declines it for the same reason, see [handleSurfaceScrubKey].
+        // The credits recommendations own the D-pad while they are up - every
+        // press that could be a browse press - and that rule cannot sit behind
+        // [plainPlaybackForeground]: the panel is drawn over the video while the
+        // controls overlay underneath it can still be up, and that overlay parks
+        // focus on its SEEK BAR on purpose (see [focusControls]). LEFT/RIGHT on
+        // the bar scrubs the video, so a press aimed at a pick moved the
+        // playhead of the episode that had just finished and started it playing
+        // again from there - the reported "it keeps replaying instead of
+        // stopping" - and because a seek clears [playbackEndedHandled], leaving
+        // then filed the finished episode as merely resumable. So the panel
+        // answers first, ahead of the scrub and the overlay: the press is handed
+        // to a pick when focus is already inside the panel, and swallowed while
+        // the row is still being built instead of passed down to the bar.
+        //
+        // The RELEASE half of a LEFT/RIGHT press belongs to the panel for the
+        // same reason: with the overlay up it would reach the seek bar instead,
+        // whose release handler commits the bar's own position as a seek - and a
+        // seek clears [playbackEndedHandled] and nudges the playhead off the end,
+        // so the last seconds of the finished episode played again. A surface
+        // scrub already in flight when the panel appeared is ended here, since
+        // its own release never gets through.
+        if (creditsPanelForeground() && horizontal &&
+            event.action != KeyEvent.ACTION_DOWN
+        ) {
+            if (scrubDirection != 0) stopSurfaceScrub()
+            return true
+        }
+        // The one confirm press the panel does NOT take: a visible skip prompt
+        // owns OK while the chrome is down, and a SKIP CREDITS prompt appears
+        // over these recommendations by design ([creditsPanelForeground] is
+        // deliberately not folded into [plainPlaybackForeground], and the prompt
+        // branch below is what keeps that press). Everything else the panel
+        // answers for itself.
+        val skipPromptOwnsConfirm =
+            btnSkipIntro.visibility == View.VISIBLE && !controlsVisible
+        if (creditsPanelForeground() && event.action == KeyEvent.ACTION_DOWN &&
+            (horizontal ||
+                isOverlayRaisingKey(event.keyCode) ||
+                (isConfirmKey(event.keyCode) && !skipPromptOwnsConfirm))
+        ) {
+            if (!bywUi.hasFocus()) {
                 // Focus is not guaranteed to be inside the panel yet: the row
                 // fills in a beat after the panel opens, and a skip prompt hands
                 // focus back to the video surface when it hides. Park it on the
-                // first pick so the press steps through them instead of
-                // scrubbing the credits they are recommending over.
-                if (event.action == KeyEvent.ACTION_DOWN &&
-                    !bywUi.hasFocus() &&
-                    bywUi.focusFirst()
-                ) {
-                    return true
-                }
-            } else if (handleSurfaceScrubKey(event.keyCode, event)) {
+                // first pick so the press steps through them - and when there is
+                // no pick to park on yet, still swallow the press rather than let
+                // it reach the overlay's seek bar underneath.
+                bywUi.focusFirst()
                 return true
             }
+            // Focus is on a pick: UP/DOWN have nothing above or below the row to
+            // move to (raising the overlay would also take the D-pad away from
+            // the row mid-panel), so they are swallowed; LEFT/RIGHT and OK belong
+            // to the focused pick and pass through to it.
+            if (isOverlayRaisingKey(event.keyCode)) return true
+        }
+        if (plainPlaybackForeground() && horizontal &&
+            handleSurfaceScrubKey(event.keyCode, event)
+        ) {
+            return true
         }
         if (plainPlaybackForeground()) {
             if (btnSkipIntro.visibility == View.VISIBLE) {
@@ -2839,24 +2892,17 @@ class NativePlayerActivity : ComponentActivity() {
                 return true
             }
         }
-        // The credits recommendations own UP/DOWN and OK too, for as long as
-        // they are up. UP/DOWN used to raise the controls overlay, and raising
-        // it moved focus to it as well - so the row silently lost the D-pad
-        // mid-panel and a press aimed at a pick did nothing. Nothing lives
-        // above or below the row, so the press is swallowed; if focus has
-        // drifted out of the panel it is parked on the first pick first, the
-        // same way LEFT/RIGHT does it.
-        if (event.action == KeyEvent.ACTION_DOWN && creditsPanelForeground() &&
-            (isOverlayRaisingKey(event.keyCode) || isConfirmKey(event.keyCode))
-        ) {
-            if (!bywUi.hasFocus() && bywUi.focusFirst()) return true
-            if (isOverlayRaisingKey(event.keyCode)) return true
-        }
         return super.dispatchKeyEvent(event)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The window behind and around the picture. The theme's static
+        // colorBackground cannot follow the AMOLED toggle, so an AMOLED install
+        // showed the ordinary #0A0E14 void wherever the video surface does not
+        // reach - the same mismatch MainActivity fixes for its launch window,
+        // and a player is the screen where a navy edge is most obvious.
+        applyPlayerWindowTone(this)
         // Bulk guide (EPG) writes wait for playback to end while this activity
         // is on screen: an XMLTV import re-keying thousands of rows underneath
         // a starting player is what turned into multi-hundred-millisecond GC
@@ -3254,7 +3300,7 @@ class NativePlayerActivity : ComponentActivity() {
                 // The band is filled a beat after the activity's own chrome was
                 // themed, so each card is themed as it lands - the same reason
                 // the picker's rows retint when they attach.
-                if (AppPreferences.getAmoledBlack(this)) refillPlayerChrome(itemView)
+                if (chromeThemeMoved(this)) refillPlayerChrome(itemView)
                 val nameText = itemView.findViewById<TextView>(R.id.cast_member_name)
                 val charText = itemView.findViewById<TextView>(R.id.cast_member_character)
                 val profileImage = itemView.findViewById<ImageView>(R.id.cast_member_image)
@@ -3667,7 +3713,7 @@ class NativePlayerActivity : ComponentActivity() {
         pickerList.addOnChildAttachStateChangeListener(
             object : androidx.recyclerview.widget.RecyclerView.OnChildAttachStateChangeListener {
                 override fun onChildViewAttachedToWindow(view: View) {
-                    if (AppPreferences.getAmoledBlack(this@NativePlayerActivity)) {
+                    if (chromeThemeMoved(this@NativePlayerActivity)) {
                         refillPlayerChrome(view)
                     }
                 }
@@ -3691,7 +3737,7 @@ class NativePlayerActivity : ComponentActivity() {
         channelGuideList?.addOnChildAttachStateChangeListener(
             object : androidx.recyclerview.widget.RecyclerView.OnChildAttachStateChangeListener {
                 override fun onChildViewAttachedToWindow(view: View) {
-                    if (AppPreferences.getAmoledBlack(this@NativePlayerActivity)) {
+                    if (chromeThemeMoved(this@NativePlayerActivity)) {
                         refillPlayerChrome(view)
                     }
                 }
@@ -9293,6 +9339,11 @@ class NativePlayerActivity : ComponentActivity() {
             Log.w(TAG, "ignoring end-of-playback: this session never played")
             return
         }
+        // Sticky for this session: the episode reached its end, whatever
+        // happens to the playhead afterwards (a rewind, a scrub, a transport
+        // key) - see the field. Set before any of the work below, so a path
+        // that exits early still cannot lose the fact.
+        playbackEndReached = true
         scrobbleSimkl("stop", progressOverride = 100.0)
         // Saved SYNCHRONOUSLY rather than from `scope`. saveProgress reads the
         // position while the player is still alive and then does its own
@@ -9440,9 +9491,9 @@ class NativePlayerActivity : ComponentActivity() {
      * here so the end-of-episode popups match the rest of the app.
      */
     private fun applyPlayerPanelTheme() {
-        val surfaceColor = panelSurfaceColor()
+        val surfaceColor = playerPanelSurfaceColor(this)
         listOf(becauseYouWatchedPanel, nextUpPanel).forEach { panel ->
-            panel.background = roundedDrawable(panelRaisedColor(), 16f)
+            panel.background = roundedDrawable(playerPanelRaisedColor(this), 16f)
         }
         // Everything sitting on the panel has its own fill: the next
         // episode's still, the frames the posters load into, the
@@ -9456,26 +9507,6 @@ class NativePlayerActivity : ComponentActivity() {
         if (::bywUi.isInitialized) bywUi.applyTheme()
     }
 
-    /** AMOLED-aware stand-in for @color/kb_surface (card / artwork fills). */
-    private fun panelSurfaceColor(): Int {
-        val amoled = AppPreferences.getAmoledBlack(this)
-        return when {
-            amoled && AppPreferences.getPureBlackSurface(this) -> 0xFF000000.toInt()
-            amoled -> 0xFF06080B.toInt()
-            else -> getColor(R.color.kb_surface)
-        }
-    }
-
-    /** AMOLED-aware stand-in for @color/kb_surface_raised (panel fills). */
-    private fun panelRaisedColor(): Int {
-        val amoled = AppPreferences.getAmoledBlack(this)
-        return when {
-            amoled && AppPreferences.getPureBlackSurface(this) -> 0xFF050505.toInt()
-            amoled -> 0xFF0D1117.toInt()
-            else -> getColor(R.color.kb_surface_raised)
-        }
-    }
-
     /** Rounded rectangle standing in for the XML shape drawables. */
     private fun roundedDrawable(color: Int, radiusDp: Float): android.graphics.drawable.GradientDrawable =
         android.graphics.drawable.GradientDrawable().apply {
@@ -9485,62 +9516,21 @@ class NativePlayerActivity : ComponentActivity() {
         }
 
     /**
-     * AMOLED-aware stand-in for one XML chrome fill: the same corner radius
-     * and (for the ripple drawables) the same accent press ripple, but the
-     * fill follows the theme toggles.
-     */
-    private fun themedChromeBackground(
-        fill: Int,
-        radiusPx: Float,
-        rippled: Boolean
-    ): android.graphics.drawable.Drawable {
-        val body = android.graphics.drawable.GradientDrawable().apply {
-            setShape(android.graphics.drawable.GradientDrawable.RECTANGLE)
-            setColor(fill)
-            cornerRadius = radiusPx
-        }
-        if (!rippled) return body
-        val mask = android.graphics.drawable.GradientDrawable().apply {
-            setShape(android.graphics.drawable.GradientDrawable.RECTANGLE)
-            setColor(0xFF000000.toInt())
-            cornerRadius = radiusPx
-        }
-        return android.graphics.drawable.RippleDrawable(
-            android.content.res.ColorStateList.valueOf(themeAccentColor(this)),
-            body,
-            mask
-        )
-    }
-
-    /** The cast card's avatar circle, at the theme's own artwork fill. */
-    private fun themedAvatarBackground(fill: Int): android.graphics.drawable.Drawable =
-        android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.OVAL
-            setColor(fill)
-        }
-
-    /**
      * The chrome around the video — the control-bar buttons, RETRY, the option
      * pills, the picker rows and the panels behind them — is plain XML with
-     * fixed @color/kb_surface / @color/kb_surface_raised fills, so the AMOLED /
-     * pure-black toggles never reached it: a pure-black theme still painted
-     * #141A24 buttons. Views are matched by the fill color their own background
-     * carries rather than by resource id, so every button and pill is covered
-     * without a hand-kept list, and each one keeps its own corner radius and
-     * press ripple. Pills already restyled by [applyPillState] are skipped
+     * fixed @color/kb_surface / @color/kb_surface_raised fills and
+     * @color/kb_accent strokes, so the AMOLED / pure-black toggles and the
+     * global accent never reached it: a pure-black theme still painted #141A24
+     * buttons, and a chosen accent still ringed the focused button in brass.
+     * The pass itself is shared with the other two engines ([retintPlayerChrome])
+     * and matches views by the tones their own drawables carry rather than by
+     * resource id, so every button, panel, selector and pill is covered without
+     * a hand-kept list. Pills already restyled by [applyPillState] are skipped
      * (their fill is no longer an XML color), as are the two end-of-episode
      * panels handled by [applyPlayerPanelTheme].
      */
     private fun applyPlayerChromeTheme() {
-        // The XML fills are already right only while NEITHER the surface toggles
-        // nor the global accent have moved: AMOLED repaints the surface fills,
-        // a non-default accent repaints the accent fills, text and tints.
-        val amoled = AppPreferences.getAmoledBlack(this)
-        val accentIsDefault =
-            AppPreferences.getAccentIndex(this, DEFAULT_ACCENT_INDEX) == DEFAULT_ACCENT_INDEX
-        if (!amoled && accentIsDefault) return
-        // getColor()/getCornerRadius() on a drawable are API 24+, below the
-        // app's 26 floor, so the theme walk always runs.
+        if (!chromeThemeMoved(this)) return
         refillPlayerChrome(findViewById(android.R.id.content))
     }
 
@@ -9549,102 +9539,7 @@ class NativePlayerActivity : ComponentActivity() {
      * attach: those are inflated on demand, long after the activity's own
      * view tree was themed.
      */
-    private fun refillPlayerChrome(root: View) {
-        refillPlayerChromeView(root)
-        if (root is ViewGroup) {
-            for (index in 0 until root.childCount) {
-                refillPlayerChrome(root.getChildAt(index))
-            }
-        }
-    }
-
-    /** Retints one view when its background is one of the XML chrome fills. */
-    private fun refillPlayerChromeView(view: View) {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.N) return
-        val xmlAccent = getColor(R.color.kb_accent)
-        val accent = themeAccentColor(this)
-        // Text views and progress bars carry the accent as a colour, not a
-        // drawable, so they are retinted before the background-only walk below.
-        if (accent != xmlAccent) retintAccentView(view, accent, xmlAccent)
-        val background = view.background ?: return
-
-        /*
-         * A RippleDrawable IS a LayerDrawable, and layer 0 is only its
-         * CONTENT while it actually has one: real-world ripples exist with no
-         * layer at all (or a mask only), and LayerDrawable.getDrawable(0)
-         * throws IndexOutOfBoundsException on those. This pass runs from
-         * onCreate's bindViews, so that exception force-closed the player on
-         * launch whenever AMOLED was on - Sentry ANDROID-D, TCL Smart TV,
-         * one frame after the activity started. Look the content layer up
-         * instead of assuming it, and treat a ripple without one as "not a
-         * chrome fill".
-         */
-        val ripple =
-            background as? android.graphics.drawable.RippleDrawable
-        val rippled = ripple != null
-
-        val content =
-            if (ripple == null) {
-                background
-            } else {
-                if (ripple.numberOfLayers <= 0) return
-
-                val contentIndex =
-                    (0 until ripple.numberOfLayers).firstOrNull { index ->
-                        runCatching {
-                            ripple.getId(index) == android.R.id.content
-                        }.getOrDefault(false)
-                    }
-
-                // XML ripples usually leave their single item untagged, so
-                // fall back to the first layer when nothing is marked as the
-                // content. A mask-only ripple then resolves to its mask,
-                // whose fill matches neither chrome color below, so nothing
-                // changes for it.
-                runCatching {
-                    ripple.getDrawable(contentIndex ?: 0)
-                }.getOrNull() ?: return
-            }
-
-        val shape = content as? android.graphics.drawable.GradientDrawable ?: return
-        val fill = shape.color?.defaultColor ?: return
-        val amoled = AppPreferences.getAmoledBlack(this)
-        val replacement = when {
-            amoled && fill == getColor(R.color.kb_surface) ->
-                themedChromeBackground(panelSurfaceColor(), shape.cornerRadius, rippled)
-
-            amoled && fill == getColor(R.color.kb_surface_raised) ->
-                themedChromeBackground(panelRaisedColor(), shape.cornerRadius, false)
-
-            // Not one of the chrome fills but the same problem: the cast card's
-            // avatar circle is a fixed #FF1D2530 oval, so a pure-black theme
-            // still drew gray circles behind every headshot - and the circle is
-            // all that shows for the cast members TMDB has no photo for.
-            amoled && fill == AVATAR_PLACEHOLDER_FILL -> themedAvatarBackground(panelSurfaceColor())
-
-            // A surface-fill button whose OWN press ripple is the XML accent
-            // (the control-bar buttons, the button_surface_bg pills, picker
-            // rows): the fill is not the accent, so the accent branch below
-            // never matched and the press flash kept the default brass under a
-            // chosen theme. Rebuild the ripple in the accent while keeping the
-            // fill. Reading a drawable's own ripple colour needs API 31
-            // (RippleDrawable#getEffectColor), so this keys off the surface
-            // fill instead - every surface-fill ripple in the player chrome
-            // flashes the accent.
-            !amoled && rippled && accent != xmlAccent && fill == getColor(R.color.kb_surface) ->
-                themedChromeBackground(fill, shape.cornerRadius, true)
-
-            // An accent-filled drawable (the accent button, selected pills, the
-            // live badge): the XML resolved @color/kb_accent at inflation, so a
-            // new global accent has to rebuild the fill - and the press ripple
-            // that rides it - in the chosen colour.
-            accent != xmlAccent && fill == xmlAccent ->
-                themedChromeBackground(accent, shape.cornerRadius, rippled)
-
-            else -> null
-        }
-        replacement?.let { view.background = it }
-    }
+    private fun refillPlayerChrome(root: View) = retintPlayerChrome(root, this)
 
     /**
      * The because-you-watched panel opens while the end credits are rolling:
@@ -10251,7 +10146,7 @@ class NativePlayerActivity : ComponentActivity() {
         // rule keeps the tail gate, so a Next pressed in the middle of an
         // episode still files a resumable position.
         val completed = shouldRecordCompletion(
-            playbackEnded = playbackEndedHandled,
+            playbackEnded = playbackEndedHandled || playbackEndReached,
             endPanelsShown = endPanelsShown,
             positionMs = pos,
             durationMs = dur,
@@ -10557,14 +10452,24 @@ class NativePlayerActivity : ComponentActivity() {
         // exactly as if it had never been played. A session the player itself
         // declared over is written regardless; only a MID-session save still
         // needs a real duration to mean anything.
-        if (dur == null && !forceCompleted) return
-        if (pos < MIN_RESUME_POSITION_MS && !forceCompleted) return
+        // Every write this session makes is judged as completed once its
+        // episode has finished ([playbackEndReached]), not only the write the
+        // end itself issues. A pause taken after a rewind, or the exit save,
+        // used to re-decide the verdict from where the playhead happened to be
+        // - so watching an episode to its end and then moving the playhead back
+        // (a scrub behind the end panel, a transport key) filed a RESUME row
+        // over the completion: the episode lost its watched marker and went
+        // straight back onto Continue Watching. The episode DID finish, and no
+        // later position can unsay it.
+        val sessionCompleted = forceCompleted || playbackEndReached
+        if (dur == null && !sessionCompleted) return
+        if (pos < MIN_RESUME_POSITION_MS && !sessionCompleted) return
         // With no length the played position is the best duration we have:
         // the row is completed anyway (position reset to 0), and a non-zero
         // duration keeps it from reading as a broken card.
         val effectiveDur = dur ?: pos.coerceAtLeast(1L)
         val isCompleted =
-            forceCompleted ||
+            sessionCompleted ||
                 (dur != null && pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong())
         val safePos = if (isCompleted) 0L else pos.coerceAtMost(effectiveDur)
         val now = System.currentTimeMillis()
@@ -11339,7 +11244,7 @@ class NativePlayerActivity : ComponentActivity() {
         // promise here.
         if (!mpvHandoffStarted && !externalHandoffStarted && !nextEpisodeHandoffStarted) {
             val completedOnExit = shouldRecordCompletion(
-                playbackEnded = playbackEndedHandled,
+                playbackEnded = playbackEndedHandled || playbackEndReached,
                 endPanelsShown = endPanelsShown,
                 positionMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: carryPositionMs,
                 durationMs = exoPlayer?.duration

@@ -154,9 +154,18 @@ class HomeBuiltinRailWiringContractTest {
 
     @Test
     fun `the manager offers built-ins move, hide and rename but no pin`() {
+        // The manager's built-ins are the PROFILE's, not the full list: a kids
+        // profile has no Top Today rows on Home, so its manager must not offer
+        // rows for them (its arrows would move rails the viewer cannot see).
+        // Which keys that is stays one rule, in KBHomeOrderPrefs.builtinKeysFor
+        // - pinned as behaviour in KBHomeBuiltinRailTest.
         assertTrue(
-            "built-ins must be in the manager's default list",
-            dialog.contains("KBHomeOrderPrefs.BUILTIN_KEYS +")
+            "built-ins must reach the manager's default list",
+            dialog.contains("KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge)")
+        )
+        assertTrue(
+            "and the manager must be told the profile's ceiling",
+            dialog.contains("kidsMaxAge: Int?")
         )
         assertTrue(
             "the manager must build a built-in row",
@@ -190,7 +199,7 @@ class HomeBuiltinRailWiringContractTest {
     fun `the view model answers the manager's built-in writes`() {
         assertTrue(
             "built-ins must be in the arrangement defaults",
-            viewModel.contains("return KBHomeOrderPrefs.BUILTIN_KEYS +")
+            viewModel.contains("return KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge) +")
         )
         assertTrue(
             "a rename must be persisted",

@@ -276,6 +276,11 @@ class ExternalPlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // The window behind this hand-off card: the theme's static
+        // colorBackground cannot follow the AMOLED toggle, so an AMOLED install
+        // showed the ordinary #0A0E14 void behind it.
+        applyPlayerWindowTone(this)
+
         // Kids Mode: end the hand-off the moment a daily limit or bedtime
         // lands rather than leaving this picker up behind it. Once the chosen
         // app is on top this Activity stops too, so - like watching in any
@@ -286,9 +291,12 @@ class ExternalPlayerActivity : ComponentActivity() {
 
         readIntent()
         bindViews()
-        // The panel's accent text resolved @color/kb_accent at inflation; a
-        // custom global accent has to be re-applied over the whole tree.
-        retintAccentChrome(findViewById(android.R.id.content), this)
+        // This engine's panels, buttons and pills are the same XML chrome the
+        // other two engines wear, and it resolved @color/kb_accent,
+        // @color/kb_surface and @color/kb_surface_raised at inflation - so a
+        // custom global accent and the AMOLED / pure-black toggles both have to
+        // be re-applied over the whole tree.
+        retintPlayerChrome(findViewById(android.R.id.content), this)
         historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
         // The scheme a previous session detected for this show, if any. The imdb
         // parent id answers it here; a tmdb-only parent is re-keyed from tmdbId()

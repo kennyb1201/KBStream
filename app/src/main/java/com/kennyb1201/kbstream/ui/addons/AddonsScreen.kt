@@ -502,6 +502,10 @@ fun AddonsScreen(
             configurations = catalogConfigurations,
             collectionsState = collectionsState,
             homeOrderVersion = homeOrderVersion,
+            // The manager matches what Home actually draws for this profile:
+            // a kids profile has no Top Today built-ins, so it has no rows
+            // for them either (see KBHomeOrderPrefs.builtinKeysFor).
+            kidsMaxAge = activeProfile?.kidsMaxAge,
             collectionUrlInput = collectionUrlInput,
             onCollectionUrlChange = { collectionUrlInput = it },
             onImportCollectionUrl = {

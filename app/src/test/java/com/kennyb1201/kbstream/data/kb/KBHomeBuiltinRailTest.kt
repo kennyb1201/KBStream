@@ -123,6 +123,57 @@ class KBHomeBuiltinRailTest {
     }
 
     @Test
+    fun `a kids profile's arrangeable built-ins leave out the Top Today rows`() {
+        // Home never loads the two Top Today rails for a kids profile - it
+        // swaps its pinned batch for the ceiling-filtered kids rails - so they
+        // are not rails a kids profile's manager can aim at.
+        assertEquals(
+            listOf(continueWatching, upcoming),
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7)
+        )
+        // A profile with no ceiling gets the full list, unchanged.
+        assertEquals(
+            KBHomeOrderPrefs.BUILTIN_KEYS,
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = null)
+        )
+        // The registry itself still names them: the arrangement has to know
+        // the keys, or a profile that later loses its ceiling comes back to a
+        // list that dropped the position they were given.
+        assertTrue(topMovies in KBHomeOrderPrefs.BUILTIN_KEYS)
+        assertTrue(topShows in KBHomeOrderPrefs.BUILTIN_KEYS)
+    }
+
+    @Test
+    fun `a kids rail list moves one DRAWN slot at a time`() {
+        // The failure the profile-aware list exists to prevent: while the two
+        // Top Today rows are still IN the list but not drawn, the rail below
+        // them has an invisible neighbour to swap with, so one press moves it
+        // two slots on screen. With the kids list, every neighbouring key is a
+        // rail the viewer can actually see.
+        val kidsDefaults =
+            KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7) + existingDefaults
+        val drawn = mergedHomeRailKeys(KBHomeOrder(), kidsDefaults)
+
+        assertEquals(
+            listOf(continueWatching, upcoming, "browse:1", "addon:a", "addon:b", "kb:c"),
+            drawn
+        )
+        assertFalse(topMovies in drawn)
+        assertFalse(topShows in drawn)
+        drawn.drop(1).forEachIndexed { index, key ->
+            val swapped = drawn.toMutableList().also { it.add(index, it.removeAt(index + 1)) }
+            assertEquals(
+                "UP on $key should land it one drawn slot up",
+                swapped,
+                mergedHomeRailKeys(
+                    moveRailInMergedOrder(KBHomeOrder(), kidsDefaults, key, -1),
+                    kidsDefaults
+                )
+            )
+        }
+    }
+
+    @Test
     fun `the drawn order and the moved order stay the same list, built-ins included`() {
         // The same property the pre-existing rails are held to, now covering
         // the built-ins: whatever the manager draws, UP lands a row one slot up
