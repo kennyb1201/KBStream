@@ -154,6 +154,7 @@ fun SportsHubScreen(
     val standingsFailed by viewModel.standingsFailed.collectAsStateWithLifecycle()
     val gameReminders by viewModel.gameReminders.collectAsStateWithLifecycle()
     val lineupStatus by viewModel.lineupStatus.collectAsStateWithLifecycle()
+    val matchingDone by viewModel.matchingDone.collectAsStateWithLifecycle()
     // True only once the hub knows it has NO lineup: the difference between
     // "your playlist does not carry this game" and "there is no playlist to
     // compare against". LOADING is deliberately neither - a read still in
@@ -244,13 +245,34 @@ fun SportsHubScreen(
                     val direction = when (event.key) {
                         Key.DirectionDown -> FocusDirection.Down
                         Key.DirectionUp -> FocusDirection.Up
+                        Key.DirectionLeft -> FocusDirection.Left
+                        Key.DirectionRight -> FocusDirection.Right
                         else -> return@onKeyEvent false
                     }
                     // Consumed either way: a move already happened on the first
                     // branch, and the scroll is this press's answer on the
                     // second - letting the platform handle it too would move
                     // focus AND scroll.
-                    focusManager.moveFocus(direction) || scrollByPage(direction)
+                    when (direction) {
+                        FocusDirection.Down, FocusDirection.Up ->
+                            focusManager.moveFocus(direction) || scrollByPage(direction)
+
+                        // Left/right have no scroll fallback. The standings' left
+                        // column has no table to its left, so a Left press at its
+                        // edge rises to the row above (the tab row) rather than
+                        // leaving focus stranded at the column edge; anywhere
+                        // else the platform's own move stands.
+                        FocusDirection.Left ->
+                            focusManager.moveFocus(direction) ||
+                                (leagueView == LeagueView.STANDINGS &&
+                                    focusManager.moveFocus(FocusDirection.Up))
+
+                        FocusDirection.Right -> focusManager.moveFocus(direction)
+
+                        // The mapping above only ever produces the four handled
+                        // directions; this keeps the `when` an expression.
+                        else -> false
+                    }
                 }
         ) {
             SportsHeader(
@@ -346,6 +368,7 @@ fun SportsHubScreen(
                         onOpenDetail = { detailGame = it },
                         onPlayChannels = onPlayChannels,
                         lineupMissing = lineupMissing,
+                        matchingDone = matchingDone,
                         onEditFavorites = { favoriteEditor = it },
                     )
 
@@ -382,6 +405,7 @@ fun SportsHubScreen(
                     favoriteKeys = favoriteKeys,
                     listState = listState,
                     lineupMissing = lineupMissing,
+                    matchingDone = matchingDone,
                     onOpenDetail = { detailGame = it },
                     onPlayChannels = onPlayChannels,
                     onEditFavorites = { favoriteEditor = it },
@@ -434,6 +458,7 @@ fun SportsHubScreen(
                 // own rows. Empty means the card's line was telling the truth.
                 channels = matches[game.id].orEmpty(),
                 lineupMissing = lineupMissing,
+                matchingDone = matchingDone,
                 onPlay = { feeds ->
                     detailGame = null
                     onPlayChannels(feeds)
@@ -534,6 +559,7 @@ private fun LeagueBody(
     favoriteKeys: Set<String>,
     listState: LazyListState,
     lineupMissing: Boolean,
+    matchingDone: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
     onPlayChannels: (List<IptvChannel>) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
@@ -576,6 +602,7 @@ private fun LeagueBody(
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
                 lineupMissing = lineupMissing,
+                matchingDone = matchingDone,
                 onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
@@ -598,6 +625,7 @@ private fun LeagueBody(
                     channels = matches[event.id].orEmpty(),
                     livePulse = livePulse,
                     lineupMissing = lineupMissing,
+                    matchingDone = matchingDone,
                     onPlayChannels = onPlayChannels,
                 )
             }
@@ -614,6 +642,7 @@ private fun LeagueBody(
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
                 lineupMissing = lineupMissing,
+                matchingDone = matchingDone,
                 onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
@@ -630,6 +659,7 @@ private fun LeagueBody(
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
                 lineupMissing = lineupMissing,
+                matchingDone = matchingDone,
                 onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
@@ -659,6 +689,7 @@ private fun LazyListScope.gameRows(
     livePulse: Float,
     favoriteKeys: Set<String>,
     lineupMissing: Boolean,
+    matchingDone: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
@@ -675,6 +706,7 @@ private fun LazyListScope.gameRows(
                         livePulse = livePulse,
                         favoriteKeys = favoriteKeys,
                         lineupMissing = lineupMissing,
+                        matchingDone = matchingDone,
                         onOpenDetail = onOpenDetail,
                         onEditFavorites = { onEditFavorites(game) },
                         modifier = Modifier.weight(1f)
@@ -784,6 +816,7 @@ private fun GameCard(
     livePulse: Float,
     favoriteKeys: Set<String>,
     lineupMissing: Boolean,
+    matchingDone: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: () -> Unit,
     modifier: Modifier = Modifier,
@@ -840,7 +873,11 @@ private fun GameCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            ChannelLine(channel = channel, lineupMissing = lineupMissing)
+            ChannelLine(
+                channel = channel,
+                lineupMissing = lineupMissing,
+                matchingDone = matchingDone
+            )
         }
     }
 
@@ -1196,15 +1233,27 @@ private fun ContextLine(week: String?, venue: String?) {
  * admission that this playlist does not carry it.
  */
 @Composable
-private fun ChannelLine(channel: IptvChannel?, lineupMissing: Boolean) {
+private fun ChannelLine(
+    channel: IptvChannel?,
+    lineupMissing: Boolean,
+    matchingDone: Boolean,
+) {
     if (channel == null) {
-        // Two different facts, two different sentences. "Not in your playlist"
-        // is a claim about the viewer's lineup, and it is only true when there
-        // is a lineup to compare against - a hub that could not read one is
-        // saying something about itself, and accusing every game of missing is
-        // how that reads as a broken hub rather than an unloaded playlist.
+        // Three different facts, three different sentences. While matching is
+        // still running the hub has no answer to give about the channel yet,
+        // and saying "not in your playlist" for the 40-60s a large playlist
+        // takes is what made a slow hub read as a broken one - so it says it is
+        // still looking. Once the pass is done, "Not in your playlist" is a
+        // claim about the viewer's lineup and only true when there IS a lineup
+        // to compare against; a hub that could not read one says that instead,
+        // because accusing every game of missing is how it reads as broken
+        // rather than unloaded.
         Text(
-            text = if (lineupMissing) "Lineup not loaded" else "Not in your playlist",
+            text = when {
+                !matchingDone -> "Finding channel…"
+                lineupMissing -> "Lineup not loaded"
+                else -> "Not in your playlist"
+            },
             style = MaterialTheme.typography.labelSmall,
             color = KBTextLo.copy(alpha = 0.8f)
         )
@@ -1231,6 +1280,7 @@ private fun TournamentCard(
     channels: List<IptvChannel>,
     livePulse: Float,
     lineupMissing: Boolean,
+    matchingDone: Boolean,
     onPlayChannels: (List<IptvChannel>) -> Unit,
 ) {
     val channel = channels.firstOrNull()
@@ -1289,7 +1339,11 @@ private fun TournamentCard(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            ChannelLine(channel = channel, lineupMissing = lineupMissing)
+            ChannelLine(
+                channel = channel,
+                lineupMissing = lineupMissing,
+                matchingDone = matchingDone
+            )
         }
     }
 
@@ -1560,24 +1614,73 @@ private fun StandingsBody(
             modifier = Modifier.fillMaxSize()
         )
 
-        else -> LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
-            contentPadding = PaddingValues(bottom = 24.dp)
-        ) {
-            groups.forEach { group ->
-                item(key = "std-head-" + group.name) {
-                    StandingsGroupHeader(name = group.name, count = group.entries.size)
-                }
-                item(key = "std-cols-" + group.name) { StandingsColumnHeader() }
-                itemsIndexed(
-                    group.entries,
-                    key = { _, entry ->
-                        "std-" + group.name + "-" + entry.abbreviation + "-" + entry.displayName
+        else -> {
+            val columns = SportsStandingsLayout.columns(
+                groups = groups,
+                widthDp = LocalConfiguration.current.screenWidthDp
+            )
+            if (columns.size == 2) {
+                // Two conferences side by side, each stacking its own divisions
+                // - the same rows for half the vertical scroll. The two columns
+                // scroll independently, so each takes a scroll state of its own;
+                // they share one gutter with the game grid beside it.
+                Row(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp)
+                ) {
+                    columns.forEach { columnGroups ->
+                        StandingsColumn(
+                            groups = columnGroups,
+                            listState = rememberLazyListState(),
+                            modifier = Modifier.weight(1f)
+                        )
                     }
-                ) { _, entry -> StandingsRow(entry = entry) }
+                }
+            } else {
+                // One list, and the SCREEN's own scroll state: the D-pad's
+                // scroll fallback is built on that state, and a single-column
+                // body is the case it has to keep working for.
+                StandingsColumn(
+                    groups = columns.first(),
+                    listState = listState,
+                    modifier = Modifier.fillMaxSize()
+                )
             }
+        }
+    }
+}
+
+/**
+ * One scrolling column of the table: a heading and a column header once per
+ * group, then its rows.
+ *
+ * Split out of [StandingsBody] because the two-column body draws this twice -
+ * once per conference - while the single-column body draws it once with the
+ * screen's own [listState].
+ */
+@Composable
+private fun StandingsColumn(
+    groups: List<StandingGroup>,
+    listState: LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
+        contentPadding = PaddingValues(bottom = 24.dp)
+    ) {
+        groups.forEach { group ->
+            item(key = "std-head-" + group.name) {
+                StandingsGroupHeader(name = group.name, count = group.entries.size)
+            }
+            item(key = "std-cols-" + group.name) { StandingsColumnHeader() }
+            itemsIndexed(
+                group.entries,
+                key = { _, entry ->
+                    "std-" + group.name + "-" + entry.abbreviation + "-" + entry.displayName
+                }
+            ) { _, entry -> StandingsRow(entry = entry) }
         }
     }
 }
@@ -1756,6 +1859,7 @@ private fun GameDetailSheet(
     game: SportsGame,
     channels: List<IptvChannel>,
     lineupMissing: Boolean,
+    matchingDone: Boolean,
     onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -1887,7 +1991,7 @@ private fun GameDetailSheet(
                         )
                     ) {
                         WatchButtonLabel(
-                            label = SportsDetailRules.watchLabel(false, lineupMissing),
+                            label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
                             enabled = false
                         )
                     }

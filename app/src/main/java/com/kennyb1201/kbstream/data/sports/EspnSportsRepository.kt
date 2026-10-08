@@ -350,18 +350,26 @@ internal fun parseStandings(json: String): List<StandingGroup> {
     }
     for (i in 0 until conferences.length()) {
         val conference = conferences.optJSONObject(i) ?: continue
+        val conferenceName = conference.optString("name", "")
         val divisions = conference.optJSONArray("children")
         if (divisions != null && divisions.length() > 0) {
             for (j in 0 until divisions.length()) {
                 val division = divisions.optJSONObject(j) ?: continue
                 val entries = espnStandingEntries(division)
                 if (entries.isEmpty()) continue
-                out += StandingGroup(division.optString("name", ""), entries)
+                // The division keeps the conference it was nested under, so the
+                // two-column table can stack each conference's divisions in its
+                // own column - a name like "Atlantic" cannot say which one it is.
+                out += StandingGroup(
+                    name = division.optString("name", ""),
+                    entries = entries,
+                    conference = conferenceName.takeIf { it.isNotBlank() },
+                )
             }
         } else {
             val entries = espnStandingEntries(conference)
             if (entries.isEmpty()) continue
-            out += StandingGroup(conference.optString("name", ""), entries)
+            out += StandingGroup(conferenceName, entries)
         }
     }
     return out

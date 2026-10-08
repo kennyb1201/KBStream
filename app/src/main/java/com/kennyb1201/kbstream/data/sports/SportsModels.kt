@@ -195,6 +195,17 @@ data class StandingEntry(
 data class StandingGroup(
     val name: String,
     val entries: List<StandingEntry>,
+    /**
+     * The conference this group belongs to when the feed nests divisions inside
+     * one ("AFC" for "AFC East"). Null when the group is itself the top level -
+     * a single-table league, or a conference the feed does not split.
+     *
+     * Kept because the two-column table puts a conference's divisions in one
+     * column, and by the time the groups reach the screen the nesting is gone:
+     * NHL and NBA division names ("Atlantic", "Central") say nothing about which
+     * conference they sit in, so the split cannot be re-derived from [name].
+     */
+    val conference: String? = null,
 )
 
 /** The shape a league's scoreboard carries. */

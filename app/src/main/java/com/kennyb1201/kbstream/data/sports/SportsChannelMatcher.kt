@@ -31,6 +31,12 @@ data class MatcherProgram(
  *  2. **Broadcast network match.** ESPN's own `broadcasts[].names` resolved
  *     against the playlist by normalized name: exact, then prefix/word-boundary,
  *     then contains. "ESPN" must not land on "ESPN2" when a plain "ESPN" exists.
+ *     A streaming-exclusive name ([STREAMING_EXCLUSIVES]) never matches here at
+ *     all - no cable channel carries it - so a game ESPN+ streams is found by
+ *     the other tiers: an EPG row naming both teams (tier 1, the RSN or local
+ *     channel simulcasting it) or the team's own RSN (tier 3). If tier 1 keeps
+ *     missing those, that is a bug in `epgHits` (team-name variants, window
+ *     width) to fix THERE, not a reason to widen tier 2.
  *  3. **Team RSN fallback.** A small static map of team abbreviation -> the
  *     regional networks that carry them, home team first. Last resort, and
  *     best-effort by design.
@@ -80,6 +86,29 @@ internal object SportsChannelMatcher {
         "cbssportsnetwork" to "cbssn",
         "nbatelevision" to "nbatv",
         "nflnet" to "nflnetwork",
+    )
+
+    /**
+     * Streaming services with no playlist equivalent.
+     *
+     * A broadcast naming one must not resolve to a similarly-named cable channel:
+     * "ESPN+" is not "ESPN", and matching it there plays the WRONG channel with
+     * confidence - the exact failure tier 2 is built to avoid. These services are
+     * exclusive to their own app, so there is nothing in a provider's cable lineup
+     * to match; returning nothing lets the caller fall through to the EPG tier
+     * (the local/RSN simulcast a guide row names) and then the team RSN map.
+     *
+     * Data, not code: a service that turns out to simulcast is removed here, one
+     * line. "Prime Video" is deliberately absent - Thursday Night Football is also
+     * on local channels, and the EPG tier finds those - so only services whose
+     * games are exclusive to the app belong.
+     */
+    private val STREAMING_EXCLUSIVES: Set<String> = setOf(
+        "espn+",
+        "appletv+",
+        "peacock",
+        "dazn",
+        "paramount+",
     )
 
     /**
@@ -290,6 +319,12 @@ internal object SportsChannelMatcher {
     private fun networkChannels(network: String, channels: List<IptvChannel>): List<IptvChannel> {
         val target = canonicalNetwork(network)
         if (target.isEmpty()) return emptyList()
+        // A streaming exclusive has no cable equivalent, so there is no tier-2
+        // answer to give. Returning nothing here is the point, not a miss: the
+        // caller falls through to the EPG and RSN tiers, which find whatever is
+        // actually airing the game rather than the cable channel with a similar
+        // name.
+        if (target in STREAMING_EXCLUSIVES) return emptyList()
         data class Ranked(val strength: Int, val length: Int, val channel: IptvChannel)
         return channels
             .mapNotNull { channel ->
@@ -328,16 +363,23 @@ internal object SportsChannelMatcher {
 
     // ── normalization ────────────────────────────────────────────────
 
-    /** Lowercased, punctuation folded to spaces, trimmed. */
+    /**
+     * Lowercased, punctuation folded to spaces, trimmed - but KEEPS '+'.
+     *
+     * The plus is the entire difference between "ESPN" and "ESPN+", and folding
+     * it to a space made the two normalize identically, so a game ESPN+ streams
+     * matched the ESPN cable channel. Every other punctuation mark still folds:
+     * "t.n.t" and "TNT" must stay the same network.
+     */
     private fun words(raw: String): List<String> =
         raw.lowercase()
-            .map { if (it.isLetterOrDigit()) it else ' ' }
+            .map { if (it.isLetterOrDigit() || it == '+') it else ' ' }
             .joinToString("")
             .split(' ')
             .filter { it.isNotEmpty() }
 
     /** [words] with the spaces removed, for whole-name comparison. */
-    private fun compact(raw: String): String = words(raw).joinToString("")
+    internal fun compact(raw: String): String = words(raw).joinToString("")
 
     /** True when [target] appears as a contiguous run inside [source]. */
     private fun List<String>.containsSequence(target: List<String>): Boolean {

@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.sports
 
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -322,6 +323,98 @@ class SportsChannelMatcherTest {
             game = game(yankees, redSox),
             channels = emptyList(),
             programs = listOf(program("mlb", "Yankees vs Red Sox", firstPitch, firstPitch + minute)),
+        )
+
+        assertNull(hit)
+    }
+
+    // ── Streaming exclusives ───────────────────────────────────────
+    //
+    // "ESPN+" and "ESPN" are different networks, and only one of them is in a
+    // cable lineup. Folding '+' away made them identical, so an ESPN+ game
+    // matched the ESPN cable channel - a confident wrong answer, which is the
+    // one failure this matcher exists to avoid.
+
+    @Test
+    fun `the plus survives normalization so ESPN plus is not ESPN`() {
+        assertEquals("espn+", SportsChannelMatcher.compact("ESPN+"))
+        assertEquals("espn", SportsChannelMatcher.compact("ESPN"))
+        assertNotEquals(
+            "the whole bug was these two compacting identically",
+            SportsChannelMatcher.compact("ESPN+"),
+            SportsChannelMatcher.compact("ESPN")
+        )
+    }
+
+    @Test
+    fun `a streaming exclusive never resolves to a similarly named cable channel`() {
+        val espn = channel("espn", "ESPN")
+
+        val hit = SportsChannelMatcher.match(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN+")),
+            channels = listOf(espn),
+            programs = emptyList(),
+        )
+
+        assertNull(hit)
+    }
+
+    @Test
+    fun `a plain broadcast name still resolves to its cable channel`() {
+        // The other half of the invariant: nothing without a '+' changed.
+        val espn = channel("espn", "ESPN")
+
+        val hit = SportsChannelMatcher.match(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+            channels = listOf(espn),
+            programs = emptyList(),
+        )
+
+        assertEquals(espn, hit)
+    }
+
+    @Test
+    fun `an exclusive game is found by the guide on the channel actually airing it`() {
+        // Tier 1 is the correct path for an ESPN+ game: the RSN or local channel
+        // simulcasting it lists both teams in the guide, and that beats both the
+        // ESPN cable channel and the team's own RSN.
+        val yes = channel("yes", "YES Network")
+        val espn = channel("espn", "ESPN")
+
+        val hit = SportsChannelMatcher.match(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN+")),
+            channels = listOf(espn, yes),
+            programs = listOf(
+                program("yes", "Yankees vs. Red Sox", firstPitch, firstPitch + 3 * 60 * minute)
+            ),
+        )
+
+        assertEquals(yes, hit)
+    }
+
+    @Test
+    fun `an exclusive game with no guide hit falls to the team's RSN`() {
+        val nesn = channel("nesn", "NESN")
+        val espn = channel("espn", "ESPN")
+
+        val hit = SportsChannelMatcher.match(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN+")),
+            channels = listOf(espn, nesn),
+            programs = emptyList(),
+        )
+
+        // Boston is home, so NESN is tier 3 - never the ESPN cable channel.
+        assertEquals(nesn, hit)
+    }
+
+    @Test
+    fun `Apple TV plus normalizes distinctly and is an exclusive`() {
+        assertEquals("appletv+", SportsChannelMatcher.compact("Apple TV+"))
+
+        val hit = SportsChannelMatcher.match(
+            game = game(yankees, redSox, broadcasts = listOf("Apple TV+")),
+            channels = listOf(channel("apple", "Apple TV")),
+            programs = emptyList(),
         )
 
         assertNull(hit)

@@ -936,6 +936,23 @@ class EspnSportsRepositoryTest {
     }
 
     @Test
+    fun `a flattened division keeps the conference it was nested under`() {
+        // The two-column table lays each conference's divisions out in their own
+        // column, and a division's own name (the NHL's bare "Atlantic") cannot
+        // say which conference it is in - so the conference has to survive the
+        // flattening.
+        val groups = parseStandings(standings)
+        assertEquals(
+            setOf("American Football Conference"),
+            groups.filter { it.name.startsWith("AFC") }.mapNotNull { it.conference }.toSet()
+        )
+        assertEquals(
+            setOf("National Football Conference"),
+            groups.filter { it.name.startsWith("NFC") }.mapNotNull { it.conference }.toSet()
+        )
+    }
+
+    @Test
     fun `a division's rows carry the code, the record and the streak`() {
         val kc = parseStandings(standings)
             .first { it.name == "AFC West" }
@@ -972,6 +989,9 @@ class EspnSportsRepositoryTest {
         val groups = parseStandings(flat)
         assertEquals(listOf("Eastern Conference"), groups.map { it.name })
         assertEquals("BOS", groups.single().entries.single().abbreviation)
+        // The group IS the top level here, so it carries no conference of its
+        // own - the two-column rule keys it on its own name instead.
+        assertEquals(null, groups.single().conference)
     }
 
     @Test

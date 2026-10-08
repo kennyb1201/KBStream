@@ -166,6 +166,51 @@ class SportsHubStandingsContractTest {
         )
     }
 
+    @Test
+    fun `two conferences are drawn side by side, collapsing to one on a narrow screen`() {
+        assertTrue(
+            "the split is the pure rule's, from the groups and the display width",
+            hub.contains(
+                "val columns = SportsStandingsLayout.columns( groups = groups, widthDp = LocalConfiguration.current.screenWidthDp )"
+            )
+        )
+        assertTrue(
+            "two columns are drawn only when the rule asks for them, sharing the game grid's gutter",
+            hub.contains("if (columns.size == 2) {") &&
+                hub.contains("horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp)")
+        )
+        assertTrue(
+            "each column stacks its own conference's divisions",
+            hub.contains("columns.forEach { columnGroups -> StandingsColumn( groups = columnGroups,")
+        )
+        assertTrue(
+            "the one-column body keeps the screen's scroll state the D-pad fallback rides on",
+            hub.contains("groups = columns.first(), listState = listState,")
+        )
+        assertTrue(
+            "and one column body is split out so both shapes draw the same rows",
+            hub.contains("private fun StandingsColumn(")
+        )
+    }
+
+    @Test
+    fun `a Left press at the standings edge rises to the tab row instead of sticking`() {
+        assertTrue(
+            "the Left press is answered",
+            hub.contains("Key.DirectionLeft -> FocusDirection.Left")
+        )
+        assertTrue(
+            "and only the standings body redirects it upward, so the games body is unchanged",
+            hub.contains(
+                "leagueView == LeagueView.STANDINGS && focusManager.moveFocus(FocusDirection.Up)"
+            )
+        )
+        assertTrue(
+            "up and down still focus-then-scroll, exactly as before",
+            hub.contains("focusManager.moveFocus(direction) || scrollByPage(direction)")
+        )
+    }
+
     private fun slice(text: String, startMarker: String, endMarker: String): String {
         val start = text.indexOf(startMarker)
         assertTrue("$startMarker is missing", start >= 0)

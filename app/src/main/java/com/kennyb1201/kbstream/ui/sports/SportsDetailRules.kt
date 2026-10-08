@@ -95,9 +95,20 @@ internal object SportsDetailRules {
      * is in: a lineup was read and simply does not carry this game. It is only
      * true once the hub KNOWS it has no lineup - a read still in flight is not
      * an answer and must not be worded as one.
+     *
+     * [matchingDone] defaults to true, the state of every caller that is looking
+     * at an answer rather than a pass in progress. While it is false the hub is
+     * still matching, so the button says so ("Finding channel…") rather than
+     * claiming the game is not carried - the same honest loading state the card's
+     * own channel line shows, so a tap during the 40-60s load explains itself.
      */
-    fun watchLabel(hasChannel: Boolean, lineupMissing: Boolean = false): String = when {
+    fun watchLabel(
+        hasChannel: Boolean,
+        lineupMissing: Boolean = false,
+        matchingDone: Boolean = true
+    ): String = when {
         hasChannel -> "WATCH"
+        !matchingDone -> "Finding channel…"
         lineupMissing -> "Lineup not loaded"
         else -> "Not in your playlist"
     }

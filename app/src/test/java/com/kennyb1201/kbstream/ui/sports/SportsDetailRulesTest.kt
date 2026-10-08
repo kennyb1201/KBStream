@@ -155,6 +155,18 @@ class SportsDetailRulesTest {
     }
 
     @Test
+    fun `the watch label says it is looking while matching is still running`() {
+        // The 40-60s a large playlist takes must not read as a claimed no-match,
+        // so an in-flight pass (matchingDone = false) words the disabled button
+        // as a loading state. A matched game still watches straight away, and a
+        // settled pass keeps the two honest facts.
+        assertEquals("Finding channel…", SportsDetailRules.watchLabel(false, matchingDone = false))
+        assertEquals("WATCH", SportsDetailRules.watchLabel(true, matchingDone = false))
+        assertEquals("Not in your playlist", SportsDetailRules.watchLabel(false))
+        assertEquals("Lineup not loaded", SportsDetailRules.watchLabel(false, lineupMissing = true))
+    }
+
+    @Test
     fun `a hub with no lineup blames itself, not the game`() {
         // The same disabled button, a different fact: there was nothing to
         // compare against, so "not in your playlist" would be a claim the hub

@@ -121,7 +121,7 @@ class SportsGameDetailSheetContractTest {
         val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
         assertTrue(
             "the disabled label is the rules' own, told which of the two facts this is",
-            sheet.contains("SportsDetailRules.watchLabel(false, lineupMissing)")
+            sheet.contains("SportsDetailRules.watchLabel(false, lineupMissing, matchingDone)")
         )
         assertTrue(
             "the enabled label too",
@@ -183,8 +183,13 @@ class SportsGameDetailSheetContractTest {
     @Test
     fun `a hub with no lineup says so instead of accusing every game`() {
         assertTrue(
-            "the card's line has both sentences",
-            hub.contains("if (lineupMissing) \"Lineup not loaded\" else \"Not in your playlist\"")
+            "the card's line says it is still looking before it claims a no-match",
+            hub.contains("!matchingDone -> \"Finding channel…\"")
+        )
+        assertTrue(
+            "and then distinguishes the two settled facts",
+            hub.contains("lineupMissing -> \"Lineup not loaded\"") &&
+                hub.contains("else -> \"Not in your playlist\"")
         )
         assertTrue(
             "driven by the hub's own status rather than by the game",

@@ -200,6 +200,24 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     private val _matches = MutableStateFlow<Map<String, List<IptvChannel>>>(emptyMap())
     val matches: StateFlow<Map<String, List<IptvChannel>>> = _matches.asStateFlow()
 
+    /**
+     * Whether [resolveMatches] has finished its current pass.
+     *
+     * The whole reason this exists: matching reads the paged lineup, builds a
+     * guide index over five figures of channels and runs an EPG query, which on
+     * a large provider is 40-60 seconds. For all of that time every card's
+     * channel line used to read "Not in your playlist" - indistinguishable from
+     * a genuine no-match, and how a slow hub gets read as a broken one. While
+     * this is false the cards say they are still looking; only when it flips true
+     * may they claim a game is not carried.
+     *
+     * Set false at the top of every [resolveMatches] (so a `refresh()` or the
+     * live tick that re-runs matching starts looking again) and true on every way
+     * out of it, including the early returns.
+     */
+    private val _matchingDone = MutableStateFlow(false)
+    val matchingDone: StateFlow<Boolean> = _matchingDone.asStateFlow()
+
     private var refreshJob: Job? = null
 
     /**
@@ -225,6 +243,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
     /** The merged lineup, read once per hub visit (a paged 10k-row DB read). */
     private var playlistChannels: List<IptvChannel>? = null
+
+    /**
+     * The guide index built for [playlistChannels], kept for the ViewModel's
+     * lifetime.
+     *
+     * It depends only on the lineup and the guide URLs, neither of which changes
+     * while the hub is open, so rebuilding it on every live tick was pure cost:
+     * one query per channel per guide source, over five figures of channels,
+     * repeated every 30 seconds for the tab that is in play. Held alongside the
+     * cached lineup and dropped with it when the lineup is re-read.
+     */
+    private var guideIndexCache: Map<String, IptvChannel>? = null
 
     init {
         refresh()
@@ -284,6 +314,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun retryLineup() {
         playlistChannels = null
+        guideIndexCache = null
         refresh()
     }
 
@@ -491,13 +522,22 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * no playable channel is still a useful hub.
      */
     private suspend fun resolveMatches(sections: List<LeagueSection>) {
+        // Every pass starts by saying it is looking: the cards read "Finding
+        // channel…" until the end of this function, which is what stops the
+        // 40-60s match from looking exactly like a slate the playlist does not
+        // carry. Set false here so a `refresh()` - or the live tick - that
+        // re-runs matching starts the loading state over.
+        _matchingDone.value = false
         val games = sections.flatMap { it.games }
         val events = sections.flatMap { it.tournaments }
         if (games.isEmpty() && events.isEmpty()) {
             _matches.value = emptyMap()
+            _matchingDone.value = true
             return
         }
+        val channelsStarted = System.currentTimeMillis()
         val channels = channelsOrEmpty()
+        val channelsMs = System.currentTimeMillis() - channelsStarted
         if (channels.isEmpty()) {
             // The same line shape as the one below, so a logcat grep for
             // `SPORTS DIAG` answers "is the lineup even loaded?" first: a zero
@@ -506,6 +546,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             Log.w(TAG, "SPORTS DIAG channels=0 guideIndex=0 programs=0")
             _lineupStatus.value = LineupStatus.MISSING
             _matches.value = emptyMap()
+            _matchingDone.value = true
             return
         }
         _lineupStatus.value = LineupStatus.READY
@@ -514,13 +555,16 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // figures - enough that doing it in the composition's own dispatcher
         // would be a visible frame hit on the leagues a viewer actually has.
         val matches = withContext(Dispatchers.Default) {
-            val guideIndex = runCatchingCancellable { guideChannelIndex(channels) }
-                .getOrDefault(emptyMap())
+            val guideStarted = System.currentTimeMillis()
+            val guideIndex = cachedGuideIndex(channels)
+            val guideMs = System.currentTimeMillis() - guideStarted
+            val epgStarted = System.currentTimeMillis()
             val programs = if (guideIndex.isEmpty()) {
                 emptyList()
             } else {
                 runCatchingCancellable { epgCandidates(games, guideIndex) }.getOrDefault(emptyList())
             }
+            val epgMs = System.currentTimeMillis() - epgStarted
             // One greppable line, and the three counts say which stage came back
             // empty without a debugger: channels=N guideIndex=0 is a lineup with
             // no EPG URLs, channels=N guideIndex=M programs=0 is a guide with
@@ -531,6 +575,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 "SPORTS DIAG channels=${channels.size} guideIndex=${guideIndex.size} " +
                     "programs=${programs.size}"
             )
+            val matchStarted = System.currentTimeMillis()
             val found = HashMap<String, List<IptvChannel>>()
             games.forEach { game ->
                 // Verbose, with the feed's own broadcast names beside the id:
@@ -547,6 +592,15 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     .takeIf { it.isNotEmpty() }
                     ?.let { found[event.id] = it }
             }
+            // Per-stage timing, at debug, in the order the stages run: which of
+            // the four is the slow one is a grep rather than a guess. The guide
+            // number is ~0 on every pass after the first, which is the cached
+            // index doing its job.
+            Log.d(
+                TAG,
+                "SPORTS TIMING channels=${channelsMs}ms guide=${guideMs}ms epg=${epgMs}ms " +
+                    "match=${System.currentTimeMillis() - matchStarted}ms"
+            )
             Log.d(
                 TAG,
                 "SPORTS MATCHES cards=${games.size + events.size} matched=${found.size} " +
@@ -555,6 +609,26 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             found
         }
         _matches.value = matches
+        _matchingDone.value = true
+    }
+
+    /**
+     * The guide index, built once per lineup and reused for the ViewModel's
+     * life.
+     *
+     * See [guideIndexCache]: the index is a pure function of the lineup and the
+     * guide URLs, both fixed while the hub is open, so the live tick (every 30
+     * seconds, same lineup) reuses the first build instead of walking five
+     * figures of channels again. An empty build is deliberately not cached - a
+     * lineup with no guide URL yet, or a read that failed, is worth retrying on
+     * the next pass - and [retryLineup] drops the cache with the lineup.
+     */
+    private suspend fun cachedGuideIndex(channels: List<IptvChannel>): Map<String, IptvChannel> {
+        guideIndexCache?.let { return it }
+        val built = runCatchingCancellable { guideChannelIndex(channels) }
+            .getOrDefault(emptyMap())
+        if (built.isNotEmpty()) guideIndexCache = built
+        return built
     }
 
     /**
