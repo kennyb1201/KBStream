@@ -1,6 +1,10 @@
 package com.kennyb1201.kbstream.ui.home
 
+import com.kennyb1201.kbstream.data.kb.KBHomeOrder
 import com.kennyb1201.kbstream.data.kb.KBHomeOrderPrefs
+import com.kennyb1201.kbstream.data.kb.mergedHomeRailKeys
+import com.kennyb1201.kbstream.data.kb.moveRailInMergedOrder
+import com.kennyb1201.kbstream.data.kb.railMoveChangesOrder
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import java.io.File
 import java.time.LocalDate
@@ -155,6 +159,132 @@ class KidsNewRailsContractTest {
         assertTrue(home.contains("if (filtered.isEmpty()) return@async null"))
     }
 
+    // ------------------------------------------------- rename / move / hide --
+
+    /**
+     * The list the manager builds for a kids profile, and the one the move core
+     * walks: the existing pair first, then the two new rows, then whatever else
+     * the profile has arranged (a browse rail, a catalog and a collection here) -
+     * the new rows are not the last rails on the screen, and the last one has to
+     * be able to move DOWN, not only within its own block.
+     */
+    private val kidsDefaults =
+        KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7) +
+            listOf("browse:1", "addon:a", "kb:c")
+
+    private val newMovies = KBHomeOrderPrefs.BUILTIN_NEW_KIDS_MOVIES
+    private val newShows = KBHomeOrderPrefs.BUILTIN_NEW_KIDS_SHOWS
+
+    @Test
+    fun `both new rails can be renamed, and fall back to their own name`() {
+        val renamed = KBHomeOrderPrefs.withRename(
+            KBHomeOrderPrefs.withRename(KBHomeOrder(), newMovies, "Fresh for the Kids"),
+            newShows,
+            "New Cartoons"
+        )
+
+        assertEquals(
+            "Fresh for the Kids",
+            KBHomeOrderPrefs.railTitle(renamed, newMovies, "New Kids Movies")
+        )
+        assertEquals(
+            "New Cartoons",
+            KBHomeOrderPrefs.railTitle(renamed, newShows, "New Kids Shows")
+        )
+        // The default a rename falls back to is the rail's own name - the same
+        // string the loader builds it with - and an override on one row never
+        // leaks into another.
+        assertEquals("New Kids Movies", KBHomeOrderPrefs.builtinDefaultTitle(newMovies))
+        assertEquals("New Kids Shows", KBHomeOrderPrefs.builtinDefaultTitle(newShows))
+        assertEquals(
+            "an unrelated row keeps its default",
+            "Top Kids Movies",
+            KBHomeOrderPrefs.railTitle(renamed, KBHomeOrderPrefs.BUILTIN_TOP_KIDS_MOVIES, "Top Kids Movies")
+        )
+    }
+
+    @Test
+    fun `a blank name clears the override, as it does everywhere else`() {
+        val cleared = KBHomeOrderPrefs.withRename(
+            KBHomeOrderPrefs.withRename(KBHomeOrder(), newShows, "Cartoons"),
+            newShows,
+            "   "
+        )
+        assertTrue("a blank name must not be stored", cleared.renames.isEmpty())
+        assertEquals(
+            "New Kids Shows",
+            KBHomeOrderPrefs.railTitle(cleared, newShows, "New Kids Shows")
+        )
+    }
+
+    @Test
+    fun `the rename a new kids rail carries reaches the drawn rail`() {
+        // A rename is keyed by the ARRANGEMENT key, so it reaches a kids rail
+        // only if the rail's catalog id resolves to that key - the same join
+        // that is what makes it movable and hideable. Both halves are one line
+        // each and silently draw the default name if either is dropped.
+        assertEquals(newMovies, KBHomeOrderPrefs.builtinKeyForCatalogId("new_kids_movies"))
+        assertEquals(newShows, KBHomeOrderPrefs.builtinKeyForCatalogId("new_kids_shows"))
+
+        val slots = squash(source(SLOTS))
+        assertTrue(
+            "the merge must key an app-built rail by its catalog id",
+            slots.contains("KBHomeOrderPrefs.builtinKeyForCatalogId(rail.catalogId)")
+        )
+        assertTrue(
+            "and hand the arrangement's rename to the drawn rail",
+            slots.contains("titleOverride = renamedTitle(key)")
+        )
+    }
+
+    @Test
+    fun `both new rails move within the kids arrangement like the standing pair`() {
+        // A row is offered its arrows exactly when a press changes the order -
+        // the manager's enabled state comes from this same rule.
+        listOf(newMovies, newShows).forEach { key ->
+            assertTrue(
+                "UP on $key must do something",
+                railMoveChangesOrder(KBHomeOrder(), kidsDefaults, key, -1)
+            )
+            assertTrue(
+                "DOWN on $key must do something",
+                railMoveChangesOrder(KBHomeOrder(), kidsDefaults, key, +1)
+            )
+        }
+
+        // ...and the move lands one drawn slot up, exactly as the manager draws
+        // the list - the new rows interleave with the standing pair and with
+        // whatever follows them, not only within their own block.
+        val drawn = mergedHomeRailKeys(KBHomeOrder(), kidsDefaults)
+        val from = drawn.indexOf(newShows)
+        val expected = drawn.toMutableList().also { it.add(from - 1, it.removeAt(from)) }
+        assertEquals(
+            expected,
+            mergedHomeRailKeys(
+                moveRailInMergedOrder(KBHomeOrder(), kidsDefaults, newShows, -1),
+                kidsDefaults
+            )
+        )
+    }
+
+    @Test
+    fun `a new kids rail can be hidden and shown again at its own slot`() {
+        val drawn = mergedHomeRailKeys(KBHomeOrder(), kidsDefaults)
+
+        val hidden = KBHomeOrderPrefs.toggleBuiltinHidden(KBHomeOrder(), newMovies)
+        assertTrue("the flag marks it hidden", newMovies in hidden.hiddenSet)
+        // Hidden is a filter over the order, not a removal from it: the visible
+        // list drops the row, the stored order keeps its slot, and showing it
+        // again restores the layout untouched.
+        val visible = mergedHomeRailKeys(hidden, kidsDefaults).filter { it !in hidden.hiddenSet }
+        assertFalse(newMovies in visible)
+        assertTrue(newMovies in mergedHomeRailKeys(hidden, kidsDefaults))
+
+        val shown = KBHomeOrderPrefs.toggleBuiltinHidden(hidden, newMovies)
+        assertFalse(newMovies in shown.hiddenSet)
+        assertEquals(drawn, mergedHomeRailKeys(shown, kidsDefaults))
+    }
+
     @Test
     fun `the new rails are arrangeable built-ins, not add-on rails`() {
         // A rail keyed by an add-on URL is a rail no manifest describes: the
@@ -175,7 +305,9 @@ class KidsNewRailsContractTest {
                 KBHomeOrderPrefs.BUILTIN_TOP_KIDS_MOVIES,
                 KBHomeOrderPrefs.BUILTIN_TOP_KIDS_SHOWS,
                 KBHomeOrderPrefs.BUILTIN_NEW_KIDS_MOVIES,
-                KBHomeOrderPrefs.BUILTIN_NEW_KIDS_SHOWS
+                KBHomeOrderPrefs.BUILTIN_NEW_KIDS_SHOWS,
+                KBHomeOrderPrefs.BUILTIN_TRENDING_KIDS_MOVIES,
+                KBHomeOrderPrefs.BUILTIN_TRENDING_KIDS_SHOWS
             ),
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7)
                 .filter { it in KBHomeOrderPrefs.KIDS_BUILTIN_KEYS }
@@ -291,6 +423,7 @@ class KidsNewRailsContractTest {
 
     private companion object {
         const val HOME_VM = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
+        const val SLOTS = "com/kennyb1201/kbstream/ui/kb/KBHomeSlots.kt"
         const val TMDB_API = "com/kennyb1201/kbstream/data/tmdb/TmdbApiService.kt"
         const val TMDB_REPO = "com/kennyb1201/kbstream/data/tmdb/TmdbRepository.kt"
     }

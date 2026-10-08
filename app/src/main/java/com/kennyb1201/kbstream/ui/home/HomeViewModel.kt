@@ -7606,14 +7606,17 @@ private suspend fun calculateEpisodesRemaining(
 
 
     /**
-     * Kids-profile replacement for the pinned "Top ... Today" rails: four
+     * Kids-profile replacement for the pinned "Top ... Today" rails: six
      * hardcoded rails sourced from TMDB discover — the two standing rows
      * ("Top Kids Movies" / "Top Kids Shows": popular family + animation,
-     * certified-release floor) and, after them, two recency rows ("New Kids
-     * Movies" / "New Kids Shows": the same genre sets and age ceiling over a
-     * rolling ninety-day release window — see [KidsNewRailRules]) so kids get
-     * a real, always-populated version of the rows the main profile sees, and
-     * something actually new in it. Every item still runs through the ceiling
+     * certified-release floor), then two recency rows ("New Kids Movies" /
+     * "New Kids Shows": the same genre sets and age ceiling over a rolling
+     * ninety-day release window — see [KidsNewRailRules]), then two trending
+     * rows ("Trending Kids Movies" / "Trending Kids Shows": the same genres
+     * and ceiling, sorted by popularity over a wider window — see
+     * [KidsTrendingRailRules]) so kids get a real, always-populated version of
+     * the rows the main profile sees, something actually new in it, and what
+     * is popular in it right now. Every item still runs through the ceiling
      * filter (TMDB certification check) before it lands on the rail.
      */
     private suspend fun loadPinnedKidsRails(
@@ -7621,11 +7624,12 @@ private suspend fun calculateEpisodesRemaining(
         hideUpcoming: Boolean,
         landscapeCards: Boolean
     ) {
-        // The four queries this profile draws where the Top Today rows would
+        // The six queries this profile draws where the Top Today rows would
         // be: the two standing popularity rows, then the two recency rows
-        // (see [KidsNewRailRules] for what makes those "new"). Only the query
-        // differs between them — the TMDB mapping, the digital-release/ceiling
-        // pipeline and the Rail build below are one block for all four.
+        // (see [KidsNewRailRules] for what makes those "new"), then the two
+        // trending rows (see [KidsTrendingRailRules]). Only the query differs
+        // between them — the TMDB mapping, the digital-release/ceiling
+        // pipeline and the Rail build below are one block for all six.
         val queries = listOf(
             KidsRailQuery(
                 mediaType = "movie",
@@ -7652,7 +7656,8 @@ private suspend fun calculateEpisodesRemaining(
                     releaseDateGte = "1970-01-01"
                 )
             )
-        ) + KidsNewRailRules.queries(LocalDate.now())
+        ) + KidsNewRailRules.queries(LocalDate.now()) +
+            KidsTrendingRailRules.queries(LocalDate.now())
 
         coroutineScope {
             queries.map { query ->

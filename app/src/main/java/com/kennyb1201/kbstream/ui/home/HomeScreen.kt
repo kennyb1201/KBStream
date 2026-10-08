@@ -75,6 +75,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
@@ -610,6 +611,15 @@ private fun HeroInlineTrailerPlayer(
     // back the same instance across focus changes and this composable only
     // swaps the MediaSource. (remember(source) used to rebuild the whole
     // player on every resolved-source change.)
+    // The owner the autoplay gate below reads. On a TV the app is frequently
+    // only PAUSED behind the launcher rather than stopped, and the trailer
+    // resolve is a network call that can outlive the Home press - so a trailer
+    // that mounts AFTER the ON_PAUSE below already fired would otherwise start
+    // playing over the launcher. The mount therefore decides whether to
+    // autoplay from the owner's CURRENT state, not from an event it may have
+    // missed (see the ON_PAUSE effect further down).
+    val lifecycleOwner = LocalLifecycleOwner.current
+
     val exoPlayer = remember {
         TrailerPlayerPool.acquire {
             val renderersFactory =
@@ -688,7 +698,11 @@ private fun HeroInlineTrailerPlayer(
 
         exoPlayer.repeatMode = Player.REPEAT_MODE_OFF
         exoPlayer.volume = if (muted) 0f else 1f
-        exoPlayer.playWhenReady = true
+        // Only autoplay while the owner is still started: mounting into a
+        // paused/stopped app (the resolve finished behind the launcher) leaves
+        // the pool silent until HomeHero's resume epoch re-resolves it.
+        exoPlayer.playWhenReady =
+            lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
         exoPlayer.prepare()
 
         // Resume point for the post-failure retry. After prepare(), so the seek
@@ -714,12 +728,14 @@ private fun HeroInlineTrailerPlayer(
         onDispose { }
     }
 
-    // Backgrounding the app (TV Home press, input switch) STOPS the activity
-    // but does not dispose the composition, so the DisposableEffect cleanups
-    // above never run and the trailer audio keeps playing over other apps.
-    // Pause the pooled player on ON_STOP; the resume epoch in HomeHero
-    // re-resolves and re-preps it when the app returns.
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+    // Backgrounding the app (TV Home press, input switch) does not dispose the
+    // composition, so the DisposableEffect cleanups above never run and the
+    // trailer audio keeps playing over other apps. PAUSE - not STOP - is what
+    // is handled: Fire OS often leaves the app merely paused behind its
+    // launcher (no stop at all), and ON_PAUSE precedes ON_STOP wherever the
+    // activity really does stop, so one handler covers both. The resume epoch
+    // in HomeHero re-resolves and re-preps it when the app returns.
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) {
         TrailerPlayerPool.pauseCurrent()
     }
 
@@ -1051,12 +1067,15 @@ private fun HomeHero(
     // loop resolve → mount → 403 forever.
     var trailerAttempt by remember(trailerKey) { mutableStateOf(0) }
 
-    // Re-arm the trailer when the app returns to the foreground: ON_STOP
-    // released the player (audio-leak fix), so bump the epoch to drop the
-    // stale source and re-resolve instead of leaving a released/blank player.
+    // Re-arm the trailer when the app returns to the foreground: ON_PAUSE
+    // silenced the player (audio-leak fix), so bump the epoch to drop the
+    // stale source and re-resolve instead of leaving a paused/blank player.
+    // ON_PAUSE, not ON_STOP: Fire OS often only PAUSES the app behind its
+    // launcher, and a trailer paused in that window has to be re-armed too -
+    // ON_STOP would leave it frozen on the first frame.
     var appInBackground by remember { mutableStateOf(false) }
     var resumeEpoch by remember { mutableStateOf(0) }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { appInBackground = true }
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { appInBackground = true }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         if (appInBackground) {
             appInBackground = false

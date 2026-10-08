@@ -431,10 +431,11 @@ object KBHomeOrderPrefs {
     )
 
     /**
-     * The rails a KIDS profile draws where the Top Today rows would be: four
+     * The rails a KIDS profile draws where the Top Today rows would be: the
      * ceiling-filtered TMDB rows built by `loadPinnedKidsRails` - the two
-     * standing "Top Kids" rows, then the two recency rows this app added
-     * beside them ("New Kids Movies" / "New Kids Shows").
+     * standing "Top Kids" rows, then the two recency rows ("New Kids Movies" /
+     * "New Kids Shows") and the two popularity rows ("Trending Kids Movies" /
+     * "Trending Kids Shows") this app added beside them.
      *
      * They are built-in rails rather than add-on rails because that is what
      * makes them arrangeable and renamable: a rail keyed by an addon URL is a
@@ -442,13 +443,15 @@ object KBHomeOrderPrefs {
      * (see [builtinKeyForCatalogId] and `KBHomeSlots.buildMergedEntries`).
      *
      * The order here is the order they are drawn in: the standing rows keep
-     * their slots, and the recency rows follow them.
+     * their slots, then the recency rows, then the trending rows.
      */
     val KIDS_BUILTIN_KEYS: List<String> = listOf(
         builtinKey(TOP_KIDS_MOVIES_KEY_ID),
         builtinKey(TOP_KIDS_SHOWS_KEY_ID),
         builtinKey(NEW_KIDS_MOVIES_KEY_ID),
-        builtinKey(NEW_KIDS_SHOWS_KEY_ID)
+        builtinKey(NEW_KIDS_SHOWS_KEY_ID),
+        builtinKey(TRENDING_KIDS_MOVIES_KEY_ID),
+        builtinKey(TRENDING_KIDS_SHOWS_KEY_ID)
     )
 
     /**
@@ -477,6 +480,8 @@ object KBHomeOrderPrefs {
     val BUILTIN_TOP_KIDS_SHOWS: String = KIDS_BUILTIN_KEYS[1]
     val BUILTIN_NEW_KIDS_MOVIES: String = KIDS_BUILTIN_KEYS[2]
     val BUILTIN_NEW_KIDS_SHOWS: String = KIDS_BUILTIN_KEYS[3]
+    val BUILTIN_TRENDING_KIDS_MOVIES: String = KIDS_BUILTIN_KEYS[4]
+    val BUILTIN_TRENDING_KIDS_SHOWS: String = KIDS_BUILTIN_KEYS[5]
     val BUILTIN_GUEST_LATEST_DIGITAL: String = GUEST_BUILTIN_KEYS[0]
     val BUILTIN_GUEST_AIRING_NOW: String = GUEST_BUILTIN_KEYS[1]
     val BUILTIN_GUEST_TRENDING_WEEK: String = GUEST_BUILTIN_KEYS[2]
@@ -557,6 +562,8 @@ object KBHomeOrderPrefs {
         BUILTIN_TOP_KIDS_SHOWS -> "Top Kids Shows"
         BUILTIN_NEW_KIDS_MOVIES -> "New Kids Movies"
         BUILTIN_NEW_KIDS_SHOWS -> "New Kids Shows"
+        BUILTIN_TRENDING_KIDS_MOVIES -> "Trending Kids Movies"
+        BUILTIN_TRENDING_KIDS_SHOWS -> "Trending Kids Shows"
         BUILTIN_GUEST_LATEST_DIGITAL -> "Latest Digital Releases"
         BUILTIN_GUEST_AIRING_NOW -> "Airing Now"
         BUILTIN_GUEST_TRENDING_WEEK -> "Trending This Week"
@@ -653,6 +660,14 @@ object KBHomeOrderPrefs {
     private const val NEW_KIDS_SHOWS_KEY_ID = "new_kids_shows"
 
     /**
+     * Catalog ids of the two "trending kids" rows, which follow the new pair.
+     * Stable on purpose: they are the arrangement keys of rows this app fetches
+     * and names itself (see [builtinKeyForCatalogId]).
+     */
+    private const val TRENDING_KIDS_MOVIES_KEY_ID = "trending_kids_movies"
+    private const val TRENDING_KIDS_SHOWS_KEY_ID = "trending_kids_shows"
+
+    /**
      * Catalog ids of the guest rails (see `loadPinnedGuestRails`), in the order
      * that loader builds them.
      */
@@ -683,6 +698,8 @@ object KBHomeOrderPrefs {
         TOP_KIDS_SHOWS_KEY_ID -> BUILTIN_TOP_KIDS_SHOWS
         NEW_KIDS_MOVIES_KEY_ID -> BUILTIN_NEW_KIDS_MOVIES
         NEW_KIDS_SHOWS_KEY_ID -> BUILTIN_NEW_KIDS_SHOWS
+        TRENDING_KIDS_MOVIES_KEY_ID -> BUILTIN_TRENDING_KIDS_MOVIES
+        TRENDING_KIDS_SHOWS_KEY_ID -> BUILTIN_TRENDING_KIDS_SHOWS
         GUEST_LATEST_DIGITAL_KEY_ID -> BUILTIN_GUEST_LATEST_DIGITAL
         GUEST_AIRING_NOW_KEY_ID -> BUILTIN_GUEST_AIRING_NOW
         GUEST_TRENDING_WEEK_KEY_ID -> BUILTIN_GUEST_TRENDING_WEEK
