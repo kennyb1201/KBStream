@@ -17,6 +17,40 @@ import kotlinx.serialization.json.putJsonObject
  * pushes and pulls would cross profiles (the "kb leak"). With no profiles
  * this resolves to the legacy un-namespaced store, unchanged behavior.
  */
+/**
+ * The IPTV config the ACTIVE profile holds, as one comparable string.
+ *
+ * Everything the payload carries is in it, so a change to ANY of it (a new
+ * playlist, a hidden group, a favorite) is an edit and stamps the config's
+ * `iptv_config_edited_at`. Read in both directions: the builder compares it to
+ * the last one it stored to detect an edit, and the applier stores what it just
+ * adopted so an adoption is never mistaken for one. File-level because both
+ * halves of the sync layer — the builder and the applier — need the SAME
+ * normalisation, and two copies would drift. (See [IptvConfigRules].)
+ */
+private fun iptvSignature(context: Context): String {
+    fun normalised(raw: String?): String =
+        raw.orEmpty().split('\n', ';')
+            .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+            .joinToString(",")
+
+    val prefs = scopedPrefs(context, "iptv_prefs")
+    val guidePrefs = scopedPrefs(context, "iptv_guide_preferences")
+    return listOf(
+        normalised(prefs.getString("playlist_url", null)),
+        prefs.getString("playlist_name", null).orEmpty().trim(),
+        prefs.getString("epg_url", null).orEmpty().trim(),
+        normalised(prefs.getString("extra_epg_urls", null)),
+        normalised(prefs.getString("extra_playlist_urls", null)),
+        prefs.getStringSet("hidden_channel_ids", emptySet()).orEmpty().sorted()
+            .joinToString(","),
+        guidePrefs.getStringSet("hidden_groups", emptySet()).orEmpty().sorted()
+            .joinToString(","),
+        guidePrefs.getStringSet("favorites", emptySet()).orEmpty().sorted()
+            .joinToString(",")
+    ).joinToString("\u0001")
+}
+
 private fun scopedPrefs(context: Context, baseName: String) =
     context.getSharedPreferences(
         com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(context, baseName),
@@ -59,6 +93,15 @@ private const val DISPLAY_PREFS_STORE = "kbstream_player_prefs"
 private const val DISPLAY_SNAPSHOT_KEY = "__sync_snapshot__"
 private const val DISPLAY_TS_PREFIX = "__sync_ts__"
 private const val DISPLAY_SYNCED_AT_KEY = "display_prefs_synced_at"
+
+// IPTV config bookkeeping, all local to the profile's own "iptv_prefs" store.
+// `IPTV_EDITED_AT_KEY` is when the config last CHANGED here (what the blob
+// publishes, see IptvConfigRules), `IPTV_SNAPSHOT_KEY` is the config the build
+// last saw (how an edit is told from a mere rebuild, and from an adoption), and
+// `IPTV_SYNCED_AT_KEY` is the cloud copy's stamp this device last adopted.
+private const val IPTV_EDITED_AT_KEY = "iptv_config_edited_at"
+private const val IPTV_SNAPSHOT_KEY = "__iptv_config_snapshot__"
+private const val IPTV_SYNCED_AT_KEY = "iptv_synced_at"
 
 /**
  * Canonical string for a stored pref value. Matches the JSON primitive the
@@ -162,9 +205,12 @@ object PrefsPayloadBuilder {
         "accent_index",                      // global theme accent (index into the palette)
         "custom_accent_color",               // ...and the viewer's own colour for that accent
         // The MDBList / OpenSubtitles / TorBox API keys are deliberately NOT
-        // here: each is a live bearer credential, and a synced pref travels as
-        // plaintext in the cloud table. They live in the encrypted
-        // SecureTokenStore instead (see AppPreferences.apiKeyPrefs).
+        // here: each is a live bearer credential, so it stays in the encrypted
+        // SecureTokenStore rather than in this plaintext display-pref file (see
+        // AppPreferences.apiKeyPrefs). They sync as their own blob instead
+        // ([KEY_API_KEYS]), the way the Simkl session does — same cloud trust,
+        // encrypted at rest, and with per-key edit stamps so an empty-handed
+        // device cannot blank the account's keys.
         "torbox_library_sync",               // add TorBox cloud files to the Library: a library preference
         "default_subtitle_size",             // subtitle appearance: same on every device
         "default_subtitle_bg",
@@ -213,6 +259,19 @@ object PrefsPayloadBuilder {
     const val KEY_ADDONS = "addons"
     const val KEY_SIMKL_AUTH = "simkl_auth"
     const val KEY_IPTV = "iptv_config"
+
+    /**
+     * The addon service credentials: TorBox, OpenSubtitles, MDBList.
+     *
+     * A credential rather than a display pref, so it is its own row (the same
+     * shape the Simkl session uses) with per-key edit times — see
+     * [com.kennyb1201.kbstream.data.sync.ApiKeySyncRules] for the merge and
+     * [com.kennyb1201.kbstream.data.settings.AppPreferences.SYNCED_API_KEYS] for
+     * what travels. The values stay encrypted at rest on each device
+     * ([com.kennyb1201.kbstream.data.security.SecureTokenStore]); the account
+     * copy is the same trust level the Simkl access token already has.
+     */
+    const val KEY_API_KEYS = "api_keys"
     const val KEY_WATCHED_OVERRIDES = "watched_overrides"
     const val KEY_HOME_ORDER = "kb_home_order"
     const val KEY_BROWSE_SHORTCUTS = "kb_browse_shortcuts"
@@ -230,6 +289,9 @@ object PrefsPayloadBuilder {
         // SupabaseSync.pushPrefsBlobs) — an empty Simkl blob published by a
         // device that never connected erases the account's session elsewhere.
         KEY_SIMKL_AUTH to buildSimklAuth(context),
+        // Same rule as the Simkl blob: a device with no key of its own must not
+        // publish its blanks (see SupabaseSync.pushPrefsBlobs).
+        KEY_API_KEYS to buildApiKeys(context),
         KEY_IPTV to buildIptv(context),
         KEY_WATCHED_OVERRIDES to buildWatchedOverrides(context),
         KEY_HOME_ORDER to buildHomeOrder(context),
@@ -536,15 +598,97 @@ object PrefsPayloadBuilder {
         }
     }
 
+    /**
+     * The service credentials this device holds an opinion about, each with the
+     * time it was last edited here.
+     *
+     * Only keys with a local edit stamp are published. A key with a VALUE but no
+     * stamp is stamped first — that is the device that pasted it before this
+     * blob existed (or had it migrated out of the old plaintext pref), and it is
+     * the device whose copy the others need. A key with neither is one this
+     * device has never had, so it has nothing to say and is left out entirely.
+     */
+    fun buildApiKeys(context: Context): JsonObject {
+        val now = System.currentTimeMillis()
+        val stamps = mutableMapOf<String, Long>()
+        val values = mutableMapOf<String, String>()
+        com.kennyb1201.kbstream.data.settings.AppPreferences.SYNCED_API_KEYS.forEach { key ->
+            val value = com.kennyb1201.kbstream.data.settings.AppPreferences
+                .storedApiKey(context, key)
+            var stamp = com.kennyb1201.kbstream.data.settings.AppPreferences
+                .apiKeyEditedAt(context, key)
+            if (stamp == 0L && value.isNotBlank()) {
+                com.kennyb1201.kbstream.data.settings.AppPreferences
+                    .stampApiKeyEdit(context, key, now)
+                stamp = now
+            }
+            if (stamp == 0L) return@forEach
+            stamps[key] = stamp
+            values[key] = value
+        }
+        return buildJsonObject {
+            put("updatedAt", ApiKeySyncRules.latestStamp(stamps.values))
+            putJsonObject(ApiKeySyncRules.KEYS_FIELD) {
+                values.forEach { (key, value) -> put(key, value) }
+            }
+            putJsonObject(ApiKeySyncRules.TIMESTAMPS_FIELD) {
+                stamps.forEach { (key, stamp) -> put(key, stamp) }
+            }
+        }
+    }
+
+    /**
+     * The newest LOCAL key edit, or 0 when this device has never edited one.
+     * The push gate compares it with the account copy this device adopted (see
+     * [ApiKeySyncRules.shouldPublish]): a device with no credential of its own,
+     * and a device that has just adopted the account's, both publish nothing —
+     * which is what keeps an empty-handed device from erasing the account's keys
+     * (the failure the Simkl session blob had) and what keeps an adoption from
+     * being echoed straight back.
+     */
+    fun apiKeysEditedAt(context: Context): Long =
+        ApiKeySyncRules.latestStamp(
+            com.kennyb1201.kbstream.data.settings.AppPreferences.SYNCED_API_KEYS.map { key ->
+                com.kennyb1201.kbstream.data.settings.AppPreferences.apiKeyEditedAt(context, key)
+            }
+        )
+
     fun buildIptv(context: Context): JsonObject {
         val prefs = scopedPrefs(context, "iptv_prefs")
         // Guide-level sets live in their own scoped store and must ride the
         // same payload row — hidden channels/groups that don't cross devices
         // make one TV's guide diverge from the other's.
         val guidePrefs = scopedPrefs(context, "iptv_guide_preferences")
+        val playlistUrl = prefs.getString("playlist_url", null).orEmpty()
+        val extraPlaylistUrls = prefs.getString("extra_playlist_urls", "").orEmpty()
+            .split('\n', ';')
+            .mapNotNull { it.trim().takeIf(String::isNotBlank) }
+        // The published stamp is the config's OWN last change, never the push's
+        // (see [IptvConfigRules]): this blob is FULL REPLACE, and stamping `now`
+        // here let any device whose profile had no playlist configured re-stamp
+        // its EMPTY config on every sign-in / Sync now and win the cloud race
+        // against the sibling that had one — the "the guest profile's IPTV
+        // didn't sync, every other profile does" report, since a guest profile
+        // is exactly the one a second device has nothing set up for. The change
+        // tracker below is what tells an edit from a mere rebuild.
+        val signature = iptvSignature(context)
+        val previous = prefs.getString(IPTV_SNAPSHOT_KEY, null)
+        if (
+            IptvConfigRules.shouldStampEdit(
+                previous,
+                signature,
+                IptvConfigRules.looksConfigured(playlistUrl, extraPlaylistUrls)
+            )
+        ) {
+            prefs.edit().putLong(IPTV_EDITED_AT_KEY, System.currentTimeMillis()).apply()
+        }
+        if (previous != signature) {
+            prefs.edit().putString(IPTV_SNAPSHOT_KEY, signature).apply()
+        }
+        val editedAt = prefs.getLong(IPTV_EDITED_AT_KEY, 0L)
         return buildJsonObject {
-            put("updatedAt", System.currentTimeMillis())
-            put("playlist_url", prefs.getString("playlist_url", null).orEmpty())
+            put("updatedAt", IptvConfigRules.publishStamp(editedAt))
+            put("playlist_url", playlistUrl)
             put("playlist_name", prefs.getString("playlist_name", null).orEmpty())
             put("epg_url", prefs.getString("epg_url", null).orEmpty())
             putJsonArray("extra_epg_urls") {
@@ -554,10 +698,7 @@ object PrefsPayloadBuilder {
                     .forEach { add(it) }
             }
             putJsonArray("extra_playlist_urls") {
-                prefs.getString("extra_playlist_urls", "").orEmpty()
-                    .split('\n', ';')
-                    .mapNotNull { it.trim().takeIf(String::isNotBlank) }
-                    .forEach { add(it) }
+                extraPlaylistUrls.forEach { add(it) }
             }
             putJsonArray("hidden_channel_ids") {
                 prefs.getStringSet("hidden_channel_ids", emptySet()).orEmpty().forEach { add(it) }
@@ -570,6 +711,17 @@ object PrefsPayloadBuilder {
             }
         }
     }
+
+    /**
+     * The IPTV config's own last-change time on this device, and the cloud
+     * copy's stamp this device last adopted. The push gate compares the two
+     * (see [IptvConfigRules.shouldPublish]).
+     */
+    fun iptvEditedAt(context: Context): Long =
+        scopedPrefs(context, "iptv_prefs").getLong(IPTV_EDITED_AT_KEY, 0L)
+
+    fun iptvCloudAt(context: Context): Long =
+        scopedPrefs(context, "iptv_prefs").getLong(IPTV_SYNCED_AT_KEY, 0L)
 
     fun buildWatchedOverrides(context: Context): JsonObject =
         buildJsonObject {
@@ -671,6 +823,7 @@ object PrefsPayloadApplier {
             PrefsPayloadBuilder.KEY_DISPLAY_PREFS -> applyDisplayPrefs(context, payload)
             PrefsPayloadBuilder.KEY_ADDONS -> applyAddons(context, payload)
             PrefsPayloadBuilder.KEY_SIMKL_AUTH -> applySimklAuth(context, payload)
+            PrefsPayloadBuilder.KEY_API_KEYS -> applyApiKeys(context, payload)
             PrefsPayloadBuilder.KEY_IPTV -> applyIptv(context, payload)
             PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES -> applyWatchedOverrides(context, payload)
             PrefsPayloadBuilder.KEY_HOME_ORDER -> applyHomeOrder(context, payload)
@@ -1080,10 +1233,57 @@ object PrefsPayloadApplier {
         }
     }
 
+    /**
+     * Adopts the account's service credentials, one key at a time.
+     *
+     * Per key and by edit stamp, so a viewer who pasted the TorBox key on one TV
+     * and the MDBList key on the other keeps both, and so a deliberate clear
+     * (a blank with a newer stamp) still propagates. Only the keys the account
+     * copy carries are touched: a device's own key is never blanked by a blob
+     * that simply has no entry for it.
+     */
+    private fun applyApiKeys(context: Context, payload: JsonObject) {
+        val stamps = payload[ApiKeySyncRules.TIMESTAMPS_FIELD] as? JsonObject ?: return
+        val keys = payload[ApiKeySyncRules.KEYS_FIELD] as? JsonObject
+        var adopted = false
+        stamps.forEach { (name, stampValue) ->
+            // Allowlist, the same rule the display applier has: a blob written by
+            // a build that knows a key this one does not must not have it written
+            // into this device's store.
+            if (name !in com.kennyb1201.kbstream.data.settings.AppPreferences.SYNCED_API_KEYS) {
+                return@forEach
+            }
+            val remoteEditedAt = (stampValue as? kotlinx.serialization.json.JsonPrimitive)
+                ?.content?.toLongOrNull() ?: return@forEach
+            val localEditedAt = com.kennyb1201.kbstream.data.settings.AppPreferences
+                .apiKeyEditedAt(context, name)
+            if (!ApiKeySyncRules.remoteKeyWins(remoteEditedAt, localEditedAt)) return@forEach
+            val value = (keys?.get(name) as? kotlinx.serialization.json.JsonPrimitive)
+                ?.content.orEmpty()
+            com.kennyb1201.kbstream.data.settings.AppPreferences
+                .adoptApiKeyFromSync(context, name, value, remoteEditedAt)
+            adopted = true
+        }
+        if (adopted) {
+            com.kennyb1201.kbstream.data.settings.AppPreferences.markApiKeysAdopted(
+                context,
+                payloadUpdatedAt(payload) ?: System.currentTimeMillis()
+            )
+        }
+    }
+
     private fun applyIptv(context: Context, payload: JsonObject) {
         val prefs = scopedPrefs(context, "iptv_prefs")
         val remoteUpdated = payloadUpdatedAt(payload)
-        if (remoteUpdated != null && remoteUpdated < prefs.getLong("iptv_synced_at", 0L)) return
+        // A remote config wins only when its edit is strictly NEWER than this
+        // profile's own last edit here — not, as it used to be, when it beat
+        // `iptv_synced_at`: that key was stamped even when the apply wrote
+        // nothing, so an EMPTY blob from a device that had never configured
+        // IPTV both changed nothing locally and blocked the real config from
+        // ever landing on any device that pulled it (see [IptvConfigRules]).
+        if (!IptvConfigRules.shouldApply(remoteUpdated, prefs.getLong(IPTV_EDITED_AT_KEY, 0L))) {
+            return
+        }
 
         fun str(key: String): String =
             (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
@@ -1138,8 +1338,13 @@ object PrefsPayloadApplier {
             guideChanged = true
         }
         if (guideChanged) guideEditor.apply()
-        editor.putLong("iptv_synced_at", remoteUpdated ?: System.currentTimeMillis())
+        editor.putLong(IPTV_SYNCED_AT_KEY, remoteUpdated ?: System.currentTimeMillis())
         editor.apply()
+        // The adopted config is not a LOCAL edit: record what this device now
+        // holds, so the next build's change tracker does not read the adoption
+        // as a change of ours and echo the same config back with a new stamp
+        // (the same "adopt, do not echo" rule the addons blob follows).
+        prefs.edit().putString(IPTV_SNAPSHOT_KEY, iptvSignature(context)).apply()
 
         // Trigger IPTV reload if the source actually changed.
         if (playlistUrl.isNotBlank() && playlistUrl != prefs.getString("playlist_applied_url", null)) {

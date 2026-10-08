@@ -1167,3 +1167,134 @@ internal object HomeListBlobRules {
     fun shouldApply(remoteUpdated: Long?, localSyncedAt: Long): Boolean =
         remoteUpdated == null || remoteUpdated >= localSyncedAt
 }
+
+/**
+ * Publish/apply rules for the IPTV source config (`sync_prefs` key
+ * "iptv_config").
+ *
+ * The reported failure: "the guest profile's IPTV didn't sync, every other
+ * profile does". A guest profile is exactly the profile a second device has
+ * nothing set up for — and the IPTV blob was the last full-replace blob still
+ * publishing `updatedAt = now` from every bulk push, with no gate.
+ *
+ * Two things went wrong together, and neither is visible on the device that
+ * configured the playlist:
+ *  - the unconfigured device re-stamped its EMPTY config with a brand-new time
+ *    on every sign-in / Sync now, so its empty blob won last-write-wins in the
+ *    cloud and the configured sibling's real row was replaced by it — and it
+ *    re-won it on each of that device's pushes, because its own stamp was
+ *    always the newest,
+ *  - the applier stamped `iptv_synced_at` even when it applied nothing (a blank
+ *    playlist_url is skipped by design), so the empty blob also blocked the
+ *    real config from landing on any device that pulled it.
+ *
+ * Hence: the published stamp is the config's OWN last change (never the
+ * push's), a device with no edit of its own publishes nothing, and a pulled
+ * config has to be strictly newer than this device's own last edit to apply.
+ * A deliberate removal — clearing the playlist — IS an edit, so it still
+ * propagates; what can no longer propagate is an untouched device's emptiness.
+ */
+internal object IptvConfigRules {
+
+    /**
+     * Whether this device has an IPTV source at all: a playlist, or an extra
+     * one. Deliberately not the guide/EPG URL or the favorites — those are
+     * refinements of a source, and a device that only ever typed an EPG URL
+     * has no source to share.
+     */
+    fun looksConfigured(playlistUrl: String, extraPlaylistUrls: List<String>): Boolean =
+        playlistUrl.isNotBlank() || extraPlaylistUrls.any { it.isNotBlank() }
+
+    /**
+     * Whether a config write should claim a new edit timestamp.
+     *
+     * [previousSignature] is the config this device last OBSERVED (the tracker
+     * the applier refreshes on an adoption), and null means "first sight" - the
+     * first build after the upgrade, where only a config that looks deliberate
+     * may claim one. A later difference is a real change, because the only
+     * other writer is the applier, which sets the tracker to what it adopted.
+     */
+    fun shouldStampEdit(
+        previousSignature: String?,
+        signature: String,
+        configured: Boolean
+    ): Boolean {
+        if (previousSignature == signature) return false
+        if (previousSignature != null) return true
+        return configured
+    }
+
+    /**
+     * The `updatedAt` an IPTV blob publishes: the config's own edit time, and 0
+     * when this device has never changed its config. A never-edited device's
+     * blob is never published anyway (see [shouldPublish]), and 0 loses every
+     * last-write-wins comparison, so it could not blank a sibling's config even
+     * if a future caller published it.
+     */
+    fun publishStamp(editedAt: Long): Long = editedAt
+
+    /**
+     * Publish only when this device's config out-runs the cloud copy it last
+     * adopted. An untouched device has editedAt 0 and cloudEditedAt >= 0, so it
+     * publishes nothing: an empty config can no longer travel.
+     */
+    fun shouldPublish(localEditedAt: Long, cloudEditedAt: Long): Boolean =
+        localEditedAt > cloudEditedAt
+
+    /** A remote config wins only when its edit is strictly newer than ours. */
+    fun remoteConfigWins(remoteEditedAt: Long, localEditedAt: Long): Boolean =
+        remoteEditedAt > localEditedAt
+
+    /**
+     * Whether a pulled blob may be adopted.
+     *
+     * A blob with no stamp at all comes from a build that predates the stamp and
+     * is applied as it always was; otherwise the remote edit must be strictly
+     * newer than this profile's own last edit here. Deliberately NOT compared
+     * against `iptv_synced_at` the way it used to be: that key was stamped even
+     * when the apply wrote nothing, so an empty blob from another device could
+     * block the real config from ever landing (see this object's doc).
+     */
+    fun shouldApply(remoteUpdated: Long?, localEditedAt: Long): Boolean =
+        remoteUpdated == null || remoteConfigWins(remoteUpdated, localEditedAt)
+}
+
+/**
+ * Merge rules for the service-credential blob (`sync_prefs` key "api_keys"):
+ * the TorBox, OpenSubtitles and MDBList keys.
+ *
+ * Each one is an account-level credential the viewer pastes ONCE, and each is
+ * PER-KEY state, so the rules are the display-prefs ones lifted to credentials:
+ * a key travels with the time it was last edited, a device only publishes keys
+ * it has an opinion about, and a pulled key is adopted only when its edit is at
+ * least as new as this device's own.
+ *
+ * Why per key rather than one blob stamp: a viewer pastes the TorBox key on one
+ * TV and the MDBList key on the other, and a whole-blob last-write-wins would
+ * lose one of them. Why an edit stamp at all: the blanks are the dangerous
+ * part — a device that has never had a key pasted must not publish its empties
+ * over the account's copy (the failure mode the Simkl session blob had), while
+ * a deliberate CLEAR must still propagate, and only a stamp tells those two
+ * apart.
+ */
+internal object ApiKeySyncRules {
+
+    const val KEYS_FIELD = "keys"
+    const val TIMESTAMPS_FIELD = "timestamps"
+
+    /** The blob's own stamp: the newest local key edit, or 0 for "none". */
+    fun latestStamp(stamps: Collection<Long>): Long = stamps.maxOrNull() ?: 0L
+
+    /** Publish only when this device has an edit newer than the copy it adopted. */
+    fun shouldPublish(latestLocalEditAt: Long, cloudEditedAt: Long): Boolean =
+        latestLocalEditAt > cloudEditedAt
+
+    /**
+     * Whether a remote key may replace the local one. A device that never
+     * touched the key accepts anything (stamp 0); otherwise the remote edit must
+     * be at least as new, so two devices that paste the same key converge on one
+     * instead of trading writes forever.
+     */
+    fun remoteKeyWins(remoteEditedAt: Long, localEditedAt: Long): Boolean =
+        remoteEditedAt >= localEditedAt
+}

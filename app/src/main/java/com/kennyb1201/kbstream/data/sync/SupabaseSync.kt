@@ -1775,6 +1775,42 @@ object SupabaseSync {
                     return@forEach
                 }
             }
+            // IPTV source config: the same rule the Simkl session and the
+            // full-replace Home blobs get. This bulk push runs on every
+            // sign-in / Sync now, so a profile whose playlist is configured on a
+            // SIBLING device used to publish its empty config here, stamped with
+            // its own push time - which won last-write-wins in the cloud and
+            // replaced the configured device's row on every push, and whose
+            // `iptv_synced_at` on the receiving end then blocked the real config
+            // (the "the guest profile's IPTV didn't sync, every other profile
+            // does" report: a guest profile is exactly the one a second device
+            // has nothing set up for). Only a device whose config actually
+            // changed, and out-runs the cloud copy it adopted, publishes (see
+            // [IptvConfigRules]).
+            if (key == PrefsPayloadBuilder.KEY_IPTV &&
+                !IptvConfigRules.shouldPublish(
+                    PrefsPayloadBuilder.iptvEditedAt(context),
+                    PrefsPayloadBuilder.iptvCloudAt(context)
+                )
+            ) {
+                return@forEach
+            }
+            // Same rule for the service credentials (TorBox / OpenSubtitles /
+            // MDBList), which travel per key with their own edit times: publish
+            // when this device has an edit newer than the account copy it
+            // adopted. A device that never pasted a key, and one that has just
+            // adopted the account's, both publish nothing — so no device can
+            // blank the account's keys, and no adoption is echoed back (see
+            // [ApiKeySyncRules]).
+            if (key == PrefsPayloadBuilder.KEY_API_KEYS &&
+                !ApiKeySyncRules.shouldPublish(
+                    PrefsPayloadBuilder.apiKeysEditedAt(context),
+                    com.kennyb1201.kbstream.data.settings.AppPreferences
+                        .apiKeysCloudAt(context)
+                )
+            ) {
+                return@forEach
+            }
             // The home order is a full-replace blob too: a device that never
             // arranged a rail must not publish its empty arrangement, or one
             // untouched TV erases every sibling's rail order (the "the order

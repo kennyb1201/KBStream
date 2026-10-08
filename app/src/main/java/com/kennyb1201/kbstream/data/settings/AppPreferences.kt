@@ -97,6 +97,9 @@ object AppPreferences {
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_TORBOX_API_KEY = "torbox_api_key"
     private const val KEY_TORBOX_LIBRARY_SYNC = "torbox_library_sync"
+    // The account-copy stamp of the synced service credentials (see
+    // SYNCED_API_KEYS), kept beside them in the encrypted, profile-scoped store.
+    private const val KEY_API_KEYS_SYNCED_AT = "__api_keys_synced_at__"
     private const val KEY_AUTO_FETCH_SUBTITLES = "auto_fetch_subtitles"
     // Spoiler-free browsing: an episode the viewer has not started is listed
     // without its own title, still or synopsis (see data/spoiler/SpoilerFree).
@@ -1303,14 +1306,106 @@ object AppPreferences {
     /**
      * Moves a key out of the old plaintext pref file and into [apiKeyPrefs], the
      * first time a getter runs after the upgrade. The plaintext copy is dropped
-     * either way, so no credential is left in the clear or in the cloud blob.
+     * either way, so no credential is left in the clear.
      */
     private fun migrateApiKey(context: Context, keyName: String): String {
         val legacy = prefs(context).getString(keyName, "")?.trim().orEmpty()
         if (legacy.isBlank()) return ""
         apiKeyPrefs(context).edit().putString(keyName, legacy).apply()
         prefs(context).edit().remove(keyName).apply()
+        // A migrated key is a real credential this device holds: stamp it, so
+        // the sync blob can carry it to the account's other devices instead of
+        // treating it as something this device never touched (see
+        // [SYNCED_API_KEYS]).
+        stampApiKeyEdit(context, keyName, System.currentTimeMillis())
         return legacy
+    }
+
+    // ── Service credentials that travel with the account ──────────────
+    //
+    // TorBox / OpenSubtitles / MDBList keys, which used to be plaintext synced
+    // prefs and became device-local when they moved into the encrypted store.
+    // Device-local was too strong: each of them is an account-level credential
+    // the viewer pastes ONCE, and having to paste it again on the second TV -
+    // for every profile - is the "the API keys don't sync" report. They now
+    // ride the account's sync rows as their own blob (see
+    // com.kennyb1201.kbstream.data.sync.SyncPrefsPayload.KEY_API_KEYS), exactly
+    // as the Simkl session does, while staying encrypted at rest here.
+
+    /** The credentials the sync blob carries. Names are wire format. */
+    val SYNCED_API_KEYS: List<String> = listOf(
+        KEY_TORBOX_API_KEY,
+        KEY_OPENSUBTITLES_API_KEY,
+        KEY_MDBLIST_API_KEY
+    )
+
+    private fun apiKeySyncStampKey(keyName: String) = "__sync_ts__$keyName"
+
+    /**
+     * When [keyName] was last edited ON THIS DEVICE (a paste, a clear, or the
+     * legacy migration), or 0 when this device never touched it.
+     *
+     * The stamp, not the value, is what decides the merge: a key this device
+     * never edited has no opinion about it, and must not overwrite the account's
+     * copy with the blank it holds.
+     */
+    fun apiKeyEditedAt(context: Context, keyName: String): Long =
+        apiKeyPrefs(context).getLong(apiKeySyncStampKey(keyName), 0L)
+
+    /** Records a local edit of [keyName]. */
+    fun stampApiKeyEdit(context: Context, keyName: String, at: Long) {
+        apiKeyPrefs(context).edit().putLong(apiKeySyncStampKey(keyName), at).apply()
+    }
+
+    /**
+     * Publishes the credentials blob now that a key changed, so the other
+     * devices get it without waiting for the next bulk push. Signed out (or
+     * before the app context is bound) it is a no-op — the bulk push covers it.
+     */
+    private fun pushApiKeysBlob() {
+        com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->
+            com.kennyb1201.kbstream.data.sync.SupabaseSync.enqueuePrefs(
+                appContext,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.KEY_API_KEYS,
+                com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildApiKeys(appContext)
+            )
+        }
+    }
+
+    /**
+     * The stored value of [keyName] alone: no build-time fallback (a shipped
+     * default is not the viewer's credential and must not travel), and a legacy
+     * plaintext key is migrated into the encrypted store first.
+     */
+    fun storedApiKey(context: Context, keyName: String): String {
+        val stored = apiKeyPrefs(context).getString(keyName, "")?.trim().orEmpty()
+        if (stored.isNotBlank()) return stored
+        return migrateApiKey(context, keyName)
+    }
+
+    /**
+     * Adopts one key from the account copy: writes the value AND its edit stamp
+     * as the remote sent them, so the pull is never mistaken for a local edit
+     * (the same "adopt, do not echo" rule the other blobs follow).
+     */
+    fun adoptApiKeyFromSync(context: Context, keyName: String, value: String, editedAt: Long) {
+        apiKeyPrefs(context).edit()
+            .putString(keyName, value.trim())
+            .putLong(apiKeySyncStampKey(keyName), editedAt)
+            .apply()
+        // Never leave a plaintext copy behind (a remote clear included).
+        prefs(context).edit().remove(keyName).apply()
+    }
+
+    /**
+     * The stamp of the account copy this device last adopted, for the push gate
+     * (see com.kennyb1201.kbstream.data.sync.ApiKeySyncRules.shouldPublish).
+     */
+    fun apiKeysCloudAt(context: Context): Long =
+        apiKeyPrefs(context).getLong(KEY_API_KEYS_SYNCED_AT, 0L)
+
+    fun markApiKeysAdopted(context: Context, at: Long) {
+        apiKeyPrefs(context).edit().putLong(KEY_API_KEYS_SYNCED_AT, at).apply()
     }
 
     // ── MDBList API key (critic ratings: IMDb / RT / Metacritic / more) ─
@@ -1339,6 +1434,8 @@ object AppPreferences {
         apiKeyPrefs(context).edit().putString(KEY_MDBLIST_API_KEY, key.trim()).apply()
         // Never leave a plaintext copy behind.
         prefs(context).edit().remove(KEY_MDBLIST_API_KEY).apply()
+        stampApiKeyEdit(context, KEY_MDBLIST_API_KEY, System.currentTimeMillis())
+        pushApiKeysBlob()
     }
 
     // ── OpenSubtitles API key (in-player online subtitle search) ─────
@@ -1354,6 +1451,8 @@ object AppPreferences {
     fun setOpensubtitlesApiKey(context: Context, key: String) {
         apiKeyPrefs(context).edit().putString(KEY_OPENSUBTITLES_API_KEY, key.trim()).apply()
         prefs(context).edit().remove(KEY_OPENSUBTITLES_API_KEY).apply()
+        stampApiKeyEdit(context, KEY_OPENSUBTITLES_API_KEY, System.currentTimeMillis())
+        pushApiKeysBlob()
     }
 
     // ── TorBox API key (cached-status badges in the stream picker) ────
@@ -1369,6 +1468,8 @@ object AppPreferences {
     fun setTorboxApiKey(context: Context, key: String) {
         apiKeyPrefs(context).edit().putString(KEY_TORBOX_API_KEY, key.trim()).apply()
         prefs(context).edit().remove(KEY_TORBOX_API_KEY).apply()
+        stampApiKeyEdit(context, KEY_TORBOX_API_KEY, System.currentTimeMillis())
+        pushApiKeysBlob()
     }
 
     // ── Add TorBox cloud files to the Library ────────────────────────
