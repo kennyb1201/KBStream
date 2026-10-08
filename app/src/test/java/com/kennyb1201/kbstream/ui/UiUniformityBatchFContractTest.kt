@@ -341,40 +341,34 @@ class UiUniformityBatchFContractTest {
             playerDir.walkTopDown().filter { it.isFile && it.extension == "kt" }
                 .any { it.readText().contains("fun formatClock") }
         )
+        val native = source("ui/player/NativePlayerActivity.kt")
         assertTrue(
-            "and both of the main player's duration readouts are the duration " +
-                "formatter, not the position one",
-            count(
-                source("ui/player/NativePlayerActivity.kt"),
-                "totalTime.text = formatDurationMillis("
-            ) == 2
+            "and the main player's remaining duration readout is the duration " +
+                "formatter, not the position one (the other moved into the shared " +
+                "chrome, see below)",
+            count(native, "totalTime.text = formatDurationMillis(") >= 1 &&
+                !native.contains("totalTime.text = formatMillis(")
         )
         assertTrue(
-            "as is the MPV player's",
-            source("ui/player/MpvPlayerActivity.kt")
+            "as is the shared chrome the MPV engine drives",
+            source("ui/player/PlayerChrome.kt")
                 .contains("durationView?.text = formatDurationMillis(durationMs)")
         )
-        val nativeLayout = File(mainDir, "res/layout/activity_player.xml").readText()
-        val mpvLayout = File(mainDir, "res/layout/activity_mpv_player.xml").readText()
-        listOf(
-            "the main player's duration label" to nativeLayout,
-            "the MPV player's duration label" to mpvLayout
-        ).forEach { (what, layout) ->
-            val id = if (layout === nativeLayout) "@+id/total_time" else "@+id/mpv_duration"
-            val view = layout.substring(layout.indexOf(id)).take(600)
-            assertTrue(
-                "$what starts as the unknown glyph: the view is painted before a " +
-                    "duration exists, and a 00:00 default read as a zero-length title",
-                view.contains("android:text=\"--:--\"")
-            )
-        }
+        // One label for the whole app now: both engines draw the shared
+        // player_chrome.xml, so its duration and position readouts are theirs.
+        val chromeLayout = File(mainDir, "res/layout/player_chrome.xml").readText()
+        assertTrue(
+            "the duration label starts as the unknown glyph: the view is painted " +
+                "before a duration exists, and a 00:00 default read as a zero-length " +
+                "title",
+            chromeLayout.substring(chromeLayout.indexOf("@+id/chrome_duration")).take(600)
+                .contains("android:text=\"--:--\"")
+        )
         assertTrue(
             "while the position label beside it keeps a real 00:00 - a position of " +
                 "zero is a fact, not a missing value",
-            nativeLayout.substring(nativeLayout.indexOf("@+id/current_time")).take(600)
-                .contains("android:text=\"00:00\"") &&
-                mpvLayout.substring(mpvLayout.indexOf("@+id/mpv_position")).take(600)
-                    .contains("android:text=\"00:00\"")
+            chromeLayout.substring(chromeLayout.indexOf("@+id/chrome_position")).take(600)
+                .contains("android:text=\"00:00\"")
         )
     }
 }

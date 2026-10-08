@@ -66,7 +66,13 @@ class UiUniformityBatchEContractTest {
                 selector.contains("android:width=\"2dp\"") &&
                 selector.contains("android:color=\"@color/kb_accent\"")
         )
-        listOf("layout/activity_player.xml", "layout/activity_mpv_player.xml")
+        // The shared overlay lives in player_chrome.xml, which both players
+        // include; the Exo-only views it cannot share live in their own slot
+        // layouts and carry the same selector.
+        listOf(
+            "layout/player_chrome.xml",
+            "layout/player_exo_channel_buttons.xml"
+        )
             .forEach { layout ->
                 val text = res(layout)
                 assertEquals(
@@ -74,11 +80,14 @@ class UiUniformityBatchEContractTest {
                     0,
                     count(text, "android:background=\"@drawable/control_button_bg\"")
                 )
-                assertTrue(
-                    "$layout has no control button on the focus-less background",
-                    count(text, "android:background=\"@drawable/mpv_control_bg\"") >= 10
-                )
             }
+        assertTrue(
+            "the shared bar has no control button on the focus-less background",
+            count(
+                res("layout/player_chrome.xml"),
+                "android:background=\"@drawable/mpv_control_bg\""
+            ) >= 10
+        )
         assertFalse(
             "and the focus-less background it replaced is gone rather than left " +
                 "behind for the next screen to pick up",
@@ -116,22 +125,20 @@ class UiUniformityBatchEContractTest {
         // which buttons a title happens to show - so which one they landed on
         // depended on the stream. Now every button in both bars names it.
         val rows = mapOf(
-            "layout/activity_player.xml" to Pair(
-                "@id/seekbar",
-                listOf(
-                    "btn_channel_up", "btn_channel_down", "btn_guide", "btn_play_pause",
-                    "btn_next", "btn_source", "btn_audio", "btn_subtitle", "btn_speed",
-                    "btn_aspect", "btn_player_switch", "btn_player_external", "btn_info",
-                    "btn_settings"
-                )
+            // The Exo engine's own channel/guide buttons lead the shared bar's
+            // row, and name the shared bar as their Up target like every button
+            // in it does.
+            "layout/player_exo_channel_buttons.xml" to Pair(
+                "@id/chrome_seekbar",
+                listOf("btn_channel_up", "btn_channel_down", "btn_guide")
             ),
-            "layout/activity_mpv_player.xml" to Pair(
-                "@id/mpv_seekbar",
+            "layout/player_chrome.xml" to Pair(
+                "@id/chrome_seekbar",
                 listOf(
-                    "mpv_btn_play_pause", "mpv_btn_next", "mpv_btn_source", "mpv_btn_audio",
-                    "mpv_btn_subtitle", "mpv_btn_speed", "mpv_btn_aspect",
-                    "mpv_btn_player_switch", "mpv_btn_player_external", "mpv_btn_info",
-                    "mpv_btn_settings"
+                    "chrome_btn_play_pause", "chrome_btn_next", "chrome_btn_source",
+                    "chrome_btn_audio", "chrome_btn_subtitle", "chrome_btn_speed",
+                    "chrome_btn_aspect", "chrome_btn_player_switch",
+                    "chrome_btn_player_external", "chrome_btn_info", "chrome_btn_settings"
                 )
             )
         )
@@ -162,6 +169,9 @@ class UiUniformityBatchEContractTest {
         // next button is written in whichever layout needs it.
         listOf(
             "layout/activity_player.xml",
+            "layout/player_chrome.xml",
+            "layout/player_exo_live_program.xml",
+            "layout/player_exo_channel_buttons.xml",
             "layout/activity_mpv_player.xml",
             "layout/activity_external_player.xml"
         ).forEach { layout ->

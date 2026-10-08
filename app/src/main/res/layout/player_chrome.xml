@@ -1,0 +1,519 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The one player overlay, shared by every engine.
+
+     Both activities used to carry their own copy of this chrome - same views,
+     same order, same drawables - wired twice and drifting apart every time one
+     of them changed. It lives here once, under neutral `chrome_*` ids, and both
+     activity layouts `<include>` it where their overlay root sat.
+
+     Structure is a move, not a redesign: this mirrors activity_player.xml's
+     `controls_overlay` / activity_mpv_player.xml's `mpv_controls` attribute for
+     attribute, so an included layout draws pixel-identically. The engine-specific
+     pieces stay in the activities as siblings of the include - the Exo-only live
+     program block and channel/guide buttons, the MPV-only engine note and chapter
+     strip - because they are not chrome the two engines share.
+
+     The root is a FrameLayout so the SKIP INTRO control keeps the exact anchor it
+     had as a direct child of the activity's own FrameLayout (bottom-start, 96dp
+     off the bottom), and the overlay itself keeps the full-frame gradient. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/chrome_layer"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <!-- Main controls overlay: gradient background, hidden by default. The
+         visibility is owned by PlayerChrome (show/hide), defaulting to gone like
+         both activities' roots did. -->
+    <LinearLayout
+        android:id="@+id/chrome_root"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/overlay_gradient_bg"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:orientation="vertical"
+        android:paddingHorizontal="48dp"
+        android:paddingVertical="16dp"
+        android:visibility="gone">
+
+        <!-- Wall clock + "Ends at" estimate, top-right of the chrome: the same
+             pair both engines carry, so the Interface 24-hour toggle reads the
+             same everywhere. -->
+        <TextView
+            android:id="@+id/chrome_clock"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="18sp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/chrome_ends_at"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:fontFamily="@font/oswald_medium"
+            android:maxLines="1"
+            android:textColor="@color/kb_text_hi"
+            android:textSize="12sp"
+            android:visibility="gone" />
+
+        <!-- Top section: content info, bounded + scrollable so nothing is
+             clipped on short screens. -->
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:fillViewport="true"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="vertical">
+
+                <!-- Compact title block: the overview below is the only prose, so
+                     it gets the room. -->
+                <ImageView
+                    android:id="@+id/chrome_clear_logo"
+                    android:layout_width="400dp"
+                    android:layout_height="104dp"
+                    android:layout_marginTop="8dp"
+                    android:layout_marginBottom="6dp"
+                    android:adjustViewBounds="true"
+                    android:contentDescription="Clear logo"
+                    android:scaleType="fitCenter"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/chrome_item_name"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@font/oswald_semibold"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="26sp"
+                    android:visibility="gone" />
+
+                <!-- Slot: engine-only content that belongs inside the info scroll,
+                     just under the title. Empty here; each activity inflates its
+                     own view into it (the Exo-only live program block). Empty and
+                     GONE on the other engine, so the shared chrome stays exactly the
+                     size it was. -->
+                <LinearLayout
+                    android:id="@+id/chrome_extra_top"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/chrome_episode_label"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/oswald_medium"
+                        android:letterSpacing="0.08"
+                        android:textColor="@color/kb_accent"
+                        android:textSize="17sp"
+                        android:visibility="gone" />
+
+                    <TextView
+                        android:id="@+id/chrome_episode_title"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="12dp"
+                        android:layout_weight="1"
+                        android:ellipsize="end"
+                        android:fontFamily="@font/oswald_semibold"
+                        android:maxLines="2"
+                        android:textColor="@color/kb_text_hi"
+                        android:textSize="19sp"
+                        android:visibility="gone" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/chrome_overview"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:ellipsize="end"
+                    android:fontFamily="@font/oswald_medium"
+                    android:lineSpacingExtra="2dp"
+                    android:maxLines="5"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="15sp"
+                    android:visibility="gone" />
+
+            </LinearLayout>
+        </ScrollView>
+
+        <!-- The source's own badge chips, PINNED below the info scroll so they
+             cannot be pushed past the fold by a long overview. A read-only strip,
+             so it is not focusable and never becomes a D-pad stop. -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:clipToPadding="false"
+            android:descendantFocusability="blocksDescendants"
+            android:focusable="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/chrome_badge_row"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="2dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:visibility="gone" />
+        </HorizontalScrollView>
+
+        <!-- Slot: engine-only content that stands where the badges do - the
+             MPV-only engine note. Empty here; MPV inflates its note into it. -->
+        <LinearLayout
+            android:id="@+id/chrome_extra_note"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone" />
+
+        <!-- Cast band: pinned between the info scroll and the seekbar, the same
+             placement both players use, so avatars + names are always fully
+             visible without scrolling. -->
+        <LinearLayout
+            android:id="@+id/chrome_cast_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="CAST"
+                android:textColor="@color/kb_accent"
+                android:textSize="10sp" />
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:clipToPadding="false"
+                android:paddingStart="2dp"
+                android:paddingEnd="2dp"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/chrome_cast_row"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:clipChildren="false"
+                    android:clipToPadding="false"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+        </LinearLayout>
+
+        <!-- Bottom section: seekbar + controls. -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:id="@+id/chrome_seekbar_row"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <!-- The shared chapter-capable bar. Marks are drawn through
+                     PlayerChrome.setChapters; a bar with no marks draws like the
+                     stock SeekBar it replaces. -->
+                <com.kennyb1201.kbstream.ui.player.ChapterSeekBar
+                    android:id="@+id/chrome_seekbar"
+                    android:layout_width="match_parent"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="6dp"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:max="10000"
+                    android:nextFocusDown="@id/chrome_btn_play_pause"
+                    android:paddingHorizontal="10dp"
+                    android:progressBackgroundTint="@color/kb_surface_raised"
+                    android:progressTint="@color/kb_accent"
+                    android:splitTrack="false"
+                    android:thumbTint="@color/kb_accent" />
+
+                <!-- Slot: engine-only content that belongs between the bar and the
+                     times - the MPV-only chapter strip. Empty here; MPV inflates
+                     its strip into it. -->
+                <LinearLayout
+                    android:id="@+id/chrome_extra_seek"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:visibility="gone" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/chrome_position"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:fontFamily="@font/oswald_medium"
+                        android:text="00:00"
+                        android:textColor="@color/kb_text_hi"
+                        android:textSize="11sp" />
+
+                    <!-- An unknown duration shows the unknown glyph; only a real
+                         zero is 00:00. -->
+                    <TextView
+                        android:id="@+id/chrome_duration"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="@font/oswald_medium"
+                        android:text="--:--"
+                        android:textColor="@color/kb_text_hi"
+                        android:textSize="11sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Control bar: the 11 shared buttons, in the same order and with the
+                 same split both engines use - play/pause and next on the left,
+                 everything that configures the session on the right. -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <!-- Slot: engine-only controls that lead the bar - the Exo-only
+                     live channel/guide buttons. Empty on the other engine; GONE
+                     so it leaves no gap behind. -->
+                <LinearLayout
+                    android:id="@+id/chrome_extra_controls"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone" />
+
+                <!-- Play/Pause (primary, focused by default). -->
+                <ImageView
+                    android:id="@+id/chrome_btn_play_pause"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Play/Pause"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_play" />
+
+                <!-- Next episode: shown only when this session knows its episode. -->
+                <ImageView
+                    android:id="@+id/chrome_btn_next"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Next episode"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_next"
+                    android:visibility="gone" />
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
+                <!-- Source: pick a different stream for this title. -->
+                <ImageView
+                    android:id="@+id/chrome_btn_source"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Change source"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_sources" />
+
+                <!-- Audio track -->
+                <ImageView
+                    android:id="@+id/chrome_btn_audio"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Audio track"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_audio" />
+
+                <!-- Subtitles -->
+                <ImageView
+                    android:id="@+id/chrome_btn_subtitle"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Subtitles"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_subtitle" />
+
+                <!-- Speed: a rate is its own state, so it stays a word. -->
+                <TextView
+                    android:id="@+id/chrome_btn_speed"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_medium"
+                    android:gravity="center"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:text="1x"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="14sp" />
+
+                <!-- Aspect ratio: shows the mode name it landed on. -->
+                <TextView
+                    android:id="@+id/chrome_btn_aspect"
+                    android:layout_width="48dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:fontFamily="@font/oswald_medium"
+                    android:gravity="center"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:text="Fit"
+                    android:textColor="@color/kb_text_hi"
+                    android:textSize="12sp" />
+
+                <!-- Switch player: hand this session to the other engine. -->
+                <ImageView
+                    android:id="@+id/chrome_btn_player_switch"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Switch player"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_switch"
+                    android:visibility="gone" />
+
+                <!-- Play in another app. -->
+                <ImageView
+                    android:id="@+id/chrome_btn_player_external"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Play in another app"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_external"
+                    android:visibility="gone" />
+
+                <!-- Stream info -->
+                <ImageView
+                    android:id="@+id/chrome_btn_info"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_marginEnd="8dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Stream info"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_info" />
+
+                <!-- Settings -->
+                <ImageView
+                    android:id="@+id/chrome_btn_settings"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/mpv_control_bg"
+                    android:contentDescription="Playback settings"
+                    android:focusable="true"
+                    android:focusableInTouchMode="true"
+                    android:nextFocusUp="@id/chrome_seekbar"
+                    android:padding="8dp"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/ic_player_settings" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Skip prompt: an IntroDB segment the viewer is inside right now, with the
+         label that segment's type asks for. It sits above the control bar,
+         unmissable but out of its way, and OK skips the segment while the chrome
+         is down. Declared after the overlay so it paints above it, and anchored
+         to the layer rather than the overlay so it keeps the exact bottom-start
+         placement it had as a direct child of the activity's FrameLayout. -->
+    <TextView
+        android:id="@+id/chrome_skip_intro"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="start|bottom"
+        android:layout_marginStart="48dp"
+        android:layout_marginBottom="96dp"
+        android:background="@drawable/button_accent_bg"
+        android:elevation="6dp"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:fontFamily="@font/oswald_semibold"
+        android:paddingHorizontal="18dp"
+        android:paddingVertical="8dp"
+        android:textColor="@color/kb_void"
+        android:textSize="13sp"
+        android:textAllCaps="true"
+        android:translationZ="4dp"
+        android:visibility="gone" />
+</FrameLayout>

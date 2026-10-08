@@ -16,7 +16,7 @@
     android:paddingStart="8dp"
     android:paddingEnd="12dp"
     android:paddingVertical="6dp"
-    android:nextFocusDown="@id/seekbar">
+    android:nextFocusDown="@id/chrome_seekbar">
 
     <ImageView
         android:id="@+id/cast_member_image"

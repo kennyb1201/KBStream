@@ -93,18 +93,11 @@ class ScrubPreviewsRemovedContractTest {
 
     @Test
     fun `every seek path the previews used to ride on is still wired`() {
-        // The main player: the bar's drag and the D-pad's ten-second step. Both
-        // anchors are lines that live only in those handlers, so a comment or a
-        // declaration elsewhere cannot satisfy them.
+        // The main player: the D-pad's ten-second step. Its bar's drag is the
+        // shared chrome's now - both engines draw the same bar - so the drag half
+        // is pinned against PlayerChrome below. Each anchor is a line that lives
+        // only in its handler, so a comment or a declaration cannot satisfy it.
         val native = source(NATIVE)
-        assertTrue(
-            "the seek bar must still seek when the press is released",
-            native.contains("override fun onStopTrackingTouch(sb: SeekBar)")
-        )
-        assertTrue(
-            "and the release must still work out the position it lands on",
-            native.contains("val posMs = (sb.progress.toLong() * durationMs) / 10_000L")
-        )
         assertTrue(
             "a LEFT/RIGHT press must still step the scrub",
             native.contains("stepSeekBy(10_000L * scrubDirection)")
@@ -114,8 +107,19 @@ class ScrubPreviewsRemovedContractTest {
         val mpv = source(MPV)
         assertTrue("a D-pad step must still seek the surface", mpv.contains("surface?.seekBy(deltaMs)"))
         assertTrue(
-            "the bar must still seek on release",
-            mpv.contains("seekTo(durationMs * (bar?.progress ?: 0) / 1000L)")
+            "and the engine still exposes the seek the bar asks for",
+            mpv.contains("override fun onChromeSeekTo(positionMs: Long) = seekTo(positionMs)")
+        )
+        // The bar's release-seek moved into the shared chrome (PlayerChrome),
+        // which hands the position back through PlayerChromeHost.
+        val chrome = source(PLAYER + "PlayerChrome.kt")
+        assertTrue(
+            "the bar must still seek when the press is released",
+            chrome.contains("override fun onStopTrackingTouch(bar: SeekBar?)")
+        )
+        assertTrue(
+            "and that release must still work out the position it lands on",
+            chrome.contains("host.onChromeSeekTo(durationMs * (bar?.progress ?: 0) / SEEKBAR_MAX)")
         )
     }
 }

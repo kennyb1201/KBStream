@@ -242,4 +242,26 @@ internal object PlaybackRecoveryRules {
      */
     fun shouldAdvancePastOpenFailure(sourcesTried: Int, hasAnotherSource: Boolean): Boolean =
         hasAnotherSource && sourcesTried <= MAX_MPV_OPEN_FAILURE_SOURCES
+
+    /**
+     * A stable identity for a failure, so repeats of the SAME cause share one
+     * rebuild budget (see RebuildBudget.kt).
+     *
+     * Grouped by what a recovery could do about it rather than by the raw code:
+     * two different IO codes are different problems with different answers, but
+     * every 0x80001000 is the one decoder-pool problem however it is spelled in
+     * the codec's own message. Null when there is no failure to attribute
+     * (a session that has not failed yet), which callers read as "no budget
+     * applies".
+     */
+    fun failureCauseKey(error: PlaybackException?): String? = error?.let {
+        when {
+            isDecoderResourceExhausted(it) -> "decoder-resources"
+            isMissingDecoderFailure(it) -> "decoder-missing"
+            isDecoderError(it.errorCode) -> "decoder"
+            isContainerParseFailure(it) -> "container"
+            isUnopenableSource(it) -> "unopenable"
+            else -> "error:" + it.errorCode
+        }
+    }
 }

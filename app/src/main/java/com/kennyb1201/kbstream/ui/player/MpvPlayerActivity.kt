@@ -37,7 +37,6 @@ import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.device.DeviceCapability
-import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
@@ -112,7 +111,7 @@ private const val MAX_ADDON_SUBTITLE_BYTES = 8 * 1024 * 1024
  * end-of-playback panels, which are the same Up Next card and the same
  * Because-you-watched row, built by the same shared code.
  */
-class MpvPlayerActivity : ComponentActivity() {
+class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCastHost {
 
     /**
      * The switch-back's launch intent: this session replayed at the MAIN engine.
@@ -204,37 +203,29 @@ class MpvPlayerActivity : ComponentActivity() {
     private var errorSwitchButton: TextView? = null
     private var errorNextSourceButton: TextView? = null
     private var bufferingView: View? = null
-    private var controlsContainer: View? = null
     private var loadingBackdropView: ImageView? = null
     private var loadingLogoView: ImageView? = null
-    private var clearLogoView: ImageView? = null
-    private var itemNameView: TextView? = null
-    private var episodeLabelView: TextView? = null
-    private var episodeTitleView: TextView? = null
-    private var overviewView: TextView? = null
+    // The one shared overlay (player_chrome.xml), and this engine's own note
+    // inflated into its slot.
+    private var chrome: PlayerChrome? = null
     private var engineNoteView: TextView? = null
-    private var positionView: TextView? = null
-    private var durationView: TextView? = null
-    private var playerClock: TextView? = null
-    private var endsAtClock: TextView? = null
-    // The overlay clock's own 1 Hz tick and its two formatters, matching the
-    // main player's: DateTimeFormatter is immutable and thread-safe, so these
-    // are built once and the 24-hour toggle just picks between them.
+    // The overlay clock's own 1 Hz tick: the shared chrome paints the clock and
+    // the readouts, so this just nudges it while the bar is up (mpv's progress
+    // callback is roughly once a second, but a paused session reports nothing
+    // and the clock still has to move).
     private val clockHandler = Handler(Looper.getMainLooper())
-    private val clock12Format by lazy { DateFormats.clock12h() }
-    private val clock24Format by lazy { DateFormats.clock24h() }
     private val clockRunnable = object : Runnable {
         override fun run() {
-            if (!controlsVisible) return
-            refreshClock()
+            if (chrome?.isVisible != true) return
+            chrome?.refreshProgress()
             clockHandler.postDelayed(this, 1000L)
         }
     }
+    // The shared bar, kept only so this engine's own KEY handling can seek it;
+    // the chrome owns its value and its tap/scrub listener. The chapter strip is
+    // MPV-only: mpv reports the file's chapters natively, while ExoPlayer cannot
+    // read them at all.
     private var seekBar: SeekBar? = null
-    // The same view as [seekBar], typed so the chapter ticks can be set on it,
-    // plus the chapter strip. MPV-only for now: mpv reports the file's
-    // chapters natively, while ExoPlayer cannot read them at all.
-    private var chapterBar: ChapterSeekBar? = null
     private var chapterRow: View? = null
     private var chapterNow: TextView? = null
     private var chapterMarks: List<ChapterMark> = emptyList()
@@ -243,7 +234,6 @@ class MpvPlayerActivity : ComponentActivity() {
     // one used to draw "⏭" and "⇄" as font glyphs while SOURCE beside them was a
     // vector, so the two players' bars did not even match each other. SPEED and
     // ASPECT keep their words - a rate and a mode name ARE their state.
-    private var nextButton: ImageView? = null
     private var playerSwitchButton: ImageView? = null
     private var externalButton: ImageView? = null
     private var speedButton: TextView? = null
@@ -264,15 +254,10 @@ class MpvPlayerActivity : ComponentActivity() {
     private var isInPiPMode = false
 
     // --- Picker: the same side panel the main player opens -------------------
-    private var sourceButton: ImageView? = null
     private var pickerContainer: View? = null
     private var pickerTitle: TextView? = null
     private var pickerList: RecyclerView? = null
 
-    // --- Badge row + cast band: the main player's two rows, over mpv --------
-    private var badgeRow: LinearLayout? = null
-    private var castSection: View? = null
-    private var castRow: LinearLayout? = null
 
     /**
      * The list the picker shows, mirroring the main player's [PickerMode].
@@ -354,7 +339,10 @@ class MpvPlayerActivity : ComponentActivity() {
     private var settingsOpen = false
 
     /** True while the seekbar is being dragged, so progress cannot fight it. */
-    private var scrubbing = false
+    // Scrubbing lives with the shared bar now; this reads it so the skip
+    // prompt and the progress tick still leave a drag alone.
+    private val scrubbing: Boolean
+        get() = chrome?.isScrubbing == true
 
     // --- Audio tuning: the main player's AUDIO section, on this engine -----
     //
@@ -598,7 +586,6 @@ class MpvPlayerActivity : ComponentActivity() {
     // this engine's side of it - following mpv's playhead and seeking with mpv.
     // Having the rows at all is what lets the panel open as the credits start
     // here just as it does in the main player.
-    private var skipButton: TextView? = null
     private var introDbStamps = emptyList<IntroDbStamp>()
 
     /** The segment the playhead is inside, as last offered by [updateSkipPrompt]. */
@@ -1151,22 +1138,24 @@ class MpvPlayerActivity : ComponentActivity() {
         bufferingView = findViewById(R.id.mpv_buffering)
         loadingBackdropView = findViewById(R.id.mpv_loading_backdrop)
         loadingLogoView = findViewById(R.id.mpv_loading_logo)
-        controlsContainer = findViewById(R.id.mpv_controls)
-        clearLogoView = findViewById(R.id.mpv_clear_logo)
-        itemNameView = findViewById(R.id.mpv_item_name)
-        episodeLabelView = findViewById(R.id.mpv_episode_label)
-        episodeTitleView = findViewById(R.id.mpv_episode_title)
-        overviewView = findViewById(R.id.mpv_overview)
-        engineNoteView = findViewById(R.id.mpv_engine_note)
-        positionView = findViewById(R.id.mpv_position)
-        durationView = findViewById(R.id.mpv_duration)
-        playerClock = findViewById(R.id.mpv_player_clock)
-        endsAtClock = findViewById(R.id.mpv_ends_at_clock)
-        seekBar = findViewById(R.id.mpv_seekbar)
-        chapterBar = findViewById(R.id.mpv_seekbar)
-        chapterRow = findViewById(R.id.mpv_chapter_row)
-        chapterNow = findViewById(R.id.mpv_chapter_now)
-        findViewById<TextView>(R.id.mpv_chapter_prev)?.let { prev ->
+        // Engine-only views inflated into the shared chrome's slots, so they keep
+        // the exact place they had in this layout before it was unified.
+        val noteSlot = findViewById<LinearLayout>(R.id.chrome_extra_note)
+        engineNoteView = layoutInflater
+            .inflate(R.layout.player_mpv_engine_note, noteSlot, false) as TextView
+        noteSlot.addView(engineNoteView)
+        noteSlot.visibility = View.VISIBLE
+        val chapterSlot = findViewById<LinearLayout>(R.id.chrome_extra_seek)
+        val chapterStrip = layoutInflater.inflate(
+            R.layout.player_mpv_chapter_row,
+            chapterSlot,
+            false
+        )
+        chapterSlot.addView(chapterStrip)
+        chapterSlot.visibility = View.VISIBLE
+        chapterRow = chapterStrip
+        chapterNow = chapterStrip.findViewById(R.id.mpv_chapter_now)
+        chapterStrip.findViewById<TextView>(R.id.mpv_chapter_prev)?.let { prev ->
             prev.setOnClickListener {
                 surface?.addChapter(-1)
                 refreshChapterTitle(positionMs)
@@ -1176,7 +1165,7 @@ class MpvPlayerActivity : ComponentActivity() {
             }
             applyPillBackground(prev, selected = false, focused = false)
         }
-        findViewById<TextView>(R.id.mpv_chapter_next)?.let { next ->
+        chapterStrip.findViewById<TextView>(R.id.mpv_chapter_next)?.let { next ->
             next.setOnClickListener {
                 surface?.addChapter(1)
                 refreshChapterTitle(positionMs)
@@ -1186,13 +1175,25 @@ class MpvPlayerActivity : ComponentActivity() {
             }
             applyPillBackground(next, selected = false, focused = false)
         }
-        playPauseButton = findViewById(R.id.mpv_btn_play_pause)
-        nextButton = findViewById(R.id.mpv_btn_next)
-        playerSwitchButton = findViewById(R.id.mpv_btn_player_switch)
-        externalButton = findViewById(R.id.mpv_btn_player_external)
-        speedButton = findViewById(R.id.mpv_btn_speed)
-        aspectButton = findViewById(R.id.mpv_btn_aspect)
-        sourceButton = findViewById(R.id.mpv_btn_source)
+        // The one shared overlay, driven by this engine through PlayerChromeHost.
+        // MPV hid its bar after eight seconds, not the main player's six, so it
+        // keeps its own timeout.
+        chrome = PlayerChrome(
+            findViewById(R.id.chrome_layer),
+            this,
+            autoHideMs = CONTROLS_TIMEOUT_MS
+        )
+        // The shared bar, kept only for this engine's own key handling.
+        seekBar = findViewById(R.id.chrome_seekbar)
+        playPauseButton = findViewById(R.id.chrome_btn_play_pause)
+        playerSwitchButton = findViewById(R.id.chrome_btn_player_switch)
+        // MPV is always a valid handoff partner (ExoPlayer is always there), so
+        // its SWITCH is never hidden - the shared layout defaults it gone for the
+        // engine that does hide it.
+        playerSwitchButton?.visibility = View.VISIBLE
+        externalButton = findViewById(R.id.chrome_btn_player_external)
+        speedButton = findViewById(R.id.chrome_btn_speed)
+        aspectButton = findViewById(R.id.chrome_btn_aspect)
         pickerContainer = findViewById(R.id.mpv_picker_container)
         pickerTitle = findViewById(R.id.mpv_picker_title)
         pickerList = findViewById(R.id.mpv_picker_list)
@@ -1210,10 +1211,6 @@ class MpvPlayerActivity : ComponentActivity() {
                 override fun onChildViewDetachedFromWindow(view: View) = Unit
             }
         )
-        badgeRow = findViewById(R.id.mpv_badge_row)
-        castSection = findViewById(R.id.mpv_cast_section)
-        castRow = findViewById(R.id.mpv_cast_row)
-        setupCastRow()
         nextUpPanel = findViewById(R.id.mpv_next_up_panel)
         nextUpThumb = findViewById(R.id.mpv_next_up_thumb)
         nextUpShowTitle = findViewById(R.id.mpv_next_up_show_title)
@@ -1233,17 +1230,6 @@ class MpvPlayerActivity : ComponentActivity() {
         bywRow = findViewById(R.id.mpv_byw_row)
         setupBecauseYouWatched()
 
-        // The skip prompt is an accent-filled pill - the one control that acts
-        // on the video rather than changing a setting, so it reads as the same
-        // button the main player shows.
-        skipButton = findViewById(R.id.mpv_skip_intro)
-        skipButton?.setOnClickListener { performSkip() }
-        skipButton?.setOnFocusChangeListener { view, focused ->
-            applyPillBackground(view as TextView, selected = true, focused = focused)
-        }
-        skipButton?.let { applyPillBackground(it, selected = true, focused = false) }
-
-        seekBar?.max = 1000
     }
 
     /** Same focus / selection look the main player's pills use. */
@@ -1439,64 +1425,14 @@ class MpvPlayerActivity : ComponentActivity() {
         updateNowPlayingText()
         updateControlsInfo()
 
-        playPauseButton?.setOnClickListener {
-            // Swallowed at the end of playback (see togglePlayPauseFromControls).
-            if (togglePlayPauseFromControls()) return@setOnClickListener
-            keepControlsVisible()
-        }
-        nextButton?.setOnClickListener {
-            // The scheme-aware target, not `episode + 1`: on a show whose files
-            // hold two segments each, adding one lands on the middle of a file
-            // the viewer is already inside.
-            val target = nextEpisodeTarget() ?: return@setOnClickListener
-            launchNextEpisode(target.first, target.second)
-        }
-        playerSwitchButton?.setOnClickListener {
-            keepControlsVisible()
-            switchToExoPlayerFromButton()
-        }
-        // Play in another app: the main player's third engine, offered here
-        // too. Shown only where this box has an app to hand the stream to, so
-        // the press never dead-ends on a box without one.
+        // The shared buttons (play/pause, next, source, audio, subtitles,
+        // speed, aspect, switch, external, info, settings) are wired once by
+        // PlayerChrome and reach this engine through the PlayerChromeHost
+        // methods below. Only what is this engine's own is bound here.
+        // Play in another app: offered only where this box has an app to hand
+        // the stream to, so the press never dead-ends on a box without one.
         externalButton?.visibility =
             if (PlayerEngine.externalAvailable(this)) View.VISIBLE else View.GONE
-        externalButton?.setOnClickListener {
-            keepControlsVisible()
-            switchToExternal()
-        }
-        sourceButton?.setOnClickListener {
-            keepControlsVisible()
-            showPicker(PickerMode.SOURCE)
-        }
-        // AUDIO / SUBTITLES / SPEED open the same lists the main player opens,
-        // in the same order: a track or a speed is picked by name rather than
-        // stepped to blind.
-        findViewById<ImageView>(R.id.mpv_btn_audio).setOnClickListener {
-            keepControlsVisible()
-            showPicker(PickerMode.AUDIO)
-        }
-        findViewById<ImageView>(R.id.mpv_btn_subtitle).setOnClickListener {
-            keepControlsVisible()
-            showPicker(PickerMode.SUBTITLE)
-        }
-        speedButton?.setOnClickListener {
-            keepControlsVisible()
-            showPicker(PickerMode.SPEED)
-        }
-        aspectButton?.setOnClickListener {
-            cycleAspect()
-            keepControlsVisible()
-        }
-        findViewById<ImageView>(R.id.mpv_btn_info).setOnClickListener {
-            // The readout names its engine: this is the only place on screen
-            // that says whether the picture is coming from mpv or whether the
-            // session landed here after ExoPlayer handed the file over.
-            showToast("MPV  •  ${diagnosticsText()}", 4_000L)
-            keepControlsVisible()
-        }
-        findViewById<ImageView>(R.id.mpv_btn_settings).setOnClickListener {
-            showSettingsPanel()
-        }
 
         // The end-of-episode card's own buttons, guarded exactly like the main
         // player's: PLAY NEXT restarts the binge watchdog (a manual press means
@@ -1512,36 +1448,8 @@ class MpvPlayerActivity : ComponentActivity() {
             }
         }
 
-        // Focus holds the overlay open, the same rule the main player uses.
-        listOfNotNull(playPauseButton, nextButton, sourceButton, speedButton, aspectButton).forEach { button ->
-            button.setOnFocusChangeListener { _, focused ->
-                if (focused) removeAutoHide() else keepControlsVisible()
-            }
-        }
-
-        // The seekbar scrubs, it is not a readout: the same as the main
-        // player's. Seeking happens on release - mpv seeks by keyframe, and a
-        // remote fires a lot of progress changes on the way.
-        seekBar?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
-                if (!fromUser || durationMs <= 0L) return
-                val posMs = durationMs * progress / 1000L
-                positionView?.text = formatMillis(posMs)
-            }
-
-            override fun onStartTrackingTouch(bar: SeekBar?) {
-                scrubbing = true
-                removeAutoHide()
-            }
-
-            override fun onStopTrackingTouch(bar: SeekBar?) {
-                scrubbing = false
-                if (durationMs > 0L) {
-                    seekTo(durationMs * (bar?.progress ?: 0) / 1000L)
-                }
-                keepControlsVisible()
-            }
-        })
+        // Focus-hold and the bar's scrub listener are the shared chrome's now;
+        // what stays here is this engine's own key handling on the bar.
 
         // The bar's keys are its own, and they have to be: a bare SeekBar answers
         // LEFT/RIGHT by moving its own thumb, which on this engine slid the bar -
@@ -1595,30 +1503,9 @@ class MpvPlayerActivity : ComponentActivity() {
      * next-episode button when this session knows which episode it is on.
      */
     private fun updateNowPlayingText() {
-        val logoUrl = clearLogoUrl
-        val logo = clearLogoView
-        if (logo != null && !logoUrl.isNullOrBlank()) {
-            runCatching { logo.load(logoUrl) }
-            logo.visibility = View.VISIBLE
-            itemNameView?.visibility = View.GONE
-        } else {
-            logo?.setImageDrawable(null)
-            logo?.visibility = View.GONE
-            itemNameView?.visibility = View.VISIBLE
-        }
-        itemNameView?.text = itemName
-
-        val showSeason = season
-        val showEpisode = episode
-        val hasEpisode = showSeason != null && showEpisode != null
-        episodeLabelView?.text = if (hasEpisode) "S$showSeason\u2009E$showEpisode" else null
-        episodeLabelView?.visibility = if (hasEpisode) View.VISIBLE else View.GONE
-        episodeTitleView?.text = episodeTitle
-        episodeTitleView?.visibility =
-            if (!episodeTitle.isNullOrBlank()) View.VISIBLE else View.GONE
-        overviewView?.text = overview
-        overviewView?.visibility = if (!overview.isNullOrBlank()) View.VISIBLE else View.GONE
-        nextButton?.visibility = if (hasEpisode) View.VISIBLE else View.GONE
+        // The title block (logo / name / episode row / overview / NEXT) is drawn
+        // by the shared chrome from chromeTitleInfo().
+        chrome?.refreshTitle()
     }
 
     /**
@@ -1655,9 +1542,6 @@ class MpvPlayerActivity : ComponentActivity() {
         engineNoteView?.visibility = View.VISIBLE
         speedButton?.text = "${playbackSpeed}x"
         aspectButton?.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
-        // The playing source's own badge chips - the same shared adapter the
-        // main player's row uses, so the two cannot drift apart.
-        badgeRow?.let { PickerAdapter.bindBadgeRow(it, currentBadges) }
         // This runs as the file opens and whenever a title fact changes, which
         // is exactly when the now-playing card needs to be told: the tick in
         // [MpvMediaSession] covers the playhead between those moments.
@@ -1670,49 +1554,6 @@ class MpvPlayerActivity : ComponentActivity() {
      * the person id back to the catalog (the main player's own navigate_actor
      * contract), so the actor screen opens and this session resumes on return.
      */
-    private fun setupCastRow() {
-        val section = castSection ?: return
-        val row = castRow ?: return
-        if (castMembers.isEmpty()) {
-            section.visibility = View.GONE
-            return
-        }
-        section.visibility = View.VISIBLE
-        row.removeAllViews()
-        castMembers.forEach { member ->
-            val itemView = layoutInflater.inflate(R.layout.cast_member_item, row, false)
-            // The band is filled a beat after the activity's own chrome was
-            // themed, so each card is themed as it lands - the same reason the
-            // picker's rows retint when they attach.
-            if (chromeThemeMoved(this@MpvPlayerActivity)) refillPlayerChrome(itemView)
-            // The shared tile points its next-focus at the main player's
-            // seekbar, which is not on screen in this layout: re-point it at
-            // mpv's own so D-pad DOWN still lands on the bar.
-            itemView.nextFocusDownId = R.id.mpv_seekbar
-            itemView.findViewById<TextView>(R.id.cast_member_name).text = member.name
-            itemView.findViewById<TextView>(R.id.cast_member_character).apply {
-                val character = member.character
-                if (character.isNullOrBlank()) {
-                    visibility = View.GONE
-                } else {
-                    text = character
-                    visibility = View.VISIBLE
-                }
-            }
-            itemView.findViewById<ImageView>(R.id.cast_member_image).apply {
-                val url = member.profileImageUrl()
-                if (url.isNullOrBlank()) {
-                    setImageResource(R.drawable.ic_cast_placeholder)
-                } else {
-                    runCatching { load(url) }
-                        .onFailure { setImageResource(R.drawable.ic_cast_placeholder) }
-                }
-            }
-            itemView.setOnClickListener { navigateToActor(member) }
-            row.addView(itemView)
-        }
-    }
-
     /**
      * Leaves the player for the actor screen: the main player's navigate_actor
      * result, so MainActivity opens the person page and keeps this session's
@@ -3495,7 +3336,7 @@ class MpvPlayerActivity : ComponentActivity() {
      * there would be a button with no way to press it.
      */
     private fun updateSkipPrompt(positionMs: Long, durationMs: Long) {
-        val button = skipButton ?: return
+        val bar = chrome ?: return
         // Only while the file is actually playing. A segment starting at 0 (a
         // recap, usually) would otherwise match during the load splash, when the
         // playhead is still 0 - the prompt must never appear before the first
@@ -3523,8 +3364,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // Auto-skip before showing anything, so a skipped segment never flashes
         // its prompt up: the playhead is past it by the next tick.
         if (autoSkipSegment(matching, durationMs)) return
-        button.text = matching.type.buttonLabel
-        button.visibility = View.VISIBLE
+        bar.setSkipIntro(matching.type.buttonLabel)
     }
 
     /**
@@ -3635,10 +3475,9 @@ class MpvPlayerActivity : ComponentActivity() {
      * D-pad press would go nowhere at all.
      */
     private fun hideSkipPrompt() {
-        val button = skipButton ?: return
-        val wasFocused = button.isFocused
-        button.visibility = View.GONE
-        if (wasFocused && controlsVisible) playPauseButton?.requestFocus()
+        // The shared chrome owns the prompt: it takes the button down and hands
+        // focus back to the bar if the prompt held it.
+        chrome?.setSkipIntro(null)
     }
 
     // --- Playback callbacks ------------------------------------------------
@@ -3704,22 +3543,17 @@ class MpvPlayerActivity : ComponentActivity() {
         // until both numbers exist.
         maybeDetectScheme()
         runOnUiThread {
-            durationView?.text = formatDurationMillis(durationMs)
-            // While the seekbar is being dragged it owns the readout, so a
-            // progress tick cannot yank the thumb back out from under it.
-            if (!scrubbing) {
-                positionView?.text = formatMillis(positionMs)
-                if (durationMs > 0L) {
-                    val progress = ((positionMs * 1000L) / durationMs).toInt().coerceIn(0, 1000)
-                    seekBar?.progress = progress
-                }
-                // Keep the chapter ticks in step with a duration that arrives
-                // after the first file-loaded tick, and move the readout to the
-                // chapter the playhead is now inside.
-                if (chapterMarks.isNotEmpty()) {
-                    chapterBar?.setChapters(chapterMarks, durationMs)
-                    refreshChapterTitle(positionMs)
-                }
+            // The position / duration / bar / play-pause glyph are painted by the
+            // shared chrome from this engine's playhead.
+            chrome?.refreshProgress()
+            // While the seekbar is being dragged it owns the readout, and the
+            // chrome leaves the thumb and the times alone then - so the chapter
+            // strip follows the same rule. It also keeps the chapter ticks in
+            // step with a duration that arrives after the first file-loaded
+            // tick, and moves the readout to the chapter the playhead is inside.
+            if (!scrubbing && chapterMarks.isNotEmpty()) {
+                chrome?.setChapters(chapterMarks, durationMs)
+                refreshChapterTitle(positionMs)
             }
 
             // The card opens as the credits roll, exactly as it does in the main
@@ -4407,93 +4241,44 @@ class MpvPlayerActivity : ComponentActivity() {
     }
 
     /**
-     * Hands the D-pad to the overlay as it comes up: the seek bar, or play/pause
-     * where there is no bar that could do anything.
-     *
-     * Raising the controls used to land on play/pause, which left LEFT/RIGHT
-     * meaning "walk the button row" - so a viewer who raised the controls to
-     * jump ten seconds had to press UP onto the bar before LEFT/RIGHT would seek
-     * anything at all. Landing on the bar costs the row nothing: every button in
-     * it declares `nextFocusUp` to the bar and the bar declares `nextFocusDown`
-     * back to play/pause, so the row is still one press away, and the bar's own
-     * key listener seeks on LEFT/RIGHT and plays and pauses on OK.
-     *
-     * The bar only takes it where it can do something with it: a skip prompt is
-     * the primary target while it is up, and a session with no duration has
-     * nothing on the bar to scrub.
+     * The overlay's visibility, its wall clock, its auto-hide timer and its
+     * D-pad focus order all live in the shared [PlayerChrome] now. These are thin
+     * delegations, so every existing call site keeps working and the two engines
+     * cannot drift apart again. The clock's own 1 Hz tick stays here (see
+     * [clockRunnable]) because it rides mpv's progress reporting.
      */
-    private fun focusControls() {
-        val scrubbable = skipButton?.visibility != View.VISIBLE && durationMs > 0L
-        if (scrubbable && seekBar?.requestFocus() == true) return
-        playPauseButton?.requestFocus()
+    private fun showControls() {
+        chrome?.show()
+        startClock()
     }
 
-    /**
-     * The overlay's wall clock and its "Ends at" estimate, from the playhead
-     * and the device clock - the same two readouts, in the same format, the
-     * main player shows (see NativePlayerActivity.updateClock).
-     */
-    private fun refreshClock() {
-        val clock = playerClock ?: return
-        val ends = endsAtClock ?: return
-        val formatter =
-            if (AppPreferences.getUse24HourClock(this)) clock24Format else clock12Format
-        clock.text = DateFormats.now(formatter)
-        val remainingMs = (durationMs - positionMs).coerceAtLeast(0L)
-        val endsAt = DateFormats.time(System.currentTimeMillis() + remainingMs, formatter)
-        ends.text = "Ends at $endsAt"
-    }
-
-    /**
-     * Keeps the clock with the chrome: shown and ticking exactly while the bar
-     * is, and gone (with its tick stopped) otherwise - the main player's rule.
-     */
-    private fun syncClock() {
-        val visible = controlsVisible
-        playerClock?.visibility = if (visible) View.VISIBLE else View.GONE
-        endsAtClock?.visibility = if (visible) View.VISIBLE else View.GONE
-        clockHandler.removeCallbacks(clockRunnable)
-        if (visible) {
-            refreshClock()
-            clockHandler.postDelayed(clockRunnable, 1000L)
+    private fun setControlsVisible(visibility: Int) {
+        if (visibility == View.VISIBLE) {
+            chrome?.show()
+            startClock()
+        } else {
+            chrome?.hide()
+            clockHandler.removeCallbacks(clockRunnable)
         }
     }
 
-    /**
-     * Shows/hides the control bar, carrying the overlay clock with it. Every
-     * place the bar appears or disappears goes through here, so the clock can
-     * never be left behind by one of them.
-     */
-    private fun setControlsVisible(visibility: Int) {
-        controlsContainer?.visibility = visibility
-        syncClock()
-    }
-
-    private fun showControls() {
-        setControlsVisible(View.VISIBLE)
-        focusControls()
-        keepControlsVisible()
-    }
-
     private fun keepControlsVisible() {
-        handler.removeCallbacks(hideControlsRunnable)
-        handler.postDelayed(hideControlsRunnable, CONTROLS_TIMEOUT_MS)
+        chrome?.restartAutoHide()
     }
 
-    private val hideControlsRunnable = Runnable {
-        // The settings panel is its own screen: hiding the chrome under it would
-        // strand the user in the panel with nothing to go back to.
-        if (settingsOpen) return@Runnable
-        setControlsVisible(View.GONE)
+    /** Restarts the 1 Hz clock tick; it stops itself once the bar is down. */
+    private fun startClock() {
+        clockHandler.removeCallbacks(clockRunnable)
+        clockHandler.postDelayed(clockRunnable, 1000L)
     }
 
     /** Holds the overlay open while one of its buttons has focus. */
     private fun removeAutoHide() {
-        handler.removeCallbacks(hideControlsRunnable)
+        chrome?.cancelAutoHide()
     }
 
     private val controlsVisible: Boolean
-        get() = controlsContainer?.visibility == View.VISIBLE
+        get() = chrome?.isVisible == true
 
     /**
      * Transient feedback for this engine's buttons and subtitle flow: the
@@ -4546,7 +4331,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // during an intro should skip it, not pause underneath the prompt (the
         // same rule the main player uses). With the overlay up the prompt is an
         // ordinary focusable, so OK reaches it through the focus system instead.
-        if (skipButton?.visibility == View.VISIBLE && !controlsVisible &&
+        if (chrome?.isSkipIntroVisible == true && !controlsVisible &&
             event.action == KeyEvent.ACTION_DOWN
         ) {
             when (event.keyCode) {
@@ -4554,7 +4339,7 @@ class MpvPlayerActivity : ComponentActivity() {
                 KeyEvent.KEYCODE_ENTER,
                 KeyEvent.KEYCODE_NUMPAD_ENTER -> {
                     // One press, one skip: autorepeat must not skip twice.
-                    if (event.repeatCount == 0) skipButton?.performClick()
+                    if (event.repeatCount == 0) performSkip()
                     return true
                 }
             }
@@ -4726,7 +4511,7 @@ class MpvPlayerActivity : ComponentActivity() {
         // back. Deliberately not in onPause: Picture-in-Picture keeps the video
         // running, and the matched rate is still the right one there.
         frameRateMatcher?.release()
-        handler.removeCallbacks(hideControlsRunnable)
+        chrome?.cancelAutoHide()
         if (playerSwitchStarted) {
             // Another engine has been launched and this Activity stays in the
             // chain for its result, so it is not destroyed until that session
@@ -4774,7 +4559,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun syncChapters() {
         chapterMarks = surface?.readChapters().orEmpty()
         chapterRow?.visibility = if (chapterMarks.isEmpty()) View.GONE else View.VISIBLE
-        chapterBar?.setChapters(chapterMarks, durationMs)
+        chrome?.setChapters(chapterMarks, durationMs)
         refreshChapterTitle(positionMs)
     }
 
@@ -4796,7 +4581,7 @@ class MpvPlayerActivity : ComponentActivity() {
     private fun clearChapters() {
         chapterMarks = emptyList()
         chapterRow?.visibility = View.GONE
-        chapterBar?.setChapters(emptyList(), 0L)
+        chrome?.setChapters(emptyList(), 0L)
     }
 
     override fun onDestroy() {
@@ -4978,6 +4763,74 @@ class MpvPlayerActivity : ComponentActivity() {
         season != null && episode != null -> "$itemName \u2014 S$season\u2009E$episode"
         else -> itemName
     }
+
+    // --- PlayerChromeHost: the shared overlay's calls into this engine --------
+    //
+    // This is a rename of the calls the control bar already made by hand: play /
+    // pause, next, the pickers, aspect, settings, info, the engine switch and the
+    // skip prompt all reach the same methods they always did.
+
+    override fun chromeIsPlaying(): Boolean = surface?.isPaused() == false
+
+    override fun chromePositionMs(): Long = positionMs
+
+    override fun chromeDurationMs(): Long = durationMs
+
+    override fun onChromePlayPause() {
+        // Swallowed at the end of playback (see togglePlayPauseFromControls).
+        togglePlayPauseFromControls()
+    }
+
+    override fun onChromeSeekTo(positionMs: Long) = seekTo(positionMs)
+
+    override fun onChromeNext() {
+        // The scheme-aware target, not `episode + 1`: on a show whose files hold
+        // two segments each, adding one lands on the middle of a file the viewer
+        // is already inside.
+        val target = nextEpisodeTarget() ?: return
+        launchNextEpisode(target.first, target.second)
+    }
+
+    override fun onChromeOpenSourcePicker() = showPicker(PickerMode.SOURCE)
+
+    override fun onChromeOpenAudioPicker() = showPicker(PickerMode.AUDIO)
+
+    override fun onChromeOpenSubtitlePicker() = showPicker(PickerMode.SUBTITLE)
+
+    override fun onChromeOpenSpeedPicker() = showPicker(PickerMode.SPEED)
+
+    override fun onChromeOpenAspectPicker() = cycleAspect()
+
+    override fun onChromeOpenSettings() = showSettingsPanel()
+
+    override fun onChromeOpenInfo() {
+        // The readout names its engine: this is the only place on screen that
+        // says whether the picture is coming from mpv or whether the session
+        // landed here after ExoPlayer handed the file over.
+        showToast("MPV  \u2022  ${diagnosticsText()}", 4_000L)
+    }
+
+    override fun onChromeSwitchPlayer() = switchToExoPlayerFromButton()
+
+    override fun onChromeOpenExternal() = switchToExternal()
+
+    override fun onChromeSkipIntro() = performSkip()
+
+    override fun chromeTitleInfo(): ChromeTitleInfo = ChromeTitleInfo(
+        clearLogoUrl = clearLogoUrl,
+        itemName = itemName,
+        episodeLabel = if (season != null && episode != null) {
+            "S$season\u2009E$episode"
+        } else {
+            null
+        },
+        episodeTitle = episodeTitle,
+        overview = overview,
+        badges = currentBadges,
+        cast = castMembers
+    )
+
+    override fun onChromeCastPressed(member: PlayerCastMember) = navigateToActor(member)
 
     companion object {
         private const val TAG = "PLAYER_MPV"

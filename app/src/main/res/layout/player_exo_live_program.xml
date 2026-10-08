@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The ExoPlayer engine's live-channel program block (IPTV only): what is on
+     now - title, air window, progress, synopsis - then what is next. It used to
+     sit inside activity_player.xml's own overlay; the overlay is the shared
+     player_chrome.xml now, so this is inflated into that layout's
+     `chrome_extra_top` slot, keeping the exact place it had (inside the info
+     scroll, right under the title). Hidden for VOD, where the episode row below
+     carries instead. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/live_program_block"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="2dp"
+    android:orientation="vertical"
+    android:visibility="gone">
+
+    <!-- "LIVE  •  CH 5  •  SPORTS  •  8:00 PM – 9:30 PM" -->
+    <TextView
+        android:id="@+id/live_program_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:fontFamily="@font/oswald_medium"
+        android:textColor="@color/kb_accent"
+        android:textSize="14sp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <TextView
+        android:id="@+id/live_program_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:fontFamily="@font/oswald_semibold"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="24sp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+
+    <ProgressBar
+        android:id="@+id/live_program_progress"
+        style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="6dp"
+        android:layout_marginTop="6dp"
+        android:max="1000"
+        android:progressTint="@color/kb_accent"
+        android:progressBackgroundTint="#338891A0" />
+
+    <TextView
+        android:id="@+id/live_program_desc"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:fontFamily="@font/oswald_medium"
+        android:textColor="@color/kb_text_lo"
+        android:textSize="15sp"
+        android:maxLines="4"
+        android:ellipsize="end"
+        android:lineSpacingExtra="2dp" />
+
+    <TextView
+        android:id="@+id/live_program_next"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:fontFamily="@font/oswald_medium"
+        android:textColor="@color/kb_text_lo"
+        android:textSize="14sp"
+        android:maxLines="1"
+        android:ellipsize="end" />
+</LinearLayout>

@@ -216,6 +216,7 @@ class PlayerPillAccentContractTest {
         // there is what the MPV player's SKIP INTRO pill was still wearing.
         listOf(
             "../res/layout/activity_player.xml",
+            "../res/layout/player_chrome.xml",
             "../res/layout/activity_mpv_player.xml",
             "../res/layout/activity_external_player.xml"
         ).forEach { layout ->

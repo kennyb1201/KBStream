@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The ExoPlayer engine's live-channel controls (IPTV only), leading the
+     control bar: the D-pad/CH+ keys already zap while the overlay is hidden,
+     but with the overlay up there has to be something on screen to press. They
+     used to sit inside activity_player.xml's own overlay; the overlay is the
+     shared player_chrome.xml now, so this is inflated into that layout's
+     `chrome_extra_controls` slot, keeping the exact place they had (first in
+     the bar, before play/pause and the rest of the shared buttons).
+
+     Up from each lands on the shared scrub bar, the same target every button in
+     the shared row names. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal">
+
+    <TextView
+        android:id="@+id/btn_channel_up"
+        android:layout_width="64dp"
+        android:layout_height="40dp"
+        android:layout_marginEnd="10dp"
+        android:background="@drawable/mpv_control_bg"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:fontFamily="@font/oswald_semibold"
+        android:nextFocusUp="@id/chrome_seekbar"
+        android:gravity="center"
+        android:text="CH ▲"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="15sp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/btn_channel_down"
+        android:layout_width="64dp"
+        android:layout_height="40dp"
+        android:layout_marginEnd="10dp"
+        android:background="@drawable/mpv_control_bg"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:fontFamily="@font/oswald_semibold"
+        android:nextFocusUp="@id/chrome_seekbar"
+        android:gravity="center"
+        android:text="CH ▼"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="15sp"
+        android:visibility="gone" />
+
+    <!-- Channel guide (IPTV only): opens the browsable lineup overlay so a
+         channel can be picked deliberately instead of stepped to with CH ▲ /
+         CH ▼. Long-pressing OK opens the same overlay from the video surface. -->
+    <TextView
+        android:id="@+id/btn_guide"
+        android:layout_width="64dp"
+        android:layout_height="40dp"
+        android:layout_marginEnd="10dp"
+        android:background="@drawable/mpv_control_bg"
+        android:contentDescription="Channel guide"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:fontFamily="@font/oswald_semibold"
+        android:gravity="center"
+        android:nextFocusUp="@id/chrome_seekbar"
+        android:text="GUIDE"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="13sp"
+        android:visibility="gone" />
+</LinearLayout>

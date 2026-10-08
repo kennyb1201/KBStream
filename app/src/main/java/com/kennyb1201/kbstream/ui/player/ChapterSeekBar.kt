@@ -61,6 +61,16 @@ class ChapterSeekBar @JvmOverloads constructor(
     private var marks: List<ChapterMark> = emptyList()
     private var durationMs: Long = 0L
 
+    /**
+     * The markers currently drawn, as last handed to [setChapters]. Read-only,
+     * and the seam the shared chrome's contract test asks through - the ticks
+     * themselves are paint-only, so there is nothing else to observe.
+     */
+    internal val chapterMarks: List<ChapterMark> get() = marks
+
+    /** The duration the markers are positioned against, as last set. */
+    internal val chapterDurationMs: Long get() = durationMs
+
     private val density = resources.displayMetrics.density
 
     private val tickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {

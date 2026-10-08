@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -209,12 +208,20 @@ class PlaybackEndedKeyGuardContractTest {
         // The button, the seek bar's OK and OK-with-the-controls-down are the
         // same press the media keys make, and OK is the common one on a TV
         // remote: they have to refuse a post-end toggle for the same reason (see
-        // togglePlayPauseFromControls).
+        // togglePlayPauseFromControls). The play/pause button now reaches mpv
+        // through the shared chrome's PlayerChromeHost.
+        val source = readSource(MPV)
+        assertTrue(
+            "the shared chrome's play/pause must go through the guard",
+            source.contains("override fun onChromePlayPause() {") &&
+                source.substringAfter("override fun onChromePlayPause() {")
+                    .substringBefore("}")
+                    .contains("togglePlayPauseFromControls()")
+        )
         val controls = functionBody(MPV, "private fun setupControls() {")
-        assertEquals(
-            "the play/pause button and the seek bar's OK must both go through the guard",
-            2,
-            controls.split("togglePlayPauseFromControls()").size - 1
+        assertTrue(
+            "the seek bar's OK must still go through the guard",
+            controls.contains("togglePlayPauseFromControls()")
         )
         val dispatch = functionBody(MPV, "override fun dispatchKeyEvent(")
         assertTrue(

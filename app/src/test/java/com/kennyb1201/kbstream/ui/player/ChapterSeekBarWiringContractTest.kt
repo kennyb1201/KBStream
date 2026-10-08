@@ -77,17 +77,21 @@ class ChapterSeekBarWiringContractTest {
 
     @Test
     fun `both bars are the chapter-capable view, under the same ids`() {
-        val mpv = layout("layout/activity_mpv_player.xml")
+        // There is one bar now, in the shared player_chrome.xml both activities
+        // include: MPV draws its marks on it, and the Exo engine keeps the same
+        // view (and no chapter reader) so a file with no marks draws identically.
+        val shared = layout("layout/player_chrome.xml")
         val exo = layout("layout/activity_player.xml")
         assertTrue(
-            "the MPV bar keeps its id",
-            mpv.contains("com.kennyb1201.kbstream.ui.player.ChapterSeekBar") &&
-                mpv.contains("android:id=\"@+id/mpv_seekbar\"")
+            "the shared bar is the chapter-capable view and MPV draws its marks on it",
+            shared.contains("com.kennyb1201.kbstream.ui.player.ChapterSeekBar") &&
+                shared.contains("android:id=\"@+id/chrome_seekbar\"")
         )
         assertTrue(
-            "the Exo bar keeps its id, so it draws identically with no marks",
-            exo.contains("com.kennyb1201.kbstream.ui.player.ChapterSeekBar") &&
-                exo.contains("android:id=\"@+id/seekbar\"")
+            "and the Exo engine draws the very same bar, so it draws identically " +
+                "with no marks",
+            exo.contains("@layout/player_chrome") &&
+                !exo.contains("com.kennyb1201.kbstream.ui.player.ChapterSeekBar")
         )
     }
 

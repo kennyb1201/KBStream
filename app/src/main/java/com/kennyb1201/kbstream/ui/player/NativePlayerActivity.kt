@@ -79,11 +79,14 @@ import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
+import com.kennyb1201.kbstream.data.player.LanePoolDataSourceFactory
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.StreamDiskCache
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
+import com.kennyb1201.kbstream.data.player.fetchLanesFor
+import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
@@ -187,6 +190,26 @@ private const val DV_STRIP_REBUILD_DELAY_MS = 3_000L
 private const val DECODER_RESOURCE_RETRY_DELAY_MS = 6_000L
 
 /**
+ * The card a session parks on when the decoder pool is the reason it stopped.
+ * Written once so the wedged-pool path and the no-source-left path cannot
+ * drift into two different explanations of the same failure.
+ */
+private const val DECODER_EXHAUSTED_MESSAGE =
+    "This TV has run out of video decoder resources.\n" +
+        "Restart the app, or pick a 1080p source for this title."
+
+/**
+ * The resolution tier a stream's own text must claim (see
+ * [StreamRanker.resolutionRank]) before an unknown-bitrate source is treated as
+ * heavy enough for parallel fetch lanes: 5 is 2160p/4K.
+ *
+ * A tier rather than the string itself, because it is the same reading the
+ * ranker and the auto-play quality ceiling use, so the lane gate cannot drift
+ * from either.
+ */
+private const val UHD_RESOLUTION_RANK = 5
+
+/**
  * How long a source switch leaves the box alone between releasing the old
  * player and building the next one. A switch reuses the same output Surface
  * for the new codec, and on this Realtek stack the outgoing 4K decoder's
@@ -226,7 +249,6 @@ internal val SPEED_OPTIONS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 val ASPECT_MODES = listOf("Fit", "Zoom", "Fill", "16:9", "4:3")
 private const val ASPECT_MODE_FORCE_16_9 = 3
 private const val ASPECT_MODE_FORCE_4_3 = 4
-private const val CONTROLS_HIDE_DELAY_MS = 6_000L
 // Shared with the MPV player, which raises the same card with the same timing.
 internal const val NEXT_UP_COUNTDOWN_SECONDS = 5
 
@@ -325,7 +347,7 @@ private const val CHANNEL_GUIDE_ROWS_PER_CHANNEL = 2
  */
 private const val CHANNEL_GUIDE_WATCH_MS = 2_500L
 
-class NativePlayerActivity : ComponentActivity() {
+class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     /**
      * The MPV handoff's launch intent: this session replayed at the BACKUP
@@ -543,7 +565,10 @@ class NativePlayerActivity : ComponentActivity() {
     private lateinit var episodeTitleView: TextView
     private lateinit var badgeRow: LinearLayout
     private lateinit var overviewText: TextView
-    private lateinit var seekbarRow: LinearLayout
+    // The one shared overlay (player_chrome.xml), driven by this engine through
+    // PlayerChromeHost. Its views are bound by their neutral chrome_* ids, and
+    // its visibility, auto-hide and focus order live in the chrome itself.
+    private var chrome: PlayerChrome? = null
     private lateinit var seekbar: SeekBar
     private lateinit var currentTime: TextView
     private lateinit var totalTime: TextView
@@ -885,15 +910,16 @@ class NativePlayerActivity : ComponentActivity() {
     // Discovers Stremio-addon subtitles and merges them into the player as
     // sidecar text tracks (see AddonSubtitleController).
     private lateinit var addonSubtitleController: AddonSubtitleController
-    private var controlsVisible = false
+    /**
+     * True while the shared overlay is up. The chrome owns its visibility now
+     * (player_chrome.xml, [PlayerChrome]); this reads it, so every existing "is
+     * the overlay up?" decision keeps the same answer.
+     */
+    private val controlsVisible: Boolean
+        get() = chrome?.isVisible == true
 
     // Hold-to-scrub acceleration
     private var scrubDirection = 0  // -1 = back, 1 = forward, 0 = idle
-    // True while a touch drag is on the seek bar itself. A TV remote never
-    // drags (it uses the key path), but a touchscreen or a pointer remote
-    // does, and the two share the same "do not let the clock fight the scrub"
-    // rule below.
-    private var isBarDragging = false
     private var scrubStepMs = 0L
     /**
      * The position the viewer has scrubbed TO.
@@ -1118,12 +1144,33 @@ class NativePlayerActivity : ComponentActivity() {
     private var retryAttempt = 0
 
     /**
+     * This session's rebuild allowance, keyed by failure cause (see
+     * RebuildBudget.kt). Past the cap the ladder stops instead of rebuilding the
+     * same component again: the field session this exists for spent nine
+     * rebuilds on one file, each one asking a wedged decoder pool for a decoder
+     * it could not hand out.
+     */
+    private val rebuildBudget = RebuildBudget()
+
+    /**
+     * This session's parallel fetch lanes, when the source is heavy enough to
+     * have earned them (see StreamFetchLanes.kt). Null on the ordinary path —
+     * most sources read through the shared single-stream client — and released
+     * with the session either way.
+     */
+    private var lanePool: com.kennyb1201.kbstream.data.player.LanePoolDataSourceFactory? = null
+
+    /**
      * The one pending retry rebuild. Held as a field so [scheduleRetry] can
      * drop a queued attempt before posting a new one: two media3 errors landing
      * together used to post two runnables and double-rebuild the player.
      */
     private val retryRunnable = Runnable {
         retryAttempt++
+        // Counted where the rebuild actually happens: this is the only place
+        // that spends the budget [scheduleRetry] consults.
+        PlaybackRecoveryRules.failureCauseKey(lastPlaybackError)
+            ?.let { rebuildBudget.record(it) }
         errorMessageStr = null
         recreatePlayer()
     }
@@ -3583,15 +3630,32 @@ class NativePlayerActivity : ComponentActivity() {
         zapNowProgress = findViewById(R.id.zap_now_progress)
         zapNowDesc = findViewById(R.id.zap_now_desc)
         zapNextTitle = findViewById(R.id.zap_next_title)
-        liveProgramBlock = findViewById(R.id.live_program_block)
-        liveProgramStatus = findViewById(R.id.live_program_status)
-        liveProgramTitle = findViewById(R.id.live_program_title)
-        liveProgramProgress = findViewById(R.id.live_program_progress)
-        liveProgramDesc = findViewById(R.id.live_program_desc)
-        liveProgramNext = findViewById(R.id.live_program_next)
-        btnChannelUp = findViewById(R.id.btn_channel_up)
-        btnChannelDown = findViewById(R.id.btn_channel_down)
-        btnGuide = findViewById(R.id.btn_guide)
+        // Engine-only views inflated into the shared chrome's slots, so they keep
+        // the exact place they had in this layout before the overlay was unified:
+        // the live program block inside the info scroll, the channel buttons
+        // leading the control bar. The slots themselves are GONE in the shared
+        // layout and are revealed here.
+        val liveSlot = findViewById<LinearLayout>(R.id.chrome_extra_top)
+        val liveBlock = layoutInflater.inflate(R.layout.player_exo_live_program, liveSlot, false)
+        liveSlot.addView(liveBlock)
+        liveSlot.visibility = View.VISIBLE
+        liveProgramBlock = liveBlock
+        liveProgramStatus = liveBlock.findViewById(R.id.live_program_status)
+        liveProgramTitle = liveBlock.findViewById(R.id.live_program_title)
+        liveProgramProgress = liveBlock.findViewById(R.id.live_program_progress)
+        liveProgramDesc = liveBlock.findViewById(R.id.live_program_desc)
+        liveProgramNext = liveBlock.findViewById(R.id.live_program_next)
+        val channelSlot = findViewById<LinearLayout>(R.id.chrome_extra_controls)
+        val channelBar = layoutInflater.inflate(
+            R.layout.player_exo_channel_buttons,
+            channelSlot,
+            false
+        )
+        channelSlot.addView(channelBar)
+        channelSlot.visibility = View.VISIBLE
+        btnChannelUp = channelBar.findViewById(R.id.btn_channel_up)
+        btnChannelDown = channelBar.findViewById(R.id.btn_channel_down)
+        btnGuide = channelBar.findViewById(R.id.btn_guide)
         channelGuideContainer = findViewById(R.id.channel_guide_container)
         channelGuideTitle = findViewById(R.id.channel_guide_title)
         channelGuideList = findViewById(R.id.channel_guide_list)
@@ -3605,33 +3669,36 @@ class NativePlayerActivity : ComponentActivity() {
         btnRetry = findViewById(R.id.btn_retry)
         btnChangeSource = findViewById(R.id.btn_change_source)
         btnSwitchPlayer = findViewById(R.id.btn_switch_player)
-        btnSkipIntro = findViewById(R.id.btn_skip_intro)
-        controlsOverlay = findViewById(R.id.controls_overlay)
-        playerClock = findViewById(R.id.player_clock)
-        endsAtClock = findViewById(R.id.ends_at_clock)
+        // The one shared overlay, driven by this engine through PlayerChromeHost.
+        // Its views are the neutral chrome_* ids of player_chrome.xml; the bar
+        // and its auto-hide timing are the shared six seconds.
+        chrome = PlayerChrome(findViewById(R.id.chrome_layer), this)
+        btnSkipIntro = findViewById(R.id.chrome_skip_intro)
+        controlsOverlay = findViewById(R.id.chrome_root)
+        playerClock = findViewById(R.id.chrome_clock)
+        endsAtClock = findViewById(R.id.chrome_ends_at)
         splashContainer = findViewById(R.id.splash_container)
         splashBackdrop = findViewById(R.id.splash_backdrop)
         splashClearLogo = findViewById(R.id.splash_clear_logo)
-        clearLogo = findViewById(R.id.clear_logo)
-        itemNameView = findViewById(R.id.item_name)
-        episodeLabel = findViewById(R.id.episode_label)
-        episodeTitleView = findViewById(R.id.episode_title)
-        badgeRow = findViewById(R.id.badge_row)
-        overviewText = findViewById(R.id.overview_text)
-        seekbarRow = findViewById(R.id.seekbar_row)
-        seekbar = findViewById(R.id.seekbar)
-        currentTime = findViewById(R.id.current_time)
-        totalTime = findViewById(R.id.total_time)
-        btnPlayPause = findViewById(R.id.btn_play_pause)
-        btnNext = findViewById(R.id.btn_next)
-        btnSource = findViewById(R.id.btn_source)
-        btnPlayerSwitch = findViewById(R.id.btn_player_switch)
-        btnPlayerExternal = findViewById(R.id.btn_player_external)
-        btnAudio = findViewById(R.id.btn_audio)
-        btnSubtitle = findViewById(R.id.btn_subtitle)
-        btnSpeed = findViewById(R.id.btn_speed)
-        btnAspect = findViewById(R.id.btn_aspect)
-        btnInfo = findViewById(R.id.btn_info)
+        clearLogo = findViewById(R.id.chrome_clear_logo)
+        itemNameView = findViewById(R.id.chrome_item_name)
+        episodeLabel = findViewById(R.id.chrome_episode_label)
+        episodeTitleView = findViewById(R.id.chrome_episode_title)
+        badgeRow = findViewById(R.id.chrome_badge_row)
+        overviewText = findViewById(R.id.chrome_overview)
+        seekbar = findViewById(R.id.chrome_seekbar)
+        currentTime = findViewById(R.id.chrome_position)
+        totalTime = findViewById(R.id.chrome_duration)
+        btnPlayPause = findViewById(R.id.chrome_btn_play_pause)
+        btnNext = findViewById(R.id.chrome_btn_next)
+        btnSource = findViewById(R.id.chrome_btn_source)
+        btnPlayerSwitch = findViewById(R.id.chrome_btn_player_switch)
+        btnPlayerExternal = findViewById(R.id.chrome_btn_player_external)
+        btnAudio = findViewById(R.id.chrome_btn_audio)
+        btnSubtitle = findViewById(R.id.chrome_btn_subtitle)
+        btnSpeed = findViewById(R.id.chrome_btn_speed)
+        btnAspect = findViewById(R.id.chrome_btn_aspect)
+        btnInfo = findViewById(R.id.chrome_btn_info)
         infoPanel = findViewById(R.id.info_panel)
         infoAddonIcon = findViewById(R.id.info_addon_icon)
         infoTitle = findViewById(R.id.info_title)
@@ -3640,7 +3707,7 @@ class NativePlayerActivity : ComponentActivity() {
         infoFile = findViewById(R.id.info_file)
         infoVideo = findViewById(R.id.info_video)
         infoAudio = findViewById(R.id.info_audio)
-        btnSettings = findViewById(R.id.btn_settings)
+        btnSettings = findViewById(R.id.chrome_btn_settings)
         pickerContainer = findViewById(R.id.picker_container)
         pickerTitle = findViewById(R.id.picker_title)
         settingsContainer = findViewById(R.id.settings_container)
@@ -3713,8 +3780,8 @@ class NativePlayerActivity : ComponentActivity() {
         btnOffsetMinus = findViewById(R.id.btn_offset_minus)
         subtitleOffsetValue = findViewById(R.id.subtitle_offset_value)
         btnOffsetPlus = findViewById(R.id.btn_offset_plus)
-        castSection = findViewById(R.id.cast_section)
-        castRow = findViewById(R.id.cast_row)
+        castSection = findViewById(R.id.chrome_cast_section)
+        castRow = findViewById(R.id.chrome_cast_row)
         becauseYouWatchedPanel = findViewById(R.id.because_you_watched_panel)
         bywTitle = findViewById(R.id.byw_title)
         bywRow = findViewById(R.id.byw_row)
@@ -3817,9 +3884,6 @@ class NativePlayerActivity : ComponentActivity() {
     // holds focus. The dispatcher callback handles it too; see bindViews.
     @SuppressLint("GestureBackNavigation")
     private fun setupListeners() {
-        // Play/Pause
-        btnPlayPause.setOnClickListener { togglePlayPause() }
-
         // Live channel change from the overlay (the D-pad / CH+ keys zap too,
         // but only while the overlay is hidden — see liveZapKeysFree).
         btnChannelUp?.setOnClickListener { zapByOffset(+1) }
@@ -3848,17 +3912,6 @@ class NativePlayerActivity : ComponentActivity() {
             v.scaleX = if (focused) 1.04f else 1f
             v.scaleY = if (focused) 1.04f else 1f
         }
-        btnSkipIntro.setOnClickListener {
-            val stamp = activeIntroStamp ?: return@setOnClickListener
-            val durationMs = exoPlayer?.duration ?: 0L
-            val targetMs = if (durationMs > 0L && durationMs != C.TIME_UNSET) {
-                stamp.endMs.coerceAtMost(durationMs)
-            } else stamp.endMs
-            exoPlayer?.seekTo(targetMs)
-            activeIntroStamp = null
-            btnSkipIntro.visibility = View.GONE
-        }
-
         // Retry
         btnRetry.setOnClickListener {
             retryAttempt = 0
@@ -3886,28 +3939,11 @@ class NativePlayerActivity : ComponentActivity() {
             if (focused) removeAutoHide() else scheduleAutoHide()
         }
 
-        // Overlay control buttons
-        btnNext.setOnClickListener { advanceToNextEpisode() }
-        btnSource.setOnClickListener { showPicker(PickerMode.SOURCE) }
-        btnPlayerSwitch.setOnClickListener { switchPlayerManually() }
-        btnPlayerSwitch.setOnFocusChangeListener { _, focused ->
-            if (focused) removeAutoHide() else scheduleAutoHide()
-        }
-        btnPlayerExternal.setOnClickListener {
-            // A press is a question, so a refusal has to say why rather than
-            // look like a dead button - the same rule as the SWITCH buttons
-            // (see installManualSwitchFeedback).
-            if (!handOffToExternal()) {
-                Toast.makeText(
-                    this,
-                    "Can't open another player right now",
-                    Toast.LENGTH_SHORT
-                ).show()
-            }
-        }
-        btnPlayerExternal.setOnFocusChangeListener { _, focused ->
-            if (focused) removeAutoHide() else scheduleAutoHide()
-        }
+        // The shared control-bar buttons are wired once by PlayerChrome and
+        // reach this engine through the PlayerChromeHost methods below - play /
+        // pause, next, source, audio, subtitles, speed, aspect, switch,
+        // external, info, settings and the skip prompt all land on the same
+        // actions they always did. Only what is this engine's own is bound here.
 
         // "Up next" popup buttons
         btnNextPlay.setOnClickListener {
@@ -3925,26 +3961,6 @@ class NativePlayerActivity : ComponentActivity() {
             )
         }
         btnNextDismiss.setOnClickListener { finish() }
-        btnSource.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
-        btnAudio.setOnClickListener { showPicker(PickerMode.AUDIO) }
-        btnAudio.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
-        btnSubtitle.setOnClickListener { showPicker(PickerMode.SUBTITLE) }
-        btnSpeed.setOnClickListener { showPicker(PickerMode.SPEED) }
-        btnAspect.setOnClickListener {
-            resizeModeIndex = (resizeModeIndex + 1) % ASPECT_MODES.size
-            applyAspectMode(resizeModeIndex)
-            btnAspect.text = ASPECT_MODES[resizeModeIndex]
-            PlayerTitlePrefs.remember(
-                this,
-                titleKey,
-                (PlayerTitlePrefs.get(this, titleKey) ?: PlayerTitlePrefs.Prefs())
-                    .copy(aspectRatio = resizeModeIndex)
-            )
-            scheduleAutoHide()
-        }
-        btnAspect.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
-        btnInfo.setOnClickListener { toggleInfoPanel() }
-        btnInfo.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
         infoPanel.setOnKeyListener { _, keyCode, event ->
             // OK/Back close the panel; D-pad is swallowed so focus can't
             // escape to the video surface while it's up.
@@ -3956,33 +3972,14 @@ class NativePlayerActivity : ComponentActivity() {
                 else -> true
             }
         }
-        btnSettings.setOnClickListener { toggleSettingsPanel() }
-        btnSettings.setOnFocusChangeListener { _, focused -> if (focused) removeAutoHide() else scheduleAutoHide() }
-
         // Scrim (dismiss panels)
         scrim.setOnClickListener { dismissAllPanels() }
 
-        // Seekbar
-        seekbar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(sb: SeekBar, progress: Int, fromUser: Boolean) {
-                if (fromUser) {
-                    val durationMs = exoPlayer?.duration ?: 0L
-                    val posMs = (progress.toLong() * durationMs) / 10_000L
-                    currentTime.text = formatMillis(posMs)
-                }
-            }
-            override fun onStartTrackingTouch(sb: SeekBar) {
-                isBarDragging = true
-                removeAutoHide()
-            }
-            override fun onStopTrackingTouch(sb: SeekBar) {
-                isBarDragging = false
-                val durationMs = exoPlayer?.duration ?: 0L
-                val posMs = (sb.progress.toLong() * durationMs) / 10_000L
-                exoPlayer?.seekTo(posMs)
-                scheduleAutoHide()
-            }
-        })
+        // Seekbar: the touch/scrub listener is the shared chrome's now - it
+        // seeks through PlayerChromeHost.onChromeSeekTo on release, and reports
+        // the drag through its own isScrubbing. What stays here is this engine's
+        // own key handling, which a bare SeekBar cannot give: LEFT/RIGHT are a
+        // hold-to-scrub, OK is play/pause, and UP lands on the first cast tile.
 
         // Quick-press = 10s jump; holding (past 400ms) = accelerated scrubbing.
         seekbar.setOnKeyListener { _, keyCode, event ->
@@ -3993,7 +3990,8 @@ class NativePlayerActivity : ComponentActivity() {
                 // that follows the controls appearing: without it, OK on the
                 // bar did nothing at all and pausing meant a DOWN into the row
                 // first. One press, one toggle - a held OK would otherwise walk
-                // the pause state back and forth.
+                // the pause state back and forth. (The bar is the shared
+                // chrome's; see PlayerChrome.)
                 KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
                     if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                         togglePlayPause()
@@ -4842,9 +4840,50 @@ class NativePlayerActivity : ComponentActivity() {
         // a slow-but-valid source does not get killed before the retry
         // ladder can act. The startup / stall / black-video watchdogs still
         // bound total wait time.
-        val httpFactory =
+        val sharedHttpFactory =
             androidx.media3.datasource.okhttp.OkHttpDataSource.Factory(httpClient)
                 .setUserAgent(agent)
+
+        // Non-UA headers (e.g. Referer for addon hosts) every source carries,
+        // read here because the lane pool below takes them at construction.
+        val extraHeaders = StreamUserAgent.withoutUserAgent(streamHeaders)
+            .filterValues { it.isNotBlank() }
+
+        // Fetch lanes for a heavy source (see StreamFetchLanes.kt): a 4K remux
+        // is far past what one HTTP/2 connection can carry, so it reads on
+        // several independent pools while everything else keeps the app's one
+        // shared, warm client and pays no extra connections. Per-playback —
+        // [lanePool] goes with the session.
+        val laneCount = fetchLanesFor(
+            declaredBitrateBps = streamBitrate,
+            claimsUhd = sources.getOrNull(currentSourceIndex)
+                ?.let { StreamRanker.resolutionRank(it) >= UHD_RESOLUTION_RANK } == true,
+            isLive = isLiveChannel
+        )
+        val laneFactory = if (laneCount > 1) {
+            LanePoolDataSourceFactory(
+                lanes = laneCount,
+                userAgent = agent,
+                headers = extraHeaders,
+                laneClient = { oneLaneHttpClient() }
+            ).also { pooled ->
+                // A previous session's lanes go with that session.
+                lanePool?.release()
+                lanePool = pooled
+            }
+        } else {
+            null
+        }
+
+        // The shared client still carries the extra headers as its defaults —
+        // the lane pool already took them at construction.
+        if (extraHeaders.isNotEmpty() && laneFactory == null) {
+            sharedHttpFactory.setDefaultRequestProperties(extraHeaders)
+        }
+
+        // What a non-YouTube source reads through.
+        val httpFactory: androidx.media3.datasource.DataSource.Factory =
+            laneFactory ?: sharedHttpFactory
 
         // Trailer playback from TrailerPlayerLauncher hands us googlevideo
         // signed URLs. Those 403 on open-ended/unbounded requests unless the
@@ -4888,9 +4927,6 @@ class NativePlayerActivity : ComponentActivity() {
                     )
             }
 
-        val extraHeaders = StreamUserAgent.withoutUserAgent(streamHeaders)
-            .filterValues { it.isNotBlank() }
-        if (extraHeaders.isNotEmpty()) httpFactory.setDefaultRequestProperties(extraHeaders)
         // Non-UA headers (e.g. Referer for addon hosts) must also reach
         // googlevideo streams served through the chunked YouTube source.
         if (extraHeaders.isNotEmpty()) {
@@ -5574,6 +5610,12 @@ class NativePlayerActivity : ComponentActivity() {
             exoPlayer = null
             playerReleasedAtMs = System.currentTimeMillis()
         }
+        // The session's fetch lanes go with it: every pool emptied and every
+        // in-flight reader cancelled, so nothing keeps a socket or a thread
+        // alive behind the player that owned them (see StreamFetchLanes.kt).
+        // A rebuild that needs lanes builds a fresh pool below.
+        lanePool?.release()
+        lanePool = null
         val wait = rebuildSettleRemainingMs(
             settleMs = settleMs,
             releasedAtMs = playerReleasedAtMs,
@@ -6063,10 +6105,19 @@ class NativePlayerActivity : ComponentActivity() {
             // probes below do too. The field log shows all of them coming back
             // OMX_ErrorInsufficientResources (0x80001000), four rebuilds and
             // ~30s of black screen ending exactly where the first attempt did.
-            // Do the one thing that can help instead: the next ranked source,
-            // which is normally the smaller one this box can still decode.
+            //
+            // Which recovery is right depends on whether this process's pool
+            // has ever worked — see DecoderPoolHealth. Do NOT walk the source
+            // ladder blindly: a switch is a rebuild is a decoder request, and on
+            // a pool that is already wedged each one adds pressure instead of
+            // relieving it (the field session's nine-rebuild spiral).
             if (resourceExhausted && !decoderResourceFallbackDone) {
                 decoderResourceFallbackDone = true
+                // Recorded process-wide before anything else happens: from here
+                // on a stall in this session is read as pool pressure rather
+                // than a bad source, so the rebuffer downshift stops feeding the
+                // spiral (see maybeDownshiftOnRebuffer).
+                DecoderPoolHealth.noteExhaustion()
                 // A 0x80001000 is the box being out of decoders, not a verdict on
                 // Dolby Vision: the field log has the vendor DV decoder AND the
                 // plain HEVC decoder returning it for the same 4K source. A
@@ -6076,6 +6127,41 @@ class NativePlayerActivity : ComponentActivity() {
                     AppPreferences.clearDvPassthroughFailure(this@NativePlayerActivity)
                 }
                 errorMessageStr = null
+                // The pool worked in this process and is now wedged by our own
+                // rebuilds. A smaller source asks the SAME pool for the SAME
+                // decoder, so the source ladder is skipped entirely and the
+                // session goes straight to the software engine, which needs no
+                // MediaCodec at all: zero source switches, zero rebuilds.
+                if (DecoderPoolHealth.everRenderedFirstFrame) {
+                    Log.w(
+                        "PLAYER_RETRY",
+                        "Decoder resources exhausted after this process already " +
+                            "decoded a frame — the pool is wedged by our own " +
+                            "rebuilds, so a smaller source cannot help: handing to " +
+                            "the MPV engine with zero source switches and zero rebuilds"
+                    )
+                    PlaybackEngineTrace.note(
+                        PlaybackEngineTrace.describe(
+                            cause = "decoder pool exhausted after a successful decode",
+                            detail = "pool wedged by this session's own rebuilds — " +
+                                "handing to MPV, no source switch"
+                        )
+                    )
+                    if (handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)) return
+                    retryExhausted = true
+                    errorMessageStr = DECODER_EXHAUSTED_MESSAGE
+                    updateUIError()
+                    return
+                }
+                // A fresh pool refused the first configure: this file may
+                // genuinely exceed the box (or a concurrent holder has the
+                // decoder), so one smaller source is legitimate. Bounded to the
+                // one attempt by decoderResourceFallbackDone above.
+                Log.w(
+                    "PLAYER_RETRY",
+                    "Decoder resources exhausted on a pool that has never decoded " +
+                        "in this process — trying one smaller source"
+                )
                 val switching = tryNextSource(
                     delayMs = DECODER_RESOURCE_RETRY_DELAY_MS,
                     statusText = "This TV is out of video decoder resources — " +
@@ -6092,9 +6178,7 @@ class NativePlayerActivity : ComponentActivity() {
                 // path can fall back to software instead. Take that.
                 if (handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)) return
                 retryExhausted = true
-                errorMessageStr =
-                    "This TV has run out of video decoder resources.\n" +
-                        "Restart the app, or pick a 1080p source for this title."
+                errorMessageStr = DECODER_EXHAUSTED_MESSAGE
                 updateUIError()
                 return
             }
@@ -6485,6 +6569,12 @@ class NativePlayerActivity : ComponentActivity() {
         if (firstFrameRendered) return
         firstFrameRendered = true
         firstFrameRenderedAtMs = System.currentTimeMillis()
+        // Process-wide, so a later 0x80001000 in THIS or any other session can
+        // tell "the pool worked and our own rebuilds wedged it" apart from "a
+        // fresh pool refused this file". Only ExoPlayer reports it; MPV decodes
+        // through FFmpeg and never touches the MediaCodec pool. See
+        // DecoderPoolHealth.
+        DecoderPoolHealth.noteFirstFrame()
         // A frame actually rendered, so THIS addon works for this title: the
         // next episode's list and the picker's own order start with it instead
         // of with whichever addon the ranker happened to put first (see
@@ -7702,13 +7792,12 @@ class NativePlayerActivity : ComponentActivity() {
     }
 
     private fun updateSeekBarPosition(posMs: Long, durationMs: Long) {
-        if (durationMs > 0) {
-            seekbar.progress = ((posMs * 10_000L) / durationMs).toInt().coerceIn(0, 10_000)
-            currentTime.text = formatMillis(posMs)
-            totalTime.text = formatDurationMillis(durationMs)
+        // The shared bar and its two readouts are painted by the chrome, at its
+        // own 1000-step resolution; the clock and the play/pause glyph are left
+        // alone, since this position is the one the scrub OWNS - ahead of the
+        // player, not the playhead the clock should report.
+        chrome?.setScrubPosition(posMs, durationMs)
     }
-
-}
 
     private fun stepSeekBy(deltaMs: Long) {
         val player = exoPlayer ?: return
@@ -7742,7 +7831,9 @@ class NativePlayerActivity : ComponentActivity() {
     private fun commitSeekFromBar() {
         val durationMs = exoPlayer?.duration ?: 0L
         if (durationMs > 0) {
-            val posMs = (seekbar.progress.toLong() * durationMs) / 10_000L
+            // The shared bar's own resolution is 1000 (PlayerChrome), not the
+            // 10000 this engine's private bar used to declare.
+            val posMs = (seekbar.progress.toLong() * durationMs) / 1_000L
             exoPlayer?.seekTo(posMs)
         }
     }
@@ -8015,7 +8106,9 @@ class NativePlayerActivity : ComponentActivity() {
      *
      * Raising the overlay is deliberately not one of the two any more: it lands
      * on the seek bar instead, so that the LEFT/RIGHT that follows scrubs rather
-     * than walking the row. See [focusControls].
+     * than walking the row. The chrome's own focusControls orders those two, and
+     * asks this engine which of them applies (see chromeSeekBarScrubbable and
+     * chromeFocusPrimary).
      */
     private fun focusControlsPrimary() {
         if (btnSkipIntro.visibility == View.VISIBLE) {
@@ -8025,32 +8118,6 @@ class NativePlayerActivity : ComponentActivity() {
         } else {
             btnPlayPause.requestFocus()
         }
-    }
-
-    /**
-     * Hands the D-pad to the overlay as it comes up: the seek bar, or the
-     * primary button where there is no bar that could do anything.
-     *
-     * Raising the controls used to land on play/pause, which left LEFT/RIGHT
-     * meaning "walk the button row" - so a viewer who raised the controls to
-     * jump ten seconds had to press UP onto the bar before LEFT/RIGHT would seek
-     * anything at all. Landing on the bar costs the row nothing: every button in
-     * it declares `nextFocusUp` to the bar and the bar declares `nextFocusDown`
-     * back to play/pause, so the row is still one press away, and OK on the bar
-     * plays and pauses (see its key listener) - which is what the press after
-     * the overlay appeared did before this anyway.
-     *
-     * The bar only takes it where it can do something with it: a skip prompt is
-     * the primary target while it is up, live television has no duration to
-     * scrub, and a stream that never reported one would leave the bar swallowing
-     * LEFT/RIGHT and giving back nothing.
-     */
-    private fun focusControls() {
-        val scrubbable = !isLiveChannel &&
-            btnSkipIntro.visibility != View.VISIBLE &&
-            exoPlayer?.duration?.takeIf { it > 0 } != null
-        if (scrubbable && seekbar.requestFocus()) return
-        focusControlsPrimary()
     }
 
     /**
@@ -8070,29 +8137,20 @@ class NativePlayerActivity : ComponentActivity() {
     private fun showControls() {
         stopSurfaceScrub()
 
-        controlsVisible = true
-        controlsOverlay.visibility = View.VISIBLE
-        seekbarRow.visibility = View.VISIBLE
+        // The shared chrome brings the overlay and its seek row up, carries the
+        // clock with them, parks the D-pad on its first stop - unless a panel
+        // owns the screen, which chromeMayTakeFocus answers - and starts the
+        // auto-hide countdown whose fire onChromeAutoHide answers.
+        chrome?.show()
         updateControlsInfo()
         updateClock()
-        playerClock.visibility = View.VISIBLE
-        endsAtClock.visibility = View.VISIBLE
         clockHandler.removeCallbacks(clockRunnable)
         clockHandler.post(clockRunnable)
-        // If a panel is open, the panel owns focus — do not steal it.
-        if (infoPanel.visibility == View.VISIBLE) {
-            // Info panel keeps its own focus; just keep controls visible.
-            scheduleAutoHide()
-            return
-        }
-        if (!showSettingsPanel && !isPickerShowing) {
-            controlsOverlay.post { focusControls() }
-        }
-        scheduleAutoHide()
         // Best-effort: resolve the next episode's name so the Next button's
         // handoff label (and the streams screen it opens) carries the real
-        // episode title, not just S#E#.
-        prefetchNextEpisodeName()
+        // episode title, not just S#E#. The info panel keeps its own focus and
+        // its own callers, so it is left alone.
+        if (infoPanel.visibility != View.VISIBLE) prefetchNextEpisodeName()
     }
 
     private fun hideControls() {
@@ -8105,9 +8163,9 @@ class NativePlayerActivity : ComponentActivity() {
         scrubHintHandler.removeCallbacks(scrubHintHider)
         surfaceScrubHint?.visibility = View.GONE
 
-        controlsVisible = false
-        controlsOverlay.visibility = View.GONE
-        seekbarRow.visibility = View.GONE
+        // The chrome takes the overlay, its seek row and the clocks down; the
+        // engine's own teardown is the rest of this method.
+        chrome?.hide()
         dismissAllPanels()
         hideInfoPanel()
         hideBufferingSpinner()
@@ -8679,25 +8737,22 @@ class NativePlayerActivity : ComponentActivity() {
         }
     }
 
-    private val autoHideRunnable = Runnable { hideControls() }
-
+    /**
+     * Restarts the shared bar's auto-hide countdown.
+     *
+     * This engine's own guards - no hiding while paused (live excepted, since a
+     * live channel cannot be paused and isPlaying reads false for the whole
+     * buffering start), and none while a panel owns the screen - are answered by
+     * chromeMayAutoHide when the countdown fires, so the rule lives in one place
+     * and this is only a restart.
+     */
     private fun scheduleAutoHide() {
-        handler.removeCallbacks(autoHideRunnable)
-        // Don't auto-hide when paused — keep overlay visible. Live is the
-        // exception: a live channel cannot be paused, and isPlaying reads
-        // false for the whole buffering start, which left the overlay up for
-        // the entire session. That is also what made UP/DOWN look broken on
-        // live TV — they navigate the visible overlay instead of zapping, so
-        // the channel never changed.
-        if (!isLiveChannel && exoPlayer?.isPlaying == false) return
-        // Don't auto-hide while a panel is open: hiding the overlay mid-
-        // navigation tears down the panel's focus and drops the user's spot.
-        if (showSettingsPanel || isPickerShowing || isGuideShowing) return
-        handler.postDelayed(autoHideRunnable, CONTROLS_HIDE_DELAY_MS)
+        chrome?.restartAutoHide()
     }
 
+    /** Cancels the pending auto-hide; the bar stays up until [scheduleAutoHide]. */
     private fun removeAutoHide() {
-        handler.removeCallbacks(autoHideRunnable)
+        chrome?.cancelAutoHide()
     }
 
     // --- Picker ---
@@ -9371,6 +9426,48 @@ class NativePlayerActivity : ComponentActivity() {
 
         if (retryAttempt >= RAW_EXTRACTOR_PROBE_ATTEMPT) {
             Log.i("PLAYER_RETRY", "Attempt ${retryAttempt + 1}: probing with raw extractor")
+        }
+
+        // Rebuild cap (see RebuildBudget.kt). A cause that has already had its
+        // rebuilds is not a cause another rebuild can fix: the ladder past that
+        // point asks the same component the same question. Checked here rather
+        // than at the top so a source that never OPENED still advances to the
+        // next ranked source above, which is a different kind of recovery and
+        // not a rebuild at all. Live channels are exempt: they have no backup
+        // engine to hand to and their reconnect loop is deliberate (see
+        // retryLoopRung).
+        val causeKey = PlaybackRecoveryRules.failureCauseKey(lastPlaybackError)
+        if (!isLiveChannel && causeKey != null && !rebuildBudget.allows(causeKey)) {
+            val spent = rebuildBudget.spentFor(causeKey)
+            Log.w(
+                "PLAYER_RETRY",
+                "Rebuild budget spent for failure cause '$causeKey' ($spent rebuilds, " +
+                    "cap $MAX_REBUILDS_PER_CAUSE) — ending the ladder instead of " +
+                    "rebuilding the same component again"
+            )
+            PlaybackEngineTrace.note(
+                PlaybackEngineTrace.describe(
+                    cause = "rebuild budget spent",
+                    detail = "$causeKey after $spent rebuilds — ladder stopped at the cap"
+                )
+            )
+            val decoderCause = lastPlaybackError
+                ?.let { PlaybackRecoveryRules.isDecoderError(it.errorCode) } == true
+            // The backup engine is the one thing left that can play the file.
+            // Refused (live TV, DRM, an "ExoPlayer only" engine setting, no
+            // libmpv), the card is the honest outcome.
+            if (!handOffToMpv(
+                    if (decoderCause) {
+                        MpvPlayerActivity.FALLBACK_REASON_DECODER
+                    } else {
+                        MpvPlayerActivity.FALLBACK_REASON_ERROR
+                    }
+                )
+            ) {
+                retryExhausted = true
+                updateUIError()
+            }
+            return
         }
 
         // One pending rebuild at a time: a second error while a retry is
@@ -10348,16 +10445,14 @@ class NativePlayerActivity : ComponentActivity() {
                     // the seek (commitSeekFromBar) committed the snap - which
                     // is what read as "scrubbing forward and back barely
                     // works". Keep only the duration honest while scrubbing.
-                    val scrubbing = scrubDirection != 0 || isBarDragging
+                    val scrubbing = scrubDirection != 0 || chrome?.isScrubbing == true
+                    val durMs = if (dur > 0 && dur != C.TIME_UNSET) dur else 0L
                     if (!scrubbing) {
-                        val progress = if (dur > 0 && dur != C.TIME_UNSET) {
-                            ((pos * 10_000L) / dur).toInt().coerceIn(0, 10_000)
-                        } else 0
-                        seekbar.progress = progress
-                        currentTime.text = formatMillis(pos)
-                    }
-                    if (dur > 0 && dur != C.TIME_UNSET) {
-                        totalTime.text = formatDurationMillis(dur)
+                        chrome?.setScrubPosition(pos, durMs)
+                    } else if (durMs > 0L) {
+                        // Keep only the duration honest while scrubbing: the bar
+                        // and the position belong to the scrub's own target.
+                        totalTime.text = formatDurationMillis(durMs)
                     }
                 }
 
@@ -11378,9 +11473,25 @@ class NativePlayerActivity : ComponentActivity() {
         releaseAssRenderer()
         exoPlayer?.release()
         exoPlayer = null
+        lanePool?.release()
+        lanePool = null
         mediaSession?.release()
         mediaSession = null
     }
+
+    /**
+     * One fetch lane's OkHttp stack (see StreamFetchLanes.kt).
+     *
+     * Deliberately NOT the shared [httpClient]: lanes exist to have separate
+     * connection pools, and a lane reusing that client would sit on the same
+     * HTTP/2 connection and buy nothing. Timeouts match the shared client's, so
+     * a lane behaves like every other read this app does.
+     */
+    private fun oneLaneHttpClient(): okhttp3.OkHttpClient =
+        okhttp3.OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
 
 
     // --- IntroDb ---
@@ -11575,6 +11686,18 @@ class NativePlayerActivity : ComponentActivity() {
         if (isLiveChannel) return false
         if (exoPlayer?.playWhenReady != true) return false
         if (reconnectingContainer.visibility == View.VISIBLE) return false
+        // Pool pressure, not a slow source: a stall inside the decoder
+        // exhaustion window is the box not having released a decoder yet, and a
+        // switch is a rebuild is another ask for that same decoder. Hold the
+        // source and let the pool recover on its own (see DecoderPoolHealth).
+        if (DecoderPoolHealth.exhaustedRecently()) {
+            Log.w(
+                "PLAYER_STALL",
+                "Rebuffer ${stalledMs}ms inside the decoder-exhaustion window — holding " +
+                    "the source and letting the decoder pool recover"
+            )
+            return false
+        }
         val now = System.currentTimeMillis()
         rebufferDownshift.record(now)
         if (!rebufferDownshift.due(now)) return false
@@ -11647,6 +11770,123 @@ class NativePlayerActivity : ComponentActivity() {
         } else {
             switchToSource(nextStream, isAutoRecovery = true)
         }
+        return true
+    }
+
+    // --- PlayerChromeHost: the shared overlay's calls into this engine --------
+    //
+    // A rename of the calls the control bar already made by hand: play / pause,
+    // next, the pickers, aspect, settings, info, the engine switch and the skip
+    // prompt all reach the same methods they always did. The chrome wires each
+    // button once; nothing here is new player logic.
+
+    override fun chromeIsPlaying(): Boolean = exoPlayer?.isPlaying == true
+
+    override fun chromePositionMs(): Long = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
+
+    override fun chromeDurationMs(): Long {
+        val raw = exoPlayer?.duration ?: 0L
+        return if (raw > 0L && raw != C.TIME_UNSET) raw else 0L
+    }
+
+    override fun onChromePlayPause() = togglePlayPause()
+
+    override fun onChromeSeekTo(positionMs: Long) {
+        exoPlayer?.seekTo(positionMs)
+    }
+
+    override fun onChromeNext() = advanceToNextEpisode()
+
+    override fun onChromeOpenSourcePicker() = showPicker(PickerMode.SOURCE)
+
+    override fun onChromeOpenAudioPicker() = showPicker(PickerMode.AUDIO)
+
+    override fun onChromeOpenSubtitlePicker() = showPicker(PickerMode.SUBTITLE)
+
+    override fun onChromeOpenSpeedPicker() = showPicker(PickerMode.SPEED)
+
+    override fun onChromeOpenAspectPicker() {
+        resizeModeIndex = (resizeModeIndex + 1) % ASPECT_MODES.size
+        applyAspectMode(resizeModeIndex)
+        btnAspect.text = ASPECT_MODES[resizeModeIndex]
+        PlayerTitlePrefs.remember(
+            this,
+            titleKey,
+            (PlayerTitlePrefs.get(this, titleKey) ?: PlayerTitlePrefs.Prefs())
+                .copy(aspectRatio = resizeModeIndex)
+        )
+    }
+
+    override fun onChromeOpenSettings() = toggleSettingsPanel()
+
+    override fun onChromeOpenInfo() = toggleInfoPanel()
+
+    override fun onChromeSwitchPlayer() = switchPlayerManually()
+
+    override fun onChromeOpenExternal() {
+        // A press is a question, so a refusal has to say why rather than look
+        // like a dead button - the same rule as the SWITCH buttons (see
+        // installManualSwitchFeedback).
+        if (!handOffToExternal()) {
+            Toast.makeText(this, "Can't open another player right now", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onChromeSkipIntro() {
+        val stamp = activeIntroStamp ?: return
+        val durationMs = exoPlayer?.duration ?: 0L
+        val targetMs = if (durationMs > 0L && durationMs != C.TIME_UNSET) {
+            stamp.endMs.coerceAtMost(durationMs)
+        } else {
+            stamp.endMs
+        }
+        exoPlayer?.seekTo(targetMs)
+        activeIntroStamp = null
+        btnSkipIntro.visibility = View.GONE
+    }
+
+    override fun chromeTitleInfo(): ChromeTitleInfo = ChromeTitleInfo(
+        clearLogoUrl = clearLogoUrl,
+        itemName = itemName,
+        episodeLabel = season?.let { s ->
+            episode?.let { e ->
+                "S${s.toString().padStart(2, '0')} · E${e.toString().padStart(2, '0')}"
+            }
+        },
+        episodeTitle = episodeTitle,
+        overview = overview,
+        badges = currentBadges,
+        cast = castMembers
+    )
+
+    // --- the shared bar's own timing and focus policy, this engine's answers ---
+
+    override fun chromeMayAutoHide(): Boolean {
+        // Don't auto-hide when paused - keep overlay visible. Live is the
+        // exception: a live channel cannot be paused, and isPlaying reads false
+        // for the whole buffering start, which would leave the overlay up for the
+        // entire session.
+        if (!isLiveChannel && exoPlayer?.isPlaying == false) return false
+        // Don't auto-hide while a panel is open: hiding the overlay mid-
+        // navigation tears down the panel's focus and drops the user's spot.
+        if (showSettingsPanel || isPickerShowing || isGuideShowing) return false
+        return true
+    }
+
+    override fun onChromeAutoHide(): Boolean {
+        // This engine's teardown is more than hiding the overlay - it ends a
+        // scrub and dismisses panels - so it owns the whole response.
+        hideControls()
+        return true
+    }
+
+    override fun chromeMayTakeFocus(): Boolean =
+        infoPanel.visibility != View.VISIBLE && !showSettingsPanel && !isPickerShowing
+
+    override fun chromeSeekBarScrubbable(): Boolean = !isLiveChannel
+
+    override fun chromeFocusPrimary(): Boolean {
+        focusControlsPrimary()
         return true
     }
 

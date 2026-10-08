@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The MPV chapter strip: PREV / current chapter / NEXT, shown only when the
+     open file actually has chapters. MPV-only (ExoPlayer cannot read a
+     container's chapters), so it is NOT in the shared player_chrome.xml: the
+     activity inflates it into that layout's `chrome_extra_seek` slot, exactly
+     where it sat - between the chapter-capable bar and the seek times. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mpv_chapter_row"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="6dp"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:visibility="gone">
+
+    <TextView
+        android:id="@+id/mpv_chapter_prev"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/pill_chip_bg"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:fontFamily="@font/oswald_semibold"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="6dp"
+        android:text="PREV"
+        android:textAllCaps="true"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="11sp" />
+
+    <TextView
+        android:id="@+id/mpv_chapter_now"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:fontFamily="@font/oswald_medium"
+        android:maxLines="1"
+        android:textColor="@color/kb_accent"
+        android:textSize="12sp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="@font/oswald_medium"
+        android:text="CHAPTERS &#183; MPV"
+        android:textColor="@color/kb_text_lo"
+        android:textSize="10sp" />
+
+    <TextView
+        android:id="@+id/mpv_chapter_next"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:background="@drawable/pill_chip_bg"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:fontFamily="@font/oswald_semibold"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="6dp"
+        android:text="NEXT"
+        android:textAllCaps="true"
+        android:textColor="@color/kb_text_hi"
+        android:textSize="11sp" />
+</LinearLayout>
