@@ -42,6 +42,14 @@ data class SportsTeam(
      * unusable values are dropped when the plate is drawn.
      */
     val colorHex: String? = null,
+    /**
+     * ESPN's own short name - "Yankees" for the New York Yankees, "Red Sox" for
+     * Boston. It is what a heading reads best with (a game reminder's title),
+     * and it is the ONE place the feed's nickname is unambiguous: taking the
+     * last word of the display name gives "Sox" and "Angels" alike. Null when
+     * the feed carries none (a person), where the display name is used instead.
+     */
+    val shortName: String? = null,
 ) {
     /**
      * The key a favourite is stored under.
@@ -103,6 +111,13 @@ data class SportsGame(
      * the hub's card, which prefers it to the venue.
      */
     val week: String? = null,
+    /**
+     * The game's top performers, up to two - one per side - when ESPN carries
+     * them on the competition. Empty for most sports and for a game the feed
+     * has no leader block for; the detail sheet skips the section entirely
+     * rather than forcing one.
+     */
+    val leaders: List<GameLeader> = emptyList(),
 )
 
 /** One row of a tournament leaderboard. */
@@ -139,6 +154,49 @@ data class TournamentEvent(
     val note: String? = null,
 )
 
+/** One top performer in a game, as ESPN carries them on the competition. */
+data class GameLeader(
+    val name: String,
+    /** The side they play for, so the sheet can put each line under its team. */
+    val teamAbbreviation: String,
+    /** ESPN's own summary line, e.g. "28 PTS, 11 REB". */
+    val summary: String,
+)
+
+/**
+ * One row of a league table.
+ *
+ * The three W/L/T counts are read as numbers; everything else is the string
+ * ESPN sends, held verbatim. That split is deliberate: a count is something the
+ * hub might sort or total, while a win percentage ("1.000"), a games-behind
+ * ("-", "4.5") and a streak ("W4") are the feed's own display text, and
+ * re-deriving them from the counts would be a second opinion the app cannot
+ * check.
+ */
+data class StandingEntry(
+    val abbreviation: String,
+    val displayName: String,
+    val logoUrl: String?,
+    val wins: Int,
+    val losses: Int,
+    val ties: Int,
+    /** "1.000" as ESPN sends it; blank when the feed carries none (soccer). */
+    val winPercent: String,
+    /** "-" for the group leader, the games-back string otherwise; blank when absent. */
+    val gamesBehind: String,
+    /** "W4"; blank when the feed carries none. */
+    val streak: String,
+)
+
+/**
+ * One division (or conference, for a league the feed does not split) of a
+ * league table.
+ */
+data class StandingGroup(
+    val name: String,
+    val entries: List<StandingEntry>,
+)
+
 /** The shape a league's scoreboard carries. */
 enum class SportsKind { HEAD_TO_HEAD, TOURNAMENT }
 
@@ -152,6 +210,15 @@ data class SportsLeague(
     val path: String,
     val label: String,
     val kind: SportsKind,
+    /**
+     * Whether ESPN publishes a standings table for this league.
+     *
+     * Static, like the catalog itself: the individual sports (tennis, MMA) have
+     * no team table at all, and golf and F1 are tournaments rather than
+     * standings. The hub hides the STANDINGS toggle for a league that has none
+     * rather than offering a view that can only ever be empty.
+     */
+    val hasStandings: Boolean = false,
 )
 
 /**
@@ -165,17 +232,18 @@ data class SportsLeague(
 object SportsLeagues {
 
     val ALL: List<SportsLeague> = listOf(
-        SportsLeague("football/nfl", "NFL", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("basketball/nba", "NBA", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("baseball/mlb", "MLB", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("hockey/nhl", "NHL", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("basketball/wnba", "WNBA", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("football/ncf", "College Football", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("basketball/ncb", "College Basketball", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("soccer/eng.1", "Premier League", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("soccer/esp.1", "La Liga", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("soccer/uefa.champions", "Champions League", SportsKind.HEAD_TO_HEAD),
-        SportsLeague("soccer/usa.1", "MLS", SportsKind.HEAD_TO_HEAD),
+        SportsLeague("football/nfl", "NFL", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("basketball/nba", "NBA", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("baseball/mlb", "MLB", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("hockey/nhl", "NHL", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("basketball/wnba", "WNBA", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("football/ncf", "College Football", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("basketball/ncb", "College Basketball", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("soccer/eng.1", "Premier League", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("soccer/esp.1", "La Liga", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("soccer/uefa.champions", "Champions League", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        SportsLeague("soccer/usa.1", "MLS", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        // Individual sports: no team table exists, so the hub never offers one.
         SportsLeague("tennis/atp", "Tennis", SportsKind.HEAD_TO_HEAD),
         SportsLeague("mma/ufc", "UFC", SportsKind.HEAD_TO_HEAD),
         SportsLeague("mma/pfl", "PFL", SportsKind.HEAD_TO_HEAD),

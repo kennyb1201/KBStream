@@ -79,6 +79,8 @@ import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsLeague
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import com.kennyb1201.kbstream.data.sports.SportsTeam
+import com.kennyb1201.kbstream.data.sports.StandingEntry
+import com.kennyb1201.kbstream.data.sports.StandingGroup
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -94,6 +96,7 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
+import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -101,10 +104,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.OswaldFamily
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-
-private const val LIVE_REFRESH_MS = 30_000L
 
 /** The gap between the two cards of a grid row. */
 private const val GRID_GUTTER_DP = 16
@@ -147,6 +147,11 @@ fun SportsHubScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val favoriteKeys by viewModel.favoriteTeamKeys.collectAsStateWithLifecycle()
     val favoritesSection by viewModel.favoritesSection.collectAsStateWithLifecycle()
+    val leagueView by viewModel.view.collectAsStateWithLifecycle()
+    val standings by viewModel.standings.collectAsStateWithLifecycle()
+    val standingsLoading by viewModel.standingsLoading.collectAsStateWithLifecycle()
+    val standingsFailed by viewModel.standingsFailed.collectAsStateWithLifecycle()
+    val gameReminders by viewModel.gameReminders.collectAsStateWithLifecycle()
 
     val leagues = remember(enabled) { SportsLeagues.enabled(enabled) }
     // FAVOURITES leads the row: it is the tab whose contents the viewer chose,
@@ -204,16 +209,12 @@ fun SportsHubScreen(
         }
     }
 
-    // The live tick. It lives in the composition, so it stops the moment the
-    // hub leaves the screen - which is the whole "stop on close" requirement.
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(LIVE_REFRESH_MS)
-            viewModel.refreshLive()
-        }
-    }
-
     var showLeagues by remember { mutableStateOf(false) }
+
+    // The game whose detail sheet is raised. A tap on a card opens this rather
+    // than playing it: the sheet carries the matchup, and its Watch button is
+    // what plays, through the same channel-match path the tap used to take.
+    var detailGame by remember { mutableStateOf<SportsGame?>(null) }
 
     // The game whose teams are being followed. A long press on a card raises
     // this: the card itself stays one focus stop, and the two teams - the
@@ -271,11 +272,37 @@ fun SportsHubScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             val favoritesTab = selectedPath == SportsLeagues.FAVORITES.path
+            val selectedLeague = leagues.firstOrNull { it.path == selectedPath }
             val section = if (favoritesTab) {
                 favoritesSection
             } else {
                 sections.firstOrNull { it.league.path == selectedPath }
             }
+
+            // The standings toggle exists only where a table does, and only
+            // outside the favourites tab - which is a view over the leagues,
+            // not one of them. A league with no table is never offered a view
+            // that could only be empty.
+            val standingsAvailable = !favoritesTab && selectedLeague?.hasStandings == true
+            if (standingsAvailable) {
+                LeagueViewToggle(selected = leagueView, onSelect = viewModel::setView)
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            val standingsLeague = selectedLeague
+                .takeIf { standingsAvailable && leagueView == LeagueView.STANDINGS }
+            if (standingsLeague != null) {
+                StandingsBody(
+                    league = standingsLeague,
+                    groups = standings[standingsLeague.path],
+                    loading = standingsLeague.path in standingsLoading,
+                    failed = standingsLeague.path in standingsFailed,
+                    listState = listState,
+                    onRetry = viewModel::retryStandings,
+                )
+                return@Column
+            }
+
             when {
                 section == null -> KBStatusMessage(
                     message = "Loading scores…",
@@ -299,6 +326,7 @@ fun SportsHubScreen(
                         matches = matches,
                         favoriteKeys = favoriteKeys,
                         listState = listState,
+                        onOpenDetail = { detailGame = it },
                         onPlayChannel = onPlayChannel,
                         onEditFavorites = { favoriteEditor = it },
                     )
@@ -335,6 +363,7 @@ fun SportsHubScreen(
                     matches = matches,
                     favoriteKeys = favoriteKeys,
                     listState = listState,
+                    onOpenDetail = { detailGame = it },
                     onPlayChannel = onPlayChannel,
                     onEditFavorites = { favoriteEditor = it },
                 )
@@ -357,7 +386,9 @@ fun SportsHubScreen(
             BackHandler { showLeagues = false }
             LeagueTogglesPanel(
                 enabled = enabled,
+                reminders = gameReminders,
                 onToggle = { path, on -> viewModel.setLeagueEnabled(path, on) },
+                onToggleReminders = viewModel::setGameReminders,
                 onClose = { showLeagues = false },
             )
         }
@@ -369,6 +400,22 @@ fun SportsHubScreen(
                 favoriteKeys = favoriteKeys,
                 onToggle = { team, on -> viewModel.setTeamFavorite(team, on) },
                 onClose = { favoriteEditor = null },
+            )
+        }
+
+        detailGame?.let { game ->
+            // Back dismisses the sheet before it can leave the hub; focus comes
+            // back to the card that raised it, because the sheet is its own
+            // dialog window and closing it returns to the tree behind.
+            BackHandler { detailGame = null }
+            GameDetailSheet(
+                game = game,
+                channel = matches[game.id],
+                onPlay = { channel ->
+                    detailGame = null
+                    onPlayChannel(channel)
+                },
+                onClose = { detailGame = null },
             )
         }
     }
@@ -463,6 +510,7 @@ private fun LeagueBody(
     matches: Map<String, IptvChannel>,
     favoriteKeys: Set<String>,
     listState: LazyListState,
+    onOpenDetail: (SportsGame) -> Unit,
     onPlayChannel: (IptvChannel) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
@@ -503,7 +551,7 @@ private fun LeagueBody(
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
-                onPlayChannel = onPlayChannel,
+                onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
         }
@@ -539,7 +587,7 @@ private fun LeagueBody(
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
-                onPlayChannel = onPlayChannel,
+                onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
         }
@@ -554,7 +602,7 @@ private fun LeagueBody(
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
-                onPlayChannel = onPlayChannel,
+                onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
         }
@@ -582,7 +630,7 @@ private fun LazyListScope.gameRows(
     matches: Map<String, IptvChannel>,
     livePulse: Float,
     favoriteKeys: Set<String>,
-    onPlayChannel: (IptvChannel) -> Unit,
+    onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
     games.chunked(columns).forEach { row ->
@@ -597,7 +645,7 @@ private fun LazyListScope.gameRows(
                         channel = matches[game.id],
                         livePulse = livePulse,
                         favoriteKeys = favoriteKeys,
-                        onPlayChannel = onPlayChannel,
+                        onOpenDetail = onOpenDetail,
                         onEditFavorites = { onEditFavorites(game) },
                         modifier = Modifier.weight(1f)
                     )
@@ -652,11 +700,10 @@ private fun GameCard(
     channel: IptvChannel?,
     livePulse: Float,
     favoriteKeys: Set<String>,
-    onPlayChannel: (IptvChannel) -> Unit,
+    onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val playable = channel != null
     // "Week 6" where the feed numbers the week, the venue otherwise. The note
     // chip is suppressed when it says the same thing, which NFL notes often do.
     val context = game.week?.takeIf { it.isNotBlank() } ?: game.venue?.takeIf { it.isNotBlank() }
@@ -713,36 +760,21 @@ private fun GameCard(
         }
     }
 
-    if (playable) {
-        KBCard(
-            onClick = { onPlayChannel(channel) },
-            // A long press follows a team instead of playing the game: two
-            // different intents, one press each. A card the playlist cannot
-            // carry has no press at all to offer, so it stays out of the focus
-            // walk - see the D-pad fallback in the screen above, which is what
-            // keeps a run of them from stranding the viewer.
-            onLongClick = onEditFavorites,
-            // The guide's own row step, not a poster tile's: a game card is a
-            // row of information that happens to be two columns wide.
-            focusedScale = KBFocusRow,
-            shape = KBShapeCard,
-            modifier = modifier.fillMaxWidth()
-        ) {
-            body()
-        }
-    } else {
-        // Not focusable on purpose: a card that cannot be played must not cost
-        // the D-pad a stop, or a run of them makes the grid feel broken.
-        Surface(
-            modifier = modifier.fillMaxWidth(),
-            shape = KBShapeCard,
-            colors = SurfaceDefaults.colors(
-                containerColor = KBSurface,
-                contentColor = KBTextHi
-            )
-        ) {
-            Box(modifier = Modifier.fillMaxWidth()) { body() }
-        }
+    // Every game opens the sheet, playable or not: a card the playlist cannot
+    // carry still has a matchup worth reading, and the sheet is where "not in
+    // your playlist" is explained. It is the sheet's WATCH button that is gated
+    // on a matched channel, not the card - and the sheet is one press, with the
+    // long press still following a team.
+    KBCard(
+        onClick = { onOpenDetail(game) },
+        onLongClick = onEditFavorites,
+        // The guide's own row step, not a poster tile's: a game card is a row of
+        // information that happens to be two columns wide.
+        focusedScale = KBFocusRow,
+        shape = KBShapeCard,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        body()
     }
 }
 
@@ -960,7 +992,9 @@ private fun GameStatusLine(game: SportsGame, livePulse: Float) {
                 )
             }
             GameState.UPCOMING -> Text(
-                text = upcomingLabel(game),
+                // The sheet's own start-time string, shared rather than
+                // respelled, so the card and the sheet can never disagree.
+                text = SportsDetailRules.statusLine(game),
                 style = MaterialTheme.typography.bodySmall,
                 color = KBTextHi
             )
@@ -970,25 +1004,6 @@ private fun GameStatusLine(game: SportsGame, livePulse: Float) {
                 color = KBTextLo
             )
         }
-    }
-}
-
-/** "Tue, 7:30 PM" in the device's own zone, plus ESPN's own detail if it adds anything. */
-private fun upcomingLabel(game: SportsGame): String {
-    val when_ = if (game.dateMs > 0L) {
-        DateFormats.time(game.dateMs, DateFormats.WEEKDAY_CLOCK_12H)
-    } else {
-        ""
-    }
-    val detail = game.statusDetail.trim()
-    // ESPN's "7:30 PM ET" duplicates the clock we just formatted; a detail that
-    // is only a time adds nothing, so it is only shown when it says something
-    // else (a delayed start, a suspension).
-    return when {
-        when_.isBlank() -> detail.ifBlank { "Today" }
-        detail.isBlank() || detail.contains("PM", ignoreCase = true) ||
-            detail.contains("AM", ignoreCase = true) -> when_
-        else -> "$when_ • $detail"
     }
 }
 
@@ -1372,6 +1387,449 @@ private fun FavoriteTeamRow(
     }
 }
 
+// ── Standings ───────────────────────────────────────────────────────────
+
+/** Width of the code column in a table row; the header aligns to it. */
+private val STANDINGS_ABBREV_WIDTH = 52.dp
+
+/** Width of one stat column. Fixed, so every row's numbers line up. */
+private val STANDINGS_STAT_WIDTH = 46.dp
+
+/**
+ * The GAMES / STANDINGS choice for the selected league.
+ *
+ * Drawn only for a league the feed publishes a table for, so there is never a
+ * STANDINGS view that can only be empty - see [SportsLeague.hasStandings].
+ */
+@Composable
+private fun LeagueViewToggle(
+    selected: LeagueView,
+    onSelect: (LeagueView) -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        LeagueViewChip("GAMES", selected == LeagueView.GAMES) { onSelect(LeagueView.GAMES) }
+        LeagueViewChip("STANDINGS", selected == LeagueView.STANDINGS) {
+            onSelect(LeagueView.STANDINGS)
+        }
+    }
+}
+
+@Composable
+private fun LeagueViewChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    KBCard(onClick = onClick, focusedScale = KBFocusChip, shape = KBShapePill) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = if (selected) KBVoid else KBTextLo,
+            modifier = Modifier
+                .background(if (selected) KBAccent else KBSurfaceRaised, KBShapePill)
+                .padding(horizontal = 12.dp, vertical = 6.dp)
+        )
+    }
+}
+
+/**
+ * The selected league's table, grouped by division (or conference where the
+ * feed does not split one), with a heading and a column header once per group.
+ *
+ * Its own section, fetched separately from the scoreboard: standings never
+ * drive game-card logic, and a failure shows the cached table or an empty
+ * state - never a crash and never the scoreboard's error card.
+ */
+@Composable
+private fun StandingsBody(
+    league: SportsLeague,
+    groups: List<StandingGroup>?,
+    loading: Boolean,
+    failed: Boolean,
+    listState: LazyListState,
+    onRetry: () -> Unit,
+) {
+    when {
+        groups == null && loading -> KBStatusMessage(
+            message = "Loading standings…",
+            loading = true,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        groups == null && failed -> KBStatusMessage(
+            title = "Couldn't reach ESPN",
+            message = "Standings for ${league.label} are unavailable right now.",
+            onRetry = onRetry,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        groups.isNullOrEmpty() -> KBStatusMessage(
+            title = "No standings",
+            message = "No standings for ${league.label} right now.",
+            icon = KB_STATUS_ICON_EMPTY,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        else -> LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
+            contentPadding = PaddingValues(bottom = 24.dp)
+        ) {
+            groups.forEach { group ->
+                item(key = "std-head-" + group.name) {
+                    StandingsGroupHeader(name = group.name, count = group.entries.size)
+                }
+                item(key = "std-cols-" + group.name) { StandingsColumnHeader() }
+                itemsIndexed(
+                    group.entries,
+                    key = { _, entry ->
+                        "std-" + group.name + "-" + entry.abbreviation + "-" + entry.displayName
+                    }
+                ) { _, entry -> StandingsRow(entry = entry) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StandingsGroupHeader(name: String, count: Int) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(top = CARD_GAP_DP.dp)
+    ) {
+        Text(
+            text = name.uppercase(),
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = KBAccent
+        )
+        Text(
+            text = count.toString(),
+            style = MaterialTheme.typography.labelSmall,
+            color = KBTextLo,
+            modifier = Modifier
+                .background(KBSurfaceRaised, KBShapePill)
+                .padding(horizontal = 8.dp, vertical = 2.dp)
+        )
+    }
+}
+
+/** The W/L/T/PCT/GB/STRK labels, drawn once above each group's rows. */
+@Composable
+private fun StandingsColumnHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Spacer(modifier = Modifier.width(24.dp))
+        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(STANDINGS_ABBREV_WIDTH))
+        Text(
+            text = "TEAM",
+            style = MaterialTheme.typography.labelSmall,
+            color = KBTextLo,
+            modifier = Modifier.weight(1f)
+        )
+        listOf("W", "L", "T", "PCT", "GB", "STRK").forEach { label ->
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = KBTextLo,
+                textAlign = TextAlign.End,
+                modifier = Modifier.width(STANDINGS_STAT_WIDTH)
+            )
+        }
+    }
+}
+
+@Composable
+private fun StandingsRow(entry: StandingEntry) {
+    KBCard(
+        // Navigable like a game card, with no tap action of its own: an empty
+        // lambda keeps the row a D-pad stop without giving it a destination.
+        onClick = {},
+        focusedScale = KBFocusRow,
+        shape = KBShapeCard,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            StandingMark(entry = entry)
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = entry.abbreviation,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = KBTextHi,
+                maxLines = 1,
+                modifier = Modifier.width(STANDINGS_ABBREV_WIDTH)
+            )
+            Text(
+                text = entry.displayName,
+                style = MaterialTheme.typography.bodySmall,
+                color = KBTextLo,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            StandingsStat(entry.wins.toString())
+            StandingsStat(entry.losses.toString())
+            StandingsStat(entry.ties.toString())
+            StandingsStat(standingsText(entry.winPercent))
+            StandingsStat(standingsText(entry.gamesBehind))
+            StandingsStat(standingsText(entry.streak))
+        }
+    }
+}
+
+@Composable
+private fun StandingsStat(value: String) {
+    Text(
+        text = value,
+        style = MaterialTheme.typography.bodySmall,
+        fontFamily = OswaldFamily,
+        color = KBTextHi,
+        textAlign = TextAlign.End,
+        maxLines = 1,
+        modifier = Modifier.width(STANDINGS_STAT_WIDTH)
+    )
+}
+
+/** A blank feed value reads as an em dash, never as an empty column. */
+private fun standingsText(value: String): String = value.takeIf { it.isNotBlank() } ?: "—"
+
+/**
+ * The compact crest a table row wears. The card's 48dp mark would dominate a
+ * row, so the plate is smaller here - same crest, same letter fallback.
+ */
+@Composable
+private fun StandingMark(entry: StandingEntry) {
+    Box(
+        modifier = Modifier
+            .size(24.dp)
+            .clip(KBShapeChip)
+            .background(KBSurfaceRaised)
+            .border(1.dp, KBTextLo.copy(alpha = 0.18f), KBShapeChip),
+        contentAlignment = Alignment.Center
+    ) {
+        val mark = entry.logoUrl
+        if (mark.isNullOrBlank()) {
+            StandingsInitials(entry = entry)
+        } else {
+            SubcomposeAsyncImage(
+                model = ImageRequest.Builder(LocalContext.current)
+                    .data(mark)
+                    .crossfade(false)
+                    .build(),
+                contentDescription = entry.displayName,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(20.dp),
+                loading = { StandingsInitials(entry = entry) },
+                error = { StandingsInitials(entry = entry) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun StandingsInitials(entry: StandingEntry) {
+    Text(
+        text = entry.abbreviation.take(2).uppercase(),
+        color = KBTextHi,
+        style = MaterialTheme.typography.labelSmall,
+        fontWeight = FontWeight.Bold
+    )
+}
+
+// ── The game detail sheet ───────────────────────────────────────────────
+
+/**
+ * The full matchup for one game, raised by a tap on its card.
+ *
+ * A bottom sheet rather than a centred dialog: it is the card, opened - the
+ * same facts in more room - so it rises from the bottom edge and leaves the hub
+ * visible above it. It fetches nothing (it renders the already-loaded
+ * [SportsGame]), so there is never a spinner in it, and its one action is
+ * Watch, which hands the matched channel to the same launch a card tap used to
+ * take. With no matched channel the button is disabled and says so.
+ */
+@Composable
+private fun GameDetailSheet(
+    game: SportsGame,
+    channel: IptvChannel?,
+    onPlay: (IptvChannel) -> Unit,
+    onClose: () -> Unit,
+) {
+    val watchButton = remember { FocusRequester() }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 24.dp),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.72f)
+                    .focusGroup()
+                    .background(KBSurface, KBShapePanel)
+                    .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
+                    .padding(22.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "MATCHUP",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Text(
+                    text = SportsDetailRules.matchupTitle(game),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextLo,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                // Header: away mark + code + record | @ | home mark + code +
+                // record, the card's own sides in a wider plate.
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TeamColumn(team = game.away, favorite = false, modifier = Modifier.weight(1f))
+                    Text(
+                        text = "@",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = KBTextLo,
+                        modifier = Modifier.padding(horizontal = 10.dp)
+                    )
+                    TeamColumn(
+                        team = game.home,
+                        favorite = false,
+                        alignEnd = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Text(
+                    text = SportsDetailRules.statusLine(game),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (game.state == GameState.LIVE) KBDanger else KBTextLo
+                )
+
+                Text(
+                    text = SportsDetailRules.scoreLine(game),
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontFamily = OswaldFamily,
+                    fontWeight = FontWeight.Bold,
+                    color = KBTextHi,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Every row is already filtered to the non-blanks, so a game
+                // with no venue and no leaders simply draws fewer rows.
+                SportsDetailRules.detailRows(game).forEach { row ->
+                    DetailRow(label = row.label, value = row.value)
+                }
+
+                val leaderLines = SportsDetailRules.leaderLines(game)
+                if (leaderLines.isNotEmpty()) {
+                    Text(
+                        text = "LEADERS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = KBTextLo,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    leaderLines.forEach { line ->
+                        Text(
+                            text = line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = KBTextHi,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                if (channel != null) {
+                    KBCard(
+                        onClick = { onPlay(channel) },
+                        focusedScale = KBFocusRow,
+                        shape = KBShapePill,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(watchButton)
+                    ) {
+                        WatchButtonLabel(label = SportsDetailRules.watchLabel(true), enabled = true)
+                    }
+                    LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
+                } else {
+                    // Not focusable: a disabled action must not be a D-pad stop.
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = KBShapePill,
+                        colors = SurfaceDefaults.colors(
+                            containerColor = KBSurfaceRaised,
+                            contentColor = KBTextLo
+                        )
+                    ) {
+                        WatchButtonLabel(label = SportsDetailRules.watchLabel(false), enabled = false)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text(
+            text = label.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = KBTextLo,
+            modifier = Modifier.width(96.dp)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall,
+            color = KBTextHi,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun WatchButtonLabel(label: String, enabled: Boolean) {
+    Text(
+        text = label.uppercase(),
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.SemiBold,
+        color = if (enabled) KBVoid else KBTextLo,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (enabled) KBAccent else KBSurfaceRaised, KBShapePill)
+            .padding(vertical = 12.dp)
+    )
+}
+
 // ── The league toggles ──────────────────────────────────────────────────
 
 /**
@@ -1384,7 +1842,9 @@ private fun FavoriteTeamRow(
 @Composable
 private fun LeagueTogglesPanel(
     enabled: Set<String>,
+    reminders: Boolean,
     onToggle: (String, Boolean) -> Unit,
+    onToggleReminders: (Boolean) -> Unit,
     onClose: () -> Unit,
 ) {
     // Handed to the first row, so opening the panel puts focus INSIDE it
@@ -1439,6 +1899,17 @@ private fun LeagueTogglesPanel(
                 }
             }
 
+            // The reminder switch lives here rather than on the hub itself: it
+            // is a preference about the hub, and this is the hub's one settings
+            // panel. Following a team is the opt-in, so this is on by default.
+            Text(
+                text = "GAME REMINDERS",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = KBTextLo
+            )
+            ReminderToggleRow(checked = reminders, onToggle = onToggleReminders)
+
             KBButton(label = "DONE", onClick = onClose)
         }
     }
@@ -1472,6 +1943,46 @@ private fun LeagueToggleRow(
                 text = league.label,
                 style = MaterialTheme.typography.bodyMedium,
                 color = KBTextHi
+            )
+            Text(
+                text = if (checked) "ON" else "OFF",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (checked) KBVoid else KBTextLo,
+                modifier = Modifier
+                    .background(if (checked) KBAccent else KBSurfaceRaised, KBShapePill)
+                    .padding(horizontal = 10.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
+/**
+ * The reminder switch, shaped like every other toggle in this panel. It is on
+ * by default, because following a team is itself the opt-in; the worker is
+ * only ever armed while at least one team is followed, so leaving it on costs
+ * nothing to a viewer who follows nobody.
+ */
+@Composable
+private fun ReminderToggleRow(
+    checked: Boolean,
+    onToggle: (Boolean) -> Unit,
+) {
+    KBCard(onClick = { onToggle(!checked) }, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(KBSurfaceRaised, KBShapeChip)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Notify me when followed teams play",
+                style = MaterialTheme.typography.bodyMedium,
+                color = KBTextHi,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
             Text(
                 text = if (checked) "ON" else "OFF",

@@ -26,6 +26,7 @@ import com.kennyb1201.kbstream.work.NewEpisodeWorker
 import com.kennyb1201.kbstream.work.OutboxFlushWorker
 import com.kennyb1201.kbstream.work.ReminderWorker
 import com.kennyb1201.kbstream.work.SimklSyncWorker
+import com.kennyb1201.kbstream.work.SportsNotificationWorker
 import com.kennyb1201.kbstream.work.TorBoxLibraryWorker
 import io.sentry.android.core.SentryAndroid
 import java.util.concurrent.TimeUnit
@@ -104,6 +105,13 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
             }
             startupStep("startup.torboxLibraryWorker", "app_create_torbox_library_worker") {
                 scheduleTorBoxLibrarySync()
+            }
+            // Followed-team game reminders. Armed only when the toggle is on
+            // and at least one team is followed (following is the opt-in), so
+            // a viewer who never used the hub's FAVORITES tab never wakes for
+            // it. Also what re-arms the round across a process restart.
+            startupStep("startup.sportsReminderWorker", "app_create_sports_reminder_worker") {
+                SportsNotificationWorker.syncScheduleForPrefs(applicationContext)
             }
             startupStep("startup.addonWorker", "app_create_addon_worker") {
                 scheduleAddonManifestRefresh()

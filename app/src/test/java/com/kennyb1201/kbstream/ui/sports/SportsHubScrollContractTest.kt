@@ -8,15 +8,20 @@ import org.junit.Test
  * "Sometimes it doesn't let me scroll down into the games."
  *
  * The cause was the hub's own good intention. A game the playlist cannot carry
- * is not focusable - a run of dead cards should not cost the D-pad a stop - so
- * focus cannot walk past one, and a section of them has no focus target below
- * for the LazyColumn to scroll to. The viewer sits on the tab row, presses
- * Down, and nothing moves: not the focus, not the list.
+ * was not focusable - a run of dead cards should not cost the D-pad a stop - so
+ * focus could not walk past one, and a section of them had no focus target
+ * below for the LazyColumn to scroll to. The viewer sits on the tab row,
+ * presses Down, and nothing moves: not the focus, not the list.
  *
  * The fix is that the press has a second answer. Down/Up first asks the
  * platform's own focus move, exactly as before, and only when there is nothing
  * to focus does the same press scroll the list. Pinned here because there is no
  * TV in CI: the wiring is read out of the source.
+ *
+ * A card is no longer the dead stop it was: it opens the detail sheet whether
+ * or not a channel matched, and it is the sheet's Watch button that a missing
+ * channel disables. The scroll fallback stays as the general safety net for any
+ * press with nothing below it.
  */
 class SportsHubScrollContractTest {
 
@@ -76,18 +81,24 @@ class SportsHubScrollContractTest {
     }
 
     @Test
-    fun `unplayable cards are still not focus stops`() {
-        // The fallback exists to make the grid reachable DESPITE this choice,
-        // not to replace it: making every dead card focusable would put the
-        // D-pad back to a press per card that cannot do anything.
+    fun `every game card is one focus stop that opens the detail sheet`() {
+        // A game the playlist cannot carry is no longer a dead card: tapping it
+        // opens the matchup sheet, and it is the SHEET's Watch button that the
+        // missing channel disables - so the card itself is one press, playable
+        // or not. The scroll fallback remains the safety net for a press with
+        // nothing below it.
         val card = slice("private fun GameCard(", "private fun TeamColumn(")
         assertTrue(
-            "only a playable card goes through KBCard",
-            card.contains("if (playable) {") && card.contains("KBCard(")
+            "every game card goes through KBCard, with no unplayable branch",
+            card.contains("KBCard(") && !card.contains("if (playable) {")
         )
         assertTrue(
-            "the other branch is a plain Surface",
-            card.contains("Surface(")
+            "and a tap opens the sheet rather than playing",
+            card.contains("onClick = { onOpenDetail(game) }")
+        )
+        assertTrue(
+            "with the long press still following a team",
+            card.contains("onLongClick = onEditFavorites")
         )
     }
 

@@ -22,11 +22,15 @@ import com.kennyb1201.kbstream.data.sports.SportsKind
 import com.kennyb1201.kbstream.data.sports.SportsLeague
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import com.kennyb1201.kbstream.data.sports.SportsTeam
+import com.kennyb1201.kbstream.data.sports.StandingGroup
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.data.sports.involvesFavorite
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.work.SportsNotificationWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -50,6 +54,12 @@ data class LeagueSection(
     val tournaments: List<TournamentEvent> = emptyList(),
     val failed: Boolean = false,
 )
+
+/**
+ * Which body the hub shows for the league that is selected: its schedule, or
+ * its standings table.
+ */
+enum class LeagueView { GAMES, STANDINGS }
 
 /**
  * The sports hub's state holder: ESPN scoreboards in, playlist channels out.
@@ -116,6 +126,45 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             initialValue = LeagueSection(SportsLeagues.FAVORITES)
         )
 
+    /**
+     * Which body the hub is showing for the selected league.
+     *
+     * A toggle within the league rather than a top-level STANDINGS tab (the
+     * spec allows either - one pattern only): the standings are a property of
+     * the league already selected, and a tab row that mixed leagues with a view
+     * would make "which league am I reading?" a question the row cannot answer.
+     * A league the feed has no table for never offers the toggle at all.
+     */
+    private val _view = MutableStateFlow(LeagueView.GAMES)
+    val view: StateFlow<LeagueView> = _view.asStateFlow()
+
+    /** Standings by league path; absent until the league's table is fetched. */
+    private val _standings = MutableStateFlow<Map<String, List<StandingGroup>>>(emptyMap())
+    val standings: StateFlow<Map<String, List<StandingGroup>>> = _standings.asStateFlow()
+
+    private val _standingsLoading = MutableStateFlow<Set<String>>(emptySet())
+    val standingsLoading: StateFlow<Set<String>> = _standingsLoading.asStateFlow()
+
+    private val _standingsFailed = MutableStateFlow<Set<String>>(emptySet())
+    val standingsFailed: StateFlow<Set<String>> = _standingsFailed.asStateFlow()
+
+    /**
+     * Whether followed teams get a "game starts soon" reminder.
+     *
+     * Default ON, because following a team is itself the opt-in - and the round
+     * is only ever armed while at least one team is followed, so this costs
+     * nothing to a viewer who never used the hub.
+     */
+    private val _gameReminders = MutableStateFlow(AppPreferences.getSportsGameReminders(app))
+    val gameReminders: StateFlow<Boolean> = _gameReminders.asStateFlow()
+
+    /** Writes the reminder toggle and re-arms (or cancels) the periodic round. */
+    fun setGameReminders(enabled: Boolean) {
+        AppPreferences.setSportsGameReminders(getApplication(), enabled)
+        _gameReminders.value = enabled
+        SportsNotificationWorker.syncScheduleForPrefs(getApplication())
+    }
+
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -130,6 +179,19 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     val matches: StateFlow<Map<String, IptvChannel>> = _matches.asStateFlow()
 
     private var refreshJob: Job? = null
+
+    /**
+     * The 30-second live tick, owned here rather than in the composition.
+     *
+     * While the tab in front of the viewer has at least one game in play, this
+     * re-fetches JUST that tab's league(s) every 30 seconds; when nothing is in
+     * play - a finished slate, or a league the poll was never for - there is no
+     * job at all, so a hub left open on NFL does not ask ESPN a question a
+     * minute about the NHL. It lives in the ViewModel's own scope, so it is tied
+     * to the screen's lifetime: [onCleared] cancels it, and nothing polls once
+     * the hub is gone.
+     */
+    private var livePollJob: Job? = null
 
     /** The merged lineup, read once per hub visit (a paged 10k-row DB read). */
     private var playlistChannels: List<IptvChannel>? = null
@@ -146,8 +208,73 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     val leagues: List<SportsLeague>
         get() = SportsLeagues.enabled(_enabledLeagues.value)
 
+    /**
+     * Selects a league tab.
+     *
+     * Also re-aims the live tick, because the poll belongs to the tab in front
+     * of the viewer: switching leagues cancels the previous league's loop and
+     * starts one only when the newly selected league has something in play. A
+     * league with no table forgoes the STANDINGS view, since its toggle is not
+     * drawn.
+     */
     fun selectLeague(path: String) {
         _selectedLeaguePath.value = path
+        if (SportsLeagues.byPath(path)?.hasStandings != true) _view.value = LeagueView.GAMES
+        if (_view.value == LeagueView.STANDINGS) ensureStandings()
+        syncLivePoll()
+    }
+
+    /**
+     * Shows the standings body for the selected league.
+     *
+     * Fetches on first use only, so flipping between a league's games and its
+     * table does not refetch the (heavy) standings document - and a fetch
+     * failure leaves the last table up rather than blanking it.
+     */
+    fun setView(view: LeagueView) {
+        if (view == LeagueView.STANDINGS && !selectedLeagueHasStandings()) return
+        _view.value = view
+        if (view == LeagueView.STANDINGS) ensureStandings()
+    }
+
+    private fun selectedLeagueHasStandings(): Boolean =
+        _selectedLeaguePath.value?.let(SportsLeagues::byPath)?.hasStandings == true
+
+    /**
+     * Drops the selected league's held table and asks for it again - the
+     * standings error state's retry. A failed fetch is never cached by the
+     * repository, so the refetch is a real network attempt.
+     */
+    fun retryStandings() {
+        val path = _selectedLeaguePath.value ?: return
+        _standings.value = _standings.value - path
+        _standingsFailed.value = _standingsFailed.value - path
+        ensureStandings()
+    }
+
+    /**
+     * Fetches the selected league's standings unless they are already held or
+     * in flight. Deliberately separate from [refresh]: standings never drive
+     * game-card logic, so they are fetched on their own and never on the
+     * scoreboard's clock.
+     */
+    private fun ensureStandings() {
+        val path = _selectedLeaguePath.value ?: return
+        if (!selectedLeagueHasStandings()) return
+        if (_standings.value.containsKey(path) || path in _standingsLoading.value) return
+        _standingsLoading.value = _standingsLoading.value + path
+        viewModelScope.launch {
+            // The repository already holds a 6-hour cache; this is a network hop
+            // only when that cache is cold.
+            val groups = withContext(Dispatchers.IO) { espn.standings(path) }
+            _standings.value = _standings.value + (path to groups)
+            _standingsFailed.value = if (groups.isEmpty() && espn.lastStandingsFetchFailed(path)) {
+                _standingsFailed.value + path
+            } else {
+                _standingsFailed.value - path
+            }
+            _standingsLoading.value = _standingsLoading.value - path
+        }
     }
 
     /**
@@ -169,6 +296,10 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             team.favoriteKey,
             favorite
         )
+        // Following a team IS the reminder opt-in, and unfollowing the last team
+        // is what cancels the schedule - so the round is re-armed on every
+        // toggle rather than only from the panel's own switch.
+        SportsNotificationWorker.syncScheduleForPrefs(getApplication())
     }
 
     fun setLeagueEnabled(path: String, enabled: Boolean) {
@@ -188,6 +319,8 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             _sections.value = emptyList()
             _isLoading.value = false
             _matches.value = emptyMap()
+            livePollJob?.cancel()
+            livePollJob = null
             return
         }
         // Full-screen spinner only when there is nothing to show at all; a
@@ -198,33 +331,66 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             _sections.value = fetched
             _isLoading.value = false
             resolveMatches(fetched)
+            // The selection's live set may have moved with this refresh, so the
+            // tick is re-aimed from the fresh sections.
+            syncLivePoll()
         }
     }
 
     /**
-     * The 30-second live tick, while the hub is on screen.
+     * (Re)arms the live tick for the tab the viewer is on, or clears it.
      *
-     * Only leagues with something in play are refetched: an upcoming game's
-     * kick-off time does not change between two ticks, and the ESPN cache would
-     * answer most of those from memory anyway - so this is about scores and the
-     * clock, which only move for a live game.
+     * One job, replaced every time the selection or the live set changes, so
+     * there is never more than one loop in flight and a tab with nothing in play
+     * is never polled at all.
      */
-    fun refreshLive() {
-        val live = _sections.value.filter { section ->
-            section.games.any { it.state == GameState.LIVE } ||
-                section.tournaments.any { it.state == GameState.LIVE }
-        }
-        if (live.isEmpty()) return
-        refreshJob?.cancel()
-        refreshJob = viewModelScope.launch {
-            val updated = _sections.value.map { section ->
-                val fresh = live.firstOrNull { it.league.path == section.league.path }
-                    ?: return@map section
-                fetchSection(fresh.league, fresh)
+    private fun syncLivePoll() {
+        livePollJob?.cancel()
+        livePollJob = null
+        val paths = SportsLivePollRules.liveLeagues(
+            sections = _sections.value,
+            selectedPath = _selectedLeaguePath.value,
+            favoriteKeys = _favoriteTeamKeys.value,
+        )
+        if (paths.isEmpty()) return
+        livePollJob = viewModelScope.launch {
+            while (isActive) {
+                delay(SportsLivePollRules.POLL_INTERVAL_MS)
+                // A failed poll keeps the last good scores (the repository
+                // hands back its cache) and simply tries again on the next
+                // beat - never an error card from a background poll. The loop
+                // ends the moment nothing in play remains, which is what stops
+                // the tick without waiting for the hub to close.
+                if (!refreshLeagues(paths)) break
             }
-            _sections.value = updated
-            resolveMatches(updated)
         }
+    }
+
+    /**
+     * Refetches [paths] and merges them into the sections in place, leaving every
+     * other league's cards untouched (no flash - the current code already
+     * updates cards without clearing them). Returns whether anything in [paths]
+     * is still in play; false is the caller's signal to stop polling.
+     */
+    private suspend fun refreshLeagues(paths: List<String>): Boolean {
+        val fresh = HashMap<String, LeagueSection>()
+        paths.forEach { path ->
+            val league = SportsLeagues.byPath(path) ?: return@forEach
+            val previous = _sections.value.firstOrNull { it.league.path == path }
+            fresh[path] = fetchSection(league, previous)
+        }
+        if (fresh.isEmpty()) return false
+        val updated = _sections.value.map { fresh[it.league.path] ?: it }
+        _sections.value = updated
+        resolveMatches(updated)
+        return paths.any { path ->
+            SportsLivePollRules.hasLive(updated.firstOrNull { it.league.path == path })
+        }
+    }
+
+    override fun onCleared() {
+        livePollJob?.cancel()
+        super.onCleared()
     }
 
     private suspend fun fetchSections(leagues: List<SportsLeague>): List<LeagueSection> =

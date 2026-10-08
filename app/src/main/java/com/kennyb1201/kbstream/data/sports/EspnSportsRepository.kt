@@ -36,7 +36,9 @@ class EspnSportsRepository(
 
     private val scoreboards = HashMap<String, Cached<List<SportsGame>>>()
     private val tournaments = HashMap<String, Cached<List<TournamentEvent>>>()
+    private val tableCache = HashMap<String, Cached<List<StandingGroup>>>()
     private val failed = HashSet<String>()
+    private val tableFailed = HashSet<String>()
 
     /**
      * The games in [leaguePath], live/upcoming/final, newest event order as
@@ -78,6 +80,29 @@ class EspnSportsRepository(
     }
 
     /**
+     * The league's standings, grouped by conference/division in the feed's own
+     * order, with the empty groups skipped. Empty on a failure with nothing
+     * cached.
+     *
+     * A six-hour TTL rather than the scoreboard's minute-scale one: a table
+     * moves at most once a day, and this is a much heavier document than a
+     * scoreboard, so refetching it with every tab switch would be pure cost.
+     */
+    suspend fun standings(leaguePath: String): List<StandingGroup> {
+        val cached = tableCache[leaguePath]
+        val now = clock()
+        if (cached != null && now - cached.atMs < STANDINGS_TTL_MS) return cached.value
+        val fetched = fetchStandings(leaguePath)?.let(::parseStandings)
+        if (fetched == null) {
+            tableFailed += leaguePath
+            return cached?.value.orEmpty()
+        }
+        tableFailed -= leaguePath
+        tableCache[leaguePath] = Cached(now, fetched)
+        return fetched
+    }
+
+    /**
      * Whether the last attempt for [leaguePath] failed.
      *
      * An empty list alone cannot say why it is empty, and the difference
@@ -88,41 +113,64 @@ class EspnSportsRepository(
      */
     fun lastFetchFailed(leaguePath: String): Boolean = leaguePath in failed
 
+    /** Whether the last standings attempt for [leaguePath] failed. See above. */
+    fun lastStandingsFetchFailed(leaguePath: String): Boolean = leaguePath in tableFailed
+
     /** Drops every cached league: what a "Refresh" press runs. */
     fun clearCache() {
         scoreboards.clear()
         tournaments.clear()
+        tableCache.clear()
         failed.clear()
+        tableFailed.clear()
     }
 
     private fun ttlMs(live: Boolean): Long = if (live) LIVE_TTL_MS else IDLE_TTL_MS
 
-    private suspend fun fetch(leaguePath: String): String? = withContext(Dispatchers.IO) {
-        val url = SCOREBOARD_BASE + leaguePath + "/scoreboard"
-        runCatching {
-            val request = Request.Builder().url(url).get().build()
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    Log.w(TAG, "scoreboard $leaguePath -> HTTP ${response.code}")
-                    return@runCatching null
+    private suspend fun fetch(leaguePath: String): String? =
+        httpGet(SCOREBOARD_BASE + leaguePath + "/scoreboard", "scoreboard $leaguePath")
+
+    private suspend fun fetchStandings(leaguePath: String): String? =
+        httpGet(
+            STANDINGS_BASE + leaguePath + "/standings?region=us&lang=en&type=0",
+            "standings $leaguePath"
+        )
+
+    private suspend fun httpGet(url: String, what: String): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val request = Request.Builder().url(url).get().build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        Log.w(TAG, "$what -> HTTP ${response.code}")
+                        return@runCatching null
+                    }
+                    response.body.string()
                 }
-                response.body.string()
+            }.getOrElse { error ->
+                Log.w(TAG, "$what failed: ${error.message}")
+                null
             }
-        }.getOrElse { error ->
-            Log.w(TAG, "scoreboard $leaguePath failed: ${error.message}")
-            null
         }
-    }
 
     companion object {
         private const val TAG = "ESPN_SPORTS"
         private const val SCOREBOARD_BASE = "https://site.api.espn.com/apis/site/v2/sports/"
+
+        /**
+         * The standings host, which is deliberately NOT the scoreboard's: the
+         * scoreboard lives on `site.api`, the table on `site.web.api`.
+         */
+        private const val STANDINGS_BASE = "https://site.web.api.espn.com/apis/v2/sports/"
 
         /** A live game changes on every drive; a minute is the hub's own tick. */
         private const val LIVE_TTL_MS = 60_000L
 
         /** Nothing in play: a schedule does not move for a quarter of an hour. */
         private const val IDLE_TTL_MS = 15L * 60_000L
+
+        /** A table moves at most daily, so it is held for a quarter of a day. */
+        private const val STANDINGS_TTL_MS = 6L * 60L * 60_000L
 
         private fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15L, TimeUnit.SECONDS)
@@ -219,7 +267,152 @@ private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? 
         // A football schedule is read in weeks, and `week.number` is where ESPN
         // puts it. Every other sport leaves it out.
         week = espnWeek(event.optJSONObject("week")),
+        // Present on only some sports/feed shapes; the sheet skips the section
+        // when it is empty rather than reserving a blank block.
+        leaders = espnGameLeaders(competition),
     )
+}
+
+/**
+ * ESPN's per-side leaders on a competition: the first stat line of each side's
+ * leader block, up to two - one per team.
+ *
+ * The shape is `competitions[0].leaders[] = { team, leaders[] = { athlete,
+ * displayValue } }`, one entry per side. Absent on most scoreboards (the NBA's
+ * regular-season feed carries no `leaders` at all), which is not a fault: the
+ * sheet simply draws no leaders section. A block with no athlete or no value is
+ * skipped rather than rendered as an empty row.
+ */
+internal fun espnGameLeaders(competition: JSONObject?): List<GameLeader> {
+    val blocks = competition?.optJSONArray("leaders") ?: return emptyList()
+    val out = ArrayList<GameLeader>(2)
+    for (i in 0 until blocks.length()) {
+        if (out.size >= 2) break
+        val block = blocks.optJSONObject(i) ?: continue
+        val abbreviation = block.optJSONObject("team")
+            ?.optString("abbreviation", "").orEmpty()
+        // Each block is a list of stat groups (points, rebounds, ...), and each
+        // of those carries the athletes in its own `leaders` array. The head of
+        // the first non-empty group is the side's top performer.
+        val groups = block.optJSONArray("leaders") ?: continue
+        var line: GameLeader? = null
+        for (g in 0 until groups.length()) {
+            val rows = groups.optJSONObject(g)?.optJSONArray("leaders") ?: continue
+            for (r in 0 until rows.length()) {
+                val row = rows.optJSONObject(r) ?: continue
+                val athlete = row.optJSONObject("athlete")
+                val name = athlete?.optString("displayName", "")?.takeIf { it.isNotBlank() }
+                    ?: row.optString("displayName", "").takeIf { it.isNotBlank() }
+                    ?: continue
+                val summary = row.optString("displayValue", "").takeIf { it.isNotBlank() }
+                    ?: row.optString("summary", "").takeIf { it.isNotBlank() }
+                    ?: ""
+                line = GameLeader(name = name, teamAbbreviation = abbreviation, summary = summary)
+                break
+            }
+            if (line != null) break
+        }
+        if (line != null) out += line
+    }
+    return out
+}
+
+// ── Standings ───────────────────────────────────────────────────────────
+
+/**
+ * ESPN's standings document into the hub's groups.
+ *
+ * The endpoint nests differently per sport and has changed shape before: the
+ * live NFL/NBA/MLB payload returns conferences each carrying their own
+ * `standings.entries` and no division children, while a payload that DOES split
+ * into divisions (and the canned case the tests pin) carries them as
+ * `children` of the conference. Both are read the same way:
+ *
+ *  - a conference WITH division children is flattened into its divisions, in
+ *    order, and the conference itself is not emitted (the spec's "conferences
+ *    containing divisions");
+ *  - a conference with no children is emitted as one group under its own name.
+ *
+ * A group with no entries is skipped rather than drawn as an empty heading, and
+ * a payload that is not standings yields no groups rather than throwing.
+ */
+internal fun parseStandings(json: String): List<StandingGroup> {
+    val root = runCatching { JSONObject(json) }.getOrNull() ?: return emptyList()
+    val out = ArrayList<StandingGroup>()
+    val conferences = root.optJSONArray("children")
+    if (conferences == null || conferences.length() == 0) {
+        // A flat payload (no conference grouping) is one group of its own.
+        val entries = espnStandingEntries(root)
+        if (entries.isNotEmpty()) {
+            out += StandingGroup(root.optString("name", "Standings"), entries)
+        }
+        return out
+    }
+    for (i in 0 until conferences.length()) {
+        val conference = conferences.optJSONObject(i) ?: continue
+        val divisions = conference.optJSONArray("children")
+        if (divisions != null && divisions.length() > 0) {
+            for (j in 0 until divisions.length()) {
+                val division = divisions.optJSONObject(j) ?: continue
+                val entries = espnStandingEntries(division)
+                if (entries.isEmpty()) continue
+                out += StandingGroup(division.optString("name", ""), entries)
+            }
+        } else {
+            val entries = espnStandingEntries(conference)
+            if (entries.isEmpty()) continue
+            out += StandingGroup(conference.optString("name", ""), entries)
+        }
+    }
+    return out
+}
+
+private fun espnStandingEntries(node: JSONObject): List<StandingEntry> {
+    val entries = node.optJSONObject("standings")?.optJSONArray("entries") ?: return emptyList()
+    return (0 until entries.length()).mapNotNull { index ->
+        entries.optJSONObject(index)?.let(::espnStandingEntry)
+    }
+}
+
+private fun espnStandingEntry(row: JSONObject): StandingEntry? {
+    val team = row.optJSONObject("team") ?: return null
+    val displayName = team.optString("displayName", "").takeIf { it.isNotBlank() }
+        ?: team.optString("name", "").takeIf { it.isNotBlank() }
+        ?: return null
+    val stats = row.optJSONArray("stats")
+    return StandingEntry(
+        abbreviation = team.optString("abbreviation", "").takeIf { it.isNotBlank() }
+            ?: displayName.take(3).uppercase(),
+        displayName = displayName,
+        // The same two places a scoreboard's crest can sit, read the same way.
+        logoUrl = team.optString("logo", "").takeIf { it.isNotBlank() }
+            ?: team.optJSONArray("logos")?.optJSONObject(0)
+                ?.optString("href", "")?.takeIf { it.isNotBlank() },
+        wins = espnStatText(stats, "wins").toIntOrNull() ?: 0,
+        losses = espnStatText(stats, "losses").toIntOrNull() ?: 0,
+        ties = espnStatText(stats, "ties").toIntOrNull() ?: 0,
+        winPercent = espnStatText(stats, "winPercent"),
+        gamesBehind = espnStatText(stats, "gamesBehind"),
+        streak = espnStatText(stats, "streak"),
+    )
+}
+
+/**
+ * One named stat's value as text, or "" when the row has no such stat.
+ *
+ * `displayValue` first (ESPN's own formatting: "1.000", "-", "W4"), falling
+ * back to the raw numeric `value` where a sport omits the display string.
+ */
+internal fun espnStatText(stats: JSONArray?, name: String): String {
+    if (stats == null) return ""
+    for (i in 0 until stats.length()) {
+        val stat = stats.optJSONObject(i) ?: continue
+        if (stat.optString("name", "") != name) continue
+        return stat.optString("displayValue", "").takeIf { it.isNotBlank() }
+            ?: stat.optString("value", "").takeIf { it.isNotBlank() }
+            ?: ""
+    }
+    return ""
 }
 
 /**
@@ -327,6 +520,11 @@ private fun espnTeamOf(row: JSONObject, homeAway: String): SportsTeam {
         record = row.optJSONArray("records")?.optJSONObject(0)?.optString("summary", "")
             ?.takeIf { it.isNotBlank() },
         colorHex = team?.optString("color", "")?.takeIf { it.isNotBlank() },
+        // The nickname ESPN publishes ("Yankees", "Red Sox"), used where a
+        // heading reads better with the name than the code - see a game
+        // reminder's title.
+        shortName = team?.optString("shortDisplayName", "")?.takeIf { it.isNotBlank() }
+            ?: athlete?.optString("shortName", "")?.takeIf { it.isNotBlank() },
     )
 }
 

@@ -776,4 +776,219 @@ class EspnSportsRepositoryTest {
         assertNull(game.venue)
         assertNull(game.note)
     }
+
+    // ── Leaders ─────────────────────────────────────────────────────
+
+    @Test
+    fun `a competition's leaders are read one per side, up to two`() {
+        val withLeaders = """
+            {
+              "events": [
+                {
+                  "id": "801",
+                  "name": "Boston Celtics at Los Angeles Lakers",
+                  "date": "2023-11-15T03:00Z",
+                  "status": { "type": { "state": "in", "shortDetail": "Q3 4:32" } },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        { "homeAway": "home", "team": { "abbreviation": "LAL", "displayName": "Los Angeles Lakers" } },
+                        { "homeAway": "away", "team": { "abbreviation": "BOS", "displayName": "Boston Celtics" } }
+                      ],
+                      "leaders": [
+                        {
+                          "team": { "abbreviation": "LAL" },
+                          "leaders": [
+                            {
+                              "name": "points",
+                              "displayName": "Points",
+                              "leaders": [
+                                { "displayValue": "28 PTS, 11 REB", "athlete": { "displayName": "LeBron James" } }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "team": { "abbreviation": "BOS" },
+                          "leaders": [
+                            {
+                              "name": "points",
+                              "leaders": [
+                                { "displayValue": "24 PTS", "athlete": { "displayName": "Jayson Tatum" } }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "team": { "abbreviation": "BOS" },
+                          "leaders": [
+                            { "leaders": [ { "displayValue": "9 REB", "athlete": { "displayName": "Third Man" } } ] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val leaders = parseScoreboard(withLeaders, "basketball/nba").single().leaders
+
+        // Two rows, not three: the sheet carries one line per side, and the
+        // stat group is descended into for the athlete and the summary.
+        assertEquals(2, leaders.size)
+        assertEquals(GameLeader("LeBron James", "LAL", "28 PTS, 11 REB"), leaders[0])
+        assertEquals(GameLeader("Jayson Tatum", "BOS", "24 PTS"), leaders[1])
+    }
+
+    @Test
+    fun `a scoreboard with no leader block yields no leaders`() {
+        // The NBA's regular-season feed carries none at all: the sheet draws no
+        // leaders section rather than an empty one.
+        val game = parseScoreboard(scoreboard, "basketball/nba").first()
+        assertTrue(game.leaders.isEmpty())
+    }
+
+    // ── Standings ───────────────────────────────────────────────────
+
+    /**
+     * A nested table: two conferences, each with four divisions - the shape the
+     * spec pins (NFL: 2 conferences, 8 divisions).
+     */
+    private val standings = """
+        {
+          "name": "National Football League",
+          "children": [
+            {
+              "name": "American Football Conference",
+              "abbreviation": "AFC",
+              "children": [
+                {
+                  "name": "AFC East",
+                  "standings": { "entries": [
+                    { "team": { "abbreviation": "BUF", "displayName": "Buffalo Bills" },
+                      "stats": [ { "name": "wins", "displayValue": "3" }, { "name": "losses", "displayValue": "1" } ] }
+                  ] }
+                },
+                {
+                  "name": "AFC North",
+                  "standings": { "entries": [
+                    { "team": { "abbreviation": "BAL", "displayName": "Baltimore Ravens" },
+                      "stats": [ { "name": "wins", "displayValue": "2" } ] }
+                  ] }
+                },
+                {
+                  "name": "AFC South",
+                  "standings": { "entries": [
+                    { "team": { "abbreviation": "HOU", "displayName": "Houston Texans" },
+                      "stats": [ { "name": "wins", "displayValue": "2" } ] }
+                  ] }
+                },
+                {
+                  "name": "AFC West",
+                  "standings": { "entries": [
+                    { "team": {
+                        "abbreviation": "KC",
+                        "displayName": "Kansas City Chiefs",
+                        "logos": [{ "href": "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png" }]
+                      },
+                      "stats": [
+                        { "name": "wins", "displayValue": "4" },
+                        { "name": "losses", "displayValue": "0" },
+                        { "name": "ties", "displayValue": "0" },
+                        { "name": "winPercent", "displayValue": "1.000" },
+                        { "name": "gamesBehind", "displayValue": "-" },
+                        { "name": "streak", "displayValue": "W4" }
+                      ] }
+                  ] }
+                }
+              ]
+            },
+            {
+              "name": "National Football Conference",
+              "abbreviation": "NFC",
+              "children": [
+                { "name": "NFC East", "standings": { "entries": [ { "team": { "abbreviation": "DAL", "displayName": "Dallas Cowboys" }, "stats": [] } ] } },
+                { "name": "NFC North", "standings": { "entries": [ { "team": { "abbreviation": "DET", "displayName": "Detroit Lions" }, "stats": [] } ] } },
+                { "name": "NFC South", "standings": { "entries": [] } },
+                { "name": "NFC West", "standings": { "entries": [ { "team": { "abbreviation": "SF", "displayName": "San Francisco 49ers" }, "stats": [] } ] } }
+              ]
+            }
+          ]
+        }
+    """.trimIndent()
+
+    @Test
+    fun `conferences are flattened into their divisions, in order, with empties skipped`() {
+        val groups = parseStandings(standings)
+
+        // NFC South had no entries, so it is not a heading; the other seven
+        // divisions are, in the feed's own order.
+        assertEquals(
+            listOf(
+                "AFC East", "AFC North", "AFC South", "AFC West",
+                "NFC East", "NFC North", "NFC West"
+            ),
+            groups.map { it.name }
+        )
+        assertEquals(7, groups.size)
+    }
+
+    @Test
+    fun `a division's rows carry the code, the record and the streak`() {
+        val kc = parseStandings(standings)
+            .first { it.name == "AFC West" }
+            .entries
+            .single { it.abbreviation == "KC" }
+
+        assertEquals("Kansas City Chiefs", kc.displayName)
+        assertEquals(4, kc.wins)
+        assertEquals(0, kc.losses)
+        assertEquals(0, kc.ties)
+        assertEquals("1.000", kc.winPercent)
+        assertEquals("-", kc.gamesBehind)
+        assertEquals("W4", kc.streak)
+        assertEquals("https://a.espncdn.com/i/teamlogos/nfl/500/kc.png", kc.logoUrl)
+    }
+
+    @Test
+    fun `a conference with no divisions is emitted as one group`() {
+        // The live endpoint returns exactly this shape: conferences each with
+        // their own `standings.entries` and no division children.
+        val flat = """
+            {
+              "name": "National Basketball Association",
+              "children": [
+                { "name": "Eastern Conference", "standings": { "entries": [
+                    { "team": { "abbreviation": "BOS", "displayName": "Boston Celtics" },
+                      "stats": [ { "name": "wins", "displayValue": "1" }, { "name": "winPercent", "displayValue": ".000" } ] }
+                ] } },
+                { "name": "Western Conference", "standings": { "entries": [] } }
+              ]
+            }
+        """.trimIndent()
+
+        val groups = parseStandings(flat)
+        assertEquals(listOf("Eastern Conference"), groups.map { it.name })
+        assertEquals("BOS", groups.single().entries.single().abbreviation)
+    }
+
+    @Test
+    fun `a payload that is not standings yields no groups rather than throwing`() {
+        assertTrue(parseStandings("not json at all").isEmpty())
+        assertTrue(parseStandings("{}").isEmpty())
+        assertTrue(parseStandings("""{"children": []}""").isEmpty())
+    }
+
+    @Test
+    fun `a stat is read by its display value, falling back to the raw number`() {
+        val stats = org.json.JSONArray(
+            """[{"name":"wins","value":4,"displayValue":"4"},{"name":"ties","value":0}]"""
+        )
+        assertEquals("4", espnStatText(stats, "wins"))
+        // A stat the feed omits its display string for still reads its value.
+        assertEquals("0", espnStatText(stats, "ties"))
+        assertEquals("", espnStatText(stats, "streak"))
+    }
 }

@@ -117,6 +117,7 @@ object AppPreferences {
     // Which ESPN leagues the sports hub renders; a Set<String> of league paths.
     private const val KEY_SPORTS_LEAGUES = "sports_enabled_leagues"
     private const val KEY_SPORTS_FAVORITE_TEAMS = "sports_favorite_teams"
+    private const val KEY_SPORTS_GAME_REMINDERS = "sports_game_reminders"
     // Which settings pane to reopen on, by SettingsPane name. Device-local on
     // purpose: the pane someone was last reading says nothing about the
     // account, and syncing it would drag a phone's "Data & Backup" onto the TV.
@@ -1701,6 +1702,22 @@ object AppPreferences {
         val next = if (favorite) current + key else current - key
         setSportsFavoriteTeams(context, next)
         return next
+    }
+
+    /**
+     * Whether the hub may post a reminder when a followed team's game is about
+     * to start.
+     *
+     * Default ON: following a team IS the opt-in, and a viewer who followed a
+     * team has already said they care when it plays. The worker is only ever
+     * scheduled while at least one team is followed, so the default costs
+     * nothing to somebody who never used the hub.
+     */
+    fun getSportsGameReminders(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_SPORTS_GAME_REMINDERS, true)
+
+    fun setSportsGameReminders(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_SPORTS_GAME_REMINDERS, enabled).apply()
     }
 
     /**

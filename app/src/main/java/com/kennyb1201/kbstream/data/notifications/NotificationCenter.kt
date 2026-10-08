@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -14,7 +16,11 @@ import com.kennyb1201.kbstream.MainActivity
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
+import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /**
  * The app's only notification surface.
@@ -29,6 +35,7 @@ internal object NotificationCenter {
 
     const val CHANNEL_NEW_EPISODES = "new_episodes"
     const val CHANNEL_LIVE_REMINDERS = "live_reminders"
+    const val CHANNEL_GAME_REMINDERS = "game_reminders"
 
     /**
      * Extras on the guide deep link: which channel a reminder tap should tune
@@ -37,11 +44,28 @@ internal object NotificationCenter {
      */
     const val EXTRA_REMINDER_CHANNEL_ID = "kbstream_reminder_channel_id"
 
-    /** Two channels, so a user can silence one kind of alert without the other. */
+    /**
+     * Extra on the sports deep link: open the sports hub. A game-reminder tap
+     * lands there, which is the hub's existing entry point (the guide's own
+     * "SPORTS" action navigates to the very same [com.kennyb1201.kbstream.Screen.Sports]).
+     */
+    const val EXTRA_OPEN_SPORTS = "kbstream_open_sports"
+
+    /**
+     * The channels, so a user can silence one kind of alert without the others.
+     *
+     * [importance] is only ever honoured at creation: the platform freezes a
+     * channel's importance once it exists, which is what keeps a user's own
+     * tuning intact across updates. A score reminder is deliberately LOW and
+     * therefore sound- and vibration-free by default - it is a heads-up, and a
+     * user who wants sound raises it in system settings (which Do Not Disturb
+     * then governs like any other channel).
+     */
     private data class ChannelSpec(
         val id: String,
         val name: String,
-        val description: String
+        val description: String,
+        val importance: Int = NotificationManager.IMPORTANCE_DEFAULT
     )
 
     private val CHANNELS = listOf(
@@ -54,8 +78,20 @@ internal object NotificationCenter {
             CHANNEL_LIVE_REMINDERS,
             "Live TV reminders",
             "Alerts when a live program you asked to be reminded about starts."
+        ),
+        ChannelSpec(
+            CHANNEL_GAME_REMINDERS,
+            "Game reminders",
+            "Silent alerts when a team you follow is about to play.",
+            importance = NotificationManager.IMPORTANCE_LOW
         )
     )
+
+    /** A small, bounded client for a reminder's crest; it never blocks long. */
+    private val logoClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
 
     /**
      * Registers the channels once per process start, and re-registers them on
@@ -81,7 +117,7 @@ internal object NotificationCenter {
             val channel = NotificationChannel(
                 spec.id,
                 spec.name,
-                NotificationManager.IMPORTANCE_DEFAULT
+                spec.importance
             ).apply {
                 description = spec.description
                 setShowBadge(true)
@@ -173,6 +209,84 @@ internal object NotificationCenter {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+    }
+
+    /**
+     * Posts "your team plays soon" for one followed game and deep-links its tap
+     * into the sports hub.
+     *
+     * The tap opens the hub rather than a player on purpose: the worker has no
+     * playlist in front of it and resolves no channel, and the hub is where a
+     * game's channel is matched and played. A reminder that opened a guess would
+     * be a second, wrong playback path - and this feature is explicitly
+     * playback-free.
+     *
+     * The large icon is the followed side's crest where one can be fetched; when
+     * it cannot (offline, a dead URL) the notification posts without it rather
+     * than not at all - a reminder that never arrives is worse than a plain one.
+     */
+    // See programReminder: canPost() gates this, and the runCatching below
+    // catches the SecurityException of a grant revoked in the gap.
+    @SuppressLint("MissingPermission")
+    fun gameReminder(context: Context, game: SportsGame): Boolean {
+        ensureChannels(context)
+        if (!canPost(context)) {
+            Log.i(TAG, "game reminder for ${game.id} skipped: notifications disabled")
+            return false
+        }
+
+        val body = SportsGameReminderRules.reminderBody(game, System.currentTimeMillis())
+        val builder = NotificationCompat.Builder(context, CHANNEL_GAME_REMINDERS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(SportsGameReminderRules.reminderTitle(game))
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            // LOW to match the channel: a heads-up, no sound, no vibration.
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setAutoCancel(true)
+            .setContentIntent(sportsIntent(context, game.id))
+
+        crestBitmap(game.home.logoUrl ?: game.away.logoUrl)?.let(builder::setLargeIcon)
+
+        return runCatching {
+            NotificationManagerCompat.from(context)
+                .notify(SportsGameReminderRules.notificationId(game.id), builder.build())
+            true
+        }.getOrElse {
+            Log.w(TAG, "could not post game reminder: ${it.message}")
+            false
+        }
+    }
+
+    /**
+     * Tap target: the sports hub. Same activity flags as the other deep links -
+     * CLEAR_TOP without SINGLE_TOP deliberately recreates the activity so its
+     * launch-intent handler (which reads extras once, at startup) sees this one.
+     */
+    private fun sportsIntent(context: Context, gameId: String): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_OPEN_SPORTS, true)
+        }
+        return PendingIntent.getActivity(
+            context,
+            SportsGameReminderRules.notificationId(gameId),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
+
+    /** A crest as a bitmap, or null when it cannot be fetched or decoded. */
+    private fun crestBitmap(url: String?): Bitmap? {
+        val href = url?.trim()?.takeIf { it.isNotBlank() } ?: return null
+        return runCatching {
+            val request = Request.Builder().url(href).get().build()
+            logoClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@runCatching null
+                val bytes = response.body.bytes()
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            }
+        }.getOrNull()
     }
 
     /**

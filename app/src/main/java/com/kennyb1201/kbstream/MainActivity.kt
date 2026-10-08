@@ -1083,6 +1083,13 @@ fun AppRoot(
         val reminderChannelId =
             intent?.getStringExtra(NotificationCenter.EXTRA_REMINDER_CHANNEL_ID)
         val spokenQuery = intent?.getStringExtra(SearchSeed.EXTRA_QUERY)
+        // A followed-team game reminder: open the hub. The hub is its own
+        // Screen, reached from the guide's header, and this is the same
+        // destination - the reminder deep link adds no new entry point.
+        if (intent?.getBooleanExtra(NotificationCenter.EXTRA_OPEN_SPORTS, false) == true) {
+            screen = Screen.Sports
+            return true
+        }
         when (
             val route = resolveLaunchIntentRoute(
                 launcherType = launcherType,
