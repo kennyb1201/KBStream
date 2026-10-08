@@ -65,6 +65,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 /**
@@ -271,6 +273,42 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     /** The ranked source list this session was launched with. */
     private var sources: List<Stream> = emptyList()
+
+    /**
+     * The add-on behind each entry of [sources], same order and same length
+     * (null when unknown). It rides the launch extras beside `sources_json`
+     * (`source_addons`), and it is what lets [nextSourceOrNull] skip the rest
+     * of an add-on whose links are dead for this session
+     * (see [SourceAddonSession]).
+     */
+    private var sourceAddons: List<String?> = emptyList()
+
+    /**
+     * Addons whose links failed to OPEN in this session (normalized names).
+     *
+     * Session-scoped: a new playback session starts empty. Deliberately NOT
+     * persisted - [com.kennyb1201.kbstream.data.player.SourceAddonMemory] owns
+     * the cross-session record; this owns the next ten seconds. Filled by the
+     * pre-playback probe before the first load, and by the open-failure path
+     * during playback.
+     */
+    private val sessionDeadAddons = mutableSetOf<String>()
+
+    /**
+     * The HTTP client the pre-playback probe uses.
+     *
+     * libmpv does its own networking, so this Activity has no client for
+     * playback - this one exists only for the cheap ranged GET that checks the
+     * head of the source list before the engine is asked to open it (see
+     * [SourcePlaybackProbe]). Built lazily, so a session with nothing to
+     * choose between never pays for it.
+     */
+    private val probeHttpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(30L, TimeUnit.SECONDS)
+            .readTimeout(60L, TimeUnit.SECONDS)
+            .build()
+    }
 
     /** Label of the source playing now, for the SOURCES picker's selected row. */
     private var currentSourceLabel: String? = null
@@ -906,6 +944,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 parentId,
                 currentAddonName
             )
+            // ...and mark it dead for the REST of this session too, so the
+            // advance below lands on the next source from a DIFFERENT addon
+            // instead of walking the same addon's remaining links
+            // (see SourceAddonSession). The persistent record above and this
+            // set are independent: this one dies with the session.
+            SourceAddonSession.markDead(sessionDeadAddons, currentAddonName)
             // This callback fires only when the file never opened (see
             // MpvPlayerView's END_FILE handling), which makes the ranked list
             // the first answer rather than the card: a source that will not
@@ -1073,11 +1117,64 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     startPositionMs = saved
                 }
                 if (isFinishing || isDestroyed) return@launch
-                loadStream()
+                probeThenLoad { loadStream() }
             }
         } else {
-            loadStream()
+            probeThenLoad { loadStream() }
         }
+    }
+
+    /**
+     * Mechanism A on this engine: probe the head of the ranked list before the
+     * player's first load, so the session never spends a full open timeout on a
+     * link the probe already knows is dead.
+     *
+     * The pick's add-on is marked dead for the session, which is exactly what
+     * the advance after it needs (see [SourceAddonSession]); the chosen source
+     * then loads normally through [load]. `load` is passed in because the load
+     * path also carries the playhead the launch resolved, and it is a local of
+     * [onCreate].
+     *
+     * On any probe infrastructure failure the top-ranked source loads as today.
+     */
+    private fun probeThenLoad(load: () -> Unit) {
+        // With fewer than two sources there is nothing to choose between, and
+        // the probe only ever decides WHICH source to open.
+        if (sources.size < 2) {
+            load()
+            return
+        }
+        val probe = SourcePlaybackProbe(sessionDeadAddons, probeHttpClient)
+        lifecycleScope.launch {
+            val pick = runCatching {
+                probe.pickLiveSource(sources, sourceAddons) { stream -> stream.requestHeaders }
+            }.getOrNull()
+            if (isFinishing || isDestroyed) return@launch
+            // Only a source the probe actually proved live moves the session;
+            // a null pick (a probe infrastructure failure) loads the head of
+            // the list exactly as before.
+            if (pick != null && !pick.url.isNullOrBlank() && pick.url != currentUrl) {
+                Log.w(TAG, "probe picked a different head source: ${pick.sourceLabel()}")
+                adoptInitialSource(pick)
+            }
+            load()
+        }
+    }
+
+    /**
+     * Makes [stream] the source this session is about to open, before any
+     * player exists: the same fields [switchToSource] moves across a mid-playback
+     * switch, minus everything that belongs to a player being torn down.
+     */
+    private fun adoptInitialSource(stream: Stream) {
+        val url = stream.url ?: return
+        currentUrl = url
+        currentAudioUrl = stream.audioUrl
+        streamHeaders = stream.requestHeaders
+        currentSourceLabel = stream.sourceLabel()
+        currentBadges = stream.badges
+        currentBingeGroup = stream.bingeGroup
+        resolveAddonIdentity(currentSourceLabel)
     }
 
     // --- Intent ------------------------------------------------------------
@@ -1132,6 +1229,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             episode?.let { requestedEpisode -> requestedSeason to requestedEpisode }
         }
         val parsedSources = parseSourcesJson(intent.getStringExtra("sources_json"))
+        // The add-on behind each parsed row, parallel to sources_json. Absent
+        // or short reads as "unknown" for the missing entries, which are never
+        // skipped and never demoted.
+        val parsedAddons = parseSourceAddonsJson(intent.getStringExtra("source_addons"))
         // Whether a Dolby Vision label is worth anything on this box, read the
         // same way the resolver reads it (see StreamsViewModel): the device has
         // to advertise a DV decoder AND the viewer must not have said their
@@ -1152,6 +1253,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             parsedSources
         }
         sources = orderedSources.withCurrentSource(currentSourceStream(currentUrl, currentAudioUrl))
+        // Resolved by stream identity, so the re-rank above and a prepended
+        // current source both keep every name with its own row.
+        sourceAddons = addonsFor(sources, parsedSources, parsedAddons)
         val playingSource = sources.firstOrNull { it.url == currentUrl }
         currentSourceLabel = playingSource?.sourceLabel()
         currentBadges = playingSource?.badges.orEmpty()
@@ -4330,10 +4434,19 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private fun nextSourceOrNull(): Stream? {
         val current = currentUrl
         val index = sources.indexOfFirst { it.url == current }
-        val start = if (index >= 0) index + 1 else 0
-        return sources.drop(start).firstOrNull { stream ->
+        var start = if (index >= 0) index + 1 else 0
+        while (true) {
+            // First pass skips every add-on this session has marked dead (see
+            // SourceAddonSession.nextIndex); when nothing live is left it falls
+            // back to plain order, because a dead link is still better than no
+            // sources. The blank-URL / same-URL guard below is the pre-existing
+            // rule and applies to whichever index the skip lands on.
+            val candidateIndex = SourceAddonSession.nextIndex(sourceAddons, start, sessionDeadAddons)
+                ?: return null
+            val stream = sources.getOrNull(candidateIndex) ?: return null
             val url = stream.url
-            !url.isNullOrBlank() && url != current
+            if (!url.isNullOrBlank() && url != current) return stream
+            start = candidateIndex + 1
         }
     }
 

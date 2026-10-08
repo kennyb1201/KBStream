@@ -111,6 +111,8 @@ object AppPreferences {
     private const val KEY_POSTER_BORDER_STRENGTH = "poster_border_strength" // 0=off, 1=subtle (default), 2=medium, 3=strong
     private const val KEY_POSTER_EDGE = "poster_edge" // 0=straight, 1=rounded (default), 2=pill
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
+    // Which ESPN leagues the sports hub renders; a Set<String> of league paths.
+    private const val KEY_SPORTS_LEAGUES = "sports_enabled_leagues"
     // Which settings pane to reopen on, by SettingsPane name. Device-local on
     // purpose: the pane someone was last reading says nothing about the
     // account, and syncing it would drag a phone's "Data & Backup" onto the TV.
@@ -1525,6 +1527,45 @@ object AppPreferences {
     fun setLastSettingsPane(context: Context, pane: String) {
         prefs(context).edit().putString(KEY_LAST_SETTINGS_PANE, pane).apply()
     }
+
+    // ── Sports hub: which leagues the hub renders ─────────────────────
+    /**
+     * The ESPN league paths the sports hub is allowed to show and fetch.
+     *
+     * Stored as the league PATHS (`"basketball/nba"`) rather than an index or
+     * a label: the catalog can be reordered or relabelled without silently
+     * changing what somebody had turned on, and an entry this build no longer
+     * knows is simply ignored by
+     * [com.kennyb1201.kbstream.data.sports.SportsLeagues.enabled].
+     *
+     * Per profile via [prefs], like the other content preferences - a profile
+     * with a tiny playlist wants a smaller hub. The four US leagues are the
+     * default because they are the ones a sports-hub-curious viewer is most
+     * likely to have a channel for.
+     */
+    fun getSportsEnabledLeagues(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_SPORTS_LEAGUES, null)?.toSet()
+            ?: com.kennyb1201.kbstream.data.sports.SportsLeagues.DEFAULT_ENABLED
+
+    fun setSportsEnabledLeagues(context: Context, leagues: Set<String>) {
+        prefs(context).edit().putStringSet(KEY_SPORTS_LEAGUES, leagues).apply()
+    }
+
+    /**
+     * Turns one league on or off around whatever is already enabled.
+     *
+     * Read-modify-write through [getSportsEnabledLeagues], so an untoggled
+     * league keeps its state and a first-ever toggle starts from the defaults
+     * rather than from an empty set.
+     */
+    fun setSportsLeagueEnabled(context: Context, path: String, enabled: Boolean) {
+        val current = getSportsEnabledLeagues(context)
+        val next = if (enabled) current + path else current - path
+        setSportsEnabledLeagues(context, next)
+    }
+
+    fun isSportsLeagueEnabled(context: Context, path: String): Boolean =
+        path in getSportsEnabledLeagues(context)
 
     /**
      * Cross-device sync: called by every setter of a SYNCED pref. Debounced

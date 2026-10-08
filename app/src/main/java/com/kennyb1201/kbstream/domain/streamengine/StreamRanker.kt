@@ -30,15 +30,27 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *  4. **Debrid-served links.** A link served by the viewer's own debrid service
  *     comes before a plain hoster link, whatever that one is labeled: the
  *     URL's host is the service itself, or the entry carries that service's own
- *     completion tag. It sits above availability because it is a fact about the
- *     URL rather than a claim in a title - an addon writes its own titles, so a
- *     scraper addon can print "Instant" beside a hoster link as readily as a
- *     debrid addon can write "cached", but it cannot print someone else's
- *     domain into the link it serves the file from. That is the difference
- *     between a completed file on a CDN and one hoster's copy of it, and it is
- *     the one this ranker kept missing: a scraper addon's 4K direct link kept
- *     taking the head of the list from the TorBox copy the viewer's own addon
- *     had sent, because only the quality labels were ever compared.
+ *     completion tag, or the entry came from an addon that is itself
+ *     debrid-backed (see `debridAddons` on [rank]). It sits above availability
+ *     because it is a fact about the URL rather than a claim in a title - an
+ *     addon writes its own titles, so a scraper addon can print "Instant"
+ *     beside a hoster link as readily as a debrid addon can write "cached", but
+ *     it cannot print someone else's domain into the link it serves the file
+ *     from. That is the difference between a completed file on a CDN and one
+ *     hoster's copy of it, and it is the one this ranker kept missing: a
+ *     scraper addon's 4K direct link kept taking the head of the list from the
+ *     TorBox copy the viewer's own addon had sent, because only the quality
+ *     labels were ever compared.
+ *
+ *     The addon half of that rule exists because the URL half cannot see every
+ *     debrid addon. AIOStreams is debrid-first: what it hands over is a torrent
+ *     infoHash it expects the viewer's account to resolve, so the link names no
+ *     debrid host and carries no completion tag at rank time - neither signal
+ *     fires, the entry scored on its labels alone, and it lost to a finicky
+ *     hoster link with a better-looking label (AIOStreams 193 under
+ *     Flix-Streams 195). Which addon a stream came from is a fact the caller
+ *     already holds; where that addon is debrid-configured, the entry is
+ *     debrid-served by definition, whatever shape its URL has.
  *  5. **Availability.** A copy the debrid service already holds starts now; an
  *     uncached one of the same title waits for peers, whatever its resolution
  *     label says. AIOStreams sorts on exactly this first, and it is the one
@@ -49,7 +61,12 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *     runtime is known), seeders and a resolution label its own file size
  *     contradicts, in that order of weight. The Dolby Vision half of the HDR
  *     bonus is paid only where this box can actually show it (see [rank]'s
- *     `dolbyVisionUseful`).
+ *     `dolbyVisionUseful`). Two small nudges sit in here as well: a
+ *     PROPER/REPACK/RERIP copy of an otherwise identical release (the scene's
+ *     own fix for a copy it nuked), and a source that declares English audio -
+ *     see [PROPER_RELEASE] and [ENGLISH_AUDIO]. Both are score terms on purpose:
+ *     they break ties between similar copies, they never move a source across a
+ *     tier.
  *
  * Every rule but the debrid one above reads the stream's *text*, and that text
  * is every field the addon
@@ -140,6 +157,71 @@ object StreamRanker {
         Regex("""\bweb-?dl\b""") to 15,
         Regex("""\b(webrip|hdtv)\b""") to 5
     )
+
+    /**
+     * A marker that the text is a RELEASE NAME rather than a film's own title: a
+     * resolution, or one of [RELEASE_TIERS]' own types.
+     *
+     * Read by [PROPER_RELEASE]' bonus and by it alone, because that bonus is the
+     * one tag a title can plausibly carry by accident: "A Proper Introduction"
+     * is a film, and a bare word-bounded `proper` would hand it the scene's
+     * fix bonus for having a word in its name. A release name is not ambiguous
+     * the same way - a scene tag only means anything next to the encode it
+     * describes. Deliberately composed from [RELEASE_TIERS] rather than
+     * restating those types, so adding a release type cannot leave this rule
+     * behind.
+     *
+     * The NUKED rule does NOT use this: a copy the scene flagged as bad has to
+     * sink even when its text is sparse (a direct link carrying little more than
+     * the release name), and that is the failure it exists to prevent.
+     */
+    private val RELEASE_SIGNAL = Regex(
+        (
+            listOf("""\b(2160p|1440p|1080p|720p|480p|4k)\b""") +
+                RELEASE_TIERS.map { (pattern, _) -> pattern.pattern }
+            ).joinToString("|")
+    )
+
+    /**
+     * A release the scene itself flagged as bad: a bad encode, wrong content, a
+     * desync.
+     *
+     * Sunk as a class with the unwatchable releases (see [isKnownBad]) rather
+     * than penalized in the score, because a nuked copy usually carries every
+     * quality label and a big size - the same argument that made the CAM rule a
+     * tier. The one exception is text that ALSO names a fix: a PROPER's own
+     * description routinely says which release it was nuked for ("nuked for
+     * ..."), and sinking that entry would sink the fix while the bad copy it
+     * replaces stayed above it.
+     */
+    private val NUKED_RELEASE = Regex("""\bnuked\b""")
+
+    /**
+     * A corrected re-release of the same encode: PROPER, REPACK, RERIP.
+     *
+     * Word-bounded like every other marker here, so the tag is not read out of
+     * the middle of a word ("improperly", "prepackage").
+     */
+    private val PROPER_RELEASE = Regex("""\b(proper|repack|rerip|rerepack)\b""")
+
+    /**
+     * A source that declares English audio.
+     *
+     * This is an English-first app - Settings' Browse & discover is English-only
+     * by default and the discover rails ask TMDB for `with_original_language=en`
+     * - so between two otherwise identical copies the one that SAYS it carries
+     * English is the safer pick, and the one that says nothing is not punished
+     * for it. `en` is read as well as `english`/`eng` because that is the tag
+     * addons actually print (`Some.Film.2024.1080p.WEB-DL.EN`).
+     *
+     * `en` is also the French and Spanish preposition, so a title like "En el
+     * nombre del padre" collects the nudge - and that is harmless, which is why
+     * it is accepted rather than guarded: the bonus only separates texts that
+     * DIFFER, and two copies of that film share the title word, so they collect
+     * it together or not at all. Where a language SETTING lands, this regex
+     * becomes the viewer's own language and the nudge stays exactly this shape.
+     */
+    private val ENGLISH_AUDIO = Regex("""\b(english|eng|en)\b""")
 
     /**
      * A source that starts playing now instead of hunting for peers: the addon
@@ -234,6 +316,23 @@ object StreamRanker {
     private const val CONSTRAINED_HEAVY_PENALTY = 120
 
     /**
+     * The corrected copy of an encode the scene had nuked: enough to separate it
+     * from the identical original, far below any resolution or release-type
+     * step, so it can only ever break a tie it belongs in.
+     */
+    private const val PROPER_BONUS = 15
+
+    /**
+     * A declared English audio track, when nothing better separates two copies.
+     *
+     * Between the smallest release-type step (WEBRip/HDTV, +5) and the next one
+     * (WEB-DL, +15): enough to lift the tagged copy of the same kind of release,
+     * never enough to outvote a better one - a 4K or a 1080p copy wins on
+     * resolution whether or not it mentions its audio at all.
+     */
+    private const val ENGLISH_AUDIO_BONUS = 10
+
+    /**
      * The size nudge, for a title whose runtime is unknown: its cap and its
      * slope. 20 GB × 1.5 is the +30 that [DENSITY_POINTS_PER_GB_PER_HOUR] also
      * caps at, so the two are one nudge measured two ways rather than a
@@ -279,19 +378,31 @@ object StreamRanker {
         dolbyVisionUseful: Boolean = true,
         // The title's own length in minutes, when the caller knows it. Null = no
         // density signal, which is exactly the old bulk-size scoring.
-        runtimeMinutes: Int? = null
+        runtimeMinutes: Int? = null,
+        // Which addon each stream came from. The caller already has this - the
+        // picker carries it beside every row - and with it the debrid tier can
+        // see the addons whose links do not LOOK debrid-served: see
+        // `debridAddons`. Defaults to "no addon known", which is today's
+        // behaviour exactly.
+        addonOf: (Stream) -> String? = { null },
+        // Normalized names of the addons that are debrid-backed (see
+        // [com.kennyb1201.kbstream.domain.streamengine.DebridAddons]). Empty =
+        // every entry is judged on its URL and text alone, exactly as before.
+        debridAddons: Set<String> = emptySet()
     ): List<Stream> =
         streams
             .filter { stream -> isPlayable(stream) || !stream.infoHash.isNullOrBlank() }
             // The text every rule reads, whether the debrid service the viewer
-            // pays for is the one serving the link, and what the source itself
-            // says about the episode, all worked out once per stream.
+            // pays for is serving the link (by URL, by tag, or by the addon it
+            // came from), and what the source itself says about the episode, all
+            // worked out once per stream.
             .map { stream ->
                 val text = searchableText(stream)
                 Candidate(
                     stream = stream,
                     text = text,
-                    debridServed = isDebridServed(stream, text),
+                    debridServed = isDebridServed(stream, text) ||
+                        isDebridBackedByAddon(addonOf(stream), debridAddons),
                     episodeRank = episodeRank(stream, episode)
                 )
             }
@@ -352,14 +463,24 @@ object StreamRanker {
         episode: Pair<Int, Int>? = null,
         constrainedDevice: Boolean = false,
         dolbyVisionUseful: Boolean = true,
-        runtimeMinutes: Int? = null
+        runtimeMinutes: Int? = null,
+        // The same two facts [rank] sorted on, for the same reason the DV verdict
+        // and the runtime are here: a report that read the defaults would
+        // explain an order that was never built.
+        addonOf: (Stream) -> String? = { null },
+        debridAddons: Set<String> = emptySet()
     ): String {
         val text = searchableText(stream)
         return buildString {
             append(if (isPlayable(stream)) "playable" else "hash-only")
             if (isKnownBad(text)) append(" known-bad")
             if (episodeRank(stream, episode) == EPISODE_OTHER) append(" other-episode")
-            if (isDebridServed(stream, text)) append(" debrid-served")
+            if (
+                isDebridServed(stream, text) ||
+                isDebridBackedByAddon(addonOf(stream), debridAddons)
+            ) {
+                append(" debrid-served")
+            }
             if (INSTANT_HINT.containsMatchIn(text)) append(" instant")
             if (constrainedDevice) append(" constrained-device")
             if (!dolbyVisionUseful) append(" dv-stripped")
@@ -473,6 +594,24 @@ object StreamRanker {
             DEBRID_TAG.containsMatchIn(text)
 
     /**
+     * True when the addon an entry came from is itself debrid-backed.
+     *
+     * The URL/tag rule above reads evidence the addon leaves in the entry; this
+     * one reads what the caller knows about the addon that produced it, which is
+     * the only way an AIOStreams infoHash can be recognized as debrid-served - it
+     * names no debrid host and carries no completion tag, because the resolution
+     * has not happened yet.
+     *
+     * Both sides go through [SourceAddonPreference.normalize], the same spelling
+     * of an addon the memory tier uses, so "AIOStreams", "aiostreams" and a
+     * renamed "AIO Streams!" are one key everywhere. An empty or unknown addon
+     * name is not in [debridAddons] and never will be, so the default path
+     * ("caller passed nothing") decides nothing.
+     */
+    internal fun isDebridBackedByAddon(addon: String?, debridAddons: Set<String>): Boolean =
+        SourceAddonPreference.normalize(addon) in debridAddons
+
+    /**
      * The URL's host, lowercased, or an empty string when it has none.
      *
      * The one rule that reads the link rather than the text reads it here: the
@@ -496,7 +635,13 @@ object StreamRanker {
     private fun isKnownBad(text: String): Boolean =
         UNWATCHABLE_RELEASE.containsMatchIn(text) ||
             THREE_D_RELEASE.containsMatchIn(text) ||
-            FOREIGN_OR_HARDSUBBED_RELEASE.containsMatchIn(text)
+            FOREIGN_OR_HARDSUBBED_RELEASE.containsMatchIn(text) ||
+            // A nuked copy sinks - unless the text ALSO names the fix, which is
+            // how a PROPER describes itself ("nuked for bad audio, proper
+            // fixes it"). That entry is the fix, not the problem, and sinking it
+            // would leave the bad copy it replaces as the best of the two.
+            (NUKED_RELEASE.containsMatchIn(text) &&
+                !PROPER_RELEASE.containsMatchIn(text))
 
     private fun score(
         stream: Stream,
@@ -554,6 +699,30 @@ object StreamRanker {
         // remux, not three bonuses.
         RELEASE_TIERS.firstOrNull { (pattern, _) -> pattern.containsMatchIn(text) }
             ?.let { (_, bonus) -> score += bonus }
+
+        // The scene's own fix for a copy it nuked: PROPER, REPACK, RERIP. A small
+        // bonus rather than a tier, because it says nothing about the film - only
+        // that this is the corrected copy of an encode whose original was bad. It
+        // has to beat the identical non-PROPER release and nothing more, so it
+        // must not leapfrog a genuinely better one (a PROPER 720p still sits
+        // under a 1080p WEB-DL).
+        //
+        // Gated on the text looking like a release name (see [RELEASE_SIGNAL]):
+        // "A Proper Introduction" is a title, not a repack, and a bare
+        // word-bounded `proper` would pay it the fix bonus for its own name.
+        if (PROPER_RELEASE.containsMatchIn(text) && RELEASE_SIGNAL.containsMatchIn(text)) {
+            score += PROPER_BONUS
+        }
+
+        // A source that declares English audio, between two copies that are
+        // otherwise the same. The other half of the foreign-dub rule (see
+        // FOREIGN_OR_HARDSUBBED_RELEASE): that one sinks a copy whose audio is
+        // demonstrably wrong, this one lifts the copy that says its audio is
+        // right - and asks nothing of the copy that says nothing. Small on
+        // purpose: a debrid 720p EN still loses to a debrid 1080p with no
+        // language tag, because resolution is the stronger fact and language
+        // only whispers.
+        if (ENGLISH_AUDIO.containsMatchIn(text)) score += ENGLISH_AUDIO_BONUS
 
         // --- Peers, which only the uncached copies have to find ---
         //

@@ -444,6 +444,200 @@ class StreamRankerTest {
         assertTrue(line, line.contains("debrid-served"))
     }
 
+    // ── Which add-on sent it ──
+    //
+    // Reported bug: a debrid-first add-on's links lost to finicky hoster links
+    // (AIOStreams 193 under Flix-Streams 195). AIOStreams resolves through the
+    // viewer's account, so its entries are debrid-served - but at rank time the
+    // link names no debrid host and carries no completion tag, so both URL-based
+    // signals stayed silent and the entry was scored on its labels alone. The
+    // addon it came from is a fact the caller already holds, and that is what the
+    // ranker now reads.
+
+    /** Order with the debrid-addon facts the resolve path passes in. */
+    private fun orderWithAddons(
+        addonOf: (Stream) -> String?,
+        debridAddons: Set<String>,
+        vararg streams: Stream
+    ): List<Stream> = StreamRanker.rank(
+        streams.toList(),
+        addonOf = addonOf,
+        debridAddons = debridAddons
+    )
+
+    @Test
+    fun `a debrid-backed addon's entry heads a higher-scoring hoster link`() {
+        val aiostreams = stream(
+            "Some Film 2024 1080p WEB-DL",
+            url = "https://aiostreams.example/resolve/abc123",
+            infoHash = "0f1e2d3c4b5a69788796a5b4c3d2e1f00112233a"
+        )
+        val hoster = stream(
+            "Some Film 2024 2160p REMUX DV HDR 18 GB",
+            url = "https://cdn.pengu.example/4k.mkv"
+        )
+
+        assertEquals(
+            listOf(aiostreams, hoster),
+            orderWithAddons(
+                addonOf = { s -> if (s === aiostreams) "AIOStreams" else "Flix-Streams" },
+                debridAddons = setOf("aiostreams"),
+                hoster,
+                aiostreams
+            )
+        )
+    }
+
+    @Test
+    fun `with no debrid add-on set the bigger label still wins`() {
+        // The default path, and the behaviour every other caller keeps: nothing
+        // is treated as debrid, so the 4K hoster link heads the list on points.
+        val aiostreams = stream(
+            "Some Film 2024 1080p WEB-DL",
+            url = "https://aiostreams.example/resolve/abc123",
+            infoHash = "0f1e2d3c4b5a69788796a5b4c3d2e1f00112233a"
+        )
+        val hoster = stream(
+            "Some Film 2024 2160p REMUX DV HDR 18 GB",
+            url = "https://cdn.pengu.example/4k.mkv"
+        )
+
+        assertEquals(listOf(hoster, aiostreams), order(hoster, aiostreams))
+        assertEquals(
+            listOf(hoster, aiostreams),
+            orderWithAddons(
+                addonOf = { s -> if (s === aiostreams) "AIOStreams" else "Flix-Streams" },
+                debridAddons = emptySet(),
+                hoster,
+                aiostreams
+            )
+        )
+    }
+
+    @Test
+    fun `an add-on nothing is known about is not lifted`() {
+        // The set is the whole signal: naming some other add-on must change
+        // nothing, or the tier would promote every scraper that passes through.
+        val scraper = stream(
+            "Some Film 2024 1080p WEB-DL",
+            url = "https://somehoster.example/f/abc.mkv"
+        )
+        val hoster = stream(
+            "Some Film 2024 2160p REMUX DV HDR 18 GB",
+            url = "https://cdn.pengu.example/4k.mkv"
+        )
+
+        assertEquals(
+            listOf(hoster, scraper),
+            orderWithAddons(
+                addonOf = { s -> if (s === scraper) "Some Hoster" else "Flix-Streams" },
+                debridAddons = setOf("aiostreams"),
+                hoster,
+                scraper
+            )
+        )
+    }
+
+    @Test
+    fun `the addon name is matched however it is spelled`() {
+        // The picker carries an addon's display name and the resolve carries the
+        // manifest name, so the key is normalized on both sides (the same
+        // spelling the memory tier uses).
+        val entry = stream(
+            "Some Film 2024 1080p WEB-DL",
+            url = "https://aiostreams.example/resolve/abc123"
+        )
+        val hoster = stream(
+            "Some Film 2024 2160p REMUX DV HDR 18 GB",
+            url = "https://cdn.pengu.example/4k.mkv"
+        )
+
+        for (spelling in listOf("AIOStreams", "aiostreams", "AIO-Streams", "AIOSTREAMS")) {
+            assertEquals(
+                "expected $spelling to be recognized as the debrid add-on",
+                listOf(entry, hoster),
+                orderWithAddons(
+                    addonOf = { s -> if (s === entry) spelling else "Flix-Streams" },
+                    debridAddons = setOf("aiostreams"),
+                    hoster,
+                    entry
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `an entry this app cannot open still sits under a playable link`() {
+        // Playability outranks every other tier, the debrid one included: a
+        // hash-only AIOStreams entry has no engine here at all (it is resolved
+        // by nothing), so being debrid-backed may not lift it over a link that
+        // opens right now. This is the same rule that keeps a hash-only 4K under
+        // a playable 480p, and the addon-aware debrid tier does not change it.
+        val hashOnly = stream(
+            "Some Film 2024 1080p WEB-DL",
+            infoHash = "0f1e2d3c4b5a69788796a5b4c3d2e1f00112233a"
+        )
+        val playable = stream(
+            "Some Film 2024 1080p WEB-DL",
+            url = "https://cdn.pengu.example/a.mkv"
+        )
+
+        assertEquals(
+            listOf(playable, hashOnly),
+            orderWithAddons(
+                addonOf = { _ -> "AIOStreams" },
+                debridAddons = setOf("aiostreams"),
+                playable,
+                hashOnly
+            )
+        )
+    }
+
+    @Test
+    fun `explain names the debrid tier for an addon-backed entry too`() {
+        val entry = stream(
+            "Some Film 2024 1080p WEB-DL",
+            url = "https://aiostreams.example/resolve/abc123"
+        )
+
+        val line = StreamRanker.explain(
+            entry,
+            addonOf = { _ -> "AIOStreams" },
+            debridAddons = setOf("aiostreams")
+        )
+
+        assertTrue(line, line.contains("debrid-served"))
+        // And with no set it is not claimed: the report has to explain the order
+        // that was actually built.
+        val without = StreamRanker.explain(entry, addonOf = { _ -> "AIOStreams" })
+        assertTrue(without, !without.contains("debrid-served"))
+    }
+
+    @Test
+    fun `a direct debrid link needs no addon information`() {
+        // The URL rule is untouched: any source whose own link is served by a
+        // debrid service is still debrid-served, whoever sent it.
+        val debrid = stream(
+            "Some Film 2024 1080p WEB-DL",
+            url = "https://store-9.torbox.app/download/abc/a.mkv"
+        )
+        val hoster = stream(
+            "Some Film 2024 2160p REMUX DV HDR 18 GB",
+            url = "https://cdn.pengu.example/4k.mkv"
+        )
+
+        assertEquals(listOf(debrid, hoster), order(hoster, debrid))
+        assertEquals(
+            listOf(debrid, hoster),
+            orderWithAddons(
+                addonOf = { _ -> "Some Scraper" },
+                debridAddons = emptySet(),
+                hoster,
+                debrid
+            )
+        )
+    }
+
     // ── Peers ──
 
     @Test
@@ -746,5 +940,155 @@ class StreamRankerTest {
             listOf(thirty, hundred),
             StreamRanker.rank(listOf(thirty, hundred), runtimeMinutes = 45)
         )
+    }
+
+    // ── A bad copy, and the copy that fixes it ──
+    //
+    // Reported: the head of the list went to a release the scene had already
+    // flagged as bad, while the PROPER that corrected it sat two rows down.
+    // "NUKED" and "PROPER" are the scene's own verdicts on a copy, and the
+    // ranker read neither: the nuked original carried every quality label and a
+    // big size, so it scored like a real release.
+
+    @Test
+    fun `a release the scene nuked sinks as a class`() {
+        val nuked = stream(
+            "Some Show S01E01 1080p NUKED WEB-DL 8 GB",
+            url = "https://host/a.mkv"
+        )
+        val honest = stream("Some Show S01E01 480p WEB-DL", url = "https://host/b.mkv")
+
+        // Sunk like a CAM, not penalized: on labels alone the nuked copy wins
+        // every comparison, and no bonus can promise "under every honest source".
+        assertEquals(listOf(honest, nuked), order(nuked, honest))
+        assertTrue(StreamRanker.explain(nuked).contains("known-bad"))
+    }
+
+    @Test
+    fun `the proper that fixes a nuked release is not sunk with it`() {
+        // A PROPER describes itself by naming what it replaces: "nuked for bad
+        // audio". That entry IS the fix, and sinking it would leave the bad copy
+        // it corrects as the best of the two.
+        val proper = stream(
+            "Some Show S01E01 1080p PROPER WEB-DL",
+            url = "https://host/a.mkv",
+            name = "Some Show S01E01 1080p PROPER WEB-DL nuked for bad audio"
+        )
+        // Both entries carry a name and a title, so the only difference between
+        // them is the fix itself.
+        val original = stream(
+            "Some Show S01E01 1080p WEB-DL",
+            url = "https://host/b.mkv",
+            name = "Some Show S01E01 1080p WEB-DL"
+        )
+
+        val line = StreamRanker.explain(proper)
+        assertTrue(line, !line.contains("known-bad"))
+        assertEquals(
+            "the fix beats the identical original by the fix bonus and no more",
+            15,
+            scoreOf(proper) - scoreOf(original)
+        )
+        assertEquals(listOf(proper, original), order(original, proper))
+    }
+
+    @Test
+    fun `a film whose title carries the word proper gets no fix bonus`() {
+        val titled = stream("A Proper Introduction 2024", url = "https://host/a.mkv")
+        val same = stream("A Proper Introduction 2024", url = "https://host/b.mkv")
+        val without = stream("A Introduction 2024", url = "https://host/a.mkv")
+
+        // The tag only means anything next to the encode it describes: with no
+        // release name in the text, the word is part of a title and pays nothing.
+        assertEquals(scoreOf(without), scoreOf(titled))
+        assertEquals(scoreOf(same), scoreOf(titled))
+        assertTrue(!StreamRanker.explain(titled).contains("known-bad"))
+    }
+
+    @Test
+    fun `the fix tag is read whole, not out of the middle of a word`() {
+        val wordy = stream("Some Film 2024 1080p WEB-DL Improperly Named", url = "https://host/a.mkv")
+        val plain = stream("Some Film 2024 1080p WEB-DL Named", url = "https://host/b.mkv")
+
+        assertEquals(scoreOf(plain), scoreOf(wordy))
+    }
+
+    @Test
+    fun `a nuked copy of a lower quality still sinks under an honest one`() {
+        // The tier is not the score's business: a nuked 1080p WEB-DL does not
+        // outrank an honest 480p because it carries better labels.
+        val nuked = stream("Some Film 2024 1080p BluRay NUKED 12 GB", url = "https://host/a.mkv")
+        val honest = stream("Some Film 2024 720p WEBRip", url = "https://host/b.mkv")
+
+        assertEquals(listOf(honest, nuked), order(nuked, honest))
+    }
+
+    // ── The audio the copy declares ──
+    //
+    // Reported: two otherwise identical copies - one tagged EN, one silent about
+    // its audio - scored the same, so the tie fell to whichever the addon listed
+    // first. In an English-first app the tagged one is the safer pick.
+
+    @Test
+    fun `a copy that declares english audio is lifted over one that says nothing`() {
+        val tagged = stream("Some Film 2024 1080p WEB-DL EN", url = "https://host/a.mkv")
+        val silent = stream("Some Film 2024 1080p WEB-DL", url = "https://host/b.mkv")
+
+        assertEquals(10, scoreOf(tagged) - scoreOf(silent))
+        assertEquals(listOf(tagged, silent), order(silent, tagged))
+        // The silent copy is not punished for saying nothing - only lifted one is.
+        assertEquals(
+            "the untagged copy keeps the score it always had",
+            scoreOf(silent),
+            scoreOf(stream("Some Film 2024 1080p WEB-DL", url = "https://host/c.mkv"))
+        )
+    }
+
+    @Test
+    fun `the audio nudge never outvotes a resolution`() {
+        val small = stream("Some Film 2024 720p WEB-DL english", url = "https://host/a.mkv")
+        val big = stream("Some Film 2024 1080p WEB-DL", url = "https://host/b.mkv")
+
+        assertTrue(
+            "language only whispers: a 720p EN cannot leapfrog a 1080p with no" +
+                " language tag",
+            scoreOf(big) > scoreOf(small)
+        )
+        assertEquals(listOf(big, small), order(small, big))
+    }
+
+    @Test
+    fun `a title that carries the word english collects the nudge like a tag`() {
+        val titled = stream("The English Patient 1996 1080p WEB-DL", url = "https://host/a.mkv")
+        val without = stream("The Patient 1996 1080p WEB-DL", url = "https://host/b.mkv")
+
+        // Accepted rather than guarded: "english" standing alone is still an
+        // English-language film, and two copies of one film share the word, so
+        // they collect it together or not at all.
+        assertEquals(10, scoreOf(titled) - scoreOf(without))
+    }
+
+    @Test
+    fun `the language tag is read whole, not out of the middle of a word`() {
+        val extended = stream("Some Film 2024 1080p WEB-DL Extended", url = "https://host/a.mkv")
+        val plain = stream("Some Film 2024 1080p WEB-DL", url = "https://host/b.mkv")
+
+        // "Extended" holds "en", but not as a word: no boundary between the t and
+        // the e, so it pays nothing.
+        assertEquals(scoreOf(plain), scoreOf(extended))
+    }
+
+    @Test
+    fun `a foreign dub stays sunk even when its text also says english`() {
+        val dubbed = stream(
+            "Some Film 2024 1080p WEB-DL Hindi dubbed english subtitles 10 GB",
+            url = "https://host/a.mkv"
+        )
+        val honest = stream("Some Film 2024 480p WEB-DL", url = "https://host/b.mkv")
+
+        // Tier beats score, as before: the +10 cannot lift a copy whose audio is
+        // demonstrably wrong over an honest one.
+        assertTrue(StreamRanker.explain(dubbed).contains("known-bad"))
+        assertEquals(listOf(honest, dubbed), order(dubbed, honest))
     }
 }

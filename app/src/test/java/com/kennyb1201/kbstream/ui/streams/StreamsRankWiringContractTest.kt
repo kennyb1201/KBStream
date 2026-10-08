@@ -91,7 +91,7 @@ class StreamsRankWiringContractTest {
     }
 
     @Test
-    fun `every rank call is given the DV verdict and the runtime`() {
+    fun `every rank call is given the DV verdict, the runtime and the addon facts`() {
         val fetch = functionBody(viewModel, "private suspend fun fetch(")
         val calls = Regex("""StreamRanker\.rank\(""").findAll(fetch).toList()
 
@@ -108,7 +108,66 @@ class StreamsRankWiringContractTest {
                     "request knows the length: $args",
                 args.contains("runtimeMinutes")
             )
+            // Both are needed on BOTH calls: the tab list is a filtered view of
+            // All, and a tab ranked without the addon facts would order a
+            // debrid-backed addon's own sources differently from the merged
+            // list the viewer just looked at.
+            assertTrue(
+                "a rank call with no addonOf leaves a debrid-backed addon's " +
+                    "entries unrecognized: $args",
+                args.contains("addonOf = addonOf")
+            )
+            assertTrue(
+                "and one with no debridAddons set changes nothing at all: $args",
+                args.contains("debridAddons = debridAddons")
+            )
         }
+    }
+
+    @Test
+    fun `the addon lambda is hoisted once and read by both consumers`() {
+        val fetch = functionBody(viewModel, "private suspend fun fetch(")
+        val lambda = fetch.indexOf("val addonOf: (Stream) -> String? =")
+        val debridAddons = fetch.indexOf("val debridAddons = debridBackedAddons()")
+        val rank = fetch.indexOf("StreamRanker.rank(")
+        val reorder = fetch.indexOf("SourceAddonPreference.ordered(")
+
+        assertTrue(
+            "the lambda, the debrid set, the rank and the reorder must all be there",
+            lambda >= 0 && debridAddons >= 0 && rank >= 0 && reorder >= 0
+        )
+        assertTrue(
+            "the facts have to be known before the list is ranked",
+            lambda < rank && debridAddons > lambda && debridAddons < rank
+        )
+        assertTrue(
+            "and the memory tier reads the same lambda: a second copy would be a " +
+                "second answer to whose link this is",
+            reorder > lambda
+        )
+    }
+
+    @Test
+    fun `a debrid addon is lifted only when a debrid account is configured`() {
+        val configured = viewModel
+            .substringAfter("private fun hasDebridServiceConfigured()")
+            .substringBefore("private fun debridBackedAddons()")
+        assertTrue(
+            "the check is the one the TorBox client already makes (a debrid-first " +
+                "addon serves nothing without an account), not a second definition " +
+                "of what debrid means: $configured",
+            configured.contains("AppPreferences.getTorboxApiKey")
+        )
+
+        val helper = viewModel
+            .substringAfter("private fun debridBackedAddons()")
+            .substringBefore("private companion object")
+        assertTrue(
+            "a debrid-first addon with no account configured must not be lifted: " +
+                "it can serve nothing, so it is not debrid-served: $helper",
+            helper.contains("hasDebridServiceConfigured()") &&
+                helper.contains("DebridAddons.normalizedIds()")
+        )
     }
 
     @Test
@@ -117,14 +176,17 @@ class StreamsRankWiringContractTest {
         assertTrue(
             "the report must not print a score the order was not built with",
             fetch.contains("rankReportLines(") &&
-                fetch.contains("runtimeMinutes = runtimeMinutes")
+                fetch.contains("runtimeMinutes = runtimeMinutes") &&
+                fetch.contains("debridAddons = debridAddons")
         )
 
         val report = functionBody(viewModel, "private fun rankReportLines(")
         val explain = report.substringAfter("StreamRanker.explain(", "")
         assertTrue(
-            "explain must read the DV verdict and the runtime too",
-            explain.contains("dolbyVisionUseful") && explain.contains("runtimeMinutes")
+            "explain must read the DV verdict, the runtime and the addon facts too",
+            explain.contains("dolbyVisionUseful") &&
+                explain.contains("runtimeMinutes") &&
+                explain.contains("debridAddons = debridAddons")
         )
     }
 

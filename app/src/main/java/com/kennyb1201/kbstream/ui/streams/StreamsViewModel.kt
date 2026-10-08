@@ -16,6 +16,7 @@ import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.SourceAddonMemory
 import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.domain.streamengine.DebridAddons
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import com.kennyb1201.kbstream.domain.streamengine.StreamDedup
@@ -38,6 +39,21 @@ import kotlinx.coroutines.withTimeout
  * screen can offer a tab per add-on (plus All) when more than one answered.
  */
 data class StreamAddonGroup(val addonName: String, val streams: List<Stream>)
+
+/**
+ * A resolved request: the ranked source list and, in parallel, the add-on each
+ * source came from (null for an unknown one).
+ *
+ * The two travel together because the order of the list is only ever afterwards
+ * filtered or re-ordered as a pair - a player that skips an addon whose links
+ * are dead for this session (see [com.kennyb1201.kbstream.ui.player.SourceAddonSession])
+ * needs to know whose link each row is, and that fact is only known here, where
+ * the add-ons' own results are still separate.
+ */
+data class ResolvedSources(
+    val streams: List<Stream>,
+    val addons: List<String?>
+)
 
 class StreamsViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = AddonRepository.getInstance()
@@ -65,6 +81,31 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             AppPreferences.getDvCompatMode(application) != AppPreferences.DV_COMPAT_ALL
     }
 
+    /**
+     * Whether a debrid service is configured at all.
+     *
+     * The same check [TorBoxClient] makes before it will talk to the API (see
+     * [AppPreferences.getTorboxApiKey]): TorBox is the one debrid account this
+     * app holds a key for, and the cached-status badges in the picker are
+     * already inert without it. Reused rather than re-derived, so "does the
+     * viewer have debrid" cannot mean two things.
+     */
+    private fun hasDebridServiceConfigured(): Boolean =
+        AppPreferences.getTorboxApiKey(getApplication()).isNotBlank()
+
+    /**
+     * The add-ons whose streams the ranker should treat as debrid-served.
+     *
+     * Both halves are required. The add-on list alone would promote an add-on
+     * that cannot serve anything (a debrid-first add-on with no account
+     * configured resolves no infoHash at all), and the account alone says
+     * nothing about which add-on's links reach it.
+     */
+    private fun debridBackedAddons(): Set<String> {
+        if (!hasDebridServiceConfigured()) return emptySet()
+        return DebridAddons.normalizedIds()
+    }
+
     private companion object {
         const val TAG = "KBStream"
 
@@ -86,6 +127,14 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      */
     private val _addonGroups = MutableStateFlow<List<StreamAddonGroup>>(emptyList())
     val addonGroups: StateFlow<List<StreamAddonGroup>> = _addonGroups.asStateFlow()
+
+    /**
+     * The add-on each entry of [streams] came from, in the same order and the
+     * same length (null when unknown). Published beside [streams] so a caller
+     * can hand a player both halves of one list.
+     */
+    private val _sourceAddons = MutableStateFlow<List<String?>>(emptyList())
+    val sourceAddons: StateFlow<List<String?>> = _sourceAddons.asStateFlow()
 
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
@@ -115,6 +164,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _isLoading.value = true
             _streams.value = emptyList()
+            _sourceAddons.value = emptyList()
             _addonGroups.value = emptyList()
             _debug.value = emptyList()
 
@@ -122,7 +172,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
             // Streams appear as each addon answers; the final ranked/badged
             // list replaces the raw accumulation when every addon finished.
-            val streams = fetch(
+            val resolved = fetch(
                 contentType,
                 streamId,
                 debugLines,
@@ -133,7 +183,8 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             )
 
             _debug.value = debugLines
-            _streams.value = streams
+            _streams.value = resolved.streams
+            _sourceAddons.value = resolved.addons
             _loadedKey.value = "$contentType:$streamId"
             _isLoading.value = false
         }
@@ -147,9 +198,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         contentType: String,
         streamId: String,
         runtimeMinutes: Int? = null
-    ): List<Stream> {
+    ): ResolvedSources {
         val debugLines = mutableListOf<String>()
-        val streams = fetch(
+        val resolved = fetch(
             contentType,
             streamId,
             debugLines,
@@ -157,10 +208,11 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         )
 
         _debug.value = debugLines
-        _streams.value = streams
+        _streams.value = resolved.streams
+        _sourceAddons.value = resolved.addons
         _loadedKey.value = "$contentType:$streamId"
         _isLoading.value = false
-        return streams
+        return resolved
     }
 
     private suspend fun fetch(
@@ -169,7 +221,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         debugLines: MutableList<String>,
         onAddonResult: ((List<Stream>) -> Unit)? = null,
         runtimeMinutes: Int? = null
-    ): List<Stream> {
+    ): ResolvedSources {
         // A new target's groups replace the last one's as soon as this fetch
         // starts, so a background resolve cannot leave stale tabs behind.
         _addonGroups.value = emptyList()
@@ -184,7 +236,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             debugLines.add(directMsg)
             debugLines.add("contentType=channel")
             debugLines.add("streamUrl=$streamId")
-            return listOf(directStream)
+            return ResolvedSources(streams = listOf(directStream), addons = listOf(null))
         }
 
         // The engine this request will play on is chosen later, by the player
@@ -204,7 +256,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
 
         if (streamAddons.isEmpty()) {
             debugLines.add("No installed addon offers a 'stream' resource -- add one via Manage Add-ons.")
-            return emptyList()
+            return ResolvedSources(streams = emptyList(), addons = emptyList())
         }
 
         val results: List<AddonLoadResult> = supervisorScope {
@@ -260,6 +312,26 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // of the head of the list, which is the position the picker and
         // auto-play both take from.
         val requestedEpisode = EpisodeMatch.requestedFrom(streamId)
+
+        // Which add-on each source came from, by the same stream identity the
+        // ranking map is built from. Hoisted above the rank call because both
+        // consumers need it now: the memory tier reorders by it, and the ranker
+        // reads it to recognize a debrid-backed add-on whose links name no
+        // debrid host (see [DebridAddons]). One lambda, two consumers - a second
+        // copy would be a second answer to "whose link is this".
+        val addonByStream =
+            results
+                .filterIsInstance<AddonLoadResult.Success>()
+                .flatMap { result ->
+                    result.streams.map { stream -> streamKey(stream) to result.addonName }
+                }
+                .toMap()
+        val addonOf: (Stream) -> String? = { stream -> addonByStream[streamKey(stream)] }
+        // Empty unless a debrid service is configured: an add-on that is
+        // debrid-first serves nothing without an account, so it must not be
+        // lifted for being one.
+        val debridAddons = debridBackedAddons()
+
         val preppedStreams =
             if (useRanker) {
                 StreamRanker.rank(
@@ -267,7 +339,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                     requestedEpisode,
                     constrainedDevice,
                     dolbyVisionUseful,
-                    runtimeMinutes
+                    runtimeMinutes,
+                    addonOf = addonOf,
+                    debridAddons = debridAddons
                 )
             } else {
                 allStreams
@@ -284,17 +358,10 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         // itself, so the picker, the tabs' parent list and auto-play all see
         // the same order. It only reorders - nothing is hidden, and a failure
         // expires on its own ([SourceAddonMemory.TTL_MS]).
-        val addonByStream =
-            results
-                .filterIsInstance<AddonLoadResult.Success>()
-                .flatMap { result ->
-                    result.streams.map { stream -> streamKey(stream) to result.addonName }
-                }
-                .toMap()
         val preferredStreams =
             SourceAddonPreference.ordered(
                 streams = preppedStreams,
-                addonOf = { stream -> addonByStream[streamKey(stream)] },
+                addonOf = addonOf,
                 outcomes = SourceAddonMemory.outcomes(getApplication(), streamId)
             )
 
@@ -334,7 +401,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                             requestedEpisode,
                             constrainedDevice,
                             dolbyVisionUseful,
-                            runtimeMinutes
+                            runtimeMinutes,
+                            addonOf = addonOf,
+                            debridAddons = debridAddons
                         )
                     } else {
                         result.streams
@@ -362,14 +431,22 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
         StreamRankReport.record(
             rankReportLines(
                 streams = markedStreams,
-                results = results,
+                addonOf = addonOf,
                 ranked = useRanker,
                 requestedEpisode = requestedEpisode,
-                runtimeMinutes = runtimeMinutes
+                runtimeMinutes = runtimeMinutes,
+                debridAddons = debridAddons
             )
         )
 
-        return markedStreams
+        // The parallel add-on list for the final order: each surviving row's
+        // own add-on, looked up by the stream identity the ranking map was
+        // built from. Dedup keeps one representative of a repeated torrent and
+        // the badge pass only adds chips, so every row here resolves.
+        return ResolvedSources(
+            streams = markedStreams,
+            addons = markedStreams.map { addonByStream[streamKey(it)] }
+        )
     }
 
     /**
@@ -383,17 +460,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      */
     private fun rankReportLines(
         streams: List<Stream>,
-        results: List<AddonLoadResult>,
+        addonOf: (Stream) -> String?,
         ranked: Boolean,
         requestedEpisode: Pair<Int, Int>?,
-        runtimeMinutes: Int?
+        runtimeMinutes: Int?,
+        debridAddons: Set<String>
     ): List<String> {
         if (streams.isEmpty()) return listOf("streams: none returned")
-
-        val addonByStream = results
-            .filterIsInstance<AddonLoadResult.Success>()
-            .flatMap { result -> result.streams.map { streamKey(it) to result.addonName } }
-            .toMap()
 
         return buildList {
             add(
@@ -409,7 +482,7 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             )
             streams.take(RANK_REPORT_TOP).forEach { stream ->
                 add(
-                    "  ${addonByStream[streamKey(stream)] ?: "?"} · " +
+                    "  ${addonOf(stream) ?: "?"} · " +
                         StreamRanker.explain(
                             stream,
                             requestedEpisode,
@@ -418,9 +491,13 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                             // not the defaults: a report that printed a DV
                             // bonus for a box that cannot show DV - or a
                             // density score for a runtime the request did not
-                            // carry - would explain a different list.
+                            // carry, or a debrid tier for an add-on set that
+                            // never reached the ranker - would explain a
+                            // different list.
                             dolbyVisionUseful,
-                            runtimeMinutes
+                            runtimeMinutes,
+                            addonOf = addonOf,
+                            debridAddons = debridAddons
                         )
                 )
             }

@@ -2146,6 +2146,27 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var backdropUrl: String? = null
     private var overview: String? = null
     private var sources: List<Stream> = emptyList()
+
+    /**
+     * The add-on behind each entry of [sources], same order and same length
+     * (null when unknown). Read from the `source_addons` launch extra, which
+     * arrives beside `sources_json`; it is what lets [tryNextSource] skip the
+     * rest of an add-on whose links are dead for this session
+     * (see [SourceAddonSession]).
+     */
+    private var sourceAddons: List<String?> = emptyList()
+
+    /**
+     * Addons whose links failed to OPEN in this session (normalized names).
+     *
+     * Session-scoped: a new playback session starts empty. Deliberately NOT
+     * persisted - [com.kennyb1201.kbstream.data.player.SourceAddonMemory] owns
+     * the cross-session record; this owns the next ten seconds. Filled by the
+     * pre-playback probe before the first load, and by the open-failure path
+     * during playback.
+     */
+    private val sessionDeadAddons = mutableSetOf<String>()
+
     private var currentSourceIndex = -1
     private var autoSourceSwitchCount = 0
     private val MAX_AUTO_SOURCE_SWITCHES = 2
@@ -3361,6 +3382,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // provide a complete source list.
         val selectedStream = Stream(name = "Current source", title = null, url = currentUrl, audioUrl = currentAudioUrl)
         sources = listOf(selectedStream)
+        // The list exactly as the payload carried it, before a prepended current
+        // source: the add-on names are resolved against it so every name stays
+        // with its own row.
+        var parsedSources: List<Stream> = emptyList()
 
         // Parse sources from JSON
         val sourcesJson = intent.getStringExtra("sources_json")
@@ -3387,6 +3412,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         badges = parseStreamBadges(obj.optJSONArray("badges"))
                     )
                 }.filter { !it.url.isNullOrBlank() }
+                parsedSources = sources
                 if (sources.none { it.url == currentUrl }) {
                     sources = listOf(selectedStream) + sources
                 }
@@ -3394,6 +3420,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 Log.w("NativePlayer", "Failed to parse sources_json", e)
             }
         }
+        // The add-on for each source, parallel to sources_json. Absent or short
+        // reads as "unknown" for the missing entries, which are never skipped
+        // and never demoted.
+        sourceAddons = addonsFor(
+            streams = sources,
+            parsed = parsedSources,
+            addons = parseSourceAddonsJson(intent.getStringExtra("source_addons"))
+        )
 
         // Parse cast from JSON
         val castJson = intent.getStringExtra("cast_json")
@@ -3567,11 +3601,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     carryPositionMs = savedPositionMs
                 }
                 setupIntroDb()
-                createPlayer()
+                probeThenCreatePlayer()
             }
         } else {
             setupIntroDb()
-            createPlayer()
+            probeThenCreatePlayer()
         }
     }
 
@@ -6001,6 +6035,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // alive and made the next replay re-resolve for nothing.
             if (PlaybackRecoveryRules.isLinkFailure(error)) {
                 invalidateCachedLinkBeforeFirstFrame()
+                // ...and mark the addon dead for the REST of this session, so
+                // the advance below lands on the next source from a DIFFERENT
+                // addon instead of walking the same addon's remaining links
+                // (see SourceAddonSession). Independent of the persistent
+                // record written just below: this set dies with the session.
+                if (!isLiveChannel) {
+                    SourceAddonSession.markDead(sessionDeadAddons, currentAddonName)
+                }
                 // The link itself is the thing that failed, so this addon is
                 // the one to stop heading this title's list (see
                 // SourceAddonMemory). Only a link failure counts: a decoder,
@@ -11957,8 +11999,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun tryNextSource(delayMs: Long = 0L, statusText: String? = null): Boolean {
         if (autoSourceSwitchCount >= MAX_AUTO_SOURCE_SWITCHES) return false
-        val nextIndex = currentSourceIndex + 1
-        if (nextIndex >= sources.size) return false
+        // Which source is next, not how many tries are allowed: the first
+        // remaining source whose addon is not dead this session, else plain
+        // order (see SourceAddonSession.nextIndex). Both bounds above and below
+        // are unchanged.
+        val nextIndex = SourceAddonSession.nextIndex(
+            addons = sourceAddons,
+            fromIndex = currentSourceIndex + 1,
+            dead = sessionDeadAddons
+        ) ?: return false
         val nextStream = sources[nextIndex]
         autoSourceSwitchCount++
         Log.w(
@@ -11977,6 +12026,62 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             switchToSource(nextStream, isAutoRecovery = true)
         }
         return true
+    }
+
+    /**
+     * Mechanism A on this engine: probe the head of the ranked list before the
+     * player is built for the first time, so the session never spends a full
+     * open timeout on a link the probe already knows is dead.
+     *
+     * The pick's add-on is marked dead for the session, which is exactly what
+     * the advance after it needs (see [SourceAddonSession]); the chosen source
+     * then loads normally through [createPlayer].
+     *
+     * Only the INITIAL build is wrapped - a rebuild ([recreatePlayer]) is not a
+     * fresh launch, and live channels have a single zap source with nothing to
+     * choose between.
+     *
+     * On any probe infrastructure failure the top-ranked source loads as today.
+     */
+    private fun probeThenCreatePlayer() {
+        // With fewer than two sources there is nothing to choose between, and
+        // the probe only ever decides WHICH source to open.
+        if (isLiveChannel || sources.size < 2) {
+            createPlayer()
+            return
+        }
+        val probe = SourcePlaybackProbe(sessionDeadAddons, httpClient)
+        lifecycleScope.launch {
+            val pick = runCatching {
+                probe.pickLiveSource(sources, sourceAddons) { stream -> stream.requestHeaders }
+            }.getOrNull()
+            if (isFinishing || isDestroyed) return@launch
+            // Only a source the probe actually proved live moves the session;
+            // a null pick (a probe infrastructure failure) builds the player on
+            // the head of the list exactly as before.
+            if (pick != null && !pick.url.isNullOrBlank() && pick.url != currentUrl) {
+                Log.w(TAG, "probe picked a different head source: ${pick.displayLabel()}")
+                adoptInitialSource(pick)
+            }
+            createPlayer()
+        }
+    }
+
+    /**
+     * Makes [stream] the source this session is about to open, before any
+     * player exists: the same fields [switchToSource] moves across a mid-playback
+     * switch, minus everything that belongs to a player being torn down.
+     */
+    private fun adoptInitialSource(stream: Stream) {
+        val url = stream.url ?: return
+        currentUrl = url
+        currentAudioUrl = stream.audioUrl
+        streamHeaders = stream.requestHeaders
+        currentSourceLabel = stream.displayLabel()
+        currentBadges = stream.badges
+        currentBingeGroup = stream.bingeGroup
+        resolveAddonIdentity(currentSourceLabel)
+        currentSourceIndex = sources.indexOfFirst { it.url == url }
     }
 
     // --- PlayerChromeHost: the shared overlay's calls into this engine --------

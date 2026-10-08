@@ -241,6 +241,7 @@ internal fun decodeScreen(
             "search" -> Screen.Search
             "simkl" -> Screen.Simkl
             "guide" -> Screen.Guide
+            "sports" -> Screen.Sports
             "library" -> Screen.Library
             "settings" -> Screen.Settings
             "stats" -> Screen.Stats
@@ -418,6 +419,8 @@ internal val Screen.navDepth: Int
         is Screen.CatalogBuilder -> 2
         // Reached through Settings, so it slides forward like the builder.
         is Screen.Stats -> 2
+        // Reached through the guide's header, one step into Live TV.
+        is Screen.Sports -> 2
         is Screen.ProfileEdit,
         is Screen.Actor,
         is Screen.Studio,
@@ -437,6 +440,7 @@ internal fun Screen.typeName(): String = when (this) {
     is Screen.Search -> "search"
     is Screen.Simkl -> "simkl"
     is Screen.Guide -> "guide"
+    is Screen.Sports -> "sports"
     is Screen.Library -> "library"
     is Screen.Settings -> "settings"
     is Screen.Stats -> "stats"

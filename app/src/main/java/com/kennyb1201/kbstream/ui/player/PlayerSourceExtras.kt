@@ -100,6 +100,69 @@ internal fun List<Stream>.withCurrentSource(current: Stream): List<Stream> =
     if (any { it.url == current.url }) this else listOf(current) + this
 
 /**
+ * The `source_addons` extra: each source's addon name, in the same order as
+ * `sources_json`.
+ *
+ * The parallel array the in-session demotion needs (see
+ * [SourceAddonSession]): the players advance over `sources: List<Stream>`, but
+ * which addon each candidate came from is known only where the list was built.
+ * `JSONObject.NULL` (rather than an empty string) marks an entry the writer did
+ * not know, so a missing name and a blank name are both read back as null.
+ */
+internal fun sourceAddonsJson(addons: List<String?>): String {
+    val arr = JSONArray()
+    addons.forEach { name ->
+        if (name.isNullOrBlank()) arr.put(JSONObject.NULL) else arr.put(name)
+    }
+    return arr.toString()
+}
+
+/**
+ * Parses the `source_addons` extra into a list parallel to `sources_json`.
+ *
+ * Absent, blank or malformed payloads yield an empty list rather than an
+ * exception: missing names degrade to "unknown addon", which is never skipped
+ * and never demoted. Length is preserved so index `i` here lines up with index
+ * `i` of [parseSourcesJson].
+ */
+internal fun parseSourceAddonsJson(raw: String?): List<String?> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return try {
+        val arr = JSONArray(raw)
+        (0 until arr.length()).map { i ->
+            if (arr.isNull(i)) null else arr.optString(i).ifBlank { null }
+        }
+    } catch (e: Exception) {
+        Log.w("PLAYER_SOURCES", "Failed to parse source_addons", e)
+        emptyList()
+    }
+}
+
+/**
+ * The addon name for each stream in [streams], given the payload the list
+ * arrived with.
+ *
+ * [parsed] is the list as read from `sources_json` and [addons] the parallel
+ * `source_addons` array. A player may re-rank the parsed list (stable, so the
+ * order usually survives) and may prepend the playing stream when the payload
+ * did not carry it; resolving by stream identity rather than by index keeps the
+ * names attached to the right rows either way. A stream the payload did not
+ * describe, or an absent/short array, answers null - unknown, never skipped.
+ */
+internal fun addonsFor(
+    streams: List<Stream>,
+    parsed: List<Stream>,
+    addons: List<String?>
+): List<String?> {
+    if (addons.isEmpty()) return List(streams.size) { null }
+    val byStream = HashMap<Stream, String?>()
+    parsed.forEachIndexed { index, stream ->
+        if (!byStream.containsKey(stream)) byStream[stream] = addons.getOrNull(index)
+    }
+    return streams.map { byStream[it] }
+}
+
+/**
  * One row of the payload.
  *
  * `optString(key, "").ifBlank { null }` rather than a null fallback:

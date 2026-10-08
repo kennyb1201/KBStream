@@ -79,10 +79,18 @@ fun StreamsScreen(
     backdropUrl: String?,
     clearLogoUrl: String?,
     suppressAutoSelect: Boolean = false,
-    onStreamSelected: (selected: Stream, allSources: List<Stream>) -> Unit,
+    onStreamSelected: (
+        selected: Stream,
+        allSources: List<Stream>,
+        sourceAddons: List<String?>
+    ) -> Unit,
     viewModel: StreamsViewModel = viewModel()
 ) {
     val streams by viewModel.streams.collectAsStateWithLifecycle()
+    // The add-on behind each source, in the same order as [streams]: it goes to
+    // the player so an add-on whose links are dead for that session can be
+    // skipped when the viewer asks for the next source (see SourceAddonSession).
+    val sourceAddons by viewModel.sourceAddons.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val loadedKey by viewModel.loadedKey.collectAsStateWithLifecycle()
     val addonGroups by viewModel.addonGroups.collectAsStateWithLifecycle()
@@ -94,11 +102,11 @@ fun StreamsScreen(
      * anime verdict published for this request - otherwise the anime rule would
      * send a protected source to an engine that cannot open it.
      */
-    fun selectSource(selected: Stream, allSources: List<Stream>) {
+    fun selectSource(selected: Stream, allSources: List<Stream>, addons: List<String?>) {
         if (selected.drm?.licenseUrl != null) {
             PlayerEngine.clearLaunchAnime()
         }
-        onStreamSelected(selected, allSources)
+        onStreamSelected(selected, allSources, addons)
     }
 
     // A picker opened by "Play Manually" (or by the detail screen's episode
@@ -147,7 +155,7 @@ fun StreamsScreen(
                     "(episode length ${runtimeMinutes?.let { "$it min" } ?: "unknown"})"
             )
             if (top != null) {
-                selectSource(top, streams)
+                selectSource(top, streams, sourceAddons)
             }
         }
     }
@@ -350,7 +358,7 @@ fun StreamsScreen(
                                 badgesAbove = AppPreferences.getBadgesAboveFile(context),
                                 declaredLabel = declaredLabelFor(stream, season, episode),
                                 onClick = {
-                                    selectSource(stream, streams)
+                                    selectSource(stream, streams, sourceAddons)
                                 }
                             )
                         }

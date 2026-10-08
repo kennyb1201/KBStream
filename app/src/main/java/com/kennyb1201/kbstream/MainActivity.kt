@@ -77,10 +77,12 @@ import com.kennyb1201.kbstream.ui.profiles.ProfileEditScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
 import com.kennyb1201.kbstream.ui.home.upNextPlayerNameOrUnknown
+import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.notifications.NotificationCenter
 import com.kennyb1201.kbstream.ui.iptv.GuideScreen
 import com.kennyb1201.kbstream.ui.iptv.IptvViewModel
+import com.kennyb1201.kbstream.ui.sports.SportsHubScreen
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingPrefs
 import com.kennyb1201.kbstream.ui.onboarding.OnboardingScreen
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
@@ -102,6 +104,8 @@ import com.kennyb1201.kbstream.ui.search.SearchScreen
 import com.kennyb1201.kbstream.ui.search.SearchSeed
 import com.kennyb1201.kbstream.ui.search.SearchViewModel
 import com.kennyb1201.kbstream.ui.simkl.SimklConnectScreen
+import com.kennyb1201.kbstream.ui.player.addonsFor
+import com.kennyb1201.kbstream.ui.player.sourceAddonsJson
 import com.kennyb1201.kbstream.ui.streams.StreamsScreen
 import com.kennyb1201.kbstream.ui.streams.StreamsViewModel
 import com.kennyb1201.kbstream.ui.decade.DecadeScreen
@@ -167,6 +171,14 @@ sealed class Screen {
     object Simkl : Screen()
 
     object Guide : Screen()
+
+    /**
+     * The sports hub: league tabs of live/upcoming/final games, reached from a
+     * button in the guide's header. Back returns to Live TV, which is where it
+     * is opened from - and the only place the playlist it resolves against is
+     * configured.
+     */
+    object Sports : Screen()
 
     object Library : Screen()
 
@@ -304,6 +316,14 @@ sealed class Screen {
         val fromActorReturn: Boolean = false,
         val returnTo: Screen = Home,
         val sources: List<Stream> = emptyList(),
+        /**
+         * The add-on behind each entry of [sources], in the same order - the
+         * session-scoped demotion's map of whose link each row is (see
+         * [com.kennyb1201.kbstream.ui.player.SourceAddonSession]). Empty, or
+         * shorter than [sources], reads as "unknown add-on" for the missing
+         * entries.
+         */
+        val sourceAddons: List<String?> = emptyList(),
         val streamHeaders: Map<String, String> = emptyMap(),
         val totalEpisodesInSeason: Int? = null,
         val runtimeMinutes: Int? = null,
@@ -353,7 +373,11 @@ private data class PendingPlay(
     val isNextEpisodeAdvance: Boolean
         get() = !bingeGroup.isNullOrBlank() || !addonName.isNullOrBlank()
 
-    fun toPlayerScreen(stream: Stream, allSources: List<Stream>): Screen.Player {
+    fun toPlayerScreen(
+        stream: Stream,
+        allSources: List<Stream>,
+        sourceAddons: List<String?> = emptyList()
+    ): Screen.Player {
         // A DRM stream cannot play on MPV (the engine's own handoff excludes
         // those too), so it must not inherit the anime route's engine choice.
         if (stream.drm?.licenseUrl != null) {
@@ -392,6 +416,7 @@ private data class PendingPlay(
             randomEpisodes = target.randomEpisodes,
             returnTo = returnTo,
             sources = allSources,
+            sourceAddons = sourceAddons,
             totalEpisodesInSeason = totalEpisodesInSeason,
             runtimeMinutes = target.runtimeMinutes,
             // The addon's own HTTP headers for this link (Referer / Origin /
@@ -442,6 +467,49 @@ private data class PendingPlay(
 internal fun channelTitleGraphic(channelLogoUrl: String?, epgIconUrl: String?): String? =
     channelLogoUrl?.takeIf { it.isNotBlank() }
         ?: epgIconUrl?.takeIf { it.isNotBlank() }
+
+/**
+ * The Player screen a live channel click produces, whichever screen asked.
+ *
+ * One function rather than two call sites because the guide and the sports hub
+ * must launch a channel IDENTICALLY - same parent type, same stream id, same
+ * title graphic, same single direct source - and the zap registry the player
+ * reads (CH+/CH−) keys off exactly those fields. Two copies of this list would
+ * drift on the first edit to either, and the failure mode is a hub launch that
+ * cannot zap.
+ */
+internal fun liveChannelScreen(
+    channel: IptvChannel,
+    epgIconUrl: String?,
+    returnTo: Screen
+): Screen.Player {
+    val channelName = channel.displayName.ifBlank { "Live Channel" }
+    // The channel icon is the only art a channel launch has, so it is also this
+    // launch's title graphic. See channelTitleGraphic.
+    val poster = channelTitleGraphic(channel.logoUrl, epgIconUrl)
+    val directSource = Stream(name = channelName, title = channelName, url = channel.streamUrl)
+
+    return Screen.Player(
+        url = channel.streamUrl,
+        audioUrl = directSource.audioUrl,
+        parentId = channel.id.ifBlank { channel.streamUrl },
+        parentType = "channel",
+        season = null,
+        episode = null,
+        // The channel's own id travels here too: it is what the in-player guide
+        // and the zap registry know the live channel by.
+        episodeStreamId = channel.id,
+        itemName = channelName,
+        itemPoster = poster,
+        // Also the splash's title graphic, which is what makes the loading
+        // screen pulse the channel logo instead of printing the channel name.
+        clearLogoUrl = poster,
+        startPositionMs = 0L,
+        sources = listOf(directSource),
+        streamHeaders = channel.headers,
+        returnTo = returnTo
+    )
+}
 
 /**
  * True when a recovered next-episode handoff names an episode this profile has
@@ -899,11 +967,15 @@ fun AppRoot(
         if (cached != null) {
             Log.i(TAG, "played-link cache hit for ${pending.streamKey}; skipping resolve")
             pendingAutoPlay = null
-            screen = pending.toPlayerScreen(cached.played, cached.sources)
+            // The link cache stores sources, not their add-ons, so a replay
+            // hands the player an unknown-add-on list: nothing is skipped and
+            // nothing is demoted off a stale name, which is the safe default
+            // (see SourceAddonSession).
+            screen = pending.toPlayerScreen(cached.played, cached.sources, emptyList())
                 .copy(linkCacheKey = pending.streamKey)
             return@LaunchedEffect
         }
-        val streams = streamsViewModel.resolve(
+        val resolved = streamsViewModel.resolve(
             pending.target.contentType,
             pending.target.streamId,
             // The episode's own length goes with the request: it is what lets
@@ -922,6 +994,7 @@ fun AppRoot(
         // one that stopped tagging consecutive files - the case where the
         // viewer sees a different, working addon being forgotten every
         // episode. Requiring a group skipped the resolver entirely there.
+        val streams = resolved.streams
         val ordered =
             if (pending.bingeGroup.isNullOrBlank() && pending.addonName.isNullOrBlank()) {
                 streams
@@ -933,6 +1006,10 @@ fun AppRoot(
                     previousAddonName = pending.addonName
                 )
             }
+        // The add-on for each source, in the same order the advance will walk:
+        // the binge resolver above may have re-ordered the list, so the names
+        // are resolved by stream identity rather than by their old position.
+        val orderedAddons = addonsFor(ordered, resolved.streams, resolved.addons)
         // Auto-play takes the episode this request is for, then a source that
         // says nothing about the episode - and never one whose own name
         // declares another episode (see EpisodeMatch). Where that leaves no
@@ -971,7 +1048,7 @@ fun AppRoot(
                 // hand the NEXT replay of this episode the same stale ordering
                 // the get above just refused. A fresh start (no binge identity)
                 // is the case the cache is for.
-                pending.toPlayerScreen(top, ordered)
+                pending.toPlayerScreen(top, ordered, orderedAddons)
             } else {
                 // Remember what actually started, so a replay within the link's
                 // lifetime can skip this resolve entirely.
@@ -982,7 +1059,7 @@ fun AppRoot(
                 // out to be dead before its first frame. Without it only a
                 // REPLAY (a cache hit) could heal the entry, so one more launch
                 // replayed the corpse.
-                pending.toPlayerScreen(top, ordered)
+                pending.toPlayerScreen(top, ordered, orderedAddons)
                     .copy(linkCacheKey = pending.streamKey)
             }
         } else {
@@ -1183,6 +1260,13 @@ fun AppRoot(
 
             is Screen.Tag ->
                 stableBackDestination(current.returnTo)
+
+            // The hub is opened from the guide's own header, so Back returns
+            // there rather than to Home. A channel launched from the hub
+            // behaves exactly like one launched from the guide (Back to Live
+            // TV) - that is the point of there being one launch path.
+            is Screen.Sports ->
+                Screen.Guide
 
             is Screen.Collection ->
                 stableBackDestination(current.returnTo)
@@ -1719,70 +1803,26 @@ fun AppRoot(
                 defaultEpgUrl = "",
                 defaultPlaylistName = "Live TV",
 
-                onPlayChannel = {
-                        channelWithEpg ->
-
-                    val channel =
-                        channelWithEpg.channel
-
-                    val channelName =
-                        channel.displayName
-                            .ifBlank {
-                                "Live Channel"
-                            }
-
-                    val channelId =
-                        channel.id
-                            .ifBlank {
-                                channel.streamUrl
-                            }
-
-                    // The channel icon is the only art a channel launch has,
-                    // so it is also this launch's title graphic. See
-                    // channelTitleGraphic.
-                    val poster =
-                        channelTitleGraphic(
-                            channel.logoUrl,
-                            channelWithEpg.epgChannel?.iconUrl
-                        )
-
-                    // Publish the guide's filtered/ordered lineup so the
-                    // player can zap between live channels with CH+/CH− and
-                    // show an EPG info banner. Kept in lockstep with every
-                    // launch so edits in the guide are reflected next time.
-                    // The zap lineup is published by the guide itself, from
-                    // the group being browsed (see GuideScreen) — publishing
-                    // the whole visible list here is what used to make UP/DOWN
-                    // jump out of the group you were in.
-
-                    val directSource =
-                        Stream(
-                            name = channelName,
-                            title = channelName,
-                            url = channel.streamUrl
-                        )
-
-                    screen = Screen.Player(
-                        url = channel.streamUrl,
-                        audioUrl = directSource.audioUrl,
-                        parentId = channelId,
-                        parentType = "channel",
-                        season = null,
-                        episode = null,
-                        episodeStreamId = channel.id,
-                        itemName = channelName,
-                        itemPoster = poster,
-                        // Also the splash's title graphic, which is what makes
-                        // the loading screen pulse the channel logo instead of
-                        // printing the channel name. See channelTitleGraphic.
-                        clearLogoUrl = poster,
-                        startPositionMs = 0L,
-                        sources = listOf(
-                            directSource
-                        ),
-                        streamHeaders = channel.headers,
+                // The live launch itself lives in liveChannelScreen(), shared
+                // with the sports hub. The guide's job here is only to hand it
+                // the channel and where Back should land. (The zap lineup the
+                // player reads for CH+/CH− is published by the guide itself,
+                // from the group being browsed — see GuideScreen — because
+                // publishing the whole visible list here is what used to make
+                // UP/DOWN jump out of the group you were in.)
+                onPlayChannel = { channelWithEpg ->
+                    screen = liveChannelScreen(
+                        channel = channelWithEpg.channel,
+                        epgIconUrl = channelWithEpg.epgChannel?.iconUrl,
                         returnTo = Screen.Guide
                     )
+                },
+
+                // The sports hub: a row of leagues over the same playlist the
+                // guide is showing. Back returns here, which is why the hub is
+                // a sibling of the guide rather than a pane inside it.
+                onOpenSports = {
+                    screen = Screen.Sports
                 },
 
                 // Catch-up (DVR): launch the recorded broadcast URL directly.
@@ -1825,6 +1865,28 @@ fun AppRoot(
                         returnTo = Screen.Guide
                     )
                 }
+            )
+        }
+
+        is Screen.Sports -> {
+
+            // The hub's own ViewModel: it owns the ESPN fetch, the 30-second
+            // live tick and the playlist match, none of which the guide needs.
+            // Created on demand for the same reason the guide's is - most
+            // sessions never open it, and the hub's first act is a scoreboard
+            // fetch plus a paged read of the cached lineup.
+            SportsHubScreen(
+                // Playing a game is the guide's own launch, with the hub as the
+                // Back destination. There is no second player and no second
+                // channel route - a card that matched a channel hands it to the
+                // SAME liveChannelScreen the guide uses.
+                onPlayChannel = { channel ->
+                    screen = liveChannelScreen(
+                        channel = channel,
+                        epgIconUrl = null,
+                        returnTo = Screen.Sports
+                    )
+                },
             )
         }
 
@@ -2109,7 +2171,8 @@ fun AppRoot(
 
                 onStreamSelected = {
                         stream,
-                        allSources ->
+                        allSources,
+                        sourceAddons ->
 
                     val streamUrl =
                         stream.url.orEmpty()
@@ -2152,6 +2215,7 @@ fun AppRoot(
                             randomEpisodes = current.target.randomEpisodes,
                             returnTo = stableBackDestination(current.returnTo),
                             sources = allSources,
+                            sourceAddons = sourceAddons,
                             totalEpisodesInSeason =
                                 current.target.totalEpisodesInSeason,
                             runtimeMinutes =
@@ -2572,6 +2636,11 @@ fun AppRoot(
                         sourcesArray.put(obj)
                     }
                     putExtra("sources_json", sourcesArray.toString())
+                    // The add-on behind each source, parallel to sources_json:
+                    // the players skip an add-on whose links are dead for the
+                    // session when the viewer (or the open-failure ladder) asks
+                    // for the next source (see SourceAddonSession).
+                    putExtra("source_addons", sourceAddonsJson(current.sourceAddons))
                     // Pass cast as JSON array
                     val castArray = JSONArray()
                     current.cast.forEach { member ->

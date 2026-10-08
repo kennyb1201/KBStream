@@ -1098,6 +1098,39 @@ class IptvRepository(
     }
 
     /**
+     * Guide rows that have not finished yet and whose title contains EVERY
+     * word in [terms], ordered by start time.
+     *
+     * The sports hub's tier-1 lookup: it hands in the two teams of a game
+     * together ("yankees red"), and FTS5's implicit AND means only a program
+     * naming both comes back - a pregame show or the same channel's next game
+     * is excluded by the index rather than by a later pass.
+     *
+     * This stops at the index on purpose. [searchPrograms] falls back to a
+     * `LIKE '%…%'` scan when the index returns nothing, which is the right
+     * trade for a human typing a fragment and the wrong one here: a scoreboard
+     * refresh asks about every live game at once, and each empty answer would
+     * be a full scan of the program table. No terms, or no index, means no
+     * rows - the hub reads that as "no EPG signal" and falls through to the
+     * network tiers.
+     */
+    suspend fun searchProgramsByTitleTerms(
+        terms: List<String>,
+        limit: Int = 40
+    ): List<EpgProgramRow> = withContext(Dispatchers.IO) {
+        val expression = ftsPrefixExpression(terms.joinToString(" "))
+            ?: return@withContext emptyList()
+        runCatchingCancellable {
+            dao.searchProgramsByTitleFts(
+                ftsSearchQuery(expression, System.currentTimeMillis(), limit)
+            )
+        }.getOrElse { t ->
+            Log.w(TAG, "term program search failed: ${t.message}")
+            emptyList()
+        }
+    }
+
+    /**
      * Indexed title search. `MATCH` must name the FTS table itself (an alias
      * would not resolve), and the join drops index entries whose program row is
      * gone, which is what makes the standalone index safe to leave stale.

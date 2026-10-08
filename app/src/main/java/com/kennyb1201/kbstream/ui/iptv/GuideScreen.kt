@@ -147,7 +147,14 @@ fun GuideScreen(
     defaultEpgUrl: String = "",
     defaultPlaylistName: String = "",
     onPlayChannel: ((IptvChannelWithEpg) -> Unit)? = null,
-    onPlayCatchup: ((IptvChannelWithEpg, CatchupProgram) -> Unit)? = null
+    onPlayCatchup: ((IptvChannelWithEpg, CatchupProgram) -> Unit)? = null,
+    /**
+     * Opens the sports hub. Live TV is the app's one place where a playlist —
+     * the thing a game has to be matched against — is configured, which is why
+     * the hub's entry point is a row in this screen's header rather than a
+     * destination of its own on Home.
+     */
+    onOpenSports: (() -> Unit)? = null
 ) {
     val playlist by viewModel.playlist.collectAsStateWithLifecycle()
     val visibleChannels by viewModel.visibleChannels.collectAsStateWithLifecycle()
@@ -1163,7 +1170,8 @@ LaunchedEffect(channelListState, groupedChannelIds) {
                         channelCount = groupedChannels.size,
                         selectedGroup = selectedGroup,
                         onSetupClick = { showSetup = !showSetup },
-                        onSearchClick = { showSearch = true }
+                        onSearchClick = { showSearch = true },
+                        onSportsClick = onOpenSports
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -2119,6 +2127,7 @@ private fun GuideHeader(
     selectedGroup: String,
     onSetupClick: () -> Unit,
     onSearchClick: (() -> Unit)? = null,
+    onSportsClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -2143,6 +2152,19 @@ private fun GuideHeader(
         }
 
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // The sports hub row: accent-labelled because it is the one action
+            // here that leaves Live TV for a different screen, and it sits
+            // ahead of SEARCH/SETUP so the D-pad reaches it first.
+            if (onSportsClick != null) {
+                KBCard(onClick = onSportsClick) {
+                    Text(
+                        text = "SPORTS",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)
+                    )
+                }
+            }
             if (onSearchClick != null) {
                 KBCard(onClick = onSearchClick) {
                     Text(

@@ -273,10 +273,20 @@ class PlaybackResumeContractTest {
             native.indexOf("PlaybackResume.mayResumeFromHistory("),
             native.indexOf("} else {", native.indexOf("PlaybackResume.mayResumeFromHistory("))
         )
+        // The initial build is entered through probeThenCreatePlayer now: the
+        // pre-playback probe decides WHICH source to open before the player is
+        // created, so the ordering this pins is "position known, then the
+        // probe, then the player" - and the build itself still happens through
+        // createPlayer() at the end of that path.
         assertTrue(
             "ExoPlayer has to know the position before it creates the player",
             nativeBlock.indexOf("PlaybackResume.savedPositionMs(") <
-                nativeBlock.indexOf("createPlayer()")
+                nativeBlock.indexOf("probeThenCreatePlayer()")
+        )
+        assertTrue(
+            "and the player is still built by the one createPlayer() path",
+            native.contains("private fun probeThenCreatePlayer() {") &&
+                native.contains("createPlayer()")
         )
         assertTrue(
             "and the position it found is the one the session starts from",
