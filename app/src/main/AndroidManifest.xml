@@ -60,6 +60,26 @@
             <category android:name="android.intent.category.DEFAULT" />
             <data android:mimeType="application/dash+xml" />
         </intent>
+        <!--
+             Scheme-only players: an app that registers NO video VIEW filter
+             and is reachable only through its own URL scheme.
+
+             VidHub is the one that matters. On Android and Android TV it
+             publishes `open-vidhub://x-callback-url/play` for third-party
+             integration instead of a video MIME filter, so on Android 11+ it
+             is invisible to the external-player probe unless this entry
+             declares the scheme (see ExternalPlayer's SCHEME_PLAYERS, which
+             queries exactly this URI).
+
+             Deliberately the scheme alone, with no host or path: a player is
+             free to match the request on any part of it, and the query only
+             has to find the resolver - the request itself is built to the
+             player's own documented shape.
+        -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="open-vidhub" />
+        </intent>
     </queries>
 
     <uses-feature

@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -97,13 +98,34 @@ fun StatsScreen(
         }
 
         // ── Headline numbers ─────────────────────────────────────────────────
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            StatTile("Titles finished", state.finishedTitles.toString())
-            StatTile("Episodes finished", state.finishedEpisodes.toString())
-            StatTile("Movies finished", state.finishedMovies.toString())
+        // Four equal tiles, not four fixed-width plates in a Row: the plates
+        // sized themselves to their own text, and the row then ran off the
+        // right edge of the screen - "Finished runtime" was half off the TV,
+        // the one headline a stats screen exists to show. Sharing the width
+        // keeps all four on screen at any text size.
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            StatTile(
+                "Titles finished",
+                state.finishedTitles.toString(),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                "Episodes finished",
+                state.finishedEpisodes.toString(),
+                modifier = Modifier.weight(1f)
+            )
+            StatTile(
+                "Movies finished",
+                state.finishedMovies.toString(),
+                modifier = Modifier.weight(1f)
+            )
             StatTile(
                 "Finished runtime",
-                ViewingStats.formatFinishedRuntime(state.finishedRuntimeMs)
+                ViewingStats.formatFinishedRuntime(state.finishedRuntimeMs),
+                modifier = Modifier.weight(1f)
             )
         }
 
@@ -129,9 +151,19 @@ fun StatsScreen(
                 style = MaterialTheme.typography.bodyMedium
             )
         } else {
+            // The list takes the space that is LEFT under the headline and
+            // scrolls inside it. Without the weight it was measured against
+            // the whole column, so its last rows sat below the bottom of the
+            // screen and the bottom card was cut off; the vertical
+            // contentPadding gives the focused card's ring and glow somewhere
+            // to grow at the two ends, so the first and last cards are not
+            // clipped by the list's own bounds either.
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxWidth()
+                contentPadding = PaddingValues(vertical = 10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
             ) {
                 items(state.topShows, key = { it.parentId }) { show ->
                     TopShowRow(show)
@@ -143,8 +175,8 @@ fun StatsScreen(
 
 /** One headline number, drawn in the theme's card plate. */
 @Composable
-private fun StatTile(label: String, value: String) {
-    KBCard(onClick = {}) {
+private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
+    KBCard(onClick = {}, modifier = modifier) {
         Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
             Text(
                 text = value,

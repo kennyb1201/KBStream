@@ -49,10 +49,16 @@ class ViewingStatsDaoTest {
         db.close()
     }
 
+    // The row's `type` is the PARENT's media type, copied from the launch
+    // intent by the player (see NativePlayerActivity's history write) and from
+    // the detail screen for a Detail-side mark. An episode is therefore filed
+    // under the show's own type - "series", "tv", an addon's flavour - and
+    // never under "episode"; a fixture that says "episode" is a fixture the
+    // real app can never produce, and it hid a query that matched nothing.
     private fun row(
         id: String,
         parentId: String,
-        type: String = "episode",
+        type: String = "series",
         name: String = "Show $parentId",
         positionMs: Long = 0L,
         durationMs: Long = 0L,
@@ -143,6 +149,29 @@ class ViewingStatsDaoTest {
         val top = dao.topShows()
         assertEquals(10, top.size)
         assertEquals("movie11", top.first().parentId)
+    }
+
+    @Test
+    fun `episodes are counted by every show flavour and movies only as movies`() = runBlocking {
+        dao.upsertRaw(row("s1", "show1", type = "series", isCompleted = true))
+        dao.upsertRaw(row("t1", "show2", type = "tv", isCompleted = true))
+        dao.upsertRaw(row("k1", "show3", type = "kitsu", isCompleted = true))
+        dao.upsertRaw(row("m1", "movie1", type = "movie", isCompleted = true))
+        // A live channel is neither an episode nor a movie, and a completed
+        // row is not something a channel produces at all - it must not be
+        // swept into the episode count by "anything that is not a movie".
+        dao.upsertRaw(row("c1", "chan1", type = "channel", isCompleted = true))
+        // Uppercase is a flavour the same type can arrive in.
+        dao.upsertRaw(row("m2", "movie2", type = "Movie", isCompleted = true))
+        // In-progress rows of either kind are not finished anything.
+        dao.upsertRaw(row("s9", "show1", type = "series", positionMs = 1_000L))
+        dao.upsertRaw(row("m9", "movie3", type = "movie", positionMs = 1_000L))
+
+        assertEquals(3, dao.completedEpisodeCount())
+        assertEquals(2, dao.completedMovieCount())
+        // Titles finished still counts every completed parent, channels
+        // included - it is the distinct-parent number, not a per-kind one.
+        assertEquals(6, dao.finishedTitleCount())
     }
 
     @Test

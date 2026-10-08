@@ -603,13 +603,17 @@ class ExternalPlayerActivity : ComponentActivity() {
             url = currentUrl,
             title = itemTitle(),
             positionMs = seekMs,
-            packageName = target?.packageName,
+            target = target,
             headers = streamHeaders
         ).apply {
             // CATEGORY_DEFAULT is what startActivity resolves an implicit intent
             // against, and the EXTERNAL engine writes it explicitly so a player
-            // registered without it is still reachable.
-            addCategory(Intent.CATEGORY_DEFAULT)
+            // registered without it is still reachable - but only for a plain
+            // VIEW hand-off. A scheme-only player (VidHub) was discovered by a
+            // category-free query and is launched the same way; adding a
+            // category here could turn a resolvable request into an
+            // ActivityNotFoundException.
+            if (target?.scheme == null) addCategory(Intent.CATEGORY_DEFAULT)
         }
 
         // The hand-off used to be silent, which left the refused-stream card as
@@ -622,7 +626,8 @@ class ExternalPlayerActivity : ComponentActivity() {
         Log.i(
             TAG,
             "handoff -> ${target?.label ?: "chooser"} " +
-                "pkg=${target?.packageName ?: "-"} mime=${launch.type ?: "-"} " +
+                "pkg=${target?.packageName ?: "-"} scheme=${target?.scheme ?: "-"} " +
+                "mime=${launch.type ?: "-"} " +
                 "headers=[${streamHeaders.keys.joinToString(",")}] seek=${seekMs}ms"
         )
 

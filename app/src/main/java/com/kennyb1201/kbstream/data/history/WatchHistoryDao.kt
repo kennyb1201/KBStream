@@ -510,10 +510,29 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     @Query("SELECT COUNT(DISTINCT parentId) FROM watch_history WHERE isCompleted = 1")
     suspend fun finishedTitleCount(): Int
 
-    @Query("SELECT COUNT(*) FROM watch_history WHERE isCompleted = 1 AND type = 'episode'")
+    /**
+     * Completed episode rows.
+     *
+     * An episode row is anything that is NOT a movie or a live channel, which
+     * is the same reading [getCompletedSeriesRows] takes and the only one that
+     * matches what is actually stored: the row's `type` is the parent's media
+     * type, so an episode is filed under "series" (or "tv", or an addon's own
+     * flavour) — never under "episode". Counting `type = 'episode'` matched
+     * nothing at all, which is how the Viewing stats screen reported zero
+     * episodes finished while the top-shows list right below it named shows
+     * with ten.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM watch_history
+        WHERE isCompleted = 1
+          AND lower(type) NOT IN ('movie', 'channel')
+        """
+    )
     suspend fun completedEpisodeCount(): Int
 
-    @Query("SELECT COUNT(*) FROM watch_history WHERE isCompleted = 1 AND type = 'movie'")
+    /** Completed movie rows: the one media type that is a movie outright. */
+    @Query("SELECT COUNT(*) FROM watch_history WHERE isCompleted = 1 AND lower(type) = 'movie'")
     suspend fun completedMovieCount(): Int
 
     /** Runtime of everything completed: Σ durationMs over `isCompleted` rows. */

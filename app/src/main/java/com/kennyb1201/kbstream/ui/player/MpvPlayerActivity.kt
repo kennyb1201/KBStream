@@ -344,6 +344,44 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private val scrubbing: Boolean
         get() = chrome?.isScrubbing == true
 
+    // --- Overlay-less hold-to-scrub ---------------------------------------
+    //
+    // LEFT/RIGHT with the overlay down seeks this engine's video, and holding it
+    // keeps seeking faster (see [ScrubAcceleration]). A quick tap keeps the
+    // shape it always had - one ten-second step, and the overlay comes up so the
+    // bar can be used for the rest - but a press held past
+    // [ScrubAcceleration.HOLD_START_MS] walks the playhead at the shared ramp's
+    // rate and leaves the overlay down: raising it mid-hold would hand the D-pad
+    // to the seek bar in the middle of the scrub the viewer is asking for.
+    //
+    // [mpvScrubTargetMs] is the position the viewer has scrubbed TO, owned here
+    // rather than read back from mpv: every tick asks for a seek, and mpv's own
+    // reported position lags them by the time the seeks take to land.
+    private var mpvScrubDirection = 0  // -1 = back, 1 = forward, 0 = idle
+    private var mpvScrubTargetMs = 0L
+    private var mpvScrubHeldMs = 0L
+    private var mpvScrubExtended = false
+    private val mpvScrubHandler = Handler(Looper.getMainLooper())
+    private val mpvScrubRunnable = object : Runnable {
+        override fun run() {
+            if (mpvScrubDirection == 0) return
+            val view = surface ?: return
+            val duration = view.durationMs().takeIf { it > 0 } ?: return
+            mpvScrubHeldMs += ScrubAcceleration.TICK_MS
+            mpvScrubTargetMs =
+                (mpvScrubTargetMs + ScrubAcceleration.stepFor(mpvScrubHeldMs) * mpvScrubDirection)
+                    .coerceIn(0L, duration)
+            view.seekTo(mpvScrubTargetMs)
+            mpvScrubHandler.postDelayed(this, ScrubAcceleration.TICK_MS)
+        }
+    }
+    private val mpvScrubHoldStarter = Runnable {
+        if (mpvScrubDirection == 0) return@Runnable
+        mpvScrubExtended = true
+        mpvScrubHeldMs = 0L  // The ramp starts here
+        mpvScrubHandler.post(mpvScrubRunnable)
+    }
+
     // --- Audio tuning: the main player's AUDIO section, on this engine -----
     //
     // Same three knobs, same option lists ([PlayerAudioTuning]), same storage:
@@ -1494,6 +1532,58 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     /** One seek press - from the D-pad with the overlay down, or the seek bar with it up. */
     private fun seekStepBy(deltaMs: Long) {
         surface?.seekBy(deltaMs)
+    }
+
+    /**
+     * The press half of the overlay-less hold-to-scrub: one ten-second step
+     * now, and the accelerated ramp if the press is still down after
+     * [ScrubAcceleration.HOLD_START_MS].
+     *
+     * A stream with no duration to scrub against (a live channel, or a file
+     * that has not reported one yet) keeps the old behavior instead: mpv is
+     * asked for one step and the overlay comes up, which is the only feedback
+     * such a stream can give.
+     */
+    private fun beginMpvHoldScrub(direction: Int) {
+        val view = surface
+        val duration = view?.durationMs()?.takeIf { it > 0 }
+        if (view == null || duration == null) {
+            seekStepBy(if (direction > 0) SEEK_STEP_MS else -SEEK_STEP_MS)
+            showControls()
+            return
+        }
+        mpvScrubDirection = direction
+        mpvScrubTargetMs = view.positionMs().coerceIn(0L, duration)
+        mpvScrubHeldMs = 0L
+        mpvScrubExtended = false
+        seekStepBy(SEEK_STEP_MS * direction)
+        mpvScrubTargetMs = (mpvScrubTargetMs + SEEK_STEP_MS * direction).coerceIn(0L, duration)
+        mpvScrubHandler.removeCallbacks(mpvScrubHoldStarter)
+        mpvScrubHandler.postDelayed(mpvScrubHoldStarter, ScrubAcceleration.HOLD_START_MS)
+    }
+
+    /**
+     * The release half: stop the ramp, land exactly where the viewer scrubbed
+     * to, and - for a press that was a tap rather than a hold - bring the
+     * overlay up as the old single step did.
+     */
+    private fun endMpvHoldScrub() {
+        val direction = mpvScrubDirection
+        val extended = mpvScrubExtended
+        mpvScrubDirection = 0
+        mpvScrubExtended = false
+        mpvScrubHeldMs = 0L
+        mpvScrubHandler.removeCallbacks(mpvScrubHoldStarter)
+        mpvScrubHandler.removeCallbacks(mpvScrubRunnable)
+        if (direction == 0) return
+        // The ticks seek opportunistically, and the last of a hold may not have
+        // landed; this is the one seek that makes the release exact.
+        if (extended) {
+            surface?.seekTo(mpvScrubTargetMs)
+        } else {
+            // A tap keeps its old shape: it reveals the controls.
+            showControls()
+        }
     }
 
     // --- Chrome, matched to the main player's -----------------------------
@@ -4386,6 +4476,21 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             }
             return super.dispatchKeyEvent(event)
         }
+        // An overlay-less hold-to-scrub owns the remote from the moment it
+        // starts: its release lands the scrub, and the repeats in between belong
+        // to its own timer rather than to the remote's repeat rate. Handled ahead
+        // of the ACTION_DOWN gate below because a release is not a press. Any
+        // other key ends the scrub (landing it) and is then handled normally.
+        if (mpvScrubDirection != 0) {
+            val horizontal = event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT ||
+                event.keyCode == KeyEvent.KEYCODE_DPAD_RIGHT
+            if (event.action != KeyEvent.ACTION_DOWN) {
+                endMpvHoldScrub()
+                return true
+            }
+            if (horizontal) return true
+            endMpvHoldScrub()
+        }
         if (event.action == KeyEvent.ACTION_DOWN && errorContainer?.visibility != View.VISIBLE) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MEDIA_REWIND -> {
@@ -4426,14 +4531,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 KeyEvent.KEYCODE_DPAD_LEFT,
                 KeyEvent.KEYCODE_DPAD_RIGHT -> {
                     if (!controlsVisible) {
-                        seekStepBy(
-                            if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                                -SEEK_STEP_MS
-                            } else {
-                                SEEK_STEP_MS
-                            }
+                        // One ten-second step now; if the press is still down
+                        // past the hold window it becomes an accelerated scrub
+                        // and the overlay stays down until the release (see
+                        // beginMpvHoldScrub).
+                        beginMpvHoldScrub(
+                            if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1
                         )
-                        showControls()
                         return true
                     }
                 }
@@ -4498,6 +4602,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     override fun onStop() {
         super.onStop()
+        // A hold-to-scrub has no release once the screen is left, so land it
+        // here rather than leaving its timer ticking against a paused surface.
+        endMpvHoldScrub()
         // mpv is paused just below, so guide writes may proceed again - except on
         // a handoff: Android starts the successor activity before this one's
         // onStop, so the successor has already set the gate active, and clearing

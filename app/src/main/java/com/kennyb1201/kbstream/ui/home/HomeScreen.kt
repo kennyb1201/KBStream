@@ -130,6 +130,7 @@ import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.kbFocusMarquee
 import com.kennyb1201.kbstream.ui.kb.KBHomeCollectionRail
 import com.kennyb1201.kbstream.ui.kb.homeTopRailUpHook
+import com.kennyb1201.kbstream.ui.kb.rememberHomeTopBarHoldUpHook
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.spoiler.SpoilerFree
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -2998,6 +2999,26 @@ fun HomeScreen(
         showTopBar = true
     }
 
+    /**
+     * Open the top bar from a rail that is NOT the one drawn first - the
+     * hold-Up shortcut (see [rememberHomeTopBarHoldUpHook]).
+     *
+     * [restoreTarget] is the card the viewer was on when the hold began, so the
+     * bar's dismiss puts them back exactly there. A null target keeps whatever
+     * focus target is already remembered (a rail kind that reports none for its
+     * cards), rather than clearing it and leaving the bar's dismiss with nowhere
+     * to send focus.
+     *
+     * That is the one difference from [openTopBar], which is handed the
+     * requester of the card it was pressed on and can therefore always store it.
+     */
+    fun openTopBarFromHold(restoreTarget: FocusRequester?) {
+        if (restoreTarget != null) {
+            lastPosterFocusRequester = restoreTarget
+        }
+        showTopBar = true
+    }
+
     fun dismissTopBar() {
         showTopBar = false
         lastPosterFocusRequester?.requestFocus()
@@ -3470,7 +3491,23 @@ fun HomeScreen(
                 val screenHeight = LocalConfiguration.current.screenHeightDp.dp
                 LazyColumn(
                     state = railListState,
-                    modifier = Modifier.weight(1f),
+                    // Hold-Up from ANY rail reveals the top bar (see
+                    // rememberHomeTopBarHoldUpHook): on the list rather than on
+                    // a card, so every rail kind is covered by construction and
+                    // the shortcut cannot be lost when a rail is added. A short
+                    // press is passed through untouched, so Up still walks focus
+                    // rail by rail - and on the first rail the card's own hook
+                    // still opens the bar on the press itself.
+                    modifier = Modifier
+                        .weight(1f)
+                        .then(
+                            rememberHomeTopBarHoldUpHook(
+                                restoreTargetAtPress = { lastPosterFocusRequester },
+                                onOpenTopBar = { target ->
+                                    openTopBarFromHold(target)
+                                }
+                            )
+                        ),
                     contentPadding = PaddingValues(
                         top = 0.dp,
                         bottom = screenHeight * 0.52f

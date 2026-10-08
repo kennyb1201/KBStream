@@ -742,9 +742,17 @@ class MpvPlayerView @JvmOverloads constructor(
         val video = getPropertyStringOrNull("video-format")?.uppercase() ?: "AUDIO ONLY"
         val hwdec = getPropertyStringOrNull("hwdec-current") ?: "none"
         val audio = getPropertyStringOrNull("audio-codec")?.uppercase() ?: "—"
+        // mpv's own video-bitrate, in bits per second (mpv's manual). It
+        // updates per keyframe and can read as 0 until the first one arrives,
+        // so it is appended only once it means something. The info readout
+        // named the resolution and the codec but not the rate, which is the
+        // number a viewer comparing two sources for the same film is looking
+        // for.
+        val bitrate = getPropertyIntOrNull("video-bitrate") ?: 0
         return buildString {
             if (width > 0 && height > 0) append("${width}×$height  •  ")
             append(video)
+            if (bitrate > 0) append("  •  ${bitrate / 1_000} kbps")
             append("  •  decode: $hwdec")
             append("  •  audio: $audio")
         }

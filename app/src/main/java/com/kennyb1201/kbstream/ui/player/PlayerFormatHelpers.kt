@@ -124,6 +124,52 @@ data class PlayerCastMember(
 )
 
 /**
+ * How much of a stream must have PLAYED before a measured bitrate means
+ * anything.
+ *
+ * The measurement divides bytes fetched by playback position, and in the first
+ * seconds the buffer is being filled: a player that has pulled thirty seconds
+ * of data in five seconds of playback is not describing a stream thirty times
+ * its rate, it is describing a fast connection. Fifteen seconds of playback is
+ * long enough for the fetches to average out to the file's own rate.
+ */
+internal const val MEASURED_BITRATE_MIN_POSITION_MS = 15_000L
+
+/**
+ * The bitrate of what is playing, measured from the bytes the player has
+ * actually fetched for the video track.
+ *
+ * Many progressive and hoster links declare no bitrate at all - the container
+ * carries no such field, which is why `Format.bitrate` arrives as media3's
+ * NO_VALUE and the info panel's "Bitrate" line simply did not appear for them.
+ * Bytes over played time is the same number the file itself would report, and
+ * it exists for every source that plays: the video track's loaded bytes summed
+ * over its loads, divided by the playback position.
+ *
+ * Zero means "not measurable yet" - no bytes, or less than
+ * [MEASURED_BITRATE_MIN_POSITION_MS] of playback to average against - and
+ * callers show nothing rather than a number they would have to take back.
+ */
+internal fun measuredBitrateBps(bytesLoaded: Long, positionMs: Long): Long =
+    if (bytesLoaded <= 0L || positionMs < MEASURED_BITRATE_MIN_POSITION_MS) 0L
+    else bytesLoaded * 8_000L / positionMs
+
+/**
+ * The info panel's bitrate line, or null when there is nothing honest to say.
+ *
+ * The container's declared rate wins when it has one: it is exact, and it is
+ * what the file's own metadata says. Only when the source declares none is the
+ * measured rate shown, and it says so - a viewer comparing two sources must be
+ * able to tell a number read off the file from one this device worked out.
+ * Bits are rendered as kbps, matching the panel's other rate rows.
+ */
+internal fun bitrateLabel(declaredBps: Int, measuredBps: Long): String? = when {
+    declaredBps > 0 -> "Bitrate: ${declaredBps / 1_000} kbps"
+    measuredBps > 0 -> "Bitrate: ${measuredBps / 1_000} kbps (measured)"
+    else -> null
+}
+
+/**
  * Normalize raw pixel height into a human-friendly label:
  * 2160 → "4K", 1080 → "1080p", 720 → "720p", etc.
  */

@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -433,6 +434,101 @@ internal fun Modifier.homeTopRailUpHook(
             true
         } else {
             false
+        }
+    }
+}
+
+/**
+ * How long D-pad Up has to be HELD, on any rail, before Home reveals its top
+ * bar.
+ *
+ * The bar is otherwise reachable only from the rail drawn first (see
+ * [homeTopRailUpHook]), so on a Home with a full catalog list it is one Up
+ * press per rail - forty-nine catalogs down that is forty-nine presses to
+ * reach SEARCH. The hold is the shortcut from anywhere, and a normal (short)
+ * press still moves focus to the rail above, so nothing about vertical
+ * navigation changes.
+ *
+ * Longer than the Select long press (KBCard's 450 ms) on purpose: Up is also
+ * the key a viewer holds to skim several rails in one go, and reusing the
+ * Select threshold turned that skim into the top bar opening over it. 700 ms is
+ * past a skim and still well short of feeling unresponsive.
+ *
+ * Timed on the wall clock between KeyDown and KeyUp rather than from the
+ * platform's key repeats, for the reason KBCard documents: plenty of TV remotes
+ * and emulators never emit repeat KeyDown events at all, so a repeat-based hold
+ * is a hold only on some hardware.
+ */
+internal const val HomeTopBarHoldMs = 700L
+
+/** Whether a D-pad Up held for [heldMs] reveals Home's top bar. */
+internal fun isTopBarHold(heldMs: Long): Boolean = heldMs >= HomeTopBarHoldMs
+
+/**
+ * The hold-Up -> top bar hook, applied to Home's RAILS LIST rather than to a
+ * card.
+ *
+ * Preview key events travel down from the root to the focused element, so one
+ * modifier on the list sees Up for every rail drawn inside it - every catalog
+ * rail, every browse and collection row and both built-ins - and no rail kind
+ * can forget to apply it, which is exactly the hole [homeTopRailUpHook] has for
+ * the short press (it needs each rail kind to pass it on; see
+ * HomeRailUpHookContractTest).
+ *
+ * KeyDown is never consumed: the press has to reach the focus system, because a
+ * short press still means "move focus to the rail above". Only the KeyUp that
+ * ends a long hold is swallowed, so the release cannot also fight the focus
+ * move its own press already made.
+ *
+ * [restoreTargetAtPress] is read once, when the press begins: that is the card
+ * the viewer was on, and it is what the bar hands focus back to when it closes.
+ * Reading it at KeyUp instead would return focus to whichever card focus had
+ * climbed to during the hold - i.e. not where the viewer was.
+ */
+@Composable
+internal fun rememberHomeTopBarHoldUpHook(
+    restoreTargetAtPress: () -> FocusRequester?,
+    onOpenTopBar: (FocusRequester?) -> Unit
+): Modifier {
+    var pressStartTime by remember {
+        mutableLongStateOf(0L)
+    }
+    var restoreTarget by remember {
+        mutableStateOf<FocusRequester?>(null)
+    }
+
+    return Modifier.onPreviewKeyEvent { event ->
+        when {
+            event.key != Key.DirectionUp -> false
+
+            event.type == KeyEventType.KeyDown -> {
+                if (event.nativeKeyEvent.repeatCount == 0) {
+                    pressStartTime = System.currentTimeMillis()
+                    restoreTarget = restoreTargetAtPress()
+                }
+                false
+            }
+
+            event.type == KeyEventType.KeyUp -> {
+                // 0 means no press of ours is open - a release the list never
+                // saw the press for (focus arrived inside it mid-press, say).
+                // Timed against a zeroed start it would read as a hold of
+                // fifty-odd years and open the bar on a stray release.
+                val heldMs = if (pressStartTime == 0L) {
+                    0L
+                } else {
+                    System.currentTimeMillis() - pressStartTime
+                }
+                pressStartTime = 0L
+                if (isTopBarHold(heldMs)) {
+                    onOpenTopBar(restoreTarget)
+                    true
+                } else {
+                    false
+                }
+            }
+
+            else -> false
         }
     }
 }

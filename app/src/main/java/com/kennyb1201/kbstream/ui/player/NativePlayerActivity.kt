@@ -49,6 +49,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.analytics.PlaybackStatsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -920,7 +922,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     // Hold-to-scrub acceleration
     private var scrubDirection = 0  // -1 = back, 1 = forward, 0 = idle
-    private var scrubStepMs = 0L
+    //
+    // How long the current hold has been running, which is what the shared ramp
+    // reads (see [ScrubAcceleration]). Deliberately elapsed time and not a
+    // per-tick multiplication: the remote's repeat events do not carry a rate
+    // this engine can trust, and the ramp has to look the same on a box that
+    // sends a repeat every 40 ms as on one that sends one every 100 ms.
+    private var scrubHeldMs = 0L
     /**
      * The position the viewer has scrubbed TO.
      *
@@ -960,8 +968,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             val duration = player.duration.takeIf { it > 0 } ?: return
             // Advance the target the viewer is scrubbing to, and move the bar
             // with it, at the rate the press asked for.
-            scrubTargetPosMs = (scrubTargetPosMs + scrubStepMs * scrubDirection)
-                .coerceIn(0L, duration)
+            scrubHeldMs += ScrubAcceleration.TICK_MS
+            scrubTargetPosMs =
+                (scrubTargetPosMs + ScrubAcceleration.stepFor(scrubHeldMs) * scrubDirection)
+                    .coerceIn(0L, duration)
             updateSeekBarPosition(scrubTargetPosMs, duration)
             // ...but only move the PLAYER when it has caught up with the last
             // seek. Issuing one every tick regardless is what this box cannot
@@ -976,9 +986,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             if (player.playbackState == Player.STATE_READY && !player.isLoading) {
                 player.seekTo(scrubTargetPosMs)
             }
-            // Accelerate: increase step each tick, cap at 30s
-            scrubStepMs = (scrubStepMs + scrubStepMs / 2 + 200L).coerceAtMost(30_000L)
-            scrubHandler.postDelayed(this, 80L)
+            scrubHandler.postDelayed(this, ScrubAcceleration.TICK_MS)
         }
     }
 
@@ -986,7 +994,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // from a fixed 10s jump into continuous accelerated scrubbing.
     private val scrubHoldStarter = Runnable {
         if (scrubDirection == 0) return@Runnable
-        scrubStepMs = 1_000L  // Start accelerating from 1s
+        scrubHeldMs = 0L  // The ramp starts here
         scrubHandler.post(scrubRunnable)
     }
 
@@ -1093,6 +1101,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private var zapLabelParts: List<String> = emptyList()
     private var streamBitrate = 0
+
+    /**
+     * Bytes fetched for the video track this session, the raw half of the
+     * measured bitrate the info panel falls back to when the container declares
+     * none (see [measuredBitrateBps]). Reset wherever the stream's identity is.
+     */
+    private var measuredVideoBytes = 0L
     private var streamCodec: String? = null
     // Original declared codec of the current video track (e.g. "dvhe.07.06")
     // before any DV→HDR10 rewrite. Used for P5 detection to select correction path.
@@ -1585,6 +1600,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // real one into both live overlays.
         streamWidth = 0
         streamHeight = 0
+        // Same reasoning for the rate: the outgoing channel's declared bitrate
+        // must not stand in for the incoming one's.
+        streamBitrate = 0
+        measuredVideoBytes = 0L
 
         // Always show the banner immediately with cached/known info — the
         // EPG row fills in async a moment later. Rapid-fire zapping re-shows
@@ -4031,7 +4050,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                 stepSeekBy(10_000L * scrubDirection)
                                 // If still held past the threshold, switch to fast scrubbing
                                 scrubHandler.removeCallbacks(scrubHoldStarter)
-                                scrubHandler.postDelayed(scrubHoldStarter, 400L)
+                                scrubHandler.postDelayed(
+                                    scrubHoldStarter,
+                                    ScrubAcceleration.HOLD_START_MS
+                                )
                             }
                             true
                         }
@@ -4710,7 +4732,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 stepSeekBy(10_000L * scrubDirection)
                 showScrubHint()
                 scrubHandler.removeCallbacks(scrubHoldStarter)
-                scrubHandler.postDelayed(scrubHoldStarter, 400L)
+                scrubHandler.postDelayed(scrubHoldStarter, ScrubAcceleration.HOLD_START_MS)
             } else if (scrubDirection != 0) {
                 showScrubHint()
             }
@@ -6311,6 +6333,24 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
     private fun createAnalyticsListener() = object : AnalyticsListener {
+        /**
+         * Adds up what the video track has actually fetched. This is the only
+         * place the player reports those bytes, and it is what makes the info
+         * panel's "Bitrate" line exist for a source whose container declares
+         * no rate at all. Other track types are ignored: a title's audio and
+         * its subtitles are not its video bitrate.
+         */
+        override fun onLoadCompleted(
+            eventTime: AnalyticsListener.EventTime,
+            loadEventInfo: LoadEventInfo,
+            mediaLoadData: MediaLoadData
+        ) {
+            if (mediaLoadData.trackType != C.TRACK_TYPE_VIDEO) return
+            if (loadEventInfo.bytesLoaded > 0) {
+                measuredVideoBytes += loadEventInfo.bytesLoaded
+            }
+        }
+
         override fun onDroppedVideoFrames(
             eventTime: AnalyticsListener.EventTime,
             droppedFrames: Int,
@@ -7395,7 +7435,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             }
             val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec, dvTo81Session)
             appendLine("Codec: ${if (codecLabel != "—") codecLabel else streamMimeType ?: "—"}")
-            if (streamBitrate > 0) appendLine("Bitrate: ${streamBitrate / 1_000} kbps")
+            // Declared rate when the container states one, otherwise the rate
+            // measured from the bytes actually fetched - see bitrateLabel.
+            // Without the second half the line simply vanished for a source
+            // that declares none, which on this box was most of them.
+            bitrateLabel(
+                declaredBps = streamBitrate,
+                measuredBps = measuredBitrateBps(
+                    measuredVideoBytes,
+                    exoPlayer?.currentPosition ?: 0L
+                )
+            )?.let { appendLine(it) }
             exoPlayer?.videoSize?.pixelWidthHeightRatio?.takeIf { it != 1f }?.let {
                 appendLine("Pixel ratio: $it")
             }
@@ -11554,6 +11604,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         streamCodec = null
         streamWidth = 0
         streamHeight = 0
+        streamBitrate = 0
+        measuredVideoBytes = 0L
         currentSourceIndex = sources.indexOfFirst { it.url == newUrl }
         // The downshift window is per source: the one just left cannot make the
         // next one look like it is already stalling, and a source switch is a

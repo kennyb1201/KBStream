@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import java.net.URLEncoder
 
 /**
  * The "External player" playback engine: the title is handed to whatever video
@@ -29,7 +30,18 @@ object ExternalPlayer {
     /** One installed app that can play a stream URL. */
     data class Installed(
         val packageName: String,
-        val label: String
+        val label: String,
+        /**
+         * The scheme this app has to be handed through instead of a plain
+         * video VIEW, or null for a player that answers a normal VIEW (which
+         * is every player found by [PROBE_MIME_TYPES]).
+         *
+         * Apps like this register NO `ACTION_VIEW` filter for video MIME types
+         * at all - they publish a private URL scheme and expect to be called
+         * through it - so they can never turn up in a mime probe, however wide
+         * it is. See [SCHEME_PLAYERS] for the one that matters today.
+         */
+        val scheme: String? = null
     )
 
     /**
@@ -55,10 +67,49 @@ object ExternalPlayer {
     )
 
     /**
-     * Every installed app that responds to a video VIEW, minus ourselves, with
+     * A player that is reachable only through its own URL scheme.
+     *
+     * [probe] is the exact request URI from the player's own integration docs,
+     * used as an `ACTION_VIEW` data URI: whatever app resolves it is that
+     * player, so this needs no package name and cannot break when the package
+     * is renamed or the app is sideloaded under a variant id. It does need a
+     * matching `<queries>` entry in the manifest, because Android 11+ hides
+     * exactly these resolvers from the app.
+     */
+    private data class SchemePlayer(val scheme: String, val probe: String)
+
+    /**
+     * Known scheme-only players.
+     *
+     * VidHub is the case that matters: on Android and Android TV it registers
+     * no `ACTION_VIEW` video filter, so it never appeared in the external-player
+     * picker however many MIME types were probed - the app that a viewer most
+     * wants to hand a title to was invisible to the engine. It publishes
+     * `open-vidhub://x-callback-url/play` for third-party integration instead
+     * (see https://vidhub.okaapps.com/3rd-party-app-integration/), which is
+     * what this probes for and what [launchIntent] builds.
+     */
+    private val SCHEME_PLAYERS = listOf(
+        SchemePlayer(scheme = "open-vidhub", probe = VIDHUB_PLAY_PROBE)
+    )
+
+    /** VidHub's documented request URI, and the scheme it is addressed with. */
+    internal const val VIDHUB_SCHEME = "open-vidhub"
+    internal const val VIDHUB_PLAY_PROBE = "open-vidhub://x-callback-url/play"
+
+    /** The scheme registered by the apps named in [SCHEME_PLAYERS]. */
+    internal val schemePlayerSchemes: List<String> = SCHEME_PLAYERS.map { it.scheme }
+
+    /**
+     * Every installed app that can be handed a stream, minus ourselves, with
      * duplicates collapsed: a player that registers several activities (MX
      * Player registers a main one and a Pro one, VLC registers a browser and a
      * player) would otherwise appear several times in the picker.
+     *
+     * Two kinds are found, which is why the picker needs no knowledge of
+     * either: apps that answer a video VIEW (the MIME probes above) and
+     * scheme-only apps that answer nothing else (see [SCHEME_PLAYERS]). Each
+     * entry records which kind it is, because the hand-off differs.
      *
      * Ordered by label so the picker is stable between launches. Returns an
      * empty list on a box with no such app at all, which is what makes the
@@ -66,7 +117,19 @@ object ExternalPlayer {
      */
     fun installed(context: Context): List<Installed> {
         val pm = context.packageManager
-        val found = LinkedHashMap<String, String>()
+        val found = LinkedHashMap<String, Installed>()
+
+        /**
+         * One match, deduped by package. A player that answers BOTH ways -
+         * a normal video VIEW and its own scheme - keeps the plain VIEW: the
+         * VIEW is the path every player's integration is written against and
+         * the one whose extras are standardized, so the scheme is only the
+         * fallback for a player that has nothing else.
+         */
+        fun remember(pkg: String, label: String, scheme: String?) {
+            if (found.containsKey(pkg)) return
+            found[pkg] = Installed(pkg, label, scheme)
+        }
 
         PROBE_MIME_TYPES.forEach { mime ->
             val probe = Intent(Intent.ACTION_VIEW).apply {
@@ -88,18 +151,55 @@ object ExternalPlayer {
             matches.forEach { resolve ->
                 val pkg = resolve.activityInfo?.packageName ?: return@forEach
                 if (pkg == context.packageName) return@forEach
-                if (found.containsKey(pkg)) return@forEach
-                val label = runCatching { resolve.loadLabel(pm).toString() }
-                    .getOrNull()
-                    ?.takeIf { it.isNotBlank() }
-                    ?: pkg
-                found[pkg] = label
+                remember(pkg, labelFor(resolve, pm), scheme = null)
             }
         }
 
-        return found.entries
-            .map { Installed(it.key, it.value) }
-            .sortedBy { it.label.lowercase() }
+        // Scheme-only players: nothing above can see them, because they
+        // register no video MIME filter at all.
+        SCHEME_PLAYERS.forEach { player ->
+            schemeMatches(pm, player.probe).forEach { resolve ->
+                val pkg = resolve.activityInfo?.packageName ?: return@forEach
+                if (pkg == context.packageName) return@forEach
+                remember(pkg, labelFor(resolve, pm), scheme = player.scheme)
+            }
+        }
+
+        return found.values.sortedBy { it.label.lowercase() }
+    }
+
+    /** A resolved activity's own label, falling back to its package name. */
+    private fun labelFor(
+        resolve: android.content.pm.ResolveInfo,
+        pm: PackageManager
+    ): String = runCatching { resolve.loadLabel(pm).toString() }
+        .getOrNull()
+        ?.takeIf { it.isNotBlank() }
+        ?: resolve.activityInfo?.packageName.orEmpty()
+
+    /**
+     * The apps that resolve [probe], queried with NO categories.
+     *
+     * Deliberately category-free: an intent's categories must all appear in a
+     * filter for it to match, so asking with none matches the widest set of
+     * filters - including a player whose own filter omits `CATEGORY_DEFAULT`.
+     * The mime probes above ask with DEFAULT because that is how the hand-off
+     * launches a plain VIEW; a scheme player is launched without it (see
+     * [launchIntent]), so discovery and launch agree.
+     */
+    private fun schemeMatches(
+        pm: PackageManager,
+        probe: String
+    ): List<android.content.pm.ResolveInfo> {
+        val intent = Intent(Intent.ACTION_VIEW).setData(Uri.parse(probe))
+        return runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0L))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.queryIntentActivities(intent, 0)
+            }
+        }.getOrNull().orEmpty()
     }
 
     /** True when this box has at least one app the engine could hand a title to. */
@@ -167,9 +267,12 @@ object ExternalPlayer {
         url: String,
         title: String?,
         positionMs: Long,
-        packageName: String?,
+        target: Installed?,
         headers: Map<String, String> = emptyMap()
     ): Intent {
+        if (target?.scheme == VIDHUB_SCHEME) {
+            return schemeLaunchIntent(url, title, positionMs, target)
+        }
         val mime = mimeTypeFor(url)
         val intent = Intent(Intent.ACTION_VIEW).apply {
             setDataAndType(Uri.parse(url), mime)
@@ -185,9 +288,82 @@ object ExternalPlayer {
                 )
             }
         }
-        if (!packageName.isNullOrBlank()) intent.setPackage(packageName)
+        target?.packageName?.takeIf { it.isNotBlank() }?.let { intent.setPackage(it) }
         return intent
     }
+
+    /**
+     * The hand-off to a scheme-only player, by its own documented URL.
+     *
+     * VidHub's `/play` takes the media URL, a starting position in SECONDS, and
+     * a display name as query parameters of the `open-vidhub` URL - there are no
+     * extras to set, which is the whole difference from a VIEW player.
+     *
+     * Two deliberate differences from the VIEW path:
+     *
+     *  - No `FLAG_ACTIVITY_NEW_TASK`. VidHub's own Android example adds it only
+     *    when the caller is not an Activity, and this caller always is. Keeping
+     *    the hand-off inside our task is also what lets the viewer's exit come
+     *    back to the wrapper at all: a new task drops the Activity Result.
+     *  - No `CATEGORY_DEFAULT`, for the same reason [schemeMatches] asks without
+     *    it: the app was found without categories, so it is launched without
+     *    them, and an intent with no categories resolves against every matching
+     *    filter.
+     *
+     * The request headers an addon asked for are NOT passed: this URL has no
+     * field for them, so a header-gated source is more likely to be refused
+     * here than by a VIEW player that reads the `headers` extra. That is the
+     * same best-effort trade the engine already documents.
+     */
+    private fun schemeLaunchIntent(
+        url: String,
+        title: String?,
+        positionMs: Long,
+        target: Installed
+    ): Intent {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            data = Uri.parse(vidHubPlayUrl(url, title, positionMs))
+        }
+        if (target.packageName.isNotBlank()) intent.setPackage(target.packageName)
+        return intent
+    }
+
+    /**
+     * VidHub's `/play` request URL: the media URL, the starting position in
+     * seconds, and the name to show on its now-playing card.
+     *
+     * Every value is percent-encoded with the platform encoder
+     * ([URLEncoder]); the position is clamped to the range VidHub's docs
+     * accept (0 through 31,536,000 seconds - one year), because an out-of-range
+     * value is answered with its error 102 instead of playing anything.
+     *
+     * Pure and Android-free, so the exact URL can be pinned by a unit test:
+     * getting this wrong is invisible on the device (the app simply never
+     * opens) which is the same class of failure this integration exists to
+     * fix.
+     */
+    internal fun vidHubPlayUrl(url: String, title: String?, positionMs: Long): String = buildString {
+        append(VIDHUB_PLAY_PROBE)
+        append("?url=").append(encodeQueryValue(url))
+        append("&position=").append(vidHubPositionSeconds(positionMs))
+        title?.takeIf { it.isNotBlank() }
+            ?.let { append("&filename=").append(encodeQueryValue(it)) }
+        append("&x-source=").append(encodeQueryValue(VIDHUB_SOURCE_LABEL))
+    }
+
+    /**
+     * The position as VidHub wants it: whole seconds in its accepted range.
+     *
+     * Milliseconds are floored, never rounded up - rounding up could send a
+     * resume point past the end of the file - and a negative position is a
+     * start from the beginning rather than an error.
+     */
+    internal fun vidHubPositionSeconds(positionMs: Long): String =
+        (positionMs.coerceIn(0L, VIDHUB_MAX_POSITION_MS) / 1_000L).toString()
+
+    /** Percent-encoding for a query VALUE: space as %20, never as "+". */
+    private fun encodeQueryValue(value: String): String =
+        URLEncoder.encode(value, Charsets.UTF_8.name()).replace("+", "%20")
 
     /**
      * The position an external player reported back, in milliseconds, or null
@@ -240,6 +416,18 @@ object ExternalPlayer {
 
     /** Below this a "resume" is really a restart, so the intent says so. */
     private const val RESUME_MIN_MS = 10_000L
+
+    /** The name a scheme player is told is calling (VidHub's `x-source`). */
+    internal const val VIDHUB_SOURCE_LABEL = "KBStream"
+
+    /**
+     * The largest position VidHub accepts, in milliseconds.
+     *
+     * One year, from its own documented position range (0 through 31,536,000
+     * seconds). A value outside it is refused with error 102 rather than
+     * clamped by the player, so the clamp is ours to make.
+     */
+    private const val VIDHUB_MAX_POSITION_MS = 31_536_000_000L
 
     private val MIME_BY_EXTENSION = mapOf(
         // Live TV and any adaptive stream an addon hands back: the player has
