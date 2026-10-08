@@ -341,6 +341,12 @@ internal fun pruneMediaTypeFilters(
     val isTv = mediaType == CATALOG_MEDIA_TV
     val keptCertification = pruned.certification
         ?.takeIf { isCatalogCertification(mediaType, it) }
+    // The ceiling is a value on the SAME country scale, so it is pruned with
+    // the exact match: "TV-14 or milder" asked of /discover/movie is a rating
+    // that scale does not have, and TMDB answers an empty page rather than
+    // ignoring the rule.
+    val keptCeiling = pruned.certificationLte
+        ?.takeIf { isCatalogCertification(mediaType, it) }
 
     return pruned.copy(
         withCast = pruned.withCast?.takeIf { !isTv },
@@ -350,8 +356,12 @@ internal fun pruneMediaTypeFilters(
         withType = pruned.withType?.takeIf { isTv },
         withoutNetworks = pruned.withoutNetworks?.takeIf { isTv },
         certification = keptCertification,
+        certificationLte = keptCeiling,
+        // The scale stays while EITHER age rule is read against it: a catalog
+        // whose only age rule is the ceiling would otherwise lose the country
+        // the ceiling means something on.
         certificationCountry = pruned.certificationCountry
-            ?.takeIf { keptCertification != null }
+            ?.takeIf { keptCertification != null || keptCeiling != null }
     )
 }
 
@@ -399,6 +409,7 @@ internal fun catalogRuleCount(filters: KBFilters): Int {
     if (cleaned.withRuntimeLte != null) count++
     if (com.kennyb1201.kbstream.data.catalogs.splitIds(cleaned.withCast).isNotEmpty()) count++
     if (cleaned.certification != null) count++
+    if (cleaned.certificationLte != null) count++
     if (cleaned.withStatus != null) count++
     if (cleaned.withType != null) count++
     if (com.kennyb1201.kbstream.data.catalogs.splitIds(cleaned.withoutNetworks).isNotEmpty()) count++

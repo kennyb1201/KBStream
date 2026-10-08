@@ -205,6 +205,7 @@ fun CatalogBuilderScreen(
                 onRuntimeMax = viewModel::setRuntimeMax,
                 onCertificationCountry = viewModel::setCertificationCountry,
                 onCertification = viewModel::setCertification,
+                onCertificationCeiling = viewModel::setCertificationCeiling,
                 onTvStatus = viewModel::setTvStatus,
                 onTvType = viewModel::setTvType,
                 onExcludedNetwork = viewModel::toggleExcludedNetwork,
@@ -510,6 +511,7 @@ private fun CatalogEditor(
     onRuntimeMax: (Int) -> Unit,
     onCertificationCountry: (String) -> Unit,
     onCertification: (String) -> Unit,
+    onCertificationCeiling: (String) -> Unit,
     onTvStatus: (String) -> Unit,
     onTvType: (String) -> Unit,
     onExcludedNetwork: (Int) -> Unit,
@@ -888,6 +890,17 @@ private fun CatalogEditor(
                 options = catalogCertificationOptions(catalog.mediaType),
                 isSelected = { it == (filters.certification ?: "") },
                 onToggle = onCertification
+            )
+        }
+
+        // The ceiling is its own row because it is its own rule: TMDB's exact
+        // `certification` matches ONE rating, so "PG" there drops every G title,
+        // while `certification.lte` is "this rating or milder".
+        EditorSection(title = "Age rating or milder") {
+            CodeChipRow(
+                options = catalogCertificationOptions(catalog.mediaType),
+                isSelected = { it == (filters.certificationLte ?: "") },
+                onToggle = onCertificationCeiling
             )
         }
 

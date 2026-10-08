@@ -175,6 +175,7 @@ internal fun normalizedFilters(filters: KBFilters?): KBFilters {
         withCast = clean(source.withCast),
         certificationCountry = clean(source.certificationCountry),
         certification = clean(source.certification),
+        certificationLte = clean(source.certificationLte),
         withStatus = clean(source.withStatus),
         withType = clean(source.withType),
         withoutNetworks = clean(source.withoutNetworks),

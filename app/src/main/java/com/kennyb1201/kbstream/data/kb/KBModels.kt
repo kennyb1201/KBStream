@@ -164,6 +164,19 @@ data class KBFilters(
     val certificationCountry: String? = null,
     val certification: String? = null,
     /**
+     * An age-rating CEILING (TMDB `certification.lte`): "this rating or
+     * milder".
+     *
+     * The exact-match [certification] cannot express that: TMDB reads it as
+     * one value, so `certification=PG` EXCLUDES G - the mildest and safest
+     * titles - which is the opposite of what "PG or milder" means. The
+     * ceiling is what the "New Kids Movies" / "New Kids Shows" rails ask
+     * for, and it reads against [certificationCountry] exactly as
+     * [certification] does, because a rating only means something on one
+     * country's scale.
+     */
+    val certificationLte: String? = null,
+    /**
      * TV shape, TV-only. [withStatus] is TMDB's status code
      * (0 returning, 1 planned, 2 in production, 3 ended, 4 canceled, 5 pilot)
      * and [withType] its format code (0 documentary ... 4 scripted ...).

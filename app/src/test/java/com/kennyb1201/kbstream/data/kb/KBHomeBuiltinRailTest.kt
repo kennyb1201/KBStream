@@ -44,6 +44,8 @@ class KBHomeBuiltinRailTest {
     private val topShows = KBHomeOrderPrefs.BUILTIN_TOP_SHOWS_TODAY
     private val kidsMovies = KBHomeOrderPrefs.BUILTIN_TOP_KIDS_MOVIES
     private val kidsShows = KBHomeOrderPrefs.BUILTIN_TOP_KIDS_SHOWS
+    private val newKidsMovies = KBHomeOrderPrefs.BUILTIN_NEW_KIDS_MOVIES
+    private val newKidsShows = KBHomeOrderPrefs.BUILTIN_NEW_KIDS_SHOWS
 
     @Test
     fun `the built-in keys are stable, prefixed and distinct`() {
@@ -73,8 +75,16 @@ class KBHomeBuiltinRailTest {
             KBHomeOrderPrefs.BUILTIN_KEYS.take(4)
         )
         assertEquals(
-            listOf(kidsMovies, kidsShows),
+            listOf(kidsMovies, kidsShows, newKidsMovies, newKidsShows),
             KBHomeOrderPrefs.KIDS_BUILTIN_KEYS
+        )
+        assertEquals(
+            "New Kids Movies",
+            KBHomeOrderPrefs.builtinDefaultTitle(newKidsMovies)
+        )
+        assertEquals(
+            "New Kids Shows",
+            KBHomeOrderPrefs.builtinDefaultTitle(newKidsShows)
         )
         assertEquals(
             KBHomeOrderPrefs.KIDS_BUILTIN_KEYS + KBHomeOrderPrefs.GUEST_BUILTIN_KEYS,
@@ -163,7 +173,14 @@ class KBHomeBuiltinRailTest {
         // app fetches and names itself, so without their own keys there would
         // be no row to move or rename them from.
         assertEquals(
-            listOf(continueWatching, upcoming, kidsMovies, kidsShows),
+            listOf(
+                continueWatching,
+                upcoming,
+                kidsMovies,
+                kidsShows,
+                newKidsMovies,
+                newKidsShows
+            ),
             KBHomeOrderPrefs.builtinKeysFor(kidsMaxAge = 7)
         )
         // A profile with no ceiling gets the base list; the guest flag adds the
@@ -188,6 +205,8 @@ class KBHomeBuiltinRailTest {
         assertTrue(topShows in KBHomeOrderPrefs.BUILTIN_KEYS)
         assertTrue(kidsMovies in KBHomeOrderPrefs.BUILTIN_KEYS)
         assertTrue(kidsShows in KBHomeOrderPrefs.BUILTIN_KEYS)
+        assertTrue(newKidsMovies in KBHomeOrderPrefs.BUILTIN_KEYS)
+        assertTrue(newKidsShows in KBHomeOrderPrefs.BUILTIN_KEYS)
     }
 
     @Test
@@ -237,6 +256,8 @@ class KBHomeBuiltinRailTest {
                 upcoming,
                 kidsMovies,
                 kidsShows,
+                newKidsMovies,
+                newKidsShows,
                 "browse:1",
                 "addon:a",
                 "addon:b",

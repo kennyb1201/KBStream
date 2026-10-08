@@ -503,7 +503,7 @@ fun AddonsScreen(
             collectionsState = collectionsState,
             homeOrderVersion = homeOrderVersion,
             // The manager matches what Home actually draws for this profile:
-            // a kids profile has no Top Today built-ins but has its two kids
+            // a kids profile has no Top Today built-ins but has its own kids
             // rails, and a guest profile has its own rails after the Top Today
             // rows - each of them a row the manager can move and rename (see
             // KBHomeOrderPrefs.builtinKeysFor).

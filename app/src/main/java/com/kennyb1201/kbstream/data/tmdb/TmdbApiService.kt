@@ -316,6 +316,10 @@ suspend fun searchCollection(
         @Query("with_cast") withCast: String? = null,
         @Query("certification_country") certificationCountry: String? = null,
         @Query("certification") certification: String? = null,
+        // "This rating or milder" (TMDB's own comparison on the country's
+        // scale). Separate from the exact-match `certification` above, which
+        // cannot express it: `certification=PG` excludes G. See KBFilters.
+        @Query("certification.lte") certificationLte: String? = null,
         // Release types (4 = digital, 5 = physical, 2,3 = theatrical) and the
         // REGION they are read against: TMDB resolves a release type per
         // country, so the two are one rule. Movie-only, like with_cast above.
@@ -353,6 +357,12 @@ suspend fun searchCollection(
         @Query("with_runtime.lte") withRuntimeLte: Int? = null,
         @Query("certification_country") certificationCountry: String? = null,
         @Query("certification") certification: String? = null,
+        // The ceiling twin of `certification`. Sent here for symmetry with
+        // the movie endpoint, but /discover/tv documents NO certification
+        // filter (unlike /discover/movie), so this is a parameter TMDB may
+        // ignore - a series row's rating is held by the app's own ceiling
+        // check (TmdbRepository.kidsFilterMetas), not by this.
+        @Query("certification.lte") certificationLte: String? = null,
         @Query("with_status") withStatus: String? = null,
         @Query("with_type") withType: String? = null,
         @Query("without_networks") withoutNetworks: String? = null

@@ -447,6 +447,34 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
         }
     }
 
+    /**
+     * One age-rating CEILING - "this rating or milder" - or none when it is
+     * the value already set (tap to clear).
+     *
+     * Kept apart from [setCertification] because the two mean different things
+     * to TMDB: the exact match keeps ONE rating, so "PG" there drops every G
+     * title, while `certification.lte` keeps that rating and everything milder.
+     * The country is seeded with it for the same reason it is seeded with the
+     * value; clearing it drops the scale only when nothing else reads it.
+     */
+    fun setCertificationCeiling(code: String) {
+        setFilters { filters ->
+            if (filters.certificationLte == code) {
+                filters.copy(
+                    certificationLte = null,
+                    certificationCountry = filters.certificationCountry
+                        .takeIf { filters.certification != null }
+                )
+            } else {
+                filters.copy(
+                    certificationLte = code,
+                    certificationCountry = filters.certificationCountry
+                        ?: CATALOG_DEFAULT_CERTIFICATION_COUNTRY
+                )
+            }
+        }
+    }
+
     /** TMDB's TV status code (0-5); tapping the selected one clears it. */
     fun setTvStatus(code: String) {
         setFilters { filters ->

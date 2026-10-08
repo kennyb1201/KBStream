@@ -1208,6 +1208,7 @@ class TmdbRepository private constructor(context: Context) :
                     withRuntimeLte = filters?.withRuntimeLte,
                     certificationCountry = filters?.certificationCountry,
                     certification = filters?.certification,
+                    certificationLte = filters?.certificationLte,
                     withStatus = filters?.withStatus,
                     withType = filters?.withType,
                     withoutNetworks = filters?.withoutNetworks
@@ -1239,6 +1240,7 @@ class TmdbRepository private constructor(context: Context) :
                     withCast = filters?.withCast,
                     certificationCountry = filters?.certificationCountry,
                     certification = filters?.certification,
+                    certificationLte = filters?.certificationLte,
                     withReleaseType = filters?.withReleaseType,
                     region = releaseRegion
                 )

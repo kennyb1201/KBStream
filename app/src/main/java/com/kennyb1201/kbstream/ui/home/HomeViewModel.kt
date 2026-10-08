@@ -7606,43 +7606,70 @@ private suspend fun calculateEpisodesRemaining(
 
 
     /**
-     * Kids-profile replacement for the pinned "Top ... Today" rails: two
-     * hardcoded rails ("Top Kids Movies" / "Top Kids Shows") sourced from
-     * TMDB discover — popular family + animation, certified-release floor —
-     * so kids get a real, always-populated version of the rows the main
-     * profile sees. Every item still runs through the ceiling filter
-     * (TMDB certification check) before it lands on the rail.
+     * Kids-profile replacement for the pinned "Top ... Today" rails: four
+     * hardcoded rails sourced from TMDB discover — the two standing rows
+     * ("Top Kids Movies" / "Top Kids Shows": popular family + animation,
+     * certified-release floor) and, after them, two recency rows ("New Kids
+     * Movies" / "New Kids Shows": the same genre sets and age ceiling over a
+     * rolling ninety-day release window — see [KidsNewRailRules]) so kids get
+     * a real, always-populated version of the rows the main profile sees, and
+     * something actually new in it. Every item still runs through the ceiling
+     * filter (TMDB certification check) before it lands on the rail.
      */
     private suspend fun loadPinnedKidsRails(
         result: MutableList<Rail>,
         hideUpcoming: Boolean,
         landscapeCards: Boolean
     ) {
-        val isTv = listOf(false, true)
+        // The four queries this profile draws where the Top Today rows would
+        // be: the two standing popularity rows, then the two recency rows
+        // (see [KidsNewRailRules] for what makes those "new"). Only the query
+        // differs between them — the TMDB mapping, the digital-release/ceiling
+        // pipeline and the Rail build below are one block for all four.
+        val queries = listOf(
+            KidsRailQuery(
+                mediaType = "movie",
+                sortBy = "popularity.desc",
+                catalogId = "top_kids_movies",
+                catalogName = "Top Kids Movies",
+                filters = com.kennyb1201.kbstream.data.kb.KBFilters(
+                    // Animation OR Family. (OR-comma on purpose; adult-tagged
+                    // genres like Action & Adventure or News would leak in.)
+                    withGenres = "16,10751",
+                    voteCountGte = 20,
+                    releaseDateGte = "1970-01-01"
+                )
+            ),
+            KidsRailQuery(
+                mediaType = "tv",
+                sortBy = "popularity.desc",
+                catalogId = "top_kids_shows",
+                catalogName = "Top Kids Shows",
+                filters = com.kennyb1201.kbstream.data.kb.KBFilters(
+                    // Kids, Animation — the series twin of the list above.
+                    withGenres = "10762,16",
+                    voteCountGte = 20,
+                    releaseDateGte = "1970-01-01"
+                )
+            )
+        ) + KidsNewRailRules.queries(LocalDate.now())
+
         coroutineScope {
-            isTv.map { tv ->
+            queries.map { query ->
                 async {
                     try {
-                        val filters = com.kennyb1201.kbstream.data.kb.KBFilters(
-                            // Movies: Animation OR Family. Shows: Kids OR Animation.
-                            // (OR-comma on purpose; adult-tagged genres like
-                            // Action & Adventure or News would leak in.)
-                            withGenres = if (tv) "10762,16" else "16,10751",
-                            voteCountGte = 20,
-                            releaseDateGte = "1970-01-01"
-                        )
                         val items = tmdbRepository.discoverKB(
-                            mediaType = if (tv) "tv" else "movie",
+                            mediaType = query.mediaType,
                             page = 1,
-                            sortBy = "popularity.desc",
-                            filters = filters
+                            sortBy = query.sortBy,
+                            filters = query.filters
                         ).orEmpty()
                             .take(INITIAL_RAIL_PAGE_SIZE)
 
                         val metas = items.map { item ->
                             MetaPreview(
                                 id = "tmdb:" + item.id,
-                                type = if (tv) "series" else "movie",
+                                type = query.type,
                                 name = item.name ?: item.title.orEmpty(),
                                 poster = item.posterPath
                                     ?.takeIf { it.isNotBlank() }
@@ -7678,19 +7705,20 @@ private suspend fun calculateEpisodesRemaining(
 
                         val rail = Rail(
                             addonName = KIDS_ADDON_NAME,
-                            catalogName = if (tv) "Top Kids Shows" else "Top Kids Movies",
-                            type = if (tv) "series" else "movie",
+                            catalogName = query.catalogName,
+                            type = query.type,
                             items = filtered,
-                            catalogId = if (tv) "top_kids_shows" else "top_kids_movies",
+                            catalogId = query.catalogId,
                             baseUrl = null,
                             landscapeArt = previousLandscapeArt[
                                 railKeyOf(
                                     KIDS_ADDON_NAME,
-                                    if (tv) "top_kids_shows" else "top_kids_movies",
-                                    if (tv) "series" else "movie"
+                                    query.catalogId,
+                                    query.type
                                 )
                             ] ?: emptyMap(),
-                            // "Top Kids Movies" is a standing too.
+                            // "Top Kids Movies" is a standing, and its two new
+                            // siblings are the same kind of app-built row.
                             ranked = true
                         )
 
@@ -7710,7 +7738,11 @@ private suspend fun calculateEpisodesRemaining(
 
                         rail
                     } catch (e: Exception) {
-                        Log.e("HOME_RAILS", "kids pinned rail load failed tv=$tv: " + e.message, e)
+                        Log.e(
+                            "HOME_RAILS",
+                            "kids pinned rail load failed ${query.catalogId}: " + e.message,
+                            e
+                        )
                         null
                     }
                 }

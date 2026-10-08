@@ -106,6 +106,7 @@ class CatalogBuilderContractTest {
         "withCast",
         "certificationCountry",
         "certification",
+        "certificationLte",
         "withStatus",
         "withType",
         "withoutNetworks",
@@ -153,6 +154,7 @@ class CatalogBuilderContractTest {
             "withRuntimeGte" to "Runtime",
             "withCast" to "Cast",
             "certification" to "Age rating",
+            "certificationLte" to "Age rating or milder",
             "withStatus" to "Status",
             "withType" to "Show type",
             "withReleaseType" to "Release type"
@@ -264,6 +266,7 @@ class CatalogBuilderContractTest {
             "withCast = filters?.withCast",
             "certificationCountry = filters?.certificationCountry",
             "certification = filters?.certification",
+            "certificationLte = filters?.certificationLte",
             "withStatus = filters?.withStatus",
             "withType = filters?.withType",
             "withoutNetworks = filters?.withoutNetworks"
@@ -278,6 +281,7 @@ class CatalogBuilderContractTest {
             "with_cast",
             "certification_country",
             "certification",
+            "certification.lte",
             "with_status",
             "with_type",
             "without_networks"

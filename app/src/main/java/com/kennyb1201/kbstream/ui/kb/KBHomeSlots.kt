@@ -216,8 +216,8 @@ object KBHomeSlots {
         // Everything else keys by its add-on URL exactly as before - EXCEPT an
         // APP-BUILT row, which keys by its BUILT-IN key (see
         // KBHomeOrderPrefs.builtinKeyForCatalogId): the two Top Today feed rows
-        // and the profile rails the app builds itself (a kids profile's two
-        // rows, a guest profile's fixed set). That is what puts every one of
+        // and the profile rails the app builds itself (a kids profile's rows,
+        // a guest profile's fixed set). That is what puts every one of
         // them in the one arrangement with the rest of Home: the manager lists
         // them as built-in rows, they can be moved, hidden and renamed, and
         // their content still comes from the feed the loader fetched.
