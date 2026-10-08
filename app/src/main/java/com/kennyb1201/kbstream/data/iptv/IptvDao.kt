@@ -231,33 +231,56 @@ interface IptvDao {
     )
     suspend fun getChannelsBySource(sourceUrl: String): List<EpgChannelEntity>
 
+    /**
+     * The first [perChannelLimit] programs per channel in the window: the guide's
+     * own rows, without the description/category the full read carries.
+     *
+     * Written as a correlated count rather than the partitioned row-numbering
+     * window function it used to be, which is the same "first N per channel" but
+     * on machinery every SQLite this app can run has: window functions need
+     * 3.25+, minSdk is 26 (SQLite 3.19), and Fire OS on the Fire Cube ships 3.22 —
+     * where SQLite rejects the window clause outright as a syntax error and
+     * throws on the main thread, so opening the guide force-closed the app
+     * (Sentry often missed it, because the process died before the report
+     * flushed). [GuideWindowQueryCompatibilityTest] pins both the equivalence and
+     * the absence of the old syntax. A row is kept when FEWER than
+     * [perChannelLimit] in-window programs on its channel start before it,
+     * which is exactly the row-number test; equal starts are broken by `rowid`
+     * so the answer is deterministic rather than whatever the scan order was.
+     *
+     * The window predicates are repeated inside the count so it measures the
+     * same set the outer query filters — the subquery is correlated on
+     * (sourceId, channelId), which is the coverage this table already had, and
+     * n is programs-per-channel inside a time window (tens, not thousands), the
+     * same bound the window function worked within.
+     */
     @Query(
         """
         SELECT
-            channelId,
-            title,
+            p1.channelId AS channelId,
+            p1.title AS title,
             '' AS description,
             '' AS category,
-            startUtcMillis,
-            endUtcMillis
-        FROM (
-            SELECT
-                channelId,
-                title,
-                startUtcMillis,
-                endUtcMillis,
-                ROW_NUMBER() OVER (
-                    PARTITION BY channelId
-                    ORDER BY startUtcMillis ASC
-                ) AS rowNumber
-            FROM epg_programs
-            WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
-              AND endUtcMillis > :windowStart
-              AND startUtcMillis < :windowEnd
-              AND channelId IN (:channelIds)
-        )
-        WHERE rowNumber <= :perChannelLimit
-        ORDER BY channelId ASC, startUtcMillis ASC
+            p1.startUtcMillis AS startUtcMillis,
+            p1.endUtcMillis AS endUtcMillis
+        FROM epg_programs p1
+        WHERE p1.sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
+          AND p1.endUtcMillis > :windowStart
+          AND p1.startUtcMillis < :windowEnd
+          AND p1.channelId IN (:channelIds)
+          AND (
+              SELECT COUNT(*)
+              FROM epg_programs p2
+              WHERE p2.sourceId = p1.sourceId
+                AND p2.channelId = p1.channelId
+                AND p2.endUtcMillis > :windowStart
+                AND p2.startUtcMillis < :windowEnd
+                AND (
+                    p2.startUtcMillis < p1.startUtcMillis
+                    OR (p2.startUtcMillis = p1.startUtcMillis AND p2.rowid < p1.rowid)
+                )
+          ) < :perChannelLimit
+        ORDER BY p1.channelId ASC, p1.startUtcMillis ASC
         """
     )
     suspend fun getProgramsForChannelsInWindowLite(
@@ -268,35 +291,45 @@ interface IptvDao {
         perChannelLimit: Int
     ): List<EpgProgramRow>
 
+    /**
+     * The [perChannelLimit] LATEST programs per channel that have already aired,
+     * newest first — the guide's "what just finished" rows.
+     *
+     * The DESC twin of [getProgramsForChannelsInWindowLite]'s correlated count
+     * (see there for why window functions are not an option on this app's
+     * devices): the count now measures how many in-window programs start AFTER
+     * this one, so keeping count < [perChannelLimit] keeps the N latest. The
+     * window predicates are the same two the outer query filters on, `:nowMillis`
+     * included, and equal starts stay in `rowid` order — the same tie-break the
+     * ascending twin uses, so neither read depends on scan order.
+     */
     @Query(
         """
         SELECT
-            channelId,
-            title,
-            description,
-            category,
-            startUtcMillis,
-            endUtcMillis
-        FROM (
-            SELECT
-                channelId,
-                title,
-                description,
-                category,
-                startUtcMillis,
-                endUtcMillis,
-                ROW_NUMBER() OVER (
-                    PARTITION BY channelId
-                    ORDER BY startUtcMillis DESC
-                ) AS rowNumber
-            FROM epg_programs
-            WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
-              AND endUtcMillis <= :nowMillis
-              AND endUtcMillis > :windowStart
-              AND channelId IN (:channelIds)
-        )
-        WHERE rowNumber <= :perChannelLimit
-        ORDER BY channelId ASC, startUtcMillis DESC
+            p1.channelId AS channelId,
+            p1.title AS title,
+            p1.description AS description,
+            p1.category AS category,
+            p1.startUtcMillis AS startUtcMillis,
+            p1.endUtcMillis AS endUtcMillis
+        FROM epg_programs p1
+        WHERE p1.sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
+          AND p1.endUtcMillis <= :nowMillis
+          AND p1.endUtcMillis > :windowStart
+          AND p1.channelId IN (:channelIds)
+          AND (
+              SELECT COUNT(*)
+              FROM epg_programs p2
+              WHERE p2.sourceId = p1.sourceId
+                AND p2.channelId = p1.channelId
+                AND p2.endUtcMillis <= :nowMillis
+                AND p2.endUtcMillis > :windowStart
+                AND (
+                    p2.startUtcMillis > p1.startUtcMillis
+                    OR (p2.startUtcMillis = p1.startUtcMillis AND p2.rowid < p1.rowid)
+                )
+          ) < :perChannelLimit
+        ORDER BY p1.channelId ASC, p1.startUtcMillis DESC
         """
     )
     suspend fun getRecentProgramsForChannels(
@@ -307,35 +340,42 @@ interface IptvDao {
         perChannelLimit: Int
     ): List<EpgProgramRow>
 
+    /**
+     * The first [perChannelLimit] programs per channel in the window, with the
+     * description and category the in-player guide shows.
+     *
+     * The same correlated count as [getProgramsForChannelsInWindowLite], on the
+     * same argument (a window clause is a syntax error on the SQLite Fire OS
+     * ships), with this read's own column list: [perChannelLimit] limits how many
+     * rows a channel contributes, never which columns they carry.
+     */
     @Query(
         """
         SELECT
-            channelId,
-            title,
-            description,
-            category,
-            startUtcMillis,
-            endUtcMillis
-        FROM (
-            SELECT
-                channelId,
-                title,
-                description,
-                category,
-                startUtcMillis,
-                endUtcMillis,
-                ROW_NUMBER() OVER (
-                    PARTITION BY channelId
-                    ORDER BY startUtcMillis ASC
-                ) AS rowNumber
-            FROM epg_programs
-            WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
-              AND endUtcMillis > :windowStart
-              AND startUtcMillis < :windowEnd
-              AND channelId IN (:channelIds)
-        )
-        WHERE rowNumber <= :perChannelLimit
-        ORDER BY channelId ASC, startUtcMillis ASC
+            p1.channelId AS channelId,
+            p1.title AS title,
+            p1.description AS description,
+            p1.category AS category,
+            p1.startUtcMillis AS startUtcMillis,
+            p1.endUtcMillis AS endUtcMillis
+        FROM epg_programs p1
+        WHERE p1.sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl)
+          AND p1.endUtcMillis > :windowStart
+          AND p1.startUtcMillis < :windowEnd
+          AND p1.channelId IN (:channelIds)
+          AND (
+              SELECT COUNT(*)
+              FROM epg_programs p2
+              WHERE p2.sourceId = p1.sourceId
+                AND p2.channelId = p1.channelId
+                AND p2.endUtcMillis > :windowStart
+                AND p2.startUtcMillis < :windowEnd
+                AND (
+                    p2.startUtcMillis < p1.startUtcMillis
+                    OR (p2.startUtcMillis = p1.startUtcMillis AND p2.rowid < p1.rowid)
+                )
+          ) < :perChannelLimit
+        ORDER BY p1.channelId ASC, p1.startUtcMillis ASC
         """
     )
     suspend fun getProgramsForChannelsInWindow(
