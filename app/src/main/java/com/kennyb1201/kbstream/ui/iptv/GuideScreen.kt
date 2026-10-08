@@ -547,7 +547,21 @@ fun GuideScreen(
         membershipBump += 1
     }
 
-    var showSetup by remember { mutableStateOf(playlist == null) }
+    // The setup form never opens itself.
+    //
+    // It used to start open whenever the playlist was still unknown - the
+    // ViewModel's playlist flow begins as null even for an install that has
+    // one - so entering the guide showed the box for the frames between the
+    // first composition and the cached restore. Worse, the flag outlived the
+    // flash: when the playlist landed, `showSetup && playlist != null` drew the
+    // whole form again as an OVERLAY on top of the freshly loaded guide, until
+    // the effect further down cleared it a frame later. That is the box that
+    // flashed on the way in.
+    //
+    // No-playlist does not need the flag: with a null playlist the inline
+    // placement below IS the screen, and Back already treats it that way. The
+    // flag now means only what its name says - the viewer asked for the panel.
+    var showSetup by remember { mutableStateOf(false) }
     var showHiddenManager by remember { mutableStateOf(false) }
     val groupRowState = rememberLazyListState()
 

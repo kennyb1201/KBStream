@@ -212,7 +212,67 @@ private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? 
         away = awayTeam,
         home = homeTeam,
         broadcastNames = espnBroadcasts(event, competition),
+        // The venue is on the competition for a club game; an event that only
+        // names one at the top (a tour stop) reads from there instead.
+        venue = espnVenue(competition?.optJSONObject("venue"), event.optJSONObject("venue")),
+        note = espnNote(competition?.optJSONArray("notes"), event.optJSONArray("notes")),
+        // A football schedule is read in weeks, and `week.number` is where ESPN
+        // puts it. Every other sport leaves it out.
+        week = espnWeek(event.optJSONObject("week")),
     )
+}
+
+/**
+ * ESPN's week number as the card's context line: `{"number": 6}` -> "Week 6".
+ *
+ * Only a numbered week becomes one. ESPN writes `"number": 0` for the
+ * preseason and for a neutral-site game it carries no week for, and "Week 0"
+ * is not a week anybody plays - so zero reads as no week at all and the card
+ * falls back to the venue.
+ */
+internal fun espnWeek(week: JSONObject?): String? {
+    val number = week?.optInt("number", 0) ?: 0
+    if (number <= 0) return null
+    val label = week?.optString("text", "").orEmpty().takeIf { it.isNotBlank() }
+    return label ?: "Week $number"
+}
+
+/**
+ * A venue line: "Rocket Arena · Cleveland, OH".
+ *
+ * ESPN names the place either as a full name plus an address or, on a tour,
+ * as a display name on its own ("Beijing, China PR"), and both are read the
+ * same way. The parts are joined with a middot so the line reads as one fact,
+ * and a shape this does not understand yields null rather than a dangling
+ * separator.
+ */
+internal fun espnVenue(vararg venues: JSONObject?): String? {
+    venues.forEach { venue ->
+        val name = venue?.optString("fullName", "")?.takeIf { it.isNotBlank() }
+            ?: venue?.optString("displayName", "")?.takeIf { it.isNotBlank() }
+            ?: return@forEach
+        val address = venue?.optJSONObject("address")
+        val city = address?.optString("city", "")?.takeIf { it.isNotBlank() }
+        val region = address?.optString("state", "")?.takeIf { it.isNotBlank() }
+            ?: address?.optString("country", "")?.takeIf { it.isNotBlank() }
+        val where = listOfNotNull(city, region).distinct().joinToString(", ")
+        return if (where.isBlank()) name else "$name · $where"
+    }
+    return null
+}
+
+/**
+ * ESPN's own context line for an event: `notes[0].headline` ("ALDS - Game 4",
+ * "Preseason"), or its `text` where the note is a sentence (a tennis result).
+ * Blank and missing notes are the same thing here - no line at all.
+ */
+internal fun espnNote(vararg notes: JSONArray?): String? {
+    notes.forEach { notesArray ->
+        val head = notesArray?.optJSONObject(0) ?: return@forEach
+        head.optString("headline", "").takeIf { it.isNotBlank() }?.let { return it }
+        head.optString("text", "").takeIf { it.isNotBlank() }?.let { return it }
+    }
+    return null
 }
 
 /**
@@ -239,15 +299,34 @@ private fun espnTeamOf(row: JSONObject, homeAway: String): SportsTeam {
         // "Carlos Alcaraz" reads ALCARAZ next to the score, which is what a
         // bracket actually prints.
         .ifBlank { displayName.trim().split(' ').lastOrNull().orEmpty().uppercase() }
+    // The mark, in the order ESPN offers one. `logo` (a single string) is
+    // where the LIVE scoreboard carries a club crest - `logos`, the array the
+    // detail pages use, is simply absent from the feed, so reading only that
+    // left every card printing initials instead of a crest. A person has no
+    // crest at all: a headshot where the sport publishes one, else the country
+    // flag ESPN does publish for tennis, MMA and golf.
+    val mark = team?.optString("logo", "")?.takeIf { it.isNotBlank() }
+        ?: team?.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "")
+            ?.takeIf { it.isNotBlank() }
+        ?: athlete?.optJSONObject("headshot")?.optString("href", "")
+            ?.takeIf { it.isNotBlank() }
+        ?: athlete?.optJSONObject("flag")?.optString("href", "")
+            ?.takeIf { it.isNotBlank() }
+    // ESPN's own id, which is what a favourite is stored under: a club can be
+    // renamed, and a person's display name can be spelled six ways, but the id
+    // is the same row in the feed every week.
+    val id = team?.optString("id", "")?.takeIf { it.isNotBlank() }
+        ?: athlete?.optString("id", "")?.takeIf { it.isNotBlank() }
     return SportsTeam(
+        id = id,
         abbreviation = abbreviation,
         displayName = displayName,
-        logoUrl = team?.optJSONArray("logos")?.optJSONObject(0)?.optString("href", "")
-            ?.takeIf { it.isNotBlank() },
+        logoUrl = mark,
         score = row.optString("score", "").takeIf { it.isNotBlank() },
         isHome = homeAway.equals("home", ignoreCase = true),
         record = row.optJSONArray("records")?.optJSONObject(0)?.optString("summary", "")
             ?.takeIf { it.isNotBlank() },
+        colorHex = team?.optString("color", "")?.takeIf { it.isNotBlank() },
     )
 }
 
@@ -291,6 +370,14 @@ internal fun parseTournamentEvents(json: String, leaguePath: String): List<Tourn
                 ?: status?.optString("detail", "").orEmpty(),
             leaders = espnLeaders(competition?.optJSONArray("competitors")),
             broadcastNames = espnBroadcasts(event, competition),
+            // A race names its track on the event (`circuit`); a golf round or
+            // a tennis tournament names a venue there instead.
+            venue = espnVenue(
+                event.optJSONObject("circuit"),
+                event.optJSONObject("venue"),
+                competition?.optJSONObject("venue")
+            ),
+            note = espnNote(competition?.optJSONArray("notes"), event.optJSONArray("notes")),
         )
     )
 }
@@ -320,6 +407,11 @@ private fun espnLeaders(competitors: JSONArray?): List<Leader> {
         Leader(
             name = name,
             score = score,
+            // Golfers, drivers and fighters carry a country flag and nothing
+            // else, so it is the mark a leaderboard row can draw.
+            flagUrl = row.optJSONObject("athlete")
+                ?.optJSONObject("flag")?.optString("href", "")
+                ?.takeIf { it.isNotBlank() },
         ) to (row.optInt("order", i) to score.toDoubleOrNull())
     }
     return rows

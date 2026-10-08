@@ -23,12 +23,16 @@ import com.kennyb1201.kbstream.data.sports.SportsLeague
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import com.kennyb1201.kbstream.data.sports.SportsTeam
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
+import com.kennyb1201.kbstream.data.sports.involvesFavorite
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -75,6 +79,43 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     private val _sections = MutableStateFlow<List<LeagueSection>>(emptyList())
     val sections: StateFlow<List<LeagueSection>> = _sections.asStateFlow()
 
+    /**
+     * The team keys the FAVORITES tab follows, as
+     * [SportsTeam.favoriteKey] strings.
+     */
+    private val _favoriteTeamKeys = MutableStateFlow(
+        AppPreferences.getSportsFavoriteTeams(app)
+    )
+    val favoriteTeamKeys: StateFlow<Set<String>> = _favoriteTeamKeys.asStateFlow()
+
+    /**
+     * The FAVORITES tab's own section: every game in the enabled leagues that
+     * one of the viewer's teams is playing.
+     *
+     * Built from the sections the hub already fetched rather than from a fetch
+     * of its own: [refresh] loads every enabled league up front, so this tab
+     * costs a filter rather than a round trip, and a game it shows is a game
+     * whose channel has already been resolved.
+     *
+     * Tournaments are deliberately absent. A golf field or a Grand Prix grid is
+     * a list of people, not two teams, so there is nothing in it to follow.
+     */
+    val favoritesSection: StateFlow<LeagueSection> =
+        combine(_sections, _favoriteTeamKeys) { sections, keys ->
+            LeagueSection(
+                league = SportsLeagues.FAVORITES,
+                games = if (keys.isEmpty()) {
+                    emptyList()
+                } else {
+                    sections.flatMap { it.games }.filter { it.involvesFavorite(keys) }
+                }
+            )
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = LeagueSection(SportsLeagues.FAVORITES)
+        )
+
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -115,6 +156,21 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * Persisted per profile, so a profile with a small playlist can keep the
      * hub to the leagues it actually has channels for.
      */
+    /**
+     * Follows or unfollows one team, and keeps the tab in step.
+     *
+     * The screen hands back the set the store returned rather than re-reading
+     * it: a toggle is a delta against whatever was there, and two quick presses
+     * on different teams must not both start from the same snapshot.
+     */
+    fun setTeamFavorite(team: SportsTeam, favorite: Boolean) {
+        _favoriteTeamKeys.value = AppPreferences.setSportsTeamFavorite(
+            getApplication(),
+            team.favoriteKey,
+            favorite
+        )
+    }
+
     fun setLeagueEnabled(path: String, enabled: Boolean) {
         AppPreferences.setSportsLeagueEnabled(getApplication(), path, enabled)
         _enabledLeagues.value = AppPreferences.getSportsEnabledLeagues(getApplication())

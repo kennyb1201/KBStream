@@ -116,6 +116,7 @@ object AppPreferences {
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
     // Which ESPN leagues the sports hub renders; a Set<String> of league paths.
     private const val KEY_SPORTS_LEAGUES = "sports_enabled_leagues"
+    private const val KEY_SPORTS_FAVORITE_TEAMS = "sports_favorite_teams"
     // Which settings pane to reopen on, by SettingsPane name. Device-local on
     // purpose: the pane someone was last reading says nothing about the
     // account, and syncing it would drag a phone's "Data & Backup" onto the TV.
@@ -1667,6 +1668,40 @@ object AppPreferences {
 
     fun isSportsLeagueEnabled(context: Context, path: String): Boolean =
         path in getSportsEnabledLeagues(context)
+
+    /**
+     * The teams the hub's FAVORITES tab is built from, as
+     * [com.kennyb1201.kbstream.data.sports.SportsTeam.favoriteKey] strings.
+     *
+     * Per profile via [prefs], exactly like the league toggles beside it: who
+     * you follow is part of whose hub it is, and a kids profile's fandom is not
+     * the parent's.
+     */
+    fun getSportsFavoriteTeams(context: Context): Set<String> =
+        prefs(context).getStringSet(KEY_SPORTS_FAVORITE_TEAMS, null)?.toSet().orEmpty()
+
+    fun setSportsFavoriteTeams(context: Context, teams: Set<String>) {
+        prefs(context).edit().putStringSet(KEY_SPORTS_FAVORITE_TEAMS, teams).apply()
+    }
+
+    /**
+     * Adds or removes one team around whatever is already favourited, and
+     * returns the result so the caller does not have to re-read the store.
+     *
+     * Read-modify-write through [getSportsFavoriteTeams], the way
+     * [setSportsLeagueEnabled] works: a toggle is a delta, and the next one has
+     * to start from the set the last one left behind.
+     */
+    fun setSportsTeamFavorite(
+        context: Context,
+        key: String,
+        favorite: Boolean
+    ): Set<String> {
+        val current = getSportsFavoriteTeams(context)
+        val next = if (favorite) current + key else current - key
+        setSportsFavoriteTeams(context, next)
+        return next
+    }
 
     /**
      * Cross-device sync: called by every setter of a SYNCED pref. Debounced
