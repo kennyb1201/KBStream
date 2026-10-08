@@ -473,13 +473,21 @@ internal fun channelTitleGraphic(channelLogoUrl: String?, epgIconUrl: String?): 
  *
  * One function rather than two call sites because the guide and the sports hub
  * must launch a channel IDENTICALLY - same parent type, same stream id, same
- * title graphic, same single direct source - and the zap registry the player
- * reads (CH+/CH−) keys off exactly those fields. Two copies of this list would
+ * title graphic, same direct source - and the zap registry the player reads
+ * (CH+/CH−) keys off exactly those fields. Two copies of this list would
  * drift on the first edit to either, and the failure mode is a hub launch that
  * cannot zap.
+ *
+ * [backups] is the one thing the two callers do NOT share, and it is the only
+ * reason this takes more than one channel: a game the playlist carries on two
+ * feeds hands the player both, in the matcher's own order (the chosen feed
+ * first), and the player's existing source ladder walks to the next one when a
+ * feed will not open. A guide click has no such list and passes none - its
+ * channel is the viewer's own choice, not a match to be second-guessed.
  */
 internal fun liveChannelScreen(
     channel: IptvChannel,
+    backups: List<IptvChannel> = emptyList(),
     epgIconUrl: String?,
     returnTo: Screen
 ): Screen.Player {
@@ -488,6 +496,18 @@ internal fun liveChannelScreen(
     // launch's title graphic. See channelTitleGraphic.
     val poster = channelTitleGraphic(channel.logoUrl, epgIconUrl)
     val directSource = Stream(name = channelName, title = channelName, url = channel.streamUrl)
+
+    // Each backup carries its OWN name and headers: a second feed is often a
+    // different URL on a different host, and a switch that dropped the provider's
+    // headers would fail exactly like the feed it is replacing.
+    val backupSources = backups.map { backup ->
+        Stream(
+            name = backup.displayName.ifBlank { backup.name },
+            title = backup.displayName.ifBlank { backup.name },
+            url = backup.streamUrl,
+            headers = backup.headers.takeIf { it.isNotEmpty() }
+        )
+    }
 
     return Screen.Player(
         url = channel.streamUrl,
@@ -505,7 +525,7 @@ internal fun liveChannelScreen(
         // screen pulse the channel logo instead of printing the channel name.
         clearLogoUrl = poster,
         startPositionMs = 0L,
-        sources = listOf(directSource),
+        sources = listOf(directSource) + backupSources,
         streamHeaders = channel.headers,
         returnTo = returnTo
     )
@@ -1887,12 +1907,18 @@ fun AppRoot(
                 // Back destination. There is no second player and no second
                 // channel route - a card that matched a channel hands it to the
                 // SAME liveChannelScreen the guide uses.
-                onPlayChannel = { channel ->
-                    screen = liveChannelScreen(
-                        channel = channel,
-                        epgIconUrl = null,
-                        returnTo = Screen.Sports
-                    )
+                onPlayChannels = { channels ->
+                    // The head is the feed the hub's matcher chose and the rest
+                    // are the backups the sheet listed; the player walks them in
+                    // this order if one will not open.
+                    channels.firstOrNull()?.let { primary ->
+                        screen = liveChannelScreen(
+                            channel = primary,
+                            backups = channels.drop(1),
+                            epgIconUrl = null,
+                            returnTo = Screen.Sports
+                        )
+                    }
                 },
             )
         }
@@ -2622,6 +2648,13 @@ fun AppRoot(
                             put("audioUrl", stream.audioUrl)
                             put("infoHash", stream.infoHash)
                             put("fileIdx", stream.fileIdx)
+                            // Per-source HTTP headers, which the payload used to
+                            // drop on the floor: a source that needs a Referer
+                            // or a token lost it the moment it was anything but
+                            // the one playing (see Stream.requestHeaders).
+                            stream.headers?.takeIf { it.isNotEmpty() }?.let { headers ->
+                                put("headers", JSONObject(headers as Map<*, *>))
+                            }
                             stream.bingeGroup?.let { put("bingeGroup", it) }
                             if (stream.badges.isNotEmpty()) {
                                 val badgesArray = JSONArray()

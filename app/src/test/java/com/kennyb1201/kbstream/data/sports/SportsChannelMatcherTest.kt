@@ -372,4 +372,108 @@ class SportsChannelMatcherTest {
 
         assertEquals(golf, hit)
     }
+
+    // ── Backups: every feed the playlist holds, not just the best one ───
+    //
+    // A game carried on two feeds is the case this list exists for: the head is
+    // what a card has always played, and everything behind it is what the sheet
+    // offers and the player falls to when the head will not open.
+
+    @Test
+    fun `every guide feed airing the game is kept, closest first`() {
+        val espn = channel("espn", "ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+        val game = game(yankees, redSox)
+        val programs = listOf(
+            program("espn2", "Yankees vs. Red Sox", firstPitch - 30 * minute, firstPitch + 180 * minute),
+            program("espn", "Yankees vs. Red Sox", firstPitch, firstPitch + 180 * minute),
+        )
+
+        val found = SportsChannelMatcher.matches(game, listOf(espn2, espn), programs)
+
+        assertEquals(listOf(espn, espn2), found)
+        assertEquals(
+            "and the head is exactly what a single match has always returned",
+            found.first(),
+            SportsChannelMatcher.match(game, listOf(espn2, espn), programs)
+        )
+    }
+
+    @Test
+    fun `the rest of the network family becomes the backups`() {
+        val espn = channel("espn", "ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+        val news = channel("news", "ESPN News")
+        val contains = channel("mine", "My ESPN Channel")
+
+        val found = SportsChannelMatcher.matches(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+            channels = listOf(contains, news, espn2, espn),
+            programs = emptyList(),
+        )
+
+        // Exact first, then the word-boundary hits shortest-name-first, then the
+        // one that only contains the name - the same strength order the single
+        // pick used, now with everything it used to discard behind it.
+        assertEquals(listOf(espn, espn2, news, contains), found)
+    }
+
+    @Test
+    fun `a team's regional network rides behind the national feed`() {
+        val espn = channel("espn", "ESPN")
+        val yes = channel("yes", "YES Network")
+        val nesn = channel("nesn", "NESN")
+
+        val found = SportsChannelMatcher.matches(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+            channels = listOf(espn, yes, nesn),
+            programs = emptyList(),
+        )
+
+        // Boston is home, so its own network is the backup tried first.
+        assertEquals(listOf(espn, nesn, yes), found)
+    }
+
+    @Test
+    fun `a feed that answers to two tiers is offered once`() {
+        // YES is both the game's listed broadcast and the Yankees' own network,
+        // and the same feed listed twice is not a second feed.
+        val yes = channel("yes", "YES Network")
+
+        val found = SportsChannelMatcher.matches(
+            game = game(yankees, redSox, broadcasts = listOf("YES Network")),
+            channels = listOf(yes),
+            programs = emptyList(),
+        )
+
+        assertEquals(listOf(yes), found)
+    }
+
+    @Test
+    fun `the list is capped at the feeds a ladder can use`() {
+        val many = (1..6).map { index ->
+            channel("c$index", if (index == 1) "ESPN" else "ESPN $index")
+        }
+
+        val found = SportsChannelMatcher.matches(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+            channels = many,
+            programs = emptyList(),
+        )
+
+        assertEquals(SportsChannelMatcher.MAX_MATCHES, found.size)
+        assertEquals("the exact name is still the head", many.first(), found.first())
+    }
+
+    @Test
+    fun `an empty lineup lists nothing rather than throwing`() {
+        assertEquals(
+            emptyList<IptvChannel>(),
+            SportsChannelMatcher.matches(
+                game = game(yankees, redSox),
+                channels = emptyList(),
+                programs = listOf(program("mlb", "Yankees vs Red Sox", firstPitch, firstPitch + minute)),
+            )
+        )
+    }
 }

@@ -39,6 +39,23 @@ class SportsGameDetailSheetContractTest {
     }
 
     @Test
+    fun `the card answers the press whether or not it matched`() {
+        val card = slice("private fun GameCard(", "private fun TeamColumn(")
+        assertFalse(
+            "the press is never gated on a matched channel",
+            card.contains("if (playable) {")
+        )
+        assertTrue(
+            "every card opens the sheet, so an unmatched one has somewhere to go",
+            card.contains("onClick = { onOpenDetail(game) }")
+        )
+        assertTrue(
+            "and the long press follows a team from any card",
+            card.contains("onLongClick = onEditFavorites")
+        )
+    }
+
+    @Test
     fun `the sheet is a bottom sheet, not a centred dialog`() {
         val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
         assertTrue(
@@ -85,12 +102,12 @@ class SportsGameDetailSheetContractTest {
     fun `the watch button plays through the one existing path, and is focused on open`() {
         val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
         assertTrue(
-            "enabled, the button plays the matched channel",
-            sheet.contains("onClick = { onPlay(channel) }")
+            "enabled, the button plays the ordered feed list - head first, backups behind it",
+            sheet.contains("onClick = { onPlay(channels) }")
         )
         assertTrue(
             "the screen hands that to the same launch a card tap used to take",
-            hub.contains("onPlay = { channel -> detailGame = null onPlayChannel(channel) }")
+            hub.contains("onPlay = { feeds -> detailGame = null onPlayChannels(feeds) }")
         )
         assertTrue(
             "and it is focused by default, so one press watches",
@@ -103,8 +120,8 @@ class SportsGameDetailSheetContractTest {
     fun `with no matched channel the button is disabled and says why`() {
         val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
         assertTrue(
-            "the disabled label is the rules' own",
-            sheet.contains("SportsDetailRules.watchLabel(false)")
+            "the disabled label is the rules' own, told which of the two facts this is",
+            sheet.contains("SportsDetailRules.watchLabel(false, lineupMissing)")
         )
         assertTrue(
             "the enabled label too",
@@ -125,6 +142,62 @@ class SportsGameDetailSheetContractTest {
         assertTrue(
             "and onDismissRequest does the same",
             hub.contains("onClose = { detailGame = null }")
+        )
+    }
+
+    @Test
+    fun `a game the playlist holds on several feeds offers the others`() {
+        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        assertTrue(
+            "the sheet takes the whole ordered list",
+            sheet.contains("channels: List<IptvChannel>")
+        )
+        assertTrue(
+            "the Watch button is the head of it, so a backup cannot displace the feed a card plays",
+            sheet.contains("val channel = channels.firstOrNull()")
+        )
+        assertTrue(
+            "and the rest are the sheet's own rows",
+            sheet.contains("val backups = channels.drop(1)")
+        )
+        assertTrue(
+            "under a heading drawn only when there is something under it",
+            sheet.contains("if (backups.isNotEmpty()) {") &&
+                sheet.contains("text = \"BACKUP CHANNELS\"")
+        )
+        assertTrue(
+            "each row switches to that feed and keeps the others behind it",
+            sheet.contains("onPlay(listOf(backup) + channels.filter { it.id != backup.id })")
+        )
+        assertTrue(
+            "and is named by the feed it plays",
+            sheet.contains("BackupChannelLabel(channel = backup)") &&
+                sheet.contains("text = channel.displayName.ifBlank { channel.name }.uppercase()")
+        )
+        assertTrue(
+            "the screen resolves them from the hub's own match map, not a second one",
+            hub.contains("channels = matches[game.id].orEmpty()")
+        )
+    }
+
+    @Test
+    fun `a hub with no lineup says so instead of accusing every game`() {
+        assertTrue(
+            "the card's line has both sentences",
+            hub.contains("if (lineupMissing) \"Lineup not loaded\" else \"Not in your playlist\"")
+        )
+        assertTrue(
+            "driven by the hub's own status rather than by the game",
+            hub.contains("val lineupMissing = lineupStatus == LineupStatus.MISSING")
+        )
+        assertTrue(
+            "said once, at the top, instead of on every card",
+            hub.contains("if (lineupMissing) {") &&
+                hub.contains("LineupMissingNotice(onRetry = viewModel::retryLineup)")
+        )
+        assertTrue(
+            "and the notice is a pressable card with the retry on it",
+            hub.contains("onClick = onRetry") && hub.contains("text = \"LOAD LINEUP\"")
         )
     }
 

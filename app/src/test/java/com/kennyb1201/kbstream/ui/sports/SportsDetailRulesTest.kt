@@ -149,6 +149,22 @@ class SportsDetailRulesTest {
     fun `the watch label is honest about a game the playlist cannot carry`() {
         assertEquals("WATCH", SportsDetailRules.watchLabel(true))
         assertEquals("Not in your playlist", SportsDetailRules.watchLabel(false))
+        // The default is the state every ordinary caller is in: a lineup was
+        // read, and it does not carry this game.
+        assertEquals("Not in your playlist", SportsDetailRules.watchLabel(false, lineupMissing = false))
+    }
+
+    @Test
+    fun `a hub with no lineup blames itself, not the game`() {
+        // The same disabled button, a different fact: there was nothing to
+        // compare against, so "not in your playlist" would be a claim the hub
+        // cannot make - and twenty of them read as a broken hub.
+        assertEquals("Lineup not loaded", SportsDetailRules.watchLabel(false, lineupMissing = true))
+        assertEquals(
+            "a game that DID match still watches, whatever the status says",
+            "WATCH",
+            SportsDetailRules.watchLabel(true, lineupMissing = true)
+        )
     }
 
     @Test

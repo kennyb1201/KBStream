@@ -62,6 +62,25 @@ data class LeagueSection(
 enum class LeagueView { GAMES, STANDINGS }
 
 /**
+ * Whether the hub has a lineup to match games against.
+ *
+ * The distinction the hub could not make before, and the reason a hub with an
+ * unread playlist looked EXACTLY like a hub whose playlist carries none of
+ * today's games: both answered "not in your playlist" on every card. [MISSING]
+ * is the hub's own state, not the game's, and the screen says so in those words.
+ */
+enum class LineupStatus {
+    /** Nothing read yet - the first lineup read is still in flight. */
+    LOADING,
+
+    /** A lineup was read: a card that matched nothing genuinely is not carried. */
+    READY,
+
+    /** No playlist is configured, or the cached one is empty and unreadable. */
+    MISSING,
+}
+
+/**
  * The sports hub's state holder: ESPN scoreboards in, playlist channels out.
  *
  * The interesting part is the middle - the bridge from "the Lakers are on
@@ -169,14 +188,17 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     /**
-     * The channel carrying each game/event, keyed by ESPN event id.
+     * The feeds carrying each game/event, keyed by ESPN event id, strongest
+     * first.
      *
      * An id ABSENT from the map is the honest "not in your playlist" the cards
      * show; the app never substitutes a guess, because a wrong game playing on
-     * a wrong channel is worse than nothing playing at all.
+     * a wrong channel is worse than nothing playing at all. The head of a list
+     * is the one-tap feed a card has always played; the rest are the backups a
+     * provider's second feed gives the viewer when the first one is dark.
      */
-    private val _matches = MutableStateFlow<Map<String, IptvChannel>>(emptyMap())
-    val matches: StateFlow<Map<String, IptvChannel>> = _matches.asStateFlow()
+    private val _matches = MutableStateFlow<Map<String, List<IptvChannel>>>(emptyMap())
+    val matches: StateFlow<Map<String, List<IptvChannel>>> = _matches.asStateFlow()
 
     private var refreshJob: Job? = null
 
@@ -192,6 +214,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * the hub is gone.
      */
     private var livePollJob: Job? = null
+
+    /**
+     * Whether the hub currently has a lineup to match against. See
+     * [LineupStatus]: this is what stops an unread playlist from being reported
+     * as twenty games the viewer's playlist does not carry.
+     */
+    private val _lineupStatus = MutableStateFlow(LineupStatus.LOADING)
+    val lineupStatus: StateFlow<LineupStatus> = _lineupStatus.asStateFlow()
 
     /** The merged lineup, read once per hub visit (a paged 10k-row DB read). */
     private var playlistChannels: List<IptvChannel>? = null
@@ -239,6 +269,23 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun selectedLeagueHasStandings(): Boolean =
         _selectedLeaguePath.value?.let(SportsLeagues::byPath)?.hasStandings == true
+
+    /**
+     * Re-reads the lineup and re-matches every card - the NO LINEUP notice's
+     * action.
+     *
+     * A full [refresh] rather than a lineup-only path: the cache read is not
+     * held when it comes back empty, so this genuinely asks the playlist again,
+     * and a hub with a lineup that arrived after the first read (the guide
+     * loading it in the background, a profile switch) starts matching on the
+     * same pass. Deliberately NOT an automatic playlist download: the hub reads
+     * the guide's cache, and a silent multi-megabyte fetch behind a screen the
+     * viewer opened to read scores is not this button's business.
+     */
+    fun retryLineup() {
+        playlistChannels = null
+        refresh()
+    }
 
     /**
      * Drops the selected league's held table and asks for it again - the
@@ -452,9 +499,16 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         }
         val channels = channelsOrEmpty()
         if (channels.isEmpty()) {
+            // The same line shape as the one below, so a logcat grep for
+            // `SPORTS DIAG` answers "is the lineup even loaded?" first: a zero
+            // here means the hub matched against nothing at all, and every
+            // card's "not in your playlist" is about the cache, not the game.
+            Log.w(TAG, "SPORTS DIAG channels=0 guideIndex=0 programs=0")
+            _lineupStatus.value = LineupStatus.MISSING
             _matches.value = emptyMap()
             return
         }
+        _lineupStatus.value = LineupStatus.READY
         // Off the main thread: building the guide index is one small object per
         // channel per guide source, and a provider playlist runs to five
         // figures - enough that doing it in the composition's own dispatcher
@@ -467,17 +521,36 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 runCatchingCancellable { epgCandidates(games, guideIndex) }.getOrDefault(emptyList())
             }
-            val found = HashMap<String, IptvChannel>()
+            // One greppable line, and the three counts say which stage came back
+            // empty without a debugger: channels=N guideIndex=0 is a lineup with
+            // no EPG URLs, channels=N guideIndex=M programs=0 is a guide with
+            // nothing to say about today's games (which leaves tiers 2 and 3 to
+            // carry them), and channels=0 is the lineup the line above reports.
+            Log.d(
+                TAG,
+                "SPORTS DIAG channels=${channels.size} guideIndex=${guideIndex.size} " +
+                    "programs=${programs.size}"
+            )
+            val found = HashMap<String, List<IptvChannel>>()
             games.forEach { game ->
-                SportsChannelMatcher.match(game, channels, programs)?.let { found[game.id] = it }
+                // Verbose, with the feed's own broadcast names beside the id:
+                // a card that matched nothing can then be read against the very
+                // strings tiers 2 and 3 match on.
+                Log.v(TAG, "SPORTS DIAG game=${game.id} broadcasts=${game.broadcastNames}")
+                SportsChannelMatcher.matches(game, channels, programs)
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { found[game.id] = it }
             }
             events.forEach { event ->
-                SportsChannelMatcher.match(event, channels, programs)?.let { found[event.id] = it }
+                Log.v(TAG, "SPORTS DIAG event=${event.id} broadcasts=${event.broadcastNames}")
+                SportsChannelMatcher.matches(event, channels, programs)
+                    .takeIf { it.isNotEmpty() }
+                    ?.let { found[event.id] = it }
             }
             Log.d(
                 TAG,
                 "SPORTS MATCHES cards=${games.size + events.size} matched=${found.size} " +
-                    "programs=${programs.size}"
+                    "programs=${programs.size} feeds=${found.values.sumOf { it.size }}"
             )
             found
         }

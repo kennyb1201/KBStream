@@ -83,9 +83,24 @@ internal object SportsDetailRules {
         "$side${leader.name}$summary"
     }
 
-    /** The Watch button's label: enabled, or the honest "not in your playlist". */
-    fun watchLabel(hasChannel: Boolean): String =
-        if (hasChannel) "WATCH" else "Not in your playlist"
+    /**
+     * The Watch button's label: enabled, or the honest reason it is not.
+     *
+     * "Not in your playlist" is a claim about the viewer's own lineup, so it is
+     * only made when there was a lineup to check against. A hub that could not
+     * read one at all says that instead - the alternative is accusing every
+     * game on the slate of missing when the fault is a playlist read.
+     *
+     * [lineupMissing] defaults to false, which is the state every other caller
+     * is in: a lineup was read and simply does not carry this game. It is only
+     * true once the hub KNOWS it has no lineup - a read still in flight is not
+     * an answer and must not be worded as one.
+     */
+    fun watchLabel(hasChannel: Boolean, lineupMissing: Boolean = false): String = when {
+        hasChannel -> "WATCH"
+        lineupMissing -> "Lineup not loaded"
+        else -> "Not in your playlist"
+    }
 
     /** "Tue, 7:30 PM" in the device's zone, plus ESPN's own detail if it adds any. */
     private fun upcomingLabel(game: SportsGame): String {

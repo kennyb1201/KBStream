@@ -131,14 +131,15 @@ private const val TWO_COLUMN_MIN_WIDTH_DP = 900
  * the content: team marks at a size you can see, scores set in Oswald, and a
  * single line that says when it is on.
  *
- * Playback is not this screen's business. A card hands its matched channel to
- * [onPlayChannel], which is the same launch a guide click takes.
+ * Playback is not this screen's business. A card hands the feeds the playlist
+ * holds for its game - strongest first - to [onPlayChannels], which is the same
+ * launch a guide click takes.
  */
 @Composable
 fun SportsHubScreen(
     viewModel: SportsHubViewModel = viewModel(),
     modifier: Modifier = Modifier,
-    onPlayChannel: (IptvChannel) -> Unit = {},
+    onPlayChannels: (List<IptvChannel>) -> Unit = {},
 ) {
     val enabled by viewModel.enabledLeagues.collectAsStateWithLifecycle()
     val sections by viewModel.sections.collectAsStateWithLifecycle()
@@ -152,6 +153,14 @@ fun SportsHubScreen(
     val standingsLoading by viewModel.standingsLoading.collectAsStateWithLifecycle()
     val standingsFailed by viewModel.standingsFailed.collectAsStateWithLifecycle()
     val gameReminders by viewModel.gameReminders.collectAsStateWithLifecycle()
+    val lineupStatus by viewModel.lineupStatus.collectAsStateWithLifecycle()
+    // True only once the hub knows it has NO lineup: the difference between
+    // "your playlist does not carry this game" and "there is no playlist to
+    // compare against". LOADING is deliberately neither - a read still in
+    // flight (the paged lineup read takes a moment on a large provider) must
+    // not have the cards accuse either the viewer or the hub, so they keep the
+    // ordinary sentence until the answer is in.
+    val lineupMissing = lineupStatus == LineupStatus.MISSING
 
     val leagues = remember(enabled) { SportsLeagues.enabled(enabled) }
     // FAVOURITES leads the row: it is the tab whose contents the viewer chose,
@@ -271,6 +280,14 @@ fun SportsHubScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Said once, at the top, when the hub has no lineup at all: every
+            // card below would otherwise repeat the same sentence twenty times
+            // and blame the games for it.
+            if (lineupMissing) {
+                LineupMissingNotice(onRetry = viewModel::retryLineup)
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
             val favoritesTab = selectedPath == SportsLeagues.FAVORITES.path
             val selectedLeague = leagues.firstOrNull { it.path == selectedPath }
             val section = if (favoritesTab) {
@@ -327,7 +344,8 @@ fun SportsHubScreen(
                         favoriteKeys = favoriteKeys,
                         listState = listState,
                         onOpenDetail = { detailGame = it },
-                        onPlayChannel = onPlayChannel,
+                        onPlayChannels = onPlayChannels,
+                        lineupMissing = lineupMissing,
                         onEditFavorites = { favoriteEditor = it },
                     )
 
@@ -363,8 +381,9 @@ fun SportsHubScreen(
                     matches = matches,
                     favoriteKeys = favoriteKeys,
                     listState = listState,
+                    lineupMissing = lineupMissing,
                     onOpenDetail = { detailGame = it },
-                    onPlayChannel = onPlayChannel,
+                    onPlayChannels = onPlayChannels,
                     onEditFavorites = { favoriteEditor = it },
                 )
             }
@@ -410,10 +429,14 @@ fun SportsHubScreen(
             BackHandler { detailGame = null }
             GameDetailSheet(
                 game = game,
-                channel = matches[game.id],
-                onPlay = { channel ->
+                // Every feed the playlist holds for this game, strongest first;
+                // the sheet's Watch button is the head and the backups are its
+                // own rows. Empty means the card's line was telling the truth.
+                channels = matches[game.id].orEmpty(),
+                lineupMissing = lineupMissing,
+                onPlay = { feeds ->
                     detailGame = null
-                    onPlayChannel(channel)
+                    onPlayChannels(feeds)
                 },
                 onClose = { detailGame = null },
             )
@@ -507,11 +530,12 @@ private fun LeagueTab(
 @Composable
 private fun LeagueBody(
     section: LeagueSection,
-    matches: Map<String, IptvChannel>,
+    matches: Map<String, List<IptvChannel>>,
     favoriteKeys: Set<String>,
     listState: LazyListState,
+    lineupMissing: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
-    onPlayChannel: (IptvChannel) -> Unit,
+    onPlayChannels: (List<IptvChannel>) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
     val live = section.games.filter { it.state == GameState.LIVE }
@@ -551,6 +575,7 @@ private fun LeagueBody(
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
+                lineupMissing = lineupMissing,
                 onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
@@ -570,9 +595,10 @@ private fun LeagueBody(
             items(section.tournaments, key = { it.id }) { event ->
                 TournamentCard(
                     event = event,
-                    channel = matches[event.id],
+                    channels = matches[event.id].orEmpty(),
                     livePulse = livePulse,
-                    onPlayChannel = onPlayChannel,
+                    lineupMissing = lineupMissing,
+                    onPlayChannels = onPlayChannels,
                 )
             }
         }
@@ -587,6 +613,7 @@ private fun LeagueBody(
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
+                lineupMissing = lineupMissing,
                 onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
@@ -602,6 +629,7 @@ private fun LeagueBody(
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
+                lineupMissing = lineupMissing,
                 onOpenDetail = onOpenDetail,
                 onEditFavorites = onEditFavorites
             )
@@ -627,9 +655,10 @@ private fun LeagueBody(
 private fun LazyListScope.gameRows(
     games: List<SportsGame>,
     columns: Int,
-    matches: Map<String, IptvChannel>,
+    matches: Map<String, List<IptvChannel>>,
     livePulse: Float,
     favoriteKeys: Set<String>,
+    lineupMissing: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
@@ -642,9 +671,10 @@ private fun LazyListScope.gameRows(
                 row.forEach { game ->
                     GameCard(
                         game = game,
-                        channel = matches[game.id],
+                        channel = matches.primaryChannel(game.id),
                         livePulse = livePulse,
                         favoriteKeys = favoriteKeys,
+                        lineupMissing = lineupMissing,
                         onOpenDetail = onOpenDetail,
                         onEditFavorites = { onEditFavorites(game) },
                         modifier = Modifier.weight(1f)
@@ -692,6 +722,59 @@ private fun SportsSectionHeader(
     }
 }
 
+// ── Cards ────────────────────────────────────────────────
+
+/**
+ * The head of the ordered feed list for [id], or null when the playlist has
+ * nothing for that game.
+ *
+ * One place because three card paths ask the same question, and "which feed
+ * does a card play" must have exactly one answer - the head of the list the
+ * ViewModel published, never a re-sort here.
+ */
+private fun Map<String, List<IptvChannel>>.primaryChannel(id: String): IptvChannel? =
+    this[id]?.firstOrNull()
+
+/**
+ * The notice for a hub with no lineup to match against.
+ *
+ * Not an error and not an empty state: the games are real, the scores are
+ * real, and the only missing thing is the playlist read - which is a step the
+ * viewer can retry from here rather than being told to go somewhere else.
+ */
+@Composable
+private fun LineupMissingNotice(onRetry: () -> Unit) {
+    KBCard(
+        onClick = onRetry,
+        focusedScale = KBFocusRow,
+        shape = KBShapePanel,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                text = "NO LINEUP LOADED",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = KBAccent
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Your playlist could not be read, so no game can be matched to a " +
+                    "channel yet. Open Live TV once to load it, or press here to try again.",
+                style = MaterialTheme.typography.bodySmall,
+                color = KBTextHi
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "LOAD LINEUP",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = KBAccent
+            )
+        }
+    }
+}
+
 // ── Cards ───────────────────────────────────────────────────────────────
 
 @Composable
@@ -700,6 +783,7 @@ private fun GameCard(
     channel: IptvChannel?,
     livePulse: Float,
     favoriteKeys: Set<String>,
+    lineupMissing: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: () -> Unit,
     modifier: Modifier = Modifier,
@@ -756,7 +840,7 @@ private fun GameCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            ChannelLine(channel = channel)
+            ChannelLine(channel = channel, lineupMissing = lineupMissing)
         }
     }
 
@@ -1112,10 +1196,15 @@ private fun ContextLine(week: String?, venue: String?) {
  * admission that this playlist does not carry it.
  */
 @Composable
-private fun ChannelLine(channel: IptvChannel?) {
+private fun ChannelLine(channel: IptvChannel?, lineupMissing: Boolean) {
     if (channel == null) {
+        // Two different facts, two different sentences. "Not in your playlist"
+        // is a claim about the viewer's lineup, and it is only true when there
+        // is a lineup to compare against - a hub that could not read one is
+        // saying something about itself, and accusing every game of missing is
+        // how that reads as a broken hub rather than an unloaded playlist.
         Text(
-            text = "Not in your playlist",
+            text = if (lineupMissing) "Lineup not loaded" else "Not in your playlist",
             style = MaterialTheme.typography.labelSmall,
             color = KBTextLo.copy(alpha = 0.8f)
         )
@@ -1139,10 +1228,12 @@ private fun ChannelLine(channel: IptvChannel?) {
 @Composable
 private fun TournamentCard(
     event: TournamentEvent,
-    channel: IptvChannel?,
+    channels: List<IptvChannel>,
     livePulse: Float,
-    onPlayChannel: (IptvChannel) -> Unit,
+    lineupMissing: Boolean,
+    onPlayChannels: (List<IptvChannel>) -> Unit,
 ) {
+    val channel = channels.firstOrNull()
     val playable = channel != null
 
     val body: @Composable () -> Unit = {
@@ -1198,13 +1289,15 @@ private fun TournamentCard(
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            ChannelLine(channel = channel)
+            ChannelLine(channel = channel, lineupMissing = lineupMissing)
         }
     }
 
     if (playable) {
         KBCard(
-            onClick = { onPlayChannel(channel) },
+            // The whole ordered list, head first: the tournament plays on the
+            // feed the matcher chose and falls to the rest if it will not open.
+            onClick = { onPlayChannels(channels) },
             focusedScale = KBFocusRow,
             shape = KBShapeCard,
             modifier = Modifier.fillMaxWidth()
@@ -1661,11 +1754,14 @@ private fun StandingsInitials(entry: StandingEntry) {
 @Composable
 private fun GameDetailSheet(
     game: SportsGame,
-    channel: IptvChannel?,
-    onPlay: (IptvChannel) -> Unit,
+    channels: List<IptvChannel>,
+    lineupMissing: Boolean,
+    onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit,
 ) {
     val watchButton = remember { FocusRequester() }
+    val channel = channels.firstOrNull()
+    val backups = channels.drop(1)
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
@@ -1766,7 +1862,11 @@ private fun GameDetailSheet(
 
                 if (channel != null) {
                     KBCard(
-                        onClick = { onPlay(channel) },
+                        // The whole ordered list, head first: the one-press path
+                        // is the feed the matcher chose, and the rest ride along
+                        // behind it so the player's own ladder has somewhere to
+                        // fall when that feed will not open.
+                        onClick = { onPlay(channels) },
                         focusedScale = KBFocusRow,
                         shape = KBShapePill,
                         modifier = Modifier
@@ -1786,12 +1886,61 @@ private fun GameDetailSheet(
                             contentColor = KBTextLo
                         )
                     ) {
-                        WatchButtonLabel(label = SportsDetailRules.watchLabel(false), enabled = false)
+                        WatchButtonLabel(
+                            label = SportsDetailRules.watchLabel(false, lineupMissing),
+                            enabled = false
+                        )
+                    }
+                }
+
+                // The other feeds the playlist holds for this game - the second
+                // channel the guide is airing it on, the network's alternates,
+                // the team's own regional network. Drawn only when there is
+                // one: a "backups" heading over an empty list would promise a
+                // choice that does not exist.
+                if (backups.isNotEmpty()) {
+                    Text(
+                        text = "BACKUP CHANNELS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = KBTextLo,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                    backups.forEach { backup ->
+                        KBCard(
+                            // The chosen feed goes first and the rest follow in
+                            // their own order, so picking a backup is a switch
+                            // rather than a decision to lose the other feeds.
+                            onClick = {
+                                onPlay(listOf(backup) + channels.filter { it.id != backup.id })
+                            },
+                            focusedScale = KBFocusRow,
+                            shape = KBShapePill,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            BackupChannelLabel(channel = backup)
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/** One backup feed's row: the channel's own name, on the same pill as Watch. */
+@Composable
+private fun BackupChannelLabel(channel: IptvChannel) {
+    Text(
+        text = channel.displayName.ifBlank { channel.name }.uppercase(),
+        style = MaterialTheme.typography.labelLarge,
+        color = KBTextHi,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(KBSurfaceRaised, KBShapePill)
+            .padding(vertical = 12.dp)
+    )
 }
 
 @Composable

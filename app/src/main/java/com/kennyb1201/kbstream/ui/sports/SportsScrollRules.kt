@@ -4,10 +4,15 @@ package com.kennyb1201.kbstream.ui.sports
  * How far one D-pad press scrolls the hub when there is nothing to focus in
  * that direction.
  *
- * The case this exists for: a game the playlist cannot carry is deliberately not
- * focusable, so focus cannot walk past it, and a section of them has no focus
- * target below for the list to scroll to - the viewer's "it won't scroll down
- * into the games". The press becomes a scroll instead, and this is its distance.
+ * The case it exists for: a D-pad press in a direction with nothing focusable in
+ * it - focus is still up on the tab row, the list ends in a section heading, or
+ * the body below the last row is simply empty - has to move the viewer rather
+ * than do nothing. The press becomes a scroll instead, and this is its distance.
+ *
+ * It is NOT a workaround for unplayable cards: every game card is focusable and
+ * clickable whatever the playlist holds (see GameCard, which opens the sheet
+ * either way). The fallback is about a press that has nowhere to go, not about a
+ * press that has nothing to play.
  *
  * Roughly the height of the last row on screen, because a row is the unit the
  * viewer is reading: scrolling by one puts the next row where the last one was.

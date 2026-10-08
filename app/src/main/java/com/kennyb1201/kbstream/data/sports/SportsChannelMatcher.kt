@@ -35,6 +35,11 @@ data class MatcherProgram(
  *     regional networks that carry them, home team first. Last resort, and
  *     best-effort by design.
  *
+ * [matches] returns the same answer as a LIST: every confident hit, strongest
+ * first, so a provider that airs one game on two feeds has a backup to fall to
+ * and the sheet can offer it. [match] is its head, unchanged - a backup can
+ * never displace the feed a card used to play.
+ *
  * Pure: no I/O, no clock of its own, no Compose. [SportsChannelMatcherTest] pins
  * every tier and the ordering between them.
  */
@@ -47,6 +52,17 @@ internal object SportsChannelMatcher {
      * drift and narrow enough that the previous or next program cannot qualify.
      */
     const val EPG_WINDOW_MS = 45L * 60_000L
+
+    /**
+     * How many feeds one game keeps.
+     *
+     * Four is a long enough ladder to reach a working feed and short enough to
+     * stay honest: the player itself auto-advances over at most two of them (see
+     * its own switch cap), and a sheet offering ten rows of "maybe the game is
+     * on this one" would be guessing in public. The primary is always first, so
+     * the cap can never change what a card plays.
+     */
+    const val MAX_MATCHES = 4
 
     /**
      * Known national networks, normalized form -> canonical form.
@@ -121,11 +137,33 @@ internal object SportsChannelMatcher {
         game: SportsGame,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
-    ): IptvChannel? {
-        if (channels.isEmpty()) return null
-        matchByEpg(game, channels, programs)?.let { return it }
-        matchByBroadcast(game.broadcastNames, channels)?.let { return it }
-        return matchByRsn(game, channels)
+    ): IptvChannel? = matches(game, channels, programs).firstOrNull()
+
+    /**
+     * Every channel the playlist carries [game] on, strongest first.
+     *
+     * The head is exactly what [match] has always returned; everything behind it
+     * is a feed the playlist also holds for the same game, in the order a viewer
+     * would want to fall to: the rest of tier 1 (another channel the guide says
+     * is airing it), then the networks the feed names, then the teams' own
+     * regional networks.
+     *
+     * The tiers are read as one ordered list rather than short-circuiting at the
+     * first hit, which is the whole point: "the game is on ESPN" and "the game is
+     * on YES" are both true when a provider carries the national feed AND the
+     * local one, and a dead national feed leaves the local one worth playing.
+     */
+    fun matches(
+        game: SportsGame,
+        channels: List<IptvChannel>,
+        programs: List<MatcherProgram>,
+    ): List<IptvChannel> {
+        if (channels.isEmpty()) return emptyList()
+        epgHits(game, channels, programs).let { if (it.isNotEmpty()) return cap(it) }
+        // Home before away: a regional playlist is likelier to carry the home
+        // broadcast. Within a family, the best-named channel comes first.
+        val networks = game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)
+        return cap(networks.flatMap { networkChannels(it, channels) })
     }
 
     /** The channel carrying a tournament event, or null. */
@@ -133,48 +171,73 @@ internal object SportsChannelMatcher {
         event: TournamentEvent,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
-    ): IptvChannel? {
-        if (channels.isEmpty()) return null
-        matchByEpgName(event, channels, programs)?.let { return it }
-        return matchByBroadcast(event.broadcastNames, channels)
+    ): IptvChannel? = matches(event, channels, programs).firstOrNull()
+
+    /** The channels carrying a tournament event, strongest first. See [matches]. */
+    fun matches(
+        event: TournamentEvent,
+        channels: List<IptvChannel>,
+        programs: List<MatcherProgram>,
+    ): List<IptvChannel> {
+        if (channels.isEmpty()) return emptyList()
+        epgNameHits(event, channels, programs).let { if (it.isNotEmpty()) return cap(it) }
+        return cap(event.broadcastNames.flatMap { networkChannels(it, channels) })
+    }
+
+    /**
+     * The caller's list: de-duplicated by channel and truncated to
+     * [MAX_MATCHES], in the order it was handed in.
+     *
+     * De-duplicated here rather than in each tier because one channel can hit
+     * twice - a provider that carries "ESPN" in its name AND airs the game on it
+     * per the guide - and the same feed listed twice is not a second feed.
+     */
+    private fun cap(found: List<IptvChannel>): List<IptvChannel> {
+        val seen = HashSet<String>(found.size)
+        val out = ArrayList<IptvChannel>(minOf(found.size, MAX_MATCHES))
+        found.forEach { channel ->
+            if (out.size == MAX_MATCHES) return@forEach
+            if (seen.add(channel.id)) out += channel
+        }
+        return out
     }
 
     // ── Tier 1 ───────────────────────────────────────────────────────
 
-    private fun matchByEpg(
+    private fun epgHits(
         game: SportsGame,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
-    ): IptvChannel? {
+    ): List<IptvChannel> {
         val hits = programs.filter { program ->
             overlapsWindow(program, game.dateMs) &&
                 namesBothTeams(program.title, game.away, game.home)
         }
-        if (hits.isEmpty()) return null
-        // The program whose start sits closest to the game's own start, when a
-        // provider carries the same game on more than one channel.
+        if (hits.isEmpty()) return emptyList()
+        // The program whose start sits closest to the game's own start comes
+        // first, when a provider carries the same game on more than one channel.
         val byId = channels.associateBy { it.id }
         return hits
             .sortedBy { abs(it.startMs - game.dateMs) }
-            .firstNotNullOfOrNull { byId[it.channelId] }
+            .mapNotNull { byId[it.channelId] }
     }
 
-    private fun matchByEpgName(
+    private fun epgNameHits(
         event: TournamentEvent,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
-    ): IptvChannel? {
+    ): List<IptvChannel> {
         val eventWords = words(event.name)
-        if (eventWords.isEmpty()) return null
+        if (eventWords.isEmpty()) return emptyList()
         val hits = programs.filter { program ->
             overlapsWindow(program, event.dateMs) &&
                 words(program.title).containsSequence(eventWords)
         }
-        if (hits.isEmpty()) return null
+        if (hits.isEmpty()) return emptyList()
         val byId = channels.associateBy { it.id }
         return hits
             .sortedBy { abs(it.startMs - event.dateMs) }
-            .firstNotNullOfOrNull { byId[it.channelId] }
+            .mapNotNull { byId[it.channelId] }
     }
 
     private fun overlapsWindow(program: MatcherProgram, startMs: Long): Boolean =
@@ -209,46 +272,33 @@ internal object SportsChannelMatcher {
 
     // ── Tiers 2 and 3 ────────────────────────────────────────────────
 
-    private fun matchByBroadcast(names: List<String>, channels: List<IptvChannel>): IptvChannel? =
-        names.asSequence()
-            .mapNotNull { bestNetworkChannel(it, channels) }
-            .firstOrNull()
-
-    private fun matchByRsn(game: SportsGame, channels: List<IptvChannel>): IptvChannel? {
-        // Home first, then away - the home broadcast is the one a regional
-        // playlist is more likely to carry.
-        for (team in listOf(game.home, game.away)) {
-            val rsnNames = TEAM_RSN[team.abbreviation.trim().uppercase()] ?: continue
-            rsnNames.forEach { rsn ->
-                bestNetworkChannel(rsn, channels)?.let { return it }
-            }
-        }
-        return null
-    }
+    /** The regional networks [team] plays on, the team's own listing order. */
+    private fun rsnNetworks(team: SportsTeam): List<String> =
+        TEAM_RSN[team.abbreviation.trim().uppercase()].orEmpty()
 
     /**
-     * The playlist channel naming [network], by descending strength: exact
-     * equals, then a prefix at a word boundary, then anywhere inside. Among
-     * equals, the shortest name wins - "ESPN" over "ESPN International".
+     * Every playlist channel naming [network], best first: by descending
+     * strength (exact equals, then a prefix at a word boundary, then anywhere
+     * inside) and, among equals, the shortest name - "ESPN" over "ESPN
+     * International".
+     *
+     * The head is the single channel this used to pick, so a backup can never
+     * displace the primary; the rest are the same family (ESPN2 and ESPNews for
+     * "ESPN", a provider's own "- Alt" feed for a regional network), which is
+     * exactly where a game turns up when its main feed goes dark.
      */
-    private fun bestNetworkChannel(network: String, channels: List<IptvChannel>): IptvChannel? {
+    private fun networkChannels(network: String, channels: List<IptvChannel>): List<IptvChannel> {
         val target = canonicalNetwork(network)
-        if (target.isEmpty()) return null
-        var best: IptvChannel? = null
-        var bestStrength = 0
-        var bestLength = Int.MAX_VALUE
-        channels.forEach { channel ->
-            val name = channel.displayName.ifBlank { channel.name }
-            val strength = networkStrength(name, target)
-            if (strength == 0) return@forEach
-            val length = compact(name).length
-            if (strength > bestStrength || (strength == bestStrength && length < bestLength)) {
-                best = channel
-                bestStrength = strength
-                bestLength = length
+        if (target.isEmpty()) return emptyList()
+        data class Ranked(val strength: Int, val length: Int, val channel: IptvChannel)
+        return channels
+            .mapNotNull { channel ->
+                val name = channel.displayName.ifBlank { channel.name }
+                val strength = networkStrength(name, target)
+                if (strength == 0) null else Ranked(strength, compact(name).length, channel)
             }
-        }
-        return best
+            .sortedWith(compareByDescending<Ranked> { it.strength }.thenBy { it.length })
+            .map { it.channel }
     }
 
     private fun networkStrength(channelName: String, target: String): Int {

@@ -176,6 +176,12 @@ private fun JSONObject.toStream(): Stream = Stream(
     url = optString("url", "").ifBlank { null },
     audioUrl = optString("audioUrl", "").ifBlank { null },
     infoHash = optString("infoHash", "").ifBlank { null },
+    // This source's own HTTP headers. Absent for every payload written before
+    // the field existed, and absent is the empty map the player already treats
+    // as "no headers" - so an older tree's extras still parse to what they did.
+    headers = optJSONObject("headers")
+        ?.let { obj -> obj.keys().asSequence().associateWith { key -> obj.optString(key, "") } }
+        ?.takeIf { it.isNotEmpty() },
     fileIdx = optInt("fileIdx", -1).takeIf { it >= 0 },
     behaviorHints = StreamBehaviorHints(
         bingeGroup = optString("bingeGroup", "").ifBlank { null }
