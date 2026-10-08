@@ -148,6 +148,16 @@ private const val EXTRA_HEADERS = "stream_headers"
 private const val EXTRA_DRM_LICENSE_URL = "drm_license_url"
 private const val EXTRA_DRM_HEADERS = "drm_headers"
 private const val MAX_RETRY_ATTEMPTS = 6
+
+/**
+ * Shortest gap between two follow-seeks while a touch drag moves the thumb.
+ *
+ * A drag fires a progress change far faster than a heavy stream can settle a
+ * seek, so at most one seek happens per window; the drag's release still lands
+ * exactly through [PlayerChromeHost.onChromeSeekTo]. A seek per event is the
+ * storm this throttle exists to prevent, not a target to approach.
+ */
+private const val TOUCH_FOLLOW_SEEK_MS = 150L
 private val RETRY_BACKOFF_MS = listOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L, 30_000L)
 
 /**
@@ -942,6 +952,22 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var scrubTargetPosMs = 0L
     /** True once a scrub has moved the target, so an ending knows to land on it. */
     private var scrubMoved = false
+
+    /**
+     * Play state captured when a scrub starts, restored when it ends.
+     *
+     * A scrub pauses the player first (see [beginScrubPause]). That pause is the
+     * whole reason the video can follow the bar: a paused seek has no real-time
+     * playback deadline to miss, so an unconditional seek on every tick does not
+     * turn into the stall an unthrottled scrub of PLAYING 4K did. The flag is
+     * per-scrub - a scrub that never started never resumes - and it is cleared
+     * the moment it is honoured (see [endScrubPause]).
+     */
+    private var wasPlayingBeforeScrub = false
+
+    /** Uptime of the last touch-drag follow-seek, this path's own throttle. */
+    private var lastFollowSeekMs = 0L
+
     private val scrubHandler = Handler(Looper.getMainLooper())
     private val clockHandler = Handler(Looper.getMainLooper())
     // The overlay clock's two formatters. DateTimeFormatter is immutable and
@@ -973,19 +999,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 (scrubTargetPosMs + ScrubAcceleration.stepFor(scrubHeldMs) * scrubDirection)
                     .coerceIn(0L, duration)
             updateSeekBarPosition(scrubTargetPosMs, duration)
-            // ...but only move the PLAYER when it has caught up with the last
-            // seek. Issuing one every tick regardless is what this box cannot
-            // do: a 4K release flushes its decoder on every seek, so an 80 ms
-            // tick turned a held scrub into a seek storm whose seeks never
-            // settled - the decoder was still refilling when the next one
-            // landed, which is the multi-second stall a held scrub used to
-            // cause (reported as playback.stall, 8.8 s worst). Gating on the
-            // player's own readiness lets the video advance as fast as the
-            // device can actually seek, instead of faster than it can; the bar
-            // still tracks the press, and [landScrub] makes the release exact.
-            if (player.playbackState == Player.STATE_READY && !player.isLoading) {
-                player.seekTo(scrubTargetPosMs)
-            }
+            // The player was paused when the scrub began (see [beginScrubPause]),
+            // so this seek has no playback deadline to miss: the flush-per-seek
+            // cost remains, but ExoPlayer coalesces retargeted seeks and the tick
+            // is the throttle. The old STATE_READY gate is what left the picture
+            // behind the bar - it skipped every tick while the decoder refilled,
+            // so on slow 4K content the bar moved and the video did not, which is
+            // the bug this fixes. The bar still tracks the press, and [landScrub]
+            // makes the release exact.
+            player.seekTo(scrubTargetPosMs)
             scrubHandler.postDelayed(this, ScrubAcceleration.TICK_MS)
         }
     }
@@ -3095,6 +3117,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // A typed number is a pending action, so Back cancels it
                     // before Back means "leave the channel".
                     channelNumberEntry.isNotEmpty() -> { clearChannelNumberEntry(); return }
+                    // The "Up next" card is a question, not a destination: Back
+                    // waves it away and leaves the session running. It used to
+                    // fall through to finish(), so the one press a viewer makes
+                    // to dismiss the card exited the player instead.
+                    ::nextUpPanel.isInitialized && nextUpPanel.visibility == View.VISIBLE -> {
+                        dismissNextUpPanel()
+                        showControls()
+                        return
+                    }
                     isGuideShowing -> { dismissChannelGuide(); showControls(); return }
                     isPickerShowing -> { dismissPicker(); showControls(); return }
                     showSettingsPanel -> { dismissSettingsPanel(); showControls(); return }
@@ -3113,12 +3144,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
             when (keyCode) {
                 KeyEvent.KEYCODE_BACK -> {
-                    // Only consume Back when there's actually something to
-                    // dismiss (a panel, the settings sheet, or visible
-                    // controls). Otherwise let it fall through to
-                    // onBackPressed so a Back press always exits the player
-                    // instead of being silently swallowed.
-                    if (isGuideShowing || isPickerShowing || showSettingsPanel || controlsVisible) {
+                    // A focused popup button's Back bubbles to this listener, so
+                    // the "Up next" card is dismissed here too. It must not be
+                    // swallowed into an exit: that card is not the session.
+                    if (::nextUpPanel.isInitialized && nextUpPanel.visibility == View.VISIBLE) {
+                        dismissNextUpPanel(); showControls(); true
+                    } else if (isGuideShowing || isPickerShowing || showSettingsPanel || controlsVisible) {
+                        // Only consume Back when there's actually something to
+                        // dismiss (a panel, the settings sheet, or visible
+                        // controls). Otherwise let it fall through to
+                        // onBackPressed so a Back press always exits the player
+                        // instead of being silently swallowed.
                         dismissAllPanels(); hideControls(); true
                     } else {
                         false
@@ -4045,6 +4081,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                 scrubTargetPosMs =
                                     exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
                                 scrubMoved = false
+                                // Pause for the scrub, remembering what it was: the
+                                // follow-seeks below then have no playback deadline
+                                // to miss (see [beginScrubPause]).
+                                beginScrubPause()
                                 removeAutoHide()
                                 // Immediate step for a quick press/release
                                 stepSeekBy(10_000L * scrubDirection)
@@ -4067,6 +4107,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             // rather than landed on twice.
                             scrubMoved = false
                             commitSeekFromBar()
+                            // Put the play state back exactly as the scrub found
+                            // it - playing resumes, paused stays paused.
+                            endScrubPause()
                             scheduleAutoHide()
                             true
                         }
@@ -4729,6 +4772,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // Seed the owned target at the start of the scrub.
                 scrubTargetPosMs = exoPlayer?.currentPosition?.coerceAtLeast(0L) ?: 0L
                 scrubMoved = false
+                beginScrubPause()
                 stepSeekBy(10_000L * scrubDirection)
                 showScrubHint()
                 scrubHandler.removeCallbacks(scrubHoldStarter)
@@ -4747,6 +4791,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // a press-and-hold past the first seek would otherwise stop wherever the
         // decoder last kept up.
         if (wasScrubbing) landScrub()
+        if (wasScrubbing) endScrubPause()
         if (wasScrubbing) scheduleScrubHintHide()
         return wasScrubbing
     }
@@ -4755,6 +4800,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun stopSurfaceScrub() {
         scrubDirection = 0
         landScrub()
+        // A scrub cut short here - the credits panel took the key, the overlay
+        // came up - must still put the play state back (see [endScrubPause]).
+        endScrubPause()
         scrubHandler.removeCallbacks(scrubHoldStarter)
         scrubHandler.removeCallbacks(scrubRunnable)
         scrubHintHandler.removeCallbacks(scrubHintHider)
@@ -7549,24 +7597,65 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
         // ── Audio ──────────────────────────────────────────────
         if (preferredAudioLang.isNotBlank()) {
-            val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
-            for (group in audioGroups) {
-                for (i in 0 until group.length) {
-                    val fmt = group.getTrackFormat(i)
-                    val lang = fmt.language?.lowercase()
-                    if (LanguageMatch.matches(preferredAudioLang, fmt.language)) {
-                        player.trackSelectionParameters = player.trackSelectionParameters
-                            .buildUpon()
-                            .setOverrideForType(
-                                TrackSelectionOverride(group.mediaTrackGroup, i)
-                            )
-                            .build()
-                        changed = true
-                        Log.i("PLAYER_LANG", "Auto-selected audio: $lang")
-                        break
-                    }
+            // Flat view of the audio tracks, keeping the way back to the media3
+            // objects: the fallback below names a position, and re-deriving a
+            // group from a flat index is how the two get out of step.
+            val audioTracks = tracks.groups
+                .filter { it.type == C.TRACK_TYPE_AUDIO }
+                .flatMap { group -> (0 until group.length).map { i -> group to i } }
+            for ((group, i) in audioTracks) {
+                val fmt = group.getTrackFormat(i)
+                val lang = fmt.language?.lowercase()
+                if (LanguageMatch.matches(preferredAudioLang, fmt.language)) {
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .setOverrideForType(
+                            TrackSelectionOverride(group.mediaTrackGroup, i)
+                        )
+                        .build()
+                    changed = true
+                    Log.i("PLAYER_LANG", "Auto-selected audio: $lang")
+                    break
                 }
-                if (changed) break
+            }
+            if (!changed) {
+                // Nothing matched. The muxer's DEFAULT is what opens a dual-audio
+                // EN/RU release in Russian: the English track is usually the
+                // untagged one and the DEFAULT flag sits on the other. Take the
+                // first track NOT known to be the wrong language instead - an
+                // untagged track might be the one asked for, while a `rus` track
+                // certainly is not - and keep the muxer default only when every
+                // track is knowably wrong.
+                // The tags themselves go in the log, so the next diagnostics
+                // read as a decision rather than as another silent miss.
+                val tags = audioTracks.joinToString(", ") { (group, i) ->
+                    group.getTrackFormat(i).language ?: "untagged"
+                }
+                val fallback = LanguageMatch.fallbackTrackIndex(
+                    audioTracks.map { (group, i) -> group.getTrackFormat(i).language },
+                    preferredAudioLang
+                )
+                if (fallback != null) {
+                    val (group, i) = audioTracks[fallback]
+                    player.trackSelectionParameters = player.trackSelectionParameters
+                        .buildUpon()
+                        .setOverrideForType(
+                            TrackSelectionOverride(group.mediaTrackGroup, i)
+                        )
+                        .build()
+                    changed = true
+                    Log.i(
+                        "PLAYER_LANG",
+                        "No '$preferredAudioLang' audio track; tracks are [$tags]; avoided " +
+                            "the muxer default and picked track $fallback"
+                    )
+                } else {
+                    Log.i(
+                        "PLAYER_LANG",
+                        "No '$preferredAudioLang' audio track and none of [$tags] can be " +
+                            "taken as it; keeping the muxer default"
+                    )
+                }
             }
         }
 
@@ -7864,13 +7953,41 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * Begins a scrub: remembers whether playback was running - so it can be put
+     * back exactly, see [endScrubPause] - then pauses.
+     *
+     * The pause is what lets the video follow the bar. A paused seek has no
+     * real-time playback deadline: the decoder flush per seek still happens, but
+     * nothing is trying to play through it, so a seek on every tick neither
+     * storms nor stalls the way an unthrottled scrub of a PLAYING 4K release did.
+     * Live has no seekable timeline (its duration is unset) and a scrub never
+     * starts there, so live playback is never paused.
+     */
+    private fun beginScrubPause() {
+        val player = exoPlayer ?: return
+        if (player.duration <= 0L) return
+        wasPlayingBeforeScrub = player.isPlaying
+        player.pause()
+    }
+
+    /**
+     * Ends a scrub: restores the play state [beginScrubPause] captured. A scrub
+     * that never started resumes nothing, and the flag is cleared here so it is
+     * per-scrub. The null check keeps a released player from being touched.
+     */
+    private fun endScrubPause() {
+        if (wasPlayingBeforeScrub) exoPlayer?.play()
+        wasPlayingBeforeScrub = false
+    }
+
+    /**
      * Ends a scrub by landing exactly on the position the viewer scrubbed to.
      *
-     * The scrub moves the player opportunistically - a tick whose previous seek
-     * had not settled is skipped (see the scrub runnable) - so the last part of
-     * a hold may never have reached the player at all. This is where the release
-     * is made good, once, so the viewer lands where the bar showed rather than
-     * wherever the decoder happened to keep up with.
+     * The scrub seeks opportunistically while paused, but a slow seek may still
+     * not have settled by the release, and [stepSeekBy]'s own step lands the
+     * quick press. This is where the release is made good, once, so the viewer
+     * lands where the bar showed rather than wherever the decoder happened to
+     * keep up with.
      */
     private fun landScrub() {
         if (!scrubMoved) return
@@ -8208,6 +8325,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // ticks of a hold may have been skipped while a seek settled.
         scrubDirection = 0
         landScrub()
+        // A Back press or an auto-hide can end a scrub before its release does;
+        // the pause it took must not outlive it (see [endScrubPause]).
+        endScrubPause()
         scrubHandler.removeCallbacks(scrubRunnable)
         scrubHandler.removeCallbacks(scrubHoldStarter)
         scrubHintHandler.removeCallbacks(scrubHintHider)
@@ -8829,9 +8949,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 pickerTitle.text = "AUDIO"
                 val tracks = exoPlayer?.currentTracks ?: return
                 val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                // Position of each audio track among all of them, and the total:
+                // both go into the stored signature, so a hand-picked track
+                // whose tag says nothing about its language can still be found
+                // in the next episode (see PlayerTrackBridge.signatureOf).
+                val audioTrackCount = audioGroups.sumOf { it.length }
+                val audioPrefixes = audioGroups.runningFold(0) { sum, group -> sum + group.length }
                 audioGroups.flatMapIndexed { groupIdx, group ->
                     (0 until group.length).map { trackIdx ->
                         val format = group.getTrackFormat(trackIdx)
+                        val audioPosition = audioPrefixes[groupIdx] + trackIdx
                         // Language AND format, via the same label the settings
                         // panel's track rows use: one language is often listed
                         // several times in one file (5.1 vs stereo, dub vs
@@ -8849,7 +8976,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                 // on the next rebuffer and reverted the pick.
                                 PlayerTrackBridge.chooseAudioTrack(
                                     this@NativePlayerActivity,
-                                    PlayerTrackBridge.signatureOf(format)
+                                    PlayerTrackBridge.signatureOf(
+                                        format,
+                                        audioPosition,
+                                        audioTrackCount
+                                    )
                                 )
                                 dismissPicker()
                             }
@@ -10242,7 +10373,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         } else {
             nextUpCountdownHeld = false
             nextUpCountdownRemaining = 0
-            nextUpCountdown.text = "PLAY NEXT to continue, or press BACK to exit"
+            nextUpCountdown.text = "PLAY NEXT to continue, or press BACK to dismiss"
         }
 
         // Best effort: fetch the next episode's name + still from TMDB so the
@@ -10298,6 +10429,29 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 }
             }
         }
+    }
+
+    /**
+     * Closes the "Up next" card without ending the session.
+     *
+     * Back on this card used to fall through to finish(), so the press a viewer
+     * makes to wave it away exited the player instead - at the end of the very
+     * episode they were watching. Dismissing disarms the handoff, so neither the
+     * countdown nor the card's PLAY NEXT can advance after it is gone, stops the
+     * countdown, and hides the panel. The video is left exactly where it was: the
+     * ending still playing, or the credits still rolling.
+     *
+     * The prefetched next-episode name/runtime/overview stay in place: the manual
+     * NEXT path reads them too, and the handoff is disarmed so nothing can
+     * auto-advance from them.
+     */
+    private fun dismissNextUpPanel() {
+        if (!::nextUpPanel.isInitialized || nextUpPanel.visibility != View.VISIBLE) return
+        nextUpHandoffArmed = false
+        nextUpCountdownHeld = false
+        nextUpCountdownRemaining = 0
+        nextUpCountdownHandler.removeCallbacks(nextUpCountdownRunnable)
+        nextUpPanel.visibility = View.GONE
     }
 
     /** Milliseconds left in the episode, or -1 when the duration is unknown. */
@@ -11846,6 +12000,31 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     override fun onChromeSeekTo(positionMs: Long) {
         exoPlayer?.seekTo(positionMs)
     }
+
+    /**
+     * A touch drag on the bar begins: pause for it, exactly as the D-pad scrub
+     * does, so the drag's follow-seeks have no playback deadline to miss (see
+     * [beginScrubPause]).
+     */
+    override fun onChromeScrubStart() = beginScrubPause()
+
+    /**
+     * Follow the drag's thumb, throttled to [TOUCH_FOLLOW_SEEK_MS]. The drag
+     * fires progress changes far faster than a slow stream settles a seek; only
+     * the window's first one seeks, and the release's exact seek is still the
+     * landing (see [onChromeSeekTo]).
+     */
+    override fun onChromeScrubProgress(positionMs: Long) {
+        val player = exoPlayer ?: return
+        if (player.duration <= 0L) return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - lastFollowSeekMs < TOUCH_FOLLOW_SEEK_MS) return
+        lastFollowSeekMs = now
+        player.seekTo(positionMs)
+    }
+
+    /** The drag is over: put the play state back (see [endScrubPause]). */
+    override fun onChromeScrubEnd() = endScrubPause()
 
     override fun onChromeNext() = advanceToNextEpisode()
 

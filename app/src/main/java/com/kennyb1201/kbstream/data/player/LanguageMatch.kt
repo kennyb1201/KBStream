@@ -74,4 +74,31 @@ object LanguageMatch {
         val have = canonical(trackTag) ?: return false
         return want == have
     }
+
+    /**
+     * Index of the best fallback track when no track matches [preferred].
+     *
+     * The muxer's default is not a tiebreak worth trusting: an EN/RU release
+     * routinely flags the Russian track as DEFAULT, so with an English
+     * preference the file opens in Russian and the setting looks ignored.
+     *
+     * A track whose language is known and does not match is *known-wrong* and
+     * is skipped: a `rus` track is definitely not English. A track with no or
+     * undetermined language is eligible, because it might be exactly what the
+     * user asked for. Returns null when every track is known-wrong — then
+     * nothing is knowable and the muxer default stands.
+     *
+     * Only call this when no track matched [preferred] directly; a direct match
+     * always wins. The direct-hit branch below is defensive only.
+     */
+    fun fallbackTrackIndex(languages: List<String?>, preferred: String): Int? {
+        val want = canonical(preferred) ?: return null
+        languages.forEachIndexed { index, tag ->
+            val have = canonical(tag)
+            if (have == null) return index // states nothing: might be right
+            if (have == want) return index // defensive: a direct hit
+            // Known and different: certainly not what was asked for.
+        }
+        return null
+    }
 }

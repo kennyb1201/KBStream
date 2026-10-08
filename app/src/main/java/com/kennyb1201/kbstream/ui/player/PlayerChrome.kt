@@ -58,6 +58,27 @@ interface PlayerChromeHost {
     fun onChromePlayPause()
     fun onChromeSeekTo(positionMs: Long)
 
+    /**
+     * A touch drag on the seek bar has begun. The Exo engine pauses for the drag
+     * so the follow-seeks it makes have no playback deadline to miss; the default
+     * does nothing, which leaves the MPV engine's own seek handling alone.
+     */
+    fun onChromeScrubStart() {}
+
+    /**
+     * The drag moved the thumb to [positionMs]. Called on every user progress
+     * change, so an engine that wants the picture to follow must throttle this
+     * itself; the default does nothing.
+     */
+    fun onChromeScrubProgress(positionMs: Long) {}
+
+    /**
+     * The drag ended (after [onChromeSeekTo], the exact landing). An engine that
+     * paused in [onChromeScrubStart] restores its play state here; the default
+     * does nothing.
+     */
+    fun onChromeScrubEnd() {}
+
     fun onChromeNext()
 
     // Pickers & panels
@@ -392,9 +413,11 @@ class PlayerChrome(
     }
 
     /**
-     * The seekbar scrubs, it is not a readout. The preview follows the thumb
-     * during the drag; the seek itself happens on release, because a remote
-     * fires a lot of progress changes on the way and both engines seek there.
+     * The seekbar scrubs, it is not a readout. The bar paints the thumb's own
+     * position for the whole drag, and the exact seek still happens on release -
+     * but the engine is told about the drag so it can pause for it and follow the
+     * thumb (see the scrub host hooks), which is how the picture comes with the
+     * bar instead of waiting for the release.
      */
     private fun wireSeekBar() {
         seekBar?.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -402,20 +425,26 @@ class PlayerChrome(
                 if (!fromUser) return
                 val durationMs = host.chromeDurationMs()
                 if (durationMs <= 0L) return
-                positionView?.text = formatMillis(durationMs * progress / SEEKBAR_MAX)
+                val positionMs = durationMs * progress / SEEKBAR_MAX
+                positionView?.text = formatMillis(positionMs)
+                // The engine owns whether the picture follows and how often.
+                host.onChromeScrubProgress(positionMs)
             }
 
             override fun onStartTrackingTouch(bar: SeekBar?) {
                 scrubbing = true
                 handler.removeCallbacks(hideRunnable)
+                host.onChromeScrubStart()
             }
 
             override fun onStopTrackingTouch(bar: SeekBar?) {
                 scrubbing = false
                 val durationMs = host.chromeDurationMs()
                 if (durationMs > 0L) {
+                    // The release is the exact landing, whatever the follow did.
                     host.onChromeSeekTo(durationMs * (bar?.progress ?: 0) / SEEKBAR_MAX)
                 }
+                host.onChromeScrubEnd()
                 keepVisible()
             }
         })

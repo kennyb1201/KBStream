@@ -597,6 +597,25 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         endPanelsShown = false
     }
 
+    /**
+     * Closes the end-of-episode "Up next" card without ending the session.
+     *
+     * Back on this card used to reach exitPlayer(), so the press a viewer makes
+     * to wave it away left the title instead. Dismissing hides the card with its
+     * countdown (see [hideEndPanels]) and lands the D-pad back on the controls, so
+     * the session stays open and Next or a second Back remain available.
+     */
+    private fun dismissNextUpPanel() {
+        if (nextUpPanel?.visibility != View.VISIBLE) return
+        hideEndPanels()
+        if (controlsVisible) {
+            playPauseButton?.requestFocus()
+            keepControlsVisible()
+        } else {
+            showControls()
+        }
+    }
+
     // --- Because you watched (end-credits recommendations) ------------------
     //
     // The row itself is the shared [BecauseYouWatchedUi], the same one the main
@@ -958,7 +977,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             object : OnBackPressedCallback(true) {
                 override fun handleOnBackPressed() {
                     // BACK closes the panels first, exactly like the main player.
+                    // The end-of-episode card is a question, not the session:
+                    // Back waves it away and leaves playback alone, where it used
+                    // to exit the player instead.
                     when {
+                        nextUpPanel?.visibility == View.VISIBLE -> dismissNextUpPanel()
                         pickerOpen -> dismissPicker()
                         settingsOpen -> hideSettingsPanel()
                         else -> exitPlayer()
@@ -1602,6 +1625,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * The engine note that stands where the main player's source badges sit, and
      * the two buttons that read state out in place (aspect, and the speed label
      * the picker leaves behind).
+     *
+     * Badges and status only, exactly like the main player's overlay: the file's
+     * own details (resolution, codec, bitrate, decode mode) used to be appended
+     * here, which put a line of diagnostics under the picture for the whole
+     * session. They belong to the INFO readout and the settings panel's stream
+     * row, which is where they are now - see [diagnosticsText].
      */
     private fun updateControlsInfo() {
         engineNoteView?.text = buildString {
@@ -1626,8 +1655,6 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             if (isFallbackSession && fallbackReason == FALLBACK_REASON_SUBTITLE) {
                 append("  \u00b7  ExoPlayer cannot render this file's subtitle format")
             }
-            val parsed = surface?.diagnostics().orEmpty()
-            if (parsed.isNotBlank()) append("  \u00b7  $parsed")
         }
         engineNoteView?.visibility = View.VISIBLE
         speedButton?.text = "${playbackSpeed}x"
@@ -4630,6 +4657,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // engine switch behind it, plays immediately. Hand the native
             // instance back here instead - onDestroy then has nothing to
             // release.
+            //
+            // release() is one-way (the view is never re-initialized), so this
+            // is only safe because no path brings playback back to it: both
+            // handoffs (ExoPlayer and the external player) finish this session
+            // from their launcher's callback the moment the successor returns
+            // (see exoSwitchLauncher), so onStart can only run with [surface]
+            // already null, and nothing can resume against the released view.
             surface?.release()
             surface = null
             // The file is gone with the surface, so the chapter strip goes too.
@@ -4911,9 +4945,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     override fun onChromeOpenSettings() = showSettingsPanel()
 
     override fun onChromeOpenInfo() {
-        // The readout names its engine: this is the only place on screen that
-        // says whether the picture is coming from mpv or whether the session
-        // landed here after ExoPlayer handed the file over.
+        // This readout is the engine's file-info screen: mpv's own account of
+        // the file (resolution, codec, bitrate, decode mode, audio codec), plus
+        // the engine name, because this is the only place on screen that says
+        // whether the picture is coming from mpv or whether the session landed
+        // here after ExoPlayer handed the file over. The overlay deliberately
+        // carries none of this any more (see updateControlsInfo); the settings
+        // panel's stream row reads the same string for a viewer already there.
         showToast("MPV  \u2022  ${diagnosticsText()}", 4_000L)
     }
 

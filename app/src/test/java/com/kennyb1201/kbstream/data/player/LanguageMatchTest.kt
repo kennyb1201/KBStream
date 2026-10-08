@@ -146,4 +146,77 @@ class LanguageMatchTest {
             )
         }
     }
+
+    // ── the fallback for a file with no track in the wanted language ───────
+
+    /**
+     * The reported failure: an English preference on an EN/RU release whose
+     * English track carries no language tag ("und", common in dual-audio
+     * rips). Nothing matched, so the muxer's DEFAULT — the Russian track —
+     * played. An untagged track might be the English one; a `rus` track
+     * certainly is not, so the untagged one is what the fallback must take.
+     */
+    @Test
+    fun `an untagged track is preferred over one tagged in another language`() {
+        assertEquals(0, LanguageMatch.fallbackTrackIndex(listOf("und", "rus"), "en"))
+        assertEquals(1, LanguageMatch.fallbackTrackIndex(listOf("rus", "und"), "en"))
+        assertEquals(0, LanguageMatch.fallbackTrackIndex(listOf(null, "rus"), "en"))
+        assertEquals(1, LanguageMatch.fallbackTrackIndex(listOf("rus", null), "en"))
+        assertEquals(0, LanguageMatch.fallbackTrackIndex(listOf("unknown", "rus"), "en"))
+        assertEquals(1, LanguageMatch.fallbackTrackIndex(listOf("rus", "unknown"), "en"))
+        // "mul" means several languages at once, which is not English either:
+        // it is undetermined, so it is eligible like any other untagged track.
+        assertEquals(0, LanguageMatch.fallbackTrackIndex(listOf("mul", "eng"), "en"))
+    }
+
+    @Test
+    fun `every track known-wrong leaves the muxer default alone`() {
+        assertNull(LanguageMatch.fallbackTrackIndex(listOf("rus", "ger"), "en"))
+        assertNull(LanguageMatch.fallbackTrackIndex(listOf("rus"), "en"))
+        assertNull(LanguageMatch.fallbackTrackIndex(emptyList(), "en"))
+    }
+
+    @Test
+    fun `the first eligible track wins`() {
+        assertEquals(0, LanguageMatch.fallbackTrackIndex(listOf("und", "und"), "en"))
+        assertEquals(0, LanguageMatch.fallbackTrackIndex(listOf(null, "und"), "en"))
+        assertEquals(1, LanguageMatch.fallbackTrackIndex(listOf("rus", "und", "und"), "en"))
+    }
+
+    /**
+     * A direct hit is returned where it sits, not skipped in favour of an
+     * earlier untagged track: this is only called when nothing matched, so the
+     * branch is defensive, but it must never prefer a guess over an answer.
+     */
+    @Test
+    fun `a direct hit is returned even when it is not the first track`() {
+        assertEquals(0, LanguageMatch.fallbackTrackIndex(listOf("eng", "rus"), "en"))
+        assertEquals(1, LanguageMatch.fallbackTrackIndex(listOf("rus", "eng"), "en"))
+        assertEquals(1, LanguageMatch.fallbackTrackIndex(listOf("rus", "Eng"), "en"))
+        assertEquals(1, LanguageMatch.fallbackTrackIndex(listOf("rus", "en-US"), "en"))
+    }
+
+    /**
+     * "Auto" with no global default, and anything that names no language, has
+     * nothing to fall back TO: a guess here would be worse than the file's own
+     * choice.
+     */
+    @Test
+    fun `nothing asked for means no fallback at all`() {
+        assertNull(LanguageMatch.fallbackTrackIndex(listOf("und", "rus"), ""))
+        assertNull(LanguageMatch.fallbackTrackIndex(listOf("und", "rus"), "   "))
+        assertNull(LanguageMatch.fallbackTrackIndex(listOf("und", "rus"), "und"))
+        assertNull(LanguageMatch.fallbackTrackIndex(listOf("und", "rus"), "unknown"))
+        assertNull(LanguageMatch.fallbackTrackIndex(listOf("rus"), "und"))
+    }
+
+    /**
+     * The loose spelling a file's own tag may carry still counts as a direct
+     * hit, and the region subtag is not a reason to skip a real track.
+     */
+    @Test
+    fun `the fallback reads the same tags the matcher does`() {
+        assertEquals(0, LanguageMatch.fallbackTrackIndex(listOf("fi", "rus"), "FI"))
+        assertEquals(1, LanguageMatch.fallbackTrackIndex(listOf("rus", "pt-BR"), "pt"))
+    }
 }

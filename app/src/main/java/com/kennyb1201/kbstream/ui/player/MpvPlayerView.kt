@@ -28,7 +28,12 @@ import kotlin.math.pow
  *    told `force-window=yes` only while that surface exists — this is what
  *    makes mpv render frames and OSD into it, and what has to be undone
  *    (`vo=null`, `force-window=no`, detachSurface) before the surface goes
- *    away, or the renderer keeps using a dead window;
+ *    away, or the renderer keeps using a dead window. Teardown and setup are
+ *    two halves of one cycle, so [attachSurface] has to put back everything
+ *    [surfaceDestroyed] takes away — `vo` included. Leaving the VO null is
+ *    invisible until the next frame: mpv keeps decoding (both the track list
+ *    and `video-format` populate) and throws every frame away, so the report
+ *    reads "audio plays over a black screen" rather than "playback failed";
  *  - loadfile() is deferred until the surface is up. Loading first can leave
  *    mpv with a video track it never gets an output for, which on this stack
  *    means audio playing over a black screen.
@@ -591,9 +596,21 @@ class MpvPlayerView @JvmOverloads constructor(
 
     /**
      * Selects the first audio track in [language]; blank hands the choice back
-     * to mpv's `alang`. False when the file carries no such track, in which
-     * case the current track stands - the main player keeps the current audio
-     * in that case too.
+     * to mpv's `alang`.
+     *
+     * When the file carries no such track, the first track not KNOWN to be the
+     * wrong language is taken instead, and only a file whose every track names
+     * another language leaves mpv's own choice standing (false, as before).
+     * This is the same rule the ExoPlayer engine applies
+     * ([LanguageMatch.fallbackTrackIndex]): an untagged track might be the one
+     * asked for, while a `rus` track certainly is not.
+     *
+     * It matters here because mpv's own `alang` match has the identical hole -
+     * a track with no language tag never matches — so on a dual-audio EN/RU
+     * release the open-time pass leaves whichever track the muxer flagged
+     * DEFAULT (the Russian one) playing, and the preference looks ignored. The
+     * open-time fast path is deliberately untouched; this runs once the track
+     * list exists, from the activity's applyRememberedTracks.
      */
     fun selectAudioLanguage(language: String): Boolean {
         if (!initialized) return false
@@ -601,9 +618,31 @@ class MpvPlayerView @JvmOverloads constructor(
             runCatching { mpv.setPropertyString("aid", "auto") }
             return true
         }
-        val match = audioTracks().firstOrNull { LanguageMatch.matches(language, it.language) }
-            ?: return false
-        runCatching { mpv.setPropertyInt("aid", match.id) }
+        val tracks = audioTracks()
+        val match = tracks.firstOrNull { LanguageMatch.matches(language, it.language) }
+        if (match != null) {
+            runCatching { mpv.setPropertyInt("aid", match.id) }
+            return true
+        }
+        val fallback = LanguageMatch.fallbackTrackIndex(tracks.map { it.language }, language)
+        if (fallback == null) {
+            // Every track names a language, so nothing is knowable and mpv's
+            // own choice is as good as any.
+            Log.i(
+                TAG,
+                "no '$language' audio track in [" +
+                    tracks.joinToString(", ") { it.language ?: "untagged" } +
+                    "]; keeping mpv's choice"
+            )
+            return false
+        }
+        val chosen = tracks[fallback]
+        runCatching { mpv.setPropertyInt("aid", chosen.id) }
+        Log.i(
+            TAG,
+            "no '$language' audio track; picked track ${chosen.id} (" +
+                (chosen.language ?: "untagged") + ")"
+        )
         return true
     }
 
@@ -1137,6 +1176,14 @@ class MpvPlayerView @JvmOverloads constructor(
         val surface = holder.surface ?: return
         runCatching {
             mpv.attachSurface(surface)
+            // surfaceDestroyed() nulls the VO on teardown, and this side of the
+            // cycle used to put back only force-window: a destroy -> create
+            // (backgrounding, or the SurfaceView being re-made) then left mpv
+            // decoding into the void - audio with a black screen, with the
+            // track list and video-format both populated as if all were well.
+            // "gpu" is the only VO this app ever configures (see
+            // applyOptions), so restoring it unconditionally is right.
+            mpv.setPropertyString("vo", "gpu")
             // Forces mpv to render video/subtitles into our surface even when
             // it would otherwise decide it has no window to draw into.
             mpv.setOptionString("force-window", "yes")

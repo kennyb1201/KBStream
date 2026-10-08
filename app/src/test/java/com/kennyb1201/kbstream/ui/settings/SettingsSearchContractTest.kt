@@ -75,7 +75,7 @@ class SettingsSearchContractTest {
     private fun screen(): String = source(SCREEN)
 
     private fun toggleRow(): String =
-        between(screen(), "private fun ToggleRow(", "private fun FrameRateDiagnosticRow()")
+        between(screen(), "private fun ToggleRow(", "private fun FrameRateDiagnosticRow(")
 
     private fun navigationRow(): String = between(
         screen(),

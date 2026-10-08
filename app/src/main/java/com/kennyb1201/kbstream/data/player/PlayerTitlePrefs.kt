@@ -58,13 +58,19 @@ internal object PlayerTitlePrefs {
         val audioDelayMs: Int = 0,
         /**
          * One specific audio track in this show's files, as
-         * `language|codecs|channels` (see PlayerTrackBridge.signatureOf), or
-         * blank for "whichever track my language preference picks".
+         * `language|codecs|channels|index|trackCount` (see
+         * PlayerTrackBridge.signatureOf), or blank for "whichever track my
+         * language preference picks".
          *
-         * A signature, not an index: the same episode on another source (or a
-         * different episode) numbers its tracks differently, but "English
+         * A signature first, not an index: the same episode on another source
+         * (or a different episode) numbers its tracks differently, but "English
          * E-AC3 5.1" keeps meaning the same thing — which is exactly the track
-         * a language-only preference picks wrong.
+         * a language-only preference picks wrong. The position is only ever a
+         * last resort, for a hand-picked track whose tag says nothing about its
+         * language (a dual-audio EN/RU release with untagged tracks), and it is
+         * used only when the next file has the same number of audio tracks.
+         * Signatures written before the position existed are three fields and
+         * keep matching by language and channels without it.
          */
         val audioTrackSignature: String = "",
         /**

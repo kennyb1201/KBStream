@@ -1820,7 +1820,7 @@ fun SettingsScreen(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                FrameRateDiagnosticRow()
+                FrameRateDiagnosticRow(enabled = matchFrameRate)
 
                 }
 
@@ -4027,9 +4027,16 @@ private fun ToggleRow(
  * on a couch can reach. The panel line is live until something has played, and
  * then it is the panel as the last request saw it, which is the state worth
  * comparing against the answer below it.
+ *
+ * The panel half is read live from the display, so it is there with the toggle
+ * either way - it answers "does this TV offer 24 Hz" without anything having
+ * played. The request half can only exist while matching is on: it is the
+ * matcher recording what it asked for, and with the toggle off the app never
+ * asks the panel for anything. Saying "nothing has played" in that case would
+ * be false, so [enabled] is what picks the wording.
  */
 @Composable
-private fun FrameRateDiagnosticRow() {
+private fun FrameRateDiagnosticRow(enabled: Boolean) {
     val context = LocalContext.current
     val report by FrameRateDiagnostics.report.collectAsStateWithLifecycle()
     val livePanel = remember(context) { displayReport(context) }
@@ -4054,7 +4061,11 @@ private fun FrameRateDiagnosticRow() {
         )
         FrameRateDiagnosticLine(
             label = "Last request",
-            value = report.request ?: "nothing has played on this device yet"
+            value = report.request ?: if (enabled) {
+                "nothing has played since KBStream started"
+            } else {
+                "matching is off, so the panel is never asked for a rate"
+            }
         )
         report.outcome?.let { answer ->
             FrameRateDiagnosticLine(label = "Panel's answer", value = answer)

@@ -396,21 +396,19 @@ internal object PlayerTrackBridge {
             audioTracks = emptyList()
             return
         }
-        val options = mutableListOf<AudioTrackOption>()
-        for (group in player.currentTracks.groups) {
-            if (group.type != C.TRACK_TYPE_AUDIO) continue
-            for (i in 0 until group.length) {
-                val format = group.getTrackFormat(i)
-                options.add(
-                    AudioTrackOption(
-                        signature = signatureOf(format),
-                        label = labelFor(format),
-                        selected = group.isTrackSelected(i)
-                    )
-                )
-            }
+        val refs = trackRefs(player, C.TRACK_TYPE_AUDIO)
+        audioTracks = refs.mapIndexed { position, ref ->
+            val format = ref.group.getTrackFormat(ref.index)
+            AudioTrackOption(
+                // The layout parts are what let a hand-picked track whose
+                // language says nothing be found again in the next episode (see
+                // [signatureOf]); the panel hands this signature straight back
+                // to [chooseAudioTrack].
+                signature = signatureOf(format, position, refs.size),
+                label = labelFor(format),
+                selected = ref.group.isTrackSelected(ref.index)
+            )
         }
-        audioTracks = options
     }
 
     /**
@@ -542,55 +540,185 @@ internal object PlayerTrackBridge {
         return true
     }
 
+    /**
+     * The first audio track not known to be the wrong language, or null when
+     * every track names a language and none of them is [language].
+     * [LanguageMatch.fallbackTrackIndex] does the deciding; this only carries
+     * the way back to the media3 objects.
+     */
+    private fun fallbackAudioTrack(player: Player, language: String): TrackRef? {
+        val refs = trackRefs(player, C.TRACK_TYPE_AUDIO)
+        val position = LanguageMatch.fallbackTrackIndex(
+            refs.map { it.group.getTrackFormat(it.index).language },
+            language
+        ) ?: return null
+        return refs[position]
+    }
+
     /** A track inside one of the player's groups. */
     private data class TrackRef(val group: Tracks.Group, val index: Int)
 
+    /** Every track of [type], in player order, with its position among them. */
+    private fun trackRefs(player: Player, type: Int): List<TrackRef> =
+        player.currentTracks.groups
+            .filter { it.type == type }
+            .flatMap { group -> (0 until group.length).map { TrackRef(group, it) } }
+
     /**
-     * Identity of one track across sources: language, codec and channel count.
-     * Exact-match first, then language + channels, because the codec string
-     * varies between remuxes of the same audio ("ec-3" vs "eac3").
+     * The facts about one track that a stored signature is matched against.
+     * Split out from the media3 objects so the matching itself can be pinned by
+     * a test without a player: see [resolveSignature].
      */
-    private fun findTrack(player: Player, type: Int, signature: String): TrackRef? {
-        val loose = signatureParts(signature)
-        var looseMatch: TrackRef? = null
-        for (group in player.currentTracks.groups) {
-            if (group.type != type) continue
-            for (i in 0 until group.length) {
-                val format = group.getTrackFormat(i)
-                if (signatureOf(format) == signature) return TrackRef(group, i)
+    internal data class TrackIdentity(
+        val language: String?,
+        val codecs: String,
+        val channels: Int
+    )
+
+    /**
+     * A stored track signature, split into its fields. The last two are the
+     * layout a hand-picked track was remembered with; a signature written
+     * before they existed has neither (see [signatureOf]).
+     */
+    internal data class StoredSignature(
+        val language: String,
+        val codecs: String,
+        val channels: Int,
+        val index: Int?,
+        val trackCount: Int?
+    )
+
+    /**
+     * Which of [tracks] a stored [signature] means, or null when none does.
+     *
+     * 1. Exact: the same language, codec and channel count — and, for a
+     *    signature that carries them, the same position in a file of the same
+     *    size. A legacy three-field signature matches on its three fields.
+     * 2. Loose: the same language and channel count. The codec string is what
+     *    changes between two remuxes of the same audio ("ec-3" vs "eac3").
+     * 3. Position: the last resort for a hand-picked track that names no
+     *    language at all — a dual-audio EN/RU release with untagged tracks has
+     *    no language to match on, so "the second audio track" is all that
+     *    survives to the next episode. Only when the file has the same number
+     *    of tracks, so the position still means the same thing, and only onto a
+     *    track that does not NAME a different language: that one is known-wrong,
+     *    and a guess at a known-wrong track is the one thing this path never
+     *    does.
+     */
+    internal fun resolveSignature(signature: String, tracks: List<TrackIdentity>): Int? {
+        // 1. Exact. Deliberately independent of parsing: a signature whose
+        //    channel count is not a number still names a track by its tag.
+        tracks.forEachIndexed { position, track ->
+            val exact = signatureOf(track.language, track.codecs, track.channels, position, tracks.size)
+            if (exact == signature) return position
+            if (signatureOf(track.language, track.codecs, track.channels) == signature) return position
+        }
+
+        val stored = parseSignature(signature) ?: return null
+
+        // 2. Loose.
+        if (stored.channels > 0) {
+            tracks.forEachIndexed { position, track ->
                 if (
-                    looseMatch == null && loose != null &&
-                    LanguageMatch.matches(loose.first, format.language) &&
-                    loose.second == format.channelCount
+                    LanguageMatch.matches(stored.language, track.language) &&
+                    stored.channels == track.channels
                 ) {
-                    looseMatch = TrackRef(group, i)
+                    return position
                 }
             }
         }
-        return looseMatch
-    }
 
-    /** `language|channels` of a stored signature, or null when unparseable. */
-    private fun signatureParts(signature: String): Pair<String, Int>? {
-        val parts = signature.split('|')
-        if (parts.size < 3) return null
-        val channels = parts[2].toIntOrNull() ?: return null
-        if (channels <= 0) return null
-        return parts[0] to channels
+        // 3. Position.
+        val position = stored.index
+        if (position != null && stored.trackCount == tracks.size && position in tracks.indices) {
+            val candidate = tracks[position]
+            val knownWrong = LanguageMatch.canonical(candidate.language) != null &&
+                !LanguageMatch.matches(stored.language, candidate.language)
+            if (!knownWrong) return position
+        }
+        return null
     }
 
     /**
-     * Stable-ish identity of an audio track, stored per show. Language, codec
-     * and channel count — not an index, because the same show on another source
-     * (or the next episode) orders its tracks differently.
+     * Identity of one track across sources, through [resolveSignature]: exact
+     * match first, then language + channels, then the remembered position.
      */
-    fun signatureOf(format: Format): String {
-        val channels = if (format.channelCount > 0) format.channelCount.toString() else "0"
-        return listOf(
-            format.language.orEmpty().lowercase(),
-            format.codecs.orEmpty().lowercase(),
-            channels
-        ).joinToString("|")
+    private fun findTrack(player: Player, type: Int, signature: String): TrackRef? {
+        val refs = trackRefs(player, type)
+        val position = resolveSignature(signature, refs.map { identityOf(it) }) ?: return null
+        return refs[position]
+    }
+
+    private fun identityOf(ref: TrackRef): TrackIdentity {
+        val format = ref.group.getTrackFormat(ref.index)
+        return TrackIdentity(
+            language = format.language,
+            codecs = format.codecs.orEmpty().lowercase(),
+            channels = format.channelCount
+        )
+    }
+
+    /**
+     * Splits a stored signature. Every signature carries the first three fields;
+     * the two after them are the layout a manual pick added, and an older
+     * three-field signature simply has neither. Null when the identity itself
+     * cannot be read — which leaves only the exact match above.
+     */
+    internal fun parseSignature(signature: String): StoredSignature? {
+        val parts = signature.split('|')
+        if (parts.size < 3) return null
+        return StoredSignature(
+            language = parts[0],
+            codecs = parts[1],
+            channels = parts[2].toIntOrNull() ?: return null,
+            // A tail this cannot read reads as absent rather than as
+            // corruption: the identity fields alone still resolve the track.
+            index = parts.getOrNull(3)?.toIntOrNull()?.takeIf { it >= 0 },
+            trackCount = parts.getOrNull(4)?.toIntOrNull()?.takeIf { it > 0 }
+        )
+    }
+
+    /**
+     * Stable-ish identity of a track, stored per show. Language, codec and
+     * channel count — not an index, because the same show on another source (or
+     * the next episode) orders its tracks differently.
+     *
+     * A manually picked track adds `|index|trackCount`: its position among the
+     * file's tracks of that type and how many there were. That is the last
+     * resort [resolveSignature] has for a track whose language says nothing —
+     * there is no language to match on, and the position is then the only thing
+     * that survives to the next episode.
+     */
+    fun signatureOf(format: Format, index: Int? = null, trackCount: Int? = null): String =
+        signatureOf(
+            language = format.language,
+            codecs = format.codecs,
+            channelCount = format.channelCount,
+            index = index,
+            trackCount = trackCount
+        )
+
+    /** The same, from the fields — so the format of a signature can be pinned
+     *  by a test without building a media3 [Format]. */
+    internal fun signatureOf(
+        language: String?,
+        codecs: String?,
+        channelCount: Int,
+        index: Int? = null,
+        trackCount: Int? = null
+    ): String {
+        val parts = mutableListOf(
+            language.orEmpty().lowercase(),
+            codecs.orEmpty().lowercase(),
+            if (channelCount > 0) channelCount.toString() else "0"
+        )
+        // Both parts or neither: a position with no track count cannot be
+        // checked against the next file, and is then worse than absent.
+        if (index != null && trackCount != null && trackCount > 0 && index in 0 until trackCount) {
+            parts += index.toString()
+            parts += trackCount.toString()
+        }
+        return parts.joinToString("|")
     }
 
     /** Panel label for one audio track — see [audioTrackLabel]. */
@@ -759,8 +887,35 @@ internal object PlayerTrackBridge {
                 Log.i(TAG, "no subtitle track for '$language'; subtitles off")
                 return false
             }
-            if (type == C.TRACK_TYPE_AUDIO) logTracks(player, type)
-            Log.i(TAG, "no audio track for '$language'; keeping current")
+            // Audio, and nothing in that language. "Keeping current" is the
+            // muxer's default track, and on a dual-audio EN/RU release that is
+            // the Russian one - the preference looks ignored. Take the first
+            // track NOT known to be the wrong language instead: an untagged
+            // track might be the one asked for, while a `rus` track certainly
+            // is not. When every track names a language, the current one stands
+            // exactly as before.
+            logTracks(player, type)
+            val fallback = fallbackAudioTrack(player, language)
+            if (fallback != null) {
+                player.trackSelectionParameters = player.trackSelectionParameters
+                    .buildUpon()
+                    .setOverrideForType(
+                        TrackSelectionOverride(fallback.group.mediaTrackGroup, fallback.index)
+                    )
+                    .build()
+                Log.i(
+                    TAG,
+                    "no '$language' audio track; avoided the current default and picked " +
+                        "track ${fallback.index} (" +
+                        (fallback.group.getTrackFormat(fallback.index).language ?: "untagged") +
+                        ")"
+                )
+                return true
+            }
+            Log.i(
+                TAG,
+                "no audio track for '$language'; every track names a language, keeping current"
+            )
             return false
         }
 
