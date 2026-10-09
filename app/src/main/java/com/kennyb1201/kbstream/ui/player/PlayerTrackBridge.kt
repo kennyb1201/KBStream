@@ -840,6 +840,59 @@ internal object PlayerTrackBridge {
     // ── Player-side helpers (called from the registered appliers) ──────────
 
     /**
+     * The track the language pass would arm for [type], or null when the file
+     * carries nothing [language] matches.
+     *
+     * For text tracks a track this engine cannot draw is skipped rather than
+     * armed. ExoPlayer has no PGS/VobSub/DVB renderer, so a bitmap track armed
+     * here draws nothing and raises nothing: there is no exception to trip the
+     * decoder ladder and nothing is logged either, which is the "options
+     * listed, none display" failure. The answer is the same one the picker
+     * rows already give ([SubtitleTrackRules.cannotDrawNote]), so the language
+     * pass and the rows cannot disagree about which tracks are dead. Skipping
+     * leaves the caller's "no track in this language" path to decide what
+     * happens next (the activity's NeedsMpv handoff, the OpenSubtitles fetch)
+     * instead of leaving a dead override behind.
+     *
+     * The audio side keeps its plain first-match: this engine draws every audio
+     * track it can select, and [fallbackAudioTrack] owns what happens when
+     * nothing matches.
+     *
+     * Matching goes through [LanguageMatch] because the stored preference is a
+     * two-letter code and the file's tags are almost always three-letter ones.
+     * Split out from [applyLanguage] so the rule can be pinned by a test that
+     * builds fake groups instead of a player.
+     */
+    internal fun matchingOverride(
+        tracks: Tracks,
+        type: Int,
+        language: String
+    ): TrackSelectionOverride? {
+        var matched: TrackSelectionOverride? = null
+        tracks.groups
+            .filter { it.type == type }
+            .forEach { group ->
+                if (matched != null) return@forEach
+                for (i in 0 until group.length) {
+                    val format = group.getTrackFormat(i)
+                    if (!LanguageMatch.matches(language, format.language)) continue
+                    // Text only: an audio track has no bitmap format, and the
+                    // untagged-audio fallback owns the audio side.
+                    if (
+                        type == C.TRACK_TYPE_TEXT &&
+                        SubtitleTrackRules.cannotDrawNote(
+                            mimeType = format.sampleMimeType,
+                            supported = group.isTrackSupported(i)
+                        ) != null
+                    ) continue
+                    matched = TrackSelectionOverride(group.mediaTrackGroup, i)
+                    return@forEach
+                }
+            }
+        return matched
+    }
+
+    /**
      * Applies a language to the running player: pick the first track whose
      * language matches, or (for subtitles) leave text disabled when nothing
      * matches — a subtitle language the stream does not carry must not
@@ -863,21 +916,7 @@ internal object PlayerTrackBridge {
             return true
         }
 
-        var matched: TrackSelectionOverride? = null
-        player.currentTracks.groups
-            .filter { it.type == type }
-            .forEach { group ->
-                if (matched != null) return@forEach
-                for (i in 0 until group.length) {
-                    val lang = group.getTrackFormat(i).language
-                    if (LanguageMatch.matches(language, lang)) {
-                        matched = TrackSelectionOverride(group.mediaTrackGroup, i)
-                        return@forEach
-                    }
-                }
-            }
-
-        val override = matched
+        val override = matchingOverride(player.currentTracks, type, language)
         if (override == null) {
             if (type == C.TRACK_TYPE_TEXT) {
                 player.trackSelectionParameters = player.trackSelectionParameters

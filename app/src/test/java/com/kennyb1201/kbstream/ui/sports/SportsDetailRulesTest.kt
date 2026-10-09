@@ -1,10 +1,13 @@
 package com.kennyb1201.kbstream.ui.sports
 
+import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameLeader
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsTeam
+import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -177,6 +180,96 @@ class SportsDetailRulesTest {
             "WATCH",
             SportsDetailRules.watchLabel(true, lineupMissing = true)
         )
+    }
+
+    // ── The live-stats section (the game detail sheet) ─────────────────
+
+    @Test
+    fun `no summary at all draws no stats section`() {
+        assertFalse(SportsDetailRules.hasLiveStats(null))
+        assertFalse(
+            "an empty summary is the same thing as none: no heading, no gap",
+            SportsDetailRules.hasLiveStats(EspnGameSummary())
+        )
+    }
+
+    @Test
+    fun `any one part of a summary is enough to draw the section`() {
+        assertTrue(
+            SportsDetailRules.hasLiveStats(EspnGameSummary(homeWinProbability = 68))
+        )
+        assertTrue(
+            SportsDetailRules.hasLiveStats(
+                EspnGameSummary(teamStats = listOf(Triple("Hits", "7", "5")))
+            )
+        )
+        assertTrue(
+            SportsDetailRules.hasLiveStats(EspnGameSummary(lastPlay = "Corner taken short"))
+        )
+        assertFalse(
+            "a blank play text is not content",
+            SportsDetailRules.hasLiveStats(EspnGameSummary(lastPlay = "  "))
+        )
+    }
+
+    // ── A tournament's own rows (the tournament detail sheet) ──────────
+
+    private fun tournament(
+        state: GameState = GameState.UPCOMING,
+        dateMs: Long = 0L,
+        statusDetail: String = "",
+        venue: String? = null,
+        note: String? = null,
+        broadcastNames: List<String> = emptyList(),
+    ) = TournamentEvent(
+        id = "401",
+        league = "golf/pga",
+        name = "The CJ Cup",
+        dateMs = dateMs,
+        state = state,
+        statusDetail = statusDetail,
+        leaders = emptyList(),
+        broadcastNames = broadcastNames,
+        venue = venue,
+        note = note,
+    )
+
+    @Test
+    fun `a tournament's status line mirrors its card`() {
+        assertEquals(
+            "Round 1 - Play Complete",
+            SportsDetailRules.statusLine(
+                tournament(state = GameState.LIVE, statusDetail = "Round 1 - Play Complete")
+            )
+        )
+        // A live round with no detail still says the one thing that matters.
+        assertEquals("LIVE", SportsDetailRules.statusLine(tournament(state = GameState.LIVE)))
+        assertEquals("Final", SportsDetailRules.statusLine(tournament(state = GameState.FINAL)))
+        // Same fallback as a game's: no clock and no detail reads as "Today".
+        assertEquals("Today", SportsDetailRules.statusLine(tournament()))
+    }
+
+    @Test
+    fun `a tournament's rows are venue, broadcast, then its own context line`() {
+        val rows = SportsDetailRules.detailRows(
+            tournament(
+                venue = "Congaree Golf Club · Ridgeville, SC",
+                broadcastNames = listOf("Golf Channel", "ESPN+"),
+                note = "Round 2",
+            )
+        )
+
+        assertEquals(
+            listOf(
+                GameDetailRow("Venue", "Congaree Golf Club · Ridgeville, SC"),
+                GameDetailRow("Broadcast", "Golf Channel, ESPN+"),
+                GameDetailRow("Event", "Round 2"),
+            ),
+            rows
+        )
+        // A stop the feed gives nothing about draws no rows, not blank ones.
+        assertTrue(SportsDetailRules.detailRows(tournament()).isEmpty())
+        assertTrue(SportsDetailRules.detailRows(tournament(note = "  ")).isEmpty())
     }
 
     @Test

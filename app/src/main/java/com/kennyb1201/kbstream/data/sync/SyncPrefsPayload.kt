@@ -497,6 +497,37 @@ object PrefsPayloadBuilder {
     }
 
     /**
+     * The sports keys whose stored value may still be a legacy StringSet: the
+     * pre-sync format, written by an older build and never re-saved since the
+     * String change. Everything else here is already a JSON primitive.
+     */
+    private val SPORTS_SET_KEYS = setOf(
+        "sports_enabled_leagues",
+        "sports_league_order",
+        "sports_favorite_teams"
+    )
+
+    /**
+     * The string the blob carries for [key], or null when it carries nothing.
+     *
+     * The sports sets are normalized out of the legacy StringSet form first
+     * (see [com.kennyb1201.kbstream.data.settings.AppPreferences.sportsSetForSync]):
+     * a StringSet has no representation in this primitive-only payload, so
+     * without it the key would silently drop out of the blob and the other TV
+     * would come up with a default hub.
+     *
+     * Both the change snapshot and the payload go through this, so a legacy
+     * value that has not changed locally does not read as a fresh edit on every
+     * build — and a value that moves here moves once, together.
+     */
+    private fun blobValue(key: String, raw: Any?): String? =
+        if (key in SPORTS_SET_KEYS) {
+            com.kennyb1201.kbstream.data.settings.AppPreferences.sportsSetForSync(raw)
+        } else {
+            prefsValueString(raw)
+        }
+
+    /**
      * The display blob carries the time every key last CHANGED on this device
      * (not the time it was pushed — see [DisplayPrefsRules]), so a push that
      * happens to be newer than another device's edit can no longer revert
@@ -509,7 +540,7 @@ object PrefsPayloadBuilder {
         val current =
             LinkedHashMap<String, String>()
         SYNCED_PREF_KEYS.forEach { key ->
-            prefsValueString(all[key])?.let { current[key] = it }
+            blobValue(key, all[key])?.let { current[key] = it }
         }
 
         val now =
@@ -543,6 +574,15 @@ object PrefsPayloadBuilder {
             )
             SYNCED_PREF_KEYS.forEach { key ->
                 val value = all[key] ?: return@forEach
+                // The sports sets may still be stored as legacy StringSets
+                // (written by an older build, never re-saved since). The blob
+                // carries JSON primitives only, so normalize to the
+                // newline-separated String form here — the same form the
+                // setters write — rather than dropping the key.
+                if (key in SPORTS_SET_KEYS) {
+                    blobValue(key, value)?.let { put(key, it) }
+                    return@forEach
+                }
                 when (value) {
                     is Boolean -> put(key, value)
                     is Int -> put(key, value)

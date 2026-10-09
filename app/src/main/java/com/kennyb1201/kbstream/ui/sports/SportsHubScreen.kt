@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -63,6 +64,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,6 +81,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
+import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.Leader
 import com.kennyb1201.kbstream.data.sports.SportsGame
@@ -174,6 +177,10 @@ fun SportsHubScreen(
     val gameReminders by viewModel.gameReminders.collectAsStateWithLifecycle()
     val lineupStatus by viewModel.lineupStatus.collectAsStateWithLifecycle()
     val matchingDone by viewModel.matchingDone.collectAsStateWithLifecycle()
+    // The open sheet's live stats - team stats, win probability, the last play.
+    // Null for every game without them, which is why the sheet needs no loading
+    // or error state of its own (see the ViewModel's openDetail).
+    val detailSummary by viewModel.detailSummary.collectAsStateWithLifecycle()
     // True only once the hub knows it has NO lineup: the difference between
     // "your playlist does not carry this game" and "there is no playlist to
     // compare against". LOADING is deliberately neither - a read still in
@@ -259,6 +266,23 @@ fun SportsHubScreen(
     // than playing it: the sheet carries the matchup, and its Watch button is
     // what plays, through the same channel-match path the tap used to take.
     var detailGame by remember { mutableStateOf<SportsGame?>(null) }
+
+    // The tournament whose detail sheet is raised. A press on a tournament card
+    // the playlist cannot carry opens this rather than playing: there is no feed
+    // to play, and the sheet is where the reason is stated. A MATCHED card still
+    // plays, exactly as it did.
+    var detailTournament by remember { mutableStateOf<TournamentEvent?>(null) }
+
+    // The sheet's fetch policy, in one place: opening a game asks the hub for its
+    // summary - lazily, and only for a live one - and closing clears it, so the
+    // live tick stops refreshing a sheet nobody is looking at.
+    LaunchedEffect(detailGame) {
+        val open = detailGame
+        if (open == null) viewModel.closeDetail() else viewModel.openDetail(open)
+    }
+    // Leaving the hub leaves the sheet behind: without this the ViewModel would
+    // keep re-reading the summary on every live tick for a sheet that is gone.
+    DisposableEffect(Unit) { onDispose { viewModel.closeDetail() } }
 
     // The game whose teams are being followed. A long press on a card raises
     // this: the card itself stays one focus stop, and the two teams - the
@@ -430,6 +454,7 @@ fun SportsHubScreen(
                         lineupMissing = lineupMissing,
                         matchingDone = matchingDone,
                         onOpenDetail = { detailGame = it },
+                        onOpenTournamentDetail = { detailTournament = it },
                         onPlayChannels = onPlayChannels,
                         onEditFavorites = { favoriteEditor = it },
                     )
@@ -485,6 +510,7 @@ fun SportsHubScreen(
                         favoriteKeys = favoriteKeys,
                         listState = listState,
                         onOpenDetail = { detailGame = it },
+                        onOpenTournamentDetail = { detailTournament = it },
                         onPlayChannels = onPlayChannels,
                         lineupMissing = lineupMissing,
                         matchingDone = matchingDone,
@@ -526,6 +552,7 @@ fun SportsHubScreen(
                     lineupMissing = lineupMissing,
                     matchingDone = matchingDone,
                     onOpenDetail = { detailGame = it },
+                    onOpenTournamentDetail = { detailTournament = it },
                     onPlayChannels = onPlayChannels,
                     onEditFavorites = { favoriteEditor = it },
                 )
@@ -581,6 +608,9 @@ fun SportsHubScreen(
                 channels = matches[game.id].orEmpty(),
                 lineupMissing = lineupMissing,
                 matchingDone = matchingDone,
+                // The live stats the hub read for this game, if any - the sheet
+                // still fetches nothing itself (see GameDetailSheet).
+                summary = detailSummary,
                 // Picking a feed OTHER than the matched head is the viewer
                 // correcting the matcher; record it so the next game with
                 // either team opens there. See [SportsChannelMemory].
@@ -590,6 +620,29 @@ fun SportsHubScreen(
                     onPlayChannels(feeds)
                 },
                 onClose = { detailGame = null },
+            )
+        }
+
+        detailTournament?.let { event ->
+            // Back dismisses the sheet before it can leave the hub; focus comes
+            // back to the card that raised it, because the sheet is its own
+            // dialog window and closing it returns to the tree behind - the same
+            // mechanism the game sheet has.
+            BackHandler { detailTournament = null }
+            TournamentDetailSheet(
+                event = event,
+                // Every feed the playlist holds for this tournament, strongest
+                // first. Usually empty - the sheet is raised by cards with none -
+                // but the match can land while it is open, and then the sheet
+                // offers the same Watch the card behind it now would.
+                channels = matches[event.id].orEmpty(),
+                lineupMissing = lineupMissing,
+                matchingDone = matchingDone,
+                onPlay = { feeds ->
+                    detailTournament = null
+                    onPlayChannels(feeds)
+                },
+                onClose = { detailTournament = null },
             )
         }
     }
@@ -839,6 +892,7 @@ private fun LeagueBody(
     lineupMissing: Boolean,
     matchingDone: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
+    onOpenTournamentDetail: (TournamentEvent) -> Unit,
     onPlayChannels: (List<IptvChannel>) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
@@ -903,6 +957,7 @@ private fun LeagueBody(
                     lineupMissing = lineupMissing,
                     matchingDone = matchingDone,
                     onPlayChannels = onPlayChannels,
+                    onOpenDetail = onOpenTournamentDetail,
                 )
             }
         }
@@ -1123,6 +1178,22 @@ private fun GameCard(
             }
 
             ScoreRow(game = game)
+
+            // The live situation line, when the feed carries one: "3rd & 7 ·
+            // Ball on NE 32", "Top 5th · 1 out". Absent - not blank - for every
+            // game without one, so a card's layout is untouched.
+            game.situation?.takeIf { it.isNotBlank() }?.let { situation ->
+                Text(
+                    text = situation,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextLo,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 5.dp)
+                )
+            }
 
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -1558,6 +1629,7 @@ private fun TournamentCard(
     lineupMissing: Boolean,
     matchingDone: Boolean,
     onPlayChannels: (List<IptvChannel>) -> Unit,
+    onOpenDetail: (TournamentEvent) -> Unit,
 ) {
     val channel = channels.firstOrNull()
     val playable = channel != null
@@ -1635,15 +1707,20 @@ private fun TournamentCard(
             body()
         }
     } else {
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
+        // The SAME container as the playable branch, because a card the playlist
+        // cannot carry is still a card. A bare Surface has no onClick and so is
+        // not focusable at all: the D-pad could see the card and never land on
+        // it or press it, which is what "the tournaments are dead" was. The
+        // press opens the detail sheet instead of playing - the game cards' own
+        // answer (see [GameCard]) - and it is never gated on matching, so a
+        // press during the 40-60s pass has somewhere to go.
+        KBCard(
+            onClick = { onOpenDetail(event) },
+            focusedScale = KBFocusRow,
             shape = KBShapeCard,
-            colors = SurfaceDefaults.colors(
-                containerColor = KBSurface,
-                contentColor = KBTextHi
-            )
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Box(modifier = Modifier.fillMaxWidth()) { body() }
+            body()
         }
     }
 }
@@ -2119,6 +2196,178 @@ private fun StandingsInitials(entry: StandingEntry) {
 // ── The game detail sheet ───────────────────────────────────────────────
 
 /**
+ * One tournament's own sheet, raised by a press on a card the playlist cannot
+ * carry.
+ *
+ * The game sheet's twin, and it exists for the same reason: a card the playlist
+ * does not hold still says something worth reading, and the press has to have an
+ * answer. What it adds over the card is the room to say WHY - [ChannelLine]
+ * states which of the three facts this is (a matching pass still running, no
+ * lineup to compare against, or a playlist that simply does not carry it),
+ * which the game cards have always had and tournaments never did.
+ *
+ * It fetches nothing: it renders the already-loaded [TournamentEvent] and the
+ * match map the hub already holds. A tournament the matcher HAS found - the
+ * match can land while the sheet is open - gets the same focused one-press
+ * WATCH the game sheet gives, through the hub's existing launch; with no feed
+ * the row is a plain, non-focusable surface carrying the reason instead of the
+ * word WATCH.
+ */
+@Composable
+private fun TournamentDetailSheet(
+    event: TournamentEvent,
+    channels: List<IptvChannel>,
+    lineupMissing: Boolean,
+    matchingDone: Boolean,
+    onPlay: (List<IptvChannel>) -> Unit,
+    onClose: () -> Unit,
+) {
+    val watchButton = remember { FocusRequester() }
+    val channel = channels.firstOrNull()
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 24.dp, vertical = 24.dp),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            // Bounded against the window, the game sheet's own remedy for the
+            // same class of bug: a plate that wrapped its content grew taller
+            // than the screen and then SCROLLED, cropping the heading off the
+            // top edge.
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(0.72f)
+                    .fillMaxHeight(0.92f)
+                    .focusGroup()
+                    .background(KBSurface, KBShapePanel)
+                    .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
+                    .padding(22.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    text = "TOURNAMENT",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+
+                Text(
+                    text = event.name.ifBlank { event.league },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = KBTextHi,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = SportsDetailRules.statusLine(event),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (event.state == GameState.LIVE) KBDanger else KBTextLo
+                    )
+                    Text(
+                        // The model carries the ESPN path ("golf/pga"), so the
+                        // label the hub already knows is what a viewer reads; a
+                        // path it does not know is shown as it came rather than
+                        // hidden.
+                        text = (SportsLeagues.byPath(event.league)?.label ?: event.league)
+                            .uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = KBTextLo
+                    )
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Every row is already filtered to the non-blanks, so a stop
+                    // with no venue and no note simply draws fewer rows.
+                    SportsDetailRules.detailRows(event).forEach { row ->
+                        DetailRow(label = row.label, value = row.value)
+                    }
+
+                    if (event.leaders.isNotEmpty()) {
+                        Text(
+                            text = "LEADERS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = KBTextLo,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        Leaderboard(leaders = event.leaders)
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // The bridge, with the room to explain itself: this is the
+                    // line the card compresses, and the whole reason a sheet
+                    // exists for a tournament with no feed.
+                    Text(
+                        text = "CHANNEL",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = KBTextLo
+                    )
+                    ChannelLine(
+                        channel = channel,
+                        lineupMissing = lineupMissing,
+                        matchingDone = matchingDone
+                    )
+
+                    if (channel != null) {
+                        KBCard(
+                            // The whole ordered list, head first - the same
+                            // launch a matched card takes.
+                            onClick = { onPlay(channels) },
+                            focusedScale = KBFocusRow,
+                            shape = KBShapePill,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(watchButton)
+                        ) {
+                            WatchButtonLabel(
+                                label = SportsDetailRules.watchLabel(true),
+                                enabled = true
+                            )
+                        }
+                        LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
+                    } else {
+                        // Not focusable: a disabled action must not be a D-pad
+                        // stop. It carries the reason instead of the action's
+                        // name, from the same shared rule the game sheet uses.
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = KBShapePill,
+                            colors = SurfaceDefaults.colors(
+                                containerColor = KBSurfaceRaised,
+                                contentColor = KBTextLo
+                            )
+                        ) {
+                            WatchButtonLabel(
+                                label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
+                                enabled = false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
  * The full matchup for one game, raised by a tap on its card.
  *
  * A bottom sheet rather than a centred dialog: it is the card, opened - the
@@ -2134,6 +2383,13 @@ private fun GameDetailSheet(
     channels: List<IptvChannel>,
     lineupMissing: Boolean,
     matchingDone: Boolean,
+    /**
+     * The hub's summary for this game, or null when it has none. The sheet draws
+     * the stats section from it and nothing else: no fetch, no spinner, no error
+     * state - a live game ESPN gives no stats for is simply the sheet as it was
+     * before the section existed (see `SportsDetailRules.hasLiveStats`).
+     */
+    summary: EspnGameSummary? = null,
     onManualPick: (IptvChannel) -> Unit = {},
     onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit,
@@ -2229,6 +2485,15 @@ private fun GameDetailSheet(
                         .verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
+                    // LIVE STATS sits between the score header and everything
+                    // else - the matchup's own numbers first, then the venue and
+                    // the channels. Drawn only when there is something in it, so
+                    // a game with no summary reads exactly as it did before this
+                    // section existed.
+                    summary?.takeIf { SportsDetailRules.hasLiveStats(it) }?.let { stats ->
+                        LiveStatsSection(game = game, summary = stats)
+                    }
+
                     // Every row is already filtered to the non-blanks, so a game
                     // with no venue and no leaders simply draws fewer rows.
                     SportsDetailRules.detailRows(game).forEach { row ->
@@ -2326,6 +2591,154 @@ private fun GameDetailSheet(
             }
         }
     }
+}
+
+/**
+ * The sheet's LIVE STATS block: win probability, the team comparison, then the
+ * last play - in that order, because that is the order a viewer reads a live
+ * game in (who is winning, how, and what just happened).
+ *
+ * Every part is optional and is skipped on its own: a soccer summary has stats
+ * and no win probability, a football one may have all three, and a league ESPN
+ * covers thinly has none - in which case the caller has already decided not to
+ * call this at all (see `SportsDetailRules.hasLiveStats`).
+ */
+@Composable
+private fun LiveStatsSection(game: SportsGame, summary: EspnGameSummary) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            text = "LIVE STATS",
+            style = MaterialTheme.typography.labelSmall,
+            color = KBTextLo,
+            modifier = Modifier.padding(top = 4.dp)
+        )
+
+        summary.homeWinProbability?.let { chance ->
+            WinProbabilityBar(game = game, homePercent = chance)
+        }
+
+        summary.teamStats.forEach { (label, awayValue, homeValue) ->
+            StatCompareRow(away = awayValue, label = label, home = homeValue)
+        }
+
+        summary.lastPlay?.takeIf { it.isNotBlank() }?.let { play ->
+            Text(
+                text = "Last: $play",
+                style = MaterialTheme.typography.bodySmall,
+                fontStyle = FontStyle.Italic,
+                color = KBTextLo,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/**
+ * One line of win probability: the away side's colour on the left, the home
+ * side's on the right, and the home chance printed beside it ("NE 68%").
+ *
+ * The bar IS the two chances - its split is the number - and the label names the
+ * home side, because "68%" on its own does not say whose.
+ */
+@Composable
+private fun WinProbabilityBar(game: SportsGame, homePercent: Int) {
+    val home = homePercent.coerceIn(0, 100)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .height(8.dp)
+                .clip(KBShapeChip)
+                .background(KBSurfaceRaised)
+        ) {
+            // Both segments keep a minimum weight, so a 100% bar still shows the
+            // sliver of the other side rather than collapsing the row.
+            Box(
+                modifier = Modifier
+                    .weight((100 - home).coerceAtLeast(1).toFloat())
+                    .fillMaxHeight()
+                    .background(teamBarColor(game.away.colorHex, KBTextLo))
+            )
+            Box(
+                modifier = Modifier
+                    .weight(home.coerceAtLeast(1).toFloat())
+                    .fillMaxHeight()
+                    .background(teamBarColor(game.home.colorHex, KBAccent))
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = "${game.home.abbreviation.ifBlank { game.home.displayName }.uppercase()} " +
+                "$homePercent%",
+            style = MaterialTheme.typography.labelSmall,
+            color = KBTextHi
+        )
+    }
+}
+
+/**
+ * One team-stat row: away value, label, home value - the score header's own
+ * left-to-right order, so each number sits under the side it belongs to.
+ */
+@Composable
+private fun StatCompareRow(away: String, label: String, home: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = away,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = KBTextHi,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Text(
+            text = label.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = KBTextLo,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.weight(1.4f)
+        )
+        Text(
+            text = home,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = KBTextHi,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+/**
+ * A solid team colour for the probability bar, or [fallback] when the feed sent
+ * none the app can draw. The same hex parsing the crest plates use, but opaque:
+ * a bar has nothing behind it for a translucent fill to show through, and a
+ * near-black club colour would read as a hole in the bar.
+ */
+private fun teamBarColor(colorHex: String?, fallback: Color): Color {
+    val clean = colorHex?.trim()?.removePrefix("#") ?: return fallback
+    if (clean.length != 6) return fallback
+    val value = clean.toLongOrNull(16) ?: return fallback
+    val red = ((value shr 16) and 0xFF) / 255f
+    val green = ((value shr 8) and 0xFF) / 255f
+    val blue = (value and 0xFF) / 255f
+    if (red + green + blue < 0.35f) return fallback
+    return Color(red, green, blue)
 }
 
 /** One backup feed's row: the channel's own name, on the same pill as Watch. */

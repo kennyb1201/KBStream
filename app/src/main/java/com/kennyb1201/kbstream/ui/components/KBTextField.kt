@@ -15,6 +15,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentPaste
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
@@ -43,6 +45,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -329,6 +332,30 @@ fun KBTextField(
 }
 
 /**
+ * The transformation a secret field draws through: password dots, or the plain
+ * text once the viewer has asked to see it.
+ *
+ * Pure and public-to-the-module so the masking RULE is unit tested (see
+ * KBSecretFieldMaskingTest) instead of only being read out of a composable this
+ * module's test suite cannot run.
+ */
+internal fun secretFieldTransformation(revealed: Boolean): VisualTransformation =
+    if (revealed) VisualTransformation.None else PasswordVisualTransformation()
+
+/**
+ * Whether a revealed key goes back to dots.
+ *
+ * Reveal is a momentary check - "did I paste the right key" - and never a
+ * state to leave behind, so the plaintext goes away as soon as focus holds
+ * NEITHER the field NOR its reveal chip: moving on to the paste chip, another
+ * row, or Back all re-mask it. The chip is itself a focusable node, so pressing
+ * it must not count as having left the field - hence both halves, not just the
+ * field's - or the reveal would cancel itself the instant it was asked for.
+ */
+internal fun shouldRemaskKey(fieldFocused: Boolean, toggleFocused: Boolean): Boolean =
+    !fieldFocused && !toggleFocused
+
+/**
  * The one paste button used next to every URL/key field: reads the shared
  * clipboard helper and hands the text to [onPaste]. Silently ignores an
  * empty clipboard. Focusable, so D-pad Right from the field reaches it.
@@ -351,6 +378,100 @@ fun KBPasteChip(
             imageVector = Icons.Filled.ContentPaste,
             contentDescription = "Paste from clipboard",
             tint = KBTextLo,
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 9.dp)
+                .size(16.dp)
+        )
+    }
+}
+
+/**
+ * A [KBTextField] for a SECRET - an API key - masked by default, with a
+ * focusable reveal chip beside it that shows the plaintext for a look.
+ *
+ * Masking is presentation only: [value] and [onValueChange] are the real key
+ * string, unchanged, and only what is DRAWN goes through
+ * [secretFieldTransformation]. Saving, pasting and verifying therefore keep
+ * handling the actual key (the status line still reads "Saved"/"Connected"
+ * off it), and the dots are a display the viewer can step out of rather than a
+ * value this component owns. Nothing here logs, copies or persists the
+ * plaintext: the reveal state is UI state (a `remember`, never
+ * `rememberSaveable`) and the reveal goes back to dots on focus loss (see
+ * [shouldRemaskKey]), so re-entering the screen always comes up masked.
+ *
+ * Takes the field's place in the caller's Row: pass the `weight(1f)` the field
+ * used to take, and keep the [KBPasteChip] beside it as before.
+ */
+@Composable
+fun KBSecretField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    modifier: Modifier = Modifier,
+    focusRequester: FocusRequester? = null,
+    onDone: (() -> Unit)? = null,
+    onFocusChanged: ((Boolean) -> Unit)? = null
+) {
+    var revealed by remember { mutableStateOf(false) }
+    var fieldFocused by remember { mutableStateOf(false) }
+    var chipFocused by remember { mutableStateOf(false) }
+
+    LaunchedEffect(fieldFocused, chipFocused) {
+        if (shouldRemaskKey(fieldFocused, chipFocused)) revealed = false
+    }
+
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        KBTextField(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = placeholder,
+            modifier = Modifier.weight(1f),
+            focusRequester = focusRequester,
+            visualTransformation = secretFieldTransformation(revealed),
+            onDone = onDone,
+            onFocusChanged = { focused ->
+                fieldFocused = focused
+                onFocusChanged?.invoke(focused)
+            }
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        KBRevealChip(
+            revealed = revealed,
+            onToggle = { revealed = !revealed },
+            onFocusChanged = { chipFocused = it }
+        )
+    }
+}
+
+/**
+ * The eye that reveals a masked key, beside it - the [KBPasteChip] pattern.
+ *
+ * Focusable (a [KBCard] like every other chip), so D-pad Right from the field
+ * reaches it and OK reveals. Its contentDescription reports the STATE, not
+ * just the glyph, so the reveal is announced as "Show API key"/"Hide API key"
+ * rather than as an unlabelled eye - the D-pad user cannot see the icon change.
+ * The glyph itself follows the same convention the catalog builder's visibility
+ * control uses: the icon shows which way the press will go.
+ */
+@Composable
+fun KBRevealChip(
+    revealed: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    onFocusChanged: ((Boolean) -> Unit)? = null
+) {
+    KBCard(
+        onClick = onToggle,
+        modifier = modifier.onFocusChanged { onFocusChanged?.invoke(it.isFocused) }
+    ) {
+        Icon(
+            imageVector = if (revealed) Icons.Filled.Visibility
+            else Icons.Filled.VisibilityOff,
+            contentDescription = if (revealed) "Hide API key" else "Show API key",
+            tint = if (revealed) KBAccent else KBTextLo,
             modifier = Modifier
                 .padding(horizontal = 12.dp, vertical = 9.dp)
                 .size(16.dp)

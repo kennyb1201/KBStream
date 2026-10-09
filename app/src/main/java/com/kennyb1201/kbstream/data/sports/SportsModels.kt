@@ -90,6 +90,16 @@ data class SportsGame(
     val state: GameState,
     /** "Q3 4:32" live, "7:30 PM ET" upcoming, "Final" after. */
     val statusDetail: String,
+    /**
+     * The situation line of a live game, in the feed's own terms: "3rd & 7 ·
+     * Ball on NE 32" for football, "Top 5th · 1 out" for baseball. Null
+     * everywhere else - an upcoming or final game has no situation, and a
+     * league whose scoreboard carries none (soccer, hockey, the individual
+     * sports) shows no line rather than a placeholder. Parsed from the same
+     * scoreboard payload as [statusDetail], so it costs no extra request; see
+     * `espnSituation`.
+     */
+    val situation: String? = null,
     val away: SportsTeam,
     val home: SportsTeam,
     /** Networks airing it, e.g. ["ESPN"] - the bridge to the playlist. */
@@ -118,6 +128,30 @@ data class SportsGame(
      * rather than forcing one.
      */
     val leaders: List<GameLeader> = emptyList(),
+)
+
+/**
+ * What ESPN's summary endpoint carries for one game.
+ *
+ * A separate shape from [SportsGame] because it is a separate and much heavier
+ * document (`.../summary?event={id}`), fetched LAZILY - only while a live game's
+ * detail sheet is open - and never by a card. Every field is nullable/empty on
+ * purpose: the summary's shape varies by league, and a league ESPN covers
+ * thinly (or not at all) has to degrade to the plain sheet rather than to an
+ * error.
+ */
+data class EspnGameSummary(
+    /**
+     * Paired stat rows: label + away/home display values, e.g.
+     * ("Total Yards", "312", "298"). Only the labels ESPN actually sends for
+     * BOTH sides are kept, so a row is never a pair of dashes; empty means the
+     * sheet draws no stats table at all.
+     */
+    val teamStats: List<Triple<String, String, String>> = emptyList(),
+    /** 0..100, home-team win chance; null when ESPN doesn't carry it. */
+    val homeWinProbability: Int? = null,
+    /** Most recent play text, e.g. "J. Allen pass to S. Diggs for 14 yds". Null when absent. */
+    val lastPlay: String? = null,
 )
 
 /** One row of a tournament leaderboard. */

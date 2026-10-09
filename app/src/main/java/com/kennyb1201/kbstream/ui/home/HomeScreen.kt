@@ -3750,6 +3750,15 @@ fun HomeScreen(
                                             collection = e.collection,
                                             onOpenFolder = onOpenKBFolder,
                                             onFolderFocused = { folder: KBFolder ->
+                                                // TEMP FOCUS_DIAG (focus-oscillation
+                                                // diagnosis - remove with the logs
+                                                // in KBHomeSlots): proves whether a
+                                                // tile's focus gain propagated up.
+                                                Log.d(
+                                                    "FOCUS_DIAG",
+                                                    "onFolderFocused id=${folder.id} " +
+                                                        "title=\"${folder.title}\""
+                                                )
                                                 userAdjustedFocus = true
                                                 focusedFolder = folder
                                                 focusedContinueWatchingItem = null

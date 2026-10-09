@@ -16,7 +16,9 @@ import com.kennyb1201.kbstream.data.iptv.playlistUrlsOf
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.EspnSportsRepository
+import com.kennyb1201.kbstream.data.sports.EspnSummaryRules
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.MatcherProgram
 import com.kennyb1201.kbstream.data.sports.SportsChannelMatcher
@@ -199,6 +201,63 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         SportsNotificationWorker.syncScheduleForPrefs(getApplication())
     }
 
+    /**
+     * The open detail sheet's game summary - team stats, win probability, the
+     * last play - or null when there is none to draw.
+     *
+     * Null is the ordinary state, not a failure: an upcoming or final game
+     * never fetches one, a league ESPN does not summarise has nothing to parse,
+     * and a request that fails leaves the sheet exactly as it is today. The
+     * sheet therefore needs no error state and no spinner - it draws the stats
+     * section when this is non-empty and skips it otherwise.
+     */
+    private val _detailSummary = MutableStateFlow<EspnGameSummary?>(null)
+    val detailSummary: StateFlow<EspnGameSummary?> = _detailSummary.asStateFlow()
+
+    /**
+     * The sheet's own game: the league path and event id its summary is read
+     * by, or null when no sheet is open.
+     *
+     * Held apart from [_detailSummary] because the refresh needs to know WHICH
+     * game the sheet is showing even while the summary it has is stale - and
+     * because clearing this is what stops the tick re-reading a summary for a
+     * sheet the viewer has closed.
+     */
+    private var detailRequest: Pair<String, String>? = null
+
+    private var detailJob: Job? = null
+
+    /**
+     * The detail sheet opened on [game]: the summary is fetched LAZILY, here and
+     * nowhere else, and only for a live game (see [EspnSummaryRules.shouldFetch]).
+     *
+     * Cards never call this - a card tap raises the sheet, and the sheet is what
+     * asks - so scrolling a board of twenty games costs no summary requests at
+     * all. A previous summary is dropped first, so the sheet never draws the
+     * last game's stats under this game's header while the new ones are on the
+     * way.
+     */
+    fun openDetail(game: SportsGame) {
+        detailRequest = game.league to game.id
+        detailJob?.cancel()
+        _detailSummary.value = null
+        if (!EspnSummaryRules.shouldFetch(game.state)) return
+        detailJob = viewModelScope.launch { loadDetailSummary() }
+    }
+
+    /** The sheet closed: nothing left for the live tick to keep fresh. */
+    fun closeDetail() {
+        detailRequest = null
+        detailJob?.cancel()
+        detailJob = null
+        _detailSummary.value = null
+    }
+
+    private suspend fun loadDetailSummary() {
+        val (leaguePath, eventId) = detailRequest ?: return
+        _detailSummary.value = espn.gameSummary(leaguePath, eventId)
+    }
+
     private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -268,10 +327,31 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * START it earlier - in parallel with the ESPN scoreboard fetch the screen
      * would otherwise wait for before touching the playlist at all - so [init]
      * launches it and every later pass awaits this one job instead of reading
-     * the same rows again. Dropped by [retryLineup], which is what makes the NO
-     * LINEUP notice's retry a real re-read.
+     * the same rows again. Cancelled and dropped by [retryLineup], which is what
+     * makes the NO LINEUP notice's retry a real re-read - and what stops the
+     * replaced read from publishing its stale result (see [lineupGeneration]).
      */
     private var channelsJob: Deferred<List<IptvChannel>>? = null
+
+    /**
+     * Which lineup read is the newest, bumped whenever one starts.
+     *
+     * See [readPlaylistChannels], which writes its result straight into
+     * [playlistChannels], and [retryLineup], which REPLACES an in-flight read
+     * rather than awaiting it. Cancelling the old read covers the ordinary case,
+     * but a coroutine already past its last suspension point cannot be stopped: it
+     * would then finish AFTER the fresh read and put the pre-retry lineup back in
+     * the field - the exact channels the viewer hit retry to be rid of. So every
+     * read carries the generation it was started in, and only the newest one is
+     * allowed to publish.
+     *
+     * Volatile, and incremented only on the caller's thread: matching passes run
+     * on the main dispatcher, while the guarded read happens on `Dispatchers.IO`,
+     * so the write has to be visible across threads. The increment itself never
+     * races - every bump is a call to [startLineupRead] from the main thread.
+     */
+    @Volatile
+    private var lineupGeneration = 0
 
     /**
      * The guide index built for [playlistChannels], kept for the ViewModel's
@@ -355,6 +435,15 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // than awaiting the same empty answer. It is re-started here rather than
         // left to the matching pass so the retry is already in flight by the
         // time the sections land.
+        //
+        // CANCELLED before it is dropped: an orphaned read keeps running on
+        // Dispatchers.IO and writes its stale result into [playlistChannels] when
+        // it finishes (see [readPlaylistChannels]), which on a large provider is
+        // the pre-retry lineup arriving after the fresh one - the retry would
+        // look like it worked while showing the channels the viewer was trying to
+        // get rid of. A not-yet-stoppable completion is caught by the generation
+        // guard on the write instead.
+        channelsJob?.cancel()
         channelsJob = null
         prewarmLineup()
         refresh()
@@ -545,13 +634,31 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         val updated = _sections.value.map { fresh[it.league.path] ?: it }
         _sections.value = updated
         resolveMatches(updated)
+        refreshDetailSummary()
         return paths.any { path ->
             SportsLivePollRules.hasLive(updated.firstOrNull { it.league.path == path })
         }
     }
 
+    /**
+     * Keeps the open sheet's stats moving on the hub's OWN beat.
+     *
+     * No new timer: this rides [refreshLeagues], which the existing 30s live
+     * tick already runs for the tab in front of the viewer, so a live game's
+     * stats and its score are refreshed by the same loop. The repository's 60s
+     * summary TTL is what keeps every other beat free (see `gameSummary`), and
+     * this does nothing at all when no sheet is open - [detailRequest] is null
+     * the rest of the time.
+     */
+    private fun refreshDetailSummary() {
+        if (detailRequest == null) return
+        detailJob?.cancel()
+        detailJob = viewModelScope.launch { loadDetailSummary() }
+    }
+
     override fun onCleared() {
         livePollJob?.cancel()
+        detailJob?.cancel()
         super.onCleared()
     }
 
@@ -794,14 +901,23 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Starts the lineup read if none is in flight, and returns that read. */
-    private fun startLineupRead(): Deferred<List<IptvChannel>> =
-        viewModelScope.async(Dispatchers.IO) {
+    private fun startLineupRead(): Deferred<List<IptvChannel>> {
+        // Stamped HERE, on the caller's thread rather than inside the coroutine:
+        // the order two reads are STARTED in is what the write guard orders them
+        // by, and an `async` body does not run until its dispatcher does.
+        val generation = ++lineupGeneration
+        return viewModelScope.async(Dispatchers.IO) {
             // A failed read degrades to an empty lineup, exactly as the
             // synchronous version did: the hub then says it has no lineup to
             // match against (see [LineupStatus.MISSING]) rather than failing the
-            // pass. It is NOT cached, so the next pass reads again.
-            runCatchingCancellable { readPlaylistChannels() }.getOrDefault(emptyList())
+            // pass. It is NOT cached, so the next pass reads again - and a read
+            // that was CANCELLED (retryLineup) is not a failure at all:
+            // [runCatchingCancellable] rethrows the cancellation, so it never
+            // reaches the degrade path.
+            runCatchingCancellable { readPlaylistChannels(generation) }
+                .getOrDefault(emptyList())
         }.also { channelsJob = it }
+    }
 
     /**
      * Starts the lineup read early. See [channelsJob]; a no-op when one is
@@ -818,7 +934,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * the cache, and the guide's own loading for why extra playlists get their
      * channel ids namespaced.
      */
-    private suspend fun readPlaylistChannels(): List<IptvChannel> {
+    private suspend fun readPlaylistChannels(generation: Int): List<IptvChannel> {
         val entries = playlistUrlsOf(
             playlistUrl = prefs.getString(KEY_PLAYLIST_URL, ""),
             extraPlaylistUrls = prefs.getString(KEY_EXTRA_PLAYLIST_URLS, "")
@@ -855,7 +971,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         val distinct = merged.distinctBy { it.id }
-        if (distinct.isNotEmpty()) playlistChannels = distinct
+        // Only the NEWEST read may publish. [retryLineup] cancels the read it
+        // replaces, but a coroutine already past its last suspension point still
+        // runs to this line: without the generation check it would write the
+        // pre-retry lineup AFTER the fresh read had written its own, which is the
+        // clobber the retry exists to avoid (see [lineupGeneration]).
+        if (generation == lineupGeneration && distinct.isNotEmpty()) {
+            playlistChannels = distinct
+        }
         Log.d(TAG, "SPORTS LINEUP channels=${distinct.size} playlists=${loaded.size}")
         return distinct
     }

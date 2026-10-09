@@ -1,8 +1,10 @@
 package com.kennyb1201.kbstream.ui.sports
 
 import com.kennyb1201.kbstream.data.format.DateFormats
+import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.SportsGame
+import com.kennyb1201.kbstream.data.sports.TournamentEvent
 
 /** One labelled line of the game-detail sheet. */
 data class GameDetailRow(val label: String, val value: String)
@@ -36,7 +38,19 @@ internal object SportsDetailRules {
     fun statusLine(game: SportsGame): String = when (game.state) {
         GameState.LIVE -> game.statusDetail.ifBlank { "LIVE" }
         GameState.FINAL -> "Final"
-        GameState.UPCOMING -> upcomingLabel(game)
+        GameState.UPCOMING -> upcomingLabel(game.dateMs, game.statusDetail)
+    }
+
+    /**
+     * A tournament's own status line - "Round 1 - Play Complete", the tee time,
+     * "Final" - from the same strings the card draws. A tournament has no sides
+     * and no score, so this is the whole of its state, and the sheet says it
+     * exactly as the card does.
+     */
+    fun statusLine(event: TournamentEvent): String = when (event.state) {
+        GameState.LIVE -> event.statusDetail.ifBlank { "LIVE" }
+        GameState.FINAL -> "Final"
+        GameState.UPCOMING -> upcomingLabel(event.dateMs, event.statusDetail)
     }
 
     /**
@@ -73,6 +87,21 @@ internal object SportsDetailRules {
     }
 
     /**
+     * A tournament's detail rows, from the same field rules the game sheet uses:
+     * venue, then broadcast, then ESPN's own context line (a golf round's
+     * "Round 2", an F1 weekend's session). Blank fields are omitted rather than
+     * drawn as empty lines, so a stop with no venue and no note yields fewer
+     * rows instead of a sheet of gaps.
+     */
+    fun detailRows(event: TournamentEvent): List<GameDetailRow> = buildList {
+        event.venue?.takeIf { it.isNotBlank() }?.let { add(GameDetailRow("Venue", it)) }
+        event.broadcastNames.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }?.let { names ->
+            add(GameDetailRow("Broadcast", names.joinToString(", ")))
+        }
+        event.note?.takeIf { it.isNotBlank() }?.let { add(GameDetailRow("Event", it)) }
+    }
+
+    /**
      * One line per leader, prefixed by the side they play for so the two lines
      * read as "one for each team": "LAL · LeBron James — 28 PTS, 11 REB". Empty
      * when the feed carried no leaders.
@@ -81,6 +110,23 @@ internal object SportsDetailRules {
         val side = leader.teamAbbreviation.trim().takeIf { it.isNotEmpty() }?.let { "$it · " }.orEmpty()
         val summary = leader.summary.trim().takeIf { it.isNotEmpty() }?.let { " — $it" }.orEmpty()
         "$side${leader.name}$summary"
+    }
+
+    /**
+     * Whether the sheet's LIVE STATS section is drawn at all.
+     *
+     * The section is skipped WHOLE when the summary has nothing in it - every
+     * field null or empty - so a live game ESPN carries no stats for (or one
+     * whose summary never arrived) looks exactly like today's sheet: no empty
+     * heading, no placeholder rows, no "no stats" line. The three parts are
+     * independent, so a soccer summary with stats and no win probability draws
+     * its table and no bar.
+     */
+    fun hasLiveStats(summary: EspnGameSummary?): Boolean {
+        if (summary == null) return false
+        return summary.homeWinProbability != null ||
+            summary.teamStats.isNotEmpty() ||
+            !summary.lastPlay.isNullOrBlank()
     }
 
     /**
@@ -114,13 +160,13 @@ internal object SportsDetailRules {
     }
 
     /** "Tue, 7:30 PM" in the device's zone, plus ESPN's own detail if it adds any. */
-    private fun upcomingLabel(game: SportsGame): String {
-        val when_ = if (game.dateMs > 0L) {
-            DateFormats.time(game.dateMs, DateFormats.WEEKDAY_CLOCK_12H)
+    private fun upcomingLabel(dateMs: Long, statusDetail: String): String {
+        val when_ = if (dateMs > 0L) {
+            DateFormats.time(dateMs, DateFormats.WEEKDAY_CLOCK_12H)
         } else {
             ""
         }
-        val detail = game.statusDetail.trim()
+        val detail = statusDetail.trim()
         // ESPN's "7:30 PM ET" duplicates the clock we just formatted; a detail
         // that is only a time adds nothing, so it is only shown when it says
         // something else (a delayed start, a suspension).

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -69,6 +70,7 @@ import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
@@ -168,9 +170,16 @@ fun CatalogBuilderScreen(
                 onDelete = { pendingDelete = it }
             )
         } else {
+            // The shelf PREVIEW fills is pinned HERE, under the header that
+            // fills it, rather than at the foot of the editor's twenty-six-
+            // section scroll: pressing PREVIEW used to change nothing the
+            // viewer could see, because the row it filled was several screens
+            // below the fold - so the button read as dead and the rules read
+            // as returning nothing. See PreviewPanel.
+            PreviewPanel(preview = preview)
+            Spacer(modifier = Modifier.height(10.dp))
             CatalogEditor(
                 catalog = current,
-                preview = preview,
                 keywordSuggestions = viewModel.keywordSuggestions
                     .collectAsStateWithLifecycle().value,
                 keywordNames = viewModel.keywordNames.collectAsStateWithLifecycle().value,
@@ -478,7 +487,6 @@ private fun CatalogList(
 @Composable
 private fun CatalogEditor(
     catalog: CustomCatalog,
-    preview: CatalogBuilderViewModel.PreviewState,
     keywordSuggestions: List<com.kennyb1201.kbstream.data.tmdb.TmdbSearchKeywordResult>,
     keywordNames: Map<Int, String>,
     keywordsInclude: Boolean,
@@ -931,9 +939,6 @@ private fun CatalogEditor(
             )
         }
 
-        EditorSection(title = "Preview") {
-            PreviewRow(preview = preview)
-        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -990,7 +995,18 @@ private fun ChipRow(
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        contentPadding = PaddingValues(vertical = 2.dp)
+        // A lazy row clips its own content, so the chip the D-pad is on lost
+        // its growth, its ring and its glow flat along the row's edges - the
+        // LAST chip worst of all, because focus only reaches it once the row
+        // has scrolled to its end and it is sitting flush against the cut.
+        // The room goes INSIDE the clip and is cancelled just below it, which
+        // leaves the row's left alignment exactly as it was.
+        // See [KBFocusChipInset].
+        contentPadding = PaddingValues(
+            horizontal = KBFocusChipInset,
+            vertical = 2.dp
+        ),
+        modifier = Modifier.offset(x = -KBFocusChipInset)
     ) {
         items(items = options, key = { it.id }) { option ->
             BuilderChip(
@@ -1020,7 +1036,18 @@ private fun CodeChipRow(
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        contentPadding = PaddingValues(vertical = 2.dp)
+        // A lazy row clips its own content, so the chip the D-pad is on lost
+        // its growth, its ring and its glow flat along the row's edges - the
+        // LAST chip worst of all, because focus only reaches it once the row
+        // has scrolled to its end and it is sitting flush against the cut.
+        // The room goes INSIDE the clip and is cancelled just below it, which
+        // leaves the row's left alignment exactly as it was.
+        // See [KBFocusChipInset].
+        contentPadding = PaddingValues(
+            horizontal = KBFocusChipInset,
+            vertical = 2.dp
+        ),
+        modifier = Modifier.offset(x = -KBFocusChipInset)
     ) {
         items(items = options, key = { it.code }) { option ->
             BuilderChip(
@@ -1041,7 +1068,18 @@ private fun ChoiceRow(
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        contentPadding = PaddingValues(vertical = 2.dp)
+        // A lazy row clips its own content, so the chip the D-pad is on lost
+        // its growth, its ring and its glow flat along the row's edges - the
+        // LAST chip worst of all, because focus only reaches it once the row
+        // has scrolled to its end and it is sitting flush against the cut.
+        // The room goes INSIDE the clip and is cancelled just below it, which
+        // leaves the row's left alignment exactly as it was.
+        // See [KBFocusChipInset].
+        contentPadding = PaddingValues(
+            horizontal = KBFocusChipInset,
+            vertical = 2.dp
+        ),
+        modifier = Modifier.offset(x = -KBFocusChipInset)
     ) {
         items(items = options, key = { it.first }) { (id, label) ->
             BuilderChip(
@@ -1063,7 +1101,18 @@ private fun NumberChipRow(
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
-        contentPadding = PaddingValues(vertical = 2.dp)
+        // A lazy row clips its own content, so the chip the D-pad is on lost
+        // its growth, its ring and its glow flat along the row's edges - the
+        // LAST chip worst of all, because focus only reaches it once the row
+        // has scrolled to its end and it is sitting flush against the cut.
+        // The room goes INSIDE the clip and is cancelled just below it, which
+        // leaves the row's left alignment exactly as it was.
+        // See [KBFocusChipInset].
+        contentPadding = PaddingValues(
+            horizontal = KBFocusChipInset,
+            vertical = 2.dp
+        ),
+        modifier = Modifier.offset(x = -KBFocusChipInset)
     ) {
         items(items = options, key = { it }) { value ->
             BuilderChip(
@@ -1104,14 +1153,21 @@ private fun BuilderChip(
                 KBSurface.copy(alpha = 0.80f)
             },
             contentColor = if (selected) KBAccent else KBTextHi,
+            // A selected chip must not go ACCENT ON ACCENT while the D-pad is
+            // on it: an accent label on the selected accent wash is one color
+            // on one color, and the rule set the viewer is reading is exactly
+            // the one they cannot read. Focus instead deepens the wash a step
+            // and puts the label in the light tone, so the chip stays both
+            // legible AND visibly selected (see BrowseCategoryTab, which fixes
+            // the same thing the same way).
             focusedContainerColor = if (selected) {
                 KBAccent.copy(alpha = 0.32f)
             } else {
                 KBSurfaceRaised
             },
-            focusedContentColor = KBAccent,
+            focusedContentColor = KBTextHi,
             pressedContainerColor = KBSurfaceRaised,
-            pressedContentColor = KBAccent
+            pressedContentColor = KBTextHi
         ),
         scale = ClickableSurfaceDefaults.scale(
             // The chip step of the shared focus scale: at 1.04 a capsule grew
@@ -1198,7 +1254,54 @@ private fun PickedFilterRow(
     }
 }
 
-/** The preview shelf: what the current rules actually return. */
+/**
+ * The preview shelf, pinned under the header that fills it.
+ *
+ * PREVIEW is pressed in the header, so its result has to land where the viewer
+ * is already looking. As the editor's last section it was decided correctly and
+ * drawn invisibly: the press changed a row several screens below the fold, which
+ * reads as a dead button AND as rules that return nothing. It is drawn by the
+ * screen instead, above the editor's scroll, and it states how many titles came
+ * back - so a run that returned nothing at all is told apart from one that never
+ * ran.
+ */
+@Composable
+private fun PreviewPanel(preview: CatalogBuilderViewModel.PreviewState) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = KBShapeCard,
+        colors = SurfaceDefaults.colors(
+            containerColor = KBSurface.copy(alpha = 0.55f),
+            contentColor = KBTextHi
+        )
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .width(3.dp)
+                        .height(12.dp)
+                        .background(KBAccent, KBShapeSmall)
+                )
+                Spacer(modifier = Modifier.width(7.dp))
+                Text(
+                    text = if (preview.items.isEmpty()) {
+                        "PREVIEW"
+                    } else {
+                        "PREVIEW \u00b7 ${preview.items.size} TITLES"
+                    },
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            PreviewRow(preview = preview)
+        }
+    }
+}
+
+/** The preview shelf's content: what the current rules actually return. */
 @Composable
 private fun PreviewRow(preview: CatalogBuilderViewModel.PreviewState) {
     when {

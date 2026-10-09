@@ -76,6 +76,42 @@ class UiUniformityBatchAContractTest {
     }
 
     @Test
+    fun `the discover chip row keeps a selected chip readable while focused`() {
+        // The same rule as the card above, in the genre/service row the Studio
+        // and Decade discover screens are crossed with. A SELECTED chip is an
+        // accent wash under an accent label, so the focus colors have to be
+        // spelled out: with them unset, the chip the D-pad was on fell back to
+        // that pair and the filter the row is currently on - the one the viewer
+        // is reading at that moment - was one color on one color.
+        val chips = source("ui/components/GenreChipRow.kt")
+        assertTrue(
+            "a focused discover chip must take the light label, not the accent",
+            chips.contains("focusedContentColor = KBTextHi")
+        )
+        assertFalse(
+            "no discover chip may draw the accent label over the accent wash",
+            chips.contains("focusedContentColor = KBAccent")
+        )
+        assertTrue(
+            "a focused SELECTED chip must deepen its wash a step instead of " +
+                "flattening into one accent",
+            chips.contains(
+                "focusedContainerColor = if (selected) { KBAccent.copy(alpha = 0.34f) } " +
+                    "else { KBSurfaceRaised }"
+            )
+        )
+        assertFalse(
+            "and a press must not fall back to that pair either",
+            chips.contains("pressedContentColor = KBAccent")
+        )
+        assertTrue(
+            "the unfocused selected state is unchanged: accent label on the wash, " +
+                "so the row still says which filter is on while focus is elsewhere",
+            chips.contains("contentColor = when { selected -> KBAccent")
+        )
+    }
+
+    @Test
     fun `the sync section draws one heading, not two`() {
         val sync = source("ui/settings/SyncSection.kt")
         assertFalse(

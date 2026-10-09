@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.kb
 
+import android.util.Log
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -11,9 +12,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -604,11 +607,27 @@ fun KBHomeCollectionRail(
         // straight off the left edge of the screen, so a collection always
         // looked a little clipped compared with the catalog rail below it.
 
+        // TEMP FOCUS_DIAG (focus-oscillation diagnosis - remove with the logs
+        // below): hoisted so a tile's focus event can report the rail's scroll
+        // position alongside it.
+        val listState = rememberLazyListState()
+
         // Only the drawable tiles: see [collectionRailTiles] for why the
         // null-id folders are dropped here and not inside the item block.
-        val tiles = remember(collection) { collectionRailTiles(collection.folders) }
+        val tiles = remember(collection) {
+            val t = collectionRailTiles(collection.folders)
+            // TEMP FOCUS_DIAG: fires only when this block actually RE-RUNS, so a
+            // burst of these between two focus events means the list is churning
+            // (and the id order across them says whether the keys rebind).
+            Log.d(
+                "FOCUS_DIAG",
+                "tiles rebuilt: size=${t.size} ids=${t.take(20).joinToString { it.first }}"
+            )
+            t
+        }
 
         LazyRow(
+            state = listState,
             contentPadding = PaddingValues(
                 start = RailHorizontalStartPadding,
                 end = TvSafeAreaHorizontal,
@@ -628,6 +647,7 @@ fun KBHomeCollectionRail(
                 val requester = remember { FocusRequester() }
                 CollectionFolderTile(
                     folder = folder,
+                    listState = listState,
                     onClick = { onOpenFolder(folderId) },
                     onFocus = onFolderFocused?.let { callback -> { callback(folder) } },
                     modifier = Modifier
@@ -642,6 +662,10 @@ fun KBHomeCollectionRail(
 @Composable
 private fun CollectionFolderTile(
     folder: KBFolder,
+    // TEMP FOCUS_DIAG: read for the scroll position in the focus log below, so
+    // a bring-into-view loop can be told from a real focus change. Remove the
+    // parameter with the logs.
+    listState: LazyListState,
     onClick: () -> Unit,
     onFocus: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -650,6 +674,16 @@ private fun CollectionFolderTile(
     var isFocused by remember { mutableStateOf(false) }
     val focusModifier = Modifier.onFocusChanged {
         isFocused = it.isFocused
+        // TEMP FOCUS_DIAG (remove once the oscillation cause is found): every
+        // focus transition with the rail's scroll position, so focus gain/loss
+        // can be read against the list moving under it.
+        Log.d(
+            "FOCUS_DIAG",
+            "tile ${if (it.isFocused) "GAINED" else "LOST"} " +
+                "id=${folder.id} title=\"${folder.title}\" " +
+                "scrollIdx=${listState.firstVisibleItemIndex} " +
+                "scrollOff=${listState.firstVisibleItemScrollOffset}"
+        )
         if (it.isFocused) onFocus?.invoke()
     }
 

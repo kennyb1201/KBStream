@@ -278,6 +278,10 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
      * see the shelf. A null result means the query itself failed (no TMDB key, no
      * network); an empty list means the rules are simply too narrow, which is
      * also worth saying out loud.
+     *
+     * It also runs the one pass HOME runs on top of that query - the app-wide
+     * English-only browse filter - so the shelf on screen is the rail Home will
+     * draw rather than a more generous version of it (see the filter below).
      */
     fun runPreview() {
         val catalog = _draft.value ?: return
@@ -293,7 +297,23 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
                 )
             }.getOrNull()
 
-            val metas = items.orEmpty().take(PREVIEW_LIMIT).map { item ->
+            // Home runs ONE more pass over a built catalog before it draws the
+            // rail: the app-wide English-only browse filter. A preview that
+            // skipped it could honestly report twenty titles for a rail Home
+            // would not draw at all, which from the couch is exactly what "my
+            // catalog was never made" looks like. The preview is the rail, so it
+            // makes the same pass - and says so when that pass is what emptied
+            // the row.
+            val language = tmdbRepository.browseLanguage()
+            val shown = items.orEmpty()
+                .filter { item ->
+                    language == null ||
+                        item.originalLanguage == null ||
+                        item.originalLanguage.equals(language, ignoreCase = true)
+                }
+                .take(PREVIEW_LIMIT)
+
+            val metas = shown.map { item ->
                 MetaPreview(
                     id = "tmdb:" + item.id,
                     type = catalog.railType,
@@ -312,8 +332,14 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
 
             _preview.value = when {
                 items == null -> PreviewState(message = "Preview unavailable right now")
-                metas.isEmpty() -> PreviewState(message = "No titles match these rules")
-                else -> PreviewState(items = metas)
+                metas.isNotEmpty() -> PreviewState(items = metas)
+                items.isEmpty() -> PreviewState(message = "No titles match these rules")
+                else -> PreviewState(
+                    message = "No English titles match these rules. Settings' " +
+                        "English-only browse filter is on, and Home drops " +
+                        "this rail's non-English titles the same way - turn " +
+                        "it off to see them."
+                )
             }
         }
     }

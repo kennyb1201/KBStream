@@ -36,7 +36,13 @@ class CollectionRailWiringContractTest {
         )
         assertTrue(
             "and memoised against the collection so the list is not rebuilt per frame",
-            rail.contains("remember(collection) { collectionRailTiles(collection.folders) }")
+            // Asserted as the two facts the one-liner used to spell out together
+            // (the memo key, and the rule being what fills it) rather than as the
+            // exact one-line text: the tile-list build is instrumented with a
+            // temporary FOCUS_DIAG log, and this contract has to hold with the
+            // logging present AND once those lines are removed again.
+            rail.contains("remember(collection) {") &&
+                rail.contains("collectionRailTiles(collection.folders)")
         )
         assertTrue(
             "the null-id filter must not still live in the item block - that is " +

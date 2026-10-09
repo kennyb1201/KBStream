@@ -96,6 +96,7 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
+import com.kennyb1201.kbstream.ui.components.KBSecretField
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.player.PlayerAudioTuning
 import com.kennyb1201.kbstream.ui.player.PlayerTrackBridge
@@ -667,7 +668,10 @@ fun SettingsScreen(
                                 .padding(top = 6.dp)
                                 .fillMaxWidth()
                         ) {
-                            KBTextField(
+                            // Masked by default with a reveal chip: the key is a
+                            // secret, and this screen is on a TV in a room. The
+                            // value itself is unchanged - see KBSecretField.
+                            KBSecretField(
                                 value = mdbListKeyInput,
                                 onValueChange = {
                                     mdbListKeyInput = it.trim()
@@ -869,7 +873,10 @@ fun SettingsScreen(
                                 .padding(top = 6.dp)
                                 .fillMaxWidth()
                         ) {
-                            KBTextField(
+                            // Masked by default, reveal chip beside it - see
+                            // KBSecretField; the saved/verify paths still read
+                            // the real key string.
+                            KBSecretField(
                                 value = subsKeyInput,
                                 onValueChange = {
                                     subsKeyInput = it.trim()
@@ -955,7 +962,9 @@ fun SettingsScreen(
                                 .padding(top = 6.dp)
                                 .fillMaxWidth()
                         ) {
-                            KBTextField(
+                            // Masked by default, reveal chip beside it - see
+                            // KBSecretField.
+                            KBSecretField(
                                 value = torboxKeyInput,
                                 onValueChange = {
                                     torboxKeyInput = it.trim()

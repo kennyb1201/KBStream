@@ -111,7 +111,28 @@ private fun DiscoverFilterChip(
                 selected -> KBAccent
                 focused -> KBTextHi
                 else -> KBTextLo
-            }
+            },
+            // A selected chip draws an accent wash under an accent label, so a
+            // focus that ALSO put the label in the accent left the filter this
+            // row is currently on - the one the viewer is reading - in one
+            // color on one color. Focus deepens the wash a step and takes the
+            // label to the light tone, so the chip stays legible AND stays
+            // visibly selected; the press needs the same pair, because with
+            // nothing set it fell back to exactly the accent-on-accent
+            // combination focus used to. The same fix as KBCard's label,
+            // BrowseCategoryTab's open tab and the Catalog Builder's chips.
+            focusedContainerColor = if (selected) {
+                KBAccent.copy(alpha = 0.34f)
+            } else {
+                KBSurfaceRaised
+            },
+            focusedContentColor = KBTextHi,
+            pressedContainerColor = if (selected) {
+                KBAccent.copy(alpha = 0.34f)
+            } else {
+                KBSurfaceRaised
+            },
+            pressedContentColor = KBTextHi
         ),
         // The shared focus vocabulary (see KBFocus* in the theme). These are
         // the chips the discover screens are crossed with -- services,

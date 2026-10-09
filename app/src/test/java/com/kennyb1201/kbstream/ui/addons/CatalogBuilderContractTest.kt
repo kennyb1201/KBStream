@@ -634,4 +634,114 @@ class CatalogBuilderContractTest {
             screen.contains("onClick = { viewModel.delete(")
         )
     }
+
+    // -------------------------------------------------- focus vs the clip --
+
+    @Test
+    fun `every chip row leaves room for the focused chip inside its own clip`() {
+        // A LazyRow clips its own content, so the chip the D-pad is on had its
+        // growth, its ring and its glow cut flat along the row's edges - the
+        // LAST chip worst of all, because focus only reaches it once the row
+        // has scrolled to its end and it is sitting flush against the cut. The
+        // room has to be spent INSIDE that clip and cancelled just outside it
+        // (see KBFocusChipInset), on every row, or the button that is supposed
+        // to show what is focused is the one thing the viewer cannot see.
+        val screen = builder()
+        listOf(
+            "private fun ChipRow(" to "private fun CodeChipRow(",
+            "private fun CodeChipRow(" to "private fun ChoiceRow(",
+            "private fun ChoiceRow(" to "private fun NumberChipRow(",
+            "private fun NumberChipRow(" to "private fun BuilderChip("
+        ).forEach { (start, end) ->
+            val row = between(screen, start, end)
+            assertTrue(
+                "$start leaves no room inside its clip for a focused chip",
+                row.contains("horizontal = KBFocusChipInset")
+            )
+            assertTrue(
+                "$start does not cancel that inset, so it would shift the row",
+                row.contains("Modifier.offset(x = -KBFocusChipInset)")
+            )
+        }
+    }
+
+    @Test
+    fun `a selected chip stays readable while the D-pad is on it`() {
+        // A selected chip is an accent wash under an accent label. Focus used
+        // to keep the label in the accent, which is one color on one color: the
+        // rule set the viewer is reading at that exact moment is the one they
+        // cannot read. Focus deepens the wash a step and puts the label in the
+        // light tone instead (the same fix BrowseCategoryTab documents).
+        val chip = between(
+            builder(),
+            "private fun BuilderChip(",
+            "private fun PickedFilterRow("
+        )
+        val squashed = squash(chip)
+        assertTrue(
+            "a focused chip must not keep the accent label on the accent wash",
+            squashed.contains("focusedContentColor = KBTextHi")
+        )
+        assertTrue(
+            "and a focused SELECTED chip must deepen its wash, not flatten it",
+            squashed.contains(
+                "focusedContainerColor = if (selected) { KBAccent.copy(alpha = 0.32f) } " +
+                    "else { KBSurfaceRaised }"
+            )
+        )
+    }
+
+    // --------------------------------------------------- preview feedback --
+
+    @Test
+    fun `the preview shelf is drawn under the header that fills it`() {
+        // PREVIEW is pressed in the header. As the editor's last section the
+        // shelf was decided correctly and drawn invisibly - several screens
+        // below the button that filled it - which reads as a dead button AND
+        // as rules that return nothing at all.
+        val screen = builder()
+        val panel = screen.indexOf("PreviewPanel(preview = preview)")
+        val editor = screen.indexOf("CatalogEditor(")
+        assertTrue("the screen does not draw the preview panel", panel > 0)
+        assertTrue(
+            "the preview has to be drawn above the editor's own scroll",
+            editor > panel
+        )
+        assertTrue(
+            "and it has to say how many titles came back, so an empty run " +
+                "reads as empty rather than as never having run",
+            screen.contains("preview.items.size")
+        )
+        assertFalse(
+            "the shelf must not be back at the foot of the editor's scroll",
+            squash(screen).contains("EditorSection(title = \"Preview\")")
+        )
+    }
+
+    @Test
+    fun `the preview predicts the rail Home will draw, not a richer row`() {
+        // Home drops a built catalog's non-English titles before it draws the
+        // rail - the English-only browse switch, on by default - so a preview
+        // that skipped that pass reports titles for a rail that will not be
+        // there. "I built a catalog and nothing was made" is exactly what that
+        // gap looks like from the couch.
+        val vm = squash(viewModel())
+        val preview = between(vm, "fun runPreview(", "fun setKeywordsInclude(")
+        assertTrue(
+            "the preview never runs Home's own English-only pass",
+            preview.contains("tmdbRepository.browseLanguage()")
+        )
+        assertTrue(
+            "and it must read the field Home reads it from",
+            preview.contains("item.originalLanguage")
+        )
+        assertTrue(
+            "the pass the rail makes is the same one",
+            squash(source(HOME_VM)).contains("tmdbRepository.browseLanguage()")
+        )
+        assertTrue(
+            "a row emptied BY that pass has to say so, not read as no results",
+            vm.contains("No English titles match these rules")
+        )
+    }
 }

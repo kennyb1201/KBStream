@@ -1798,6 +1798,34 @@ object AppPreferences {
         values.filter { it.isNotBlank() }.joinToString("\n")
 
     /**
+     * The value the display-prefs blob carries for a stored sports set, or null
+     * when there is nothing for it to carry.
+     *
+     * [readSportsSet] is the local READ of a set, and it accepts both formats
+     * because an upgrading install may still hold the legacy StringSet. Sync
+     * needs the EMISSION, and a StringSet has no representation in the
+     * primitive-only display blob (`prefsValueString` in SyncPrefsPayload drops
+     * anything that is not a JSON primitive), so that stored value was left out
+     * of the payload: the arrangement read back fine on the device it was set on
+     * and never reached the other TV until each setting was re-saved.
+     * Normalizing here, beside
+     * [encodeSportsSet], keeps the format knowledge in one place.
+     *
+     * A String is returned exactly as stored: it is already the setters' form,
+     * and re-splitting and re-joining it could only reorder or drop something
+     * the app itself reads back verbatim. A legacy Set normalizes to that same
+     * newline-separated form; an empty result stays absent, the way a key that
+     * was never written already is.
+     */
+    internal fun sportsSetForSync(value: Any?): String? =
+        when (value) {
+            is String -> value
+            is Set<*> ->
+                encodeSportsSet(value.filterIsInstance<String>().toSet()).ifEmpty { null }
+            else -> null
+        }
+
+    /**
      * Cross-device sync: called by every setter of a SYNCED pref. Debounced
      * inside SupabaseSync (outbox coalescing), so spamming toggles is cheap.
      */

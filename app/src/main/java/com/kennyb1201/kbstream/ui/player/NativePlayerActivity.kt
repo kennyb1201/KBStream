@@ -7803,6 +7803,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                 "$label subtitles need the MPV engine; handoff refused, " +
                                     "so subtitles stay off"
                             )
+                            // Refused, not absent: the viewer still wants
+                            // subtitles in this language, and a fetched text track
+                            // renders where the bitmap one cannot. Same gates as
+                            // the Off branch (mode, key, title, once per session)
+                            // - see maybeAutoFetchSubtitle.
+                            maybeAutoFetchSubtitle()
                         }
                     }
                     // Either way the bitmap track must not be left selectable:
@@ -9077,9 +9083,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         dismissPicker()
                     }
                 )
+                // The same position math as the audio rows above, for the same
+                // reason: two same-language text tracks have identical
+                // identities (two English SRT tracks both read "eng|srt|0"),
+                // and only the flat position tells them apart - without it the
+                // press collapses to the first identity match and the wrong
+                // track arms (see PlayerTrackBridge.signatureOf). This
+                // enumeration order matches PlayerTrackBridge.trackRefs exactly
+                // - text groups in order, each group's tracks in order.
+                val totalTextTracks = textGroups.sumOf { it.length }
+                val textPrefixes = textGroups.runningFold(0) { sum, group -> sum + group.length }
                 subtitleItems + listOf(offItem) + textGroups.flatMapIndexed { groupIdx, group ->
                     (0 until group.length).map { trackIdx ->
                         val format = group.getTrackFormat(trackIdx)
+                        val position = textPrefixes[groupIdx] + trackIdx
                         // Non-null when no renderer in THIS engine can draw the
                         // track. Naming it is the fix for the rows that used to
                         // draw nothing with no explanation, and the press below
@@ -9146,7 +9163,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                                     // preferred language.
                                     PlayerTrackBridge.chooseSubtitleTrack(
                                         this@NativePlayerActivity,
-                                        PlayerTrackBridge.signatureOf(format)
+                                        PlayerTrackBridge.signatureOf(
+                                            format,
+                                            index = position,
+                                            trackCount = totalTextTracks
+                                        )
                                     )
                                 }
                             }

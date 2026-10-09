@@ -1,0 +1,205 @@
+package com.kennyb1201.kbstream.ui.sports
+
+import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The live-stats wiring: the situation line on a card, the sheet's stats
+ * section, and - the part the spec is strictest about - WHEN a summary is
+ * fetched at all.
+ *
+ * There is no TV in CI, so the wiring is read out of the source, as the hub's
+ * other contracts are. What is pinned here is the shape of the feature rather
+ * than its words (those are [SportsDetailRulesTest] and
+ * `EspnGameSummaryTest`): the card's line appears only when the feed carried a
+ * situation, the stats section sits between the score header and the channels,
+ * the sheet still fetches nothing itself, and the summary is fetched lazily on
+ * sheet-open for a LIVE game only, refreshed by the hub's existing 30s tick
+ * rather than by a timer of its own.
+ */
+class SportsLiveStatsContractTest {
+
+    private val hub: String by lazy { flat(HUB) }
+    private val model: String by lazy { flat(VIEW_MODEL) }
+
+    /** The game card, from its declaration to the team column after it. */
+    private val card: String by lazy { slice(hub, "private fun GameCard(", "private fun TeamColumn(") }
+
+    /** The detail sheet, from its declaration to the first row helper after it. */
+    private val sheet: String by lazy { slice(hub, "private fun GameDetailSheet(", "private fun DetailRow(") }
+
+    /** Opening and closing the sheet: the only two places a summary is asked for. */
+    private val openDetail: String by lazy { slice(model, "fun openDetail(game: SportsGame) {", "fun closeDetail()") }
+
+    private val refresh: String by lazy {
+        slice(model, "private fun refreshDetailSummary() {", "override fun onCleared()")
+    }
+
+    private val tick: String by lazy {
+        slice(model, "private suspend fun refreshLeagues(", "override fun onCleared()")
+    }
+
+    @Test
+    fun `the card draws the situation line only when the feed carried one`() {
+        assertTrue(
+            "the line is the parsed situation, drawn when it exists",
+            card.contains("game.situation?.takeIf { it.isNotBlank() }?.let { situation ->")
+        )
+        assertTrue(
+            "and it says what the parser built, not a re-spelling of it",
+            card.contains("text = situation,")
+        )
+        assertTrue(
+            "in the card's secondary text style, under the score",
+            card.contains("style = MaterialTheme.typography.bodySmall,") &&
+                card.contains("color = KBTextLo,")
+        )
+        assertTrue(
+            "below the score line rather than above the sides",
+            card.indexOf("ScoreRow(game = game)") < card.indexOf("game.situation?")
+        )
+        assertFalse(
+            "no placeholder: a game without a situation draws nothing at all",
+            card.contains("?: \"\"") || card.contains("situation ?: ")
+        )
+    }
+
+    @Test
+    fun `the stats section sits between the score header and the channels`() {
+        val scoreLine = sheet.indexOf("SportsDetailRules.scoreLine(game)")
+        val stats = sheet.indexOf("LiveStatsSection(game = game, summary = stats)")
+        val detailRows = sheet.indexOf("SportsDetailRules.detailRows(game).forEach")
+        val backups = sheet.indexOf("text = \"BACKUP CHANNELS\"")
+
+        assertTrue("the score header is in the sheet", scoreLine >= 0)
+        assertTrue("the stats section is in the sheet", stats >= 0)
+        assertTrue("it comes after the score header", scoreLine < stats)
+        assertTrue("and before the venue rows, the watch button and the backups", stats < detailRows)
+        assertTrue(backups < 0 || detailRows < backups)
+    }
+
+    @Test
+    fun `the sheet draws the stats section only when there is something in it`() {
+        assertTrue(
+            "one gate for the whole section: an empty summary is the sheet as it was",
+            sheet.contains("summary?.takeIf { SportsDetailRules.hasLiveStats(it) }?.let { stats ->")
+        )
+        assertTrue(
+            "the three parts are drawn in reading order: probability, stats, last play",
+            sheet.indexOf("WinProbabilityBar(game = game, homePercent = chance)") <
+                sheet.indexOf("StatCompareRow(away = awayValue, label = label, home = homeValue)") &&
+                sheet.indexOf("StatCompareRow(away = awayValue, label = label, home = homeValue)") <
+                sheet.indexOf("text = \"Last: \$play\"")
+        )
+        assertTrue(
+            "the probability line names the home side beside the number",
+            sheet.contains("text = \"\${game.home.abbreviation.ifBlank { game.home.displayName }.uppercase()} \" +")
+        )
+        assertTrue(
+            "and the rows read away | label | home, the score header's own order",
+            sheet.contains("private fun StatCompareRow(away: String, label: String, home: String)")
+        )
+    }
+
+    @Test
+    fun `the sheet still fetches nothing itself`() {
+        assertTrue(
+            "it takes the summary the hub read, as a plain parameter",
+            sheet.contains("summary: EspnGameSummary? = null,")
+        )
+        assertFalse(
+            "no repository and no second door onto ESPN",
+            sheet.contains("EspnSportsRepository") || sheet.contains("gameSummary(")
+        )
+        assertFalse(
+            "no loading or error state: the section is simply absent when there is nothing",
+            sheet.contains("CircularProgressIndicator")
+        )
+    }
+
+    @Test
+    fun `opening a live game is what asks for a summary, and only a live one`() {
+        assertTrue(
+            "the policy lives in the repository's rules, not at this call site",
+            openDetail.contains("if (!EspnSummaryRules.shouldFetch(game.state)) return")
+        )
+        assertTrue(
+            "the request is fired lazily, from the open, and no earlier",
+            openDetail.contains("detailJob = viewModelScope.launch { loadDetailSummary() }")
+        )
+        assertFalse(
+            "a card tap is not a fetch: nothing outside openDetail asks for a summary",
+            model.split("espn.gameSummary(").size - 1 > 1
+        )
+        assertTrue(
+            "the screen raises the sheet through the hub rather than fetching",
+            hub.contains("LaunchedEffect(detailGame) {") &&
+                hub.contains("if (open == null) viewModel.closeDetail() else viewModel.openDetail(open)")
+        )
+        assertTrue(
+            "and closing it - or leaving the hub - clears the summary",
+            hub.contains("DisposableEffect(Unit) { onDispose { viewModel.closeDetail() } }")
+        )
+    }
+
+    @Test
+    fun `the summary rides the hub's existing live tick instead of a timer`() {
+        assertTrue(
+            "the tick refreshes it as part of the pass it already runs",
+            tick.contains("refreshDetailSummary()")
+        )
+        assertTrue(
+            "and does nothing at all while no sheet is open",
+            refresh.contains("if (detailRequest == null) return")
+        )
+        assertEquals(
+            "still exactly one polling loop in the ViewModel - no new timer",
+            1,
+            Regex("while \\(isActive\\)").findAll(model).count()
+        )
+        assertTrue(
+            "the beat itself is unchanged, so nothing here can shorten it",
+            model.contains("SportsLivePollRules.POLL_INTERVAL_MS")
+        )
+    }
+
+    private fun flat(relative: String): String =
+        source(relative).replace(Regex("\\s+"), " ").trim()
+
+    private fun slice(source: String, startMarker: String, endMarker: String): String {
+        val start = source.indexOf(startMarker)
+        assertTrue("$startMarker is missing", start >= 0)
+        val end = source.indexOf(endMarker, start)
+        assertTrue("$endMarker must follow $startMarker", end > start)
+        return source.substring(start, end)
+    }
+
+    private fun source(relative: String): String {
+        val file = File(findSourceRoot(), relative)
+        assertTrue("source missing: $file", file.isFile)
+        return file.readText()
+    }
+
+    private fun findSourceRoot(): File {
+        val prefixes = listOf("", "app/")
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (dir != null) {
+            prefixes.forEach { prefix ->
+                val candidate = File(dir, "${prefix}src/main/java")
+                if (candidate.isDirectory) return candidate
+            }
+            dir = dir.parentFile
+        }
+        throw AssertionError(
+            "main source root not found walking up from " + System.getProperty("user.dir")
+        )
+    }
+
+    private companion object {
+        const val HUB = "com/kennyb1201/kbstream/ui/sports/SportsHubScreen.kt"
+        const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/sports/SportsHubViewModel.kt"
+    }
+}
