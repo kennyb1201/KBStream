@@ -296,7 +296,6 @@ fun CatalogGridScreen(
                             GlobalPosterCard(
                                 posterUrl = meta.poster,
                                 backdropUrl = meta.background,
-                                logoUrl = meta.logo,
                                 contentDescription = meta.name,
                                 isWatched =
                                     viewModel.watchedKey(meta.id, meta.type) in

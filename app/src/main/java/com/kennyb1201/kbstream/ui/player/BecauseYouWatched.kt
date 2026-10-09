@@ -33,6 +33,7 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.UNSCRIPTED_TV_GENRES
+import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.displayCardMeta
 import com.kennyb1201.kbstream.data.tmdb.displayDescription
 import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
@@ -998,10 +999,12 @@ internal class BecauseYouWatchedUi(
                             .getDetailByTmdbId(pick.tmdbId, pick.type)
                     }.getOrNull()
                 } ?: return@forEach
-                val logo = detail.images?.logos
-                    ?.filter { !it.filePath.isNullOrBlank() }
-                    ?.sortedWith(compareByDescending { it.iso6391 == "en" })
-                    ?.firstOrNull()?.filePath
+                // The shared English-only pick (see [bestLogoPath]): a `null`
+                // logo is an unset-language wordmark, often the title's
+                // original-language mark, so the local copy that preferred
+                // English and otherwise took TMDB's first entry could still
+                // draw a foreign clearlogo here.
+                val logo = detail.bestLogoPath()
                 val isMovie = pick.type != "series"
                 val meta = PickMeta(
                     // One genre: the featured strip is a single line wide.

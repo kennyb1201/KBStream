@@ -94,8 +94,10 @@ internal object GlobalLandscapeArtCache {
  *
  * Returns the caller's own fallback pair immediately when [enabled] is false or
  * [addonId]/[addonType] is missing - so a portrait card, or a landscape card for
- * an item with no id to look up, costs nothing and shows exactly what it always
- * did - and upgrades to the resolved pair once the TMDB answer lands.
+ * an item with no id to look up, costs nothing - and upgrades to the resolved
+ * pair once the TMDB answer lands. The fallback's logo half is always null: a
+ * card's clearlogo is TMDB's English wordmark or nothing (see
+ * [LandscapeArtRequest]), never the add-on's own untestable one.
  *
  * [addonId] and [addonType] are the raw id and type the item is filed under
  * (anything [TmdbRepository.fetchEnrichedMetaCached] can resolve: "tt...",
@@ -106,20 +108,18 @@ fun rememberGlobalLandscapeArt(
     enabled: Boolean,
     addonId: String?,
     addonType: String?,
-    addonBackdrop: String? = null,
-    addonLogo: String? = null
+    addonBackdrop: String? = null
 ): Pair<String?, String?> {
     val context = LocalContext.current
-    val fallback = remember(addonBackdrop, addonLogo) {
-        addonBackdrop to addonLogo
+    val fallback = remember(addonBackdrop) {
+        addonBackdrop to null
     }
-    val request = remember(enabled, addonId, addonType, addonBackdrop, addonLogo) {
+    val request = remember(enabled, addonId, addonType, addonBackdrop) {
         if (enabled && !addonId.isNullOrBlank() && !addonType.isNullOrBlank()) {
             LandscapeArtRequest(
                 id = addonId,
                 type = addonType,
-                addonBackdrop = addonBackdrop,
-                addonLogo = addonLogo
+                addonBackdrop = addonBackdrop
             )
         } else {
             null

@@ -243,21 +243,16 @@ class TmdbHeroArtworkRepository(
         tmdbId: Int
     ): HeroArtwork? {
 
-        // English + textless images only (`null` is TMDB's textless marker).
-        // The hero is the largest art on screen, so a non-English backdrop or
-        // clearlogo cannot be missed: before this filter the backdrop was just
-        // the first entry in TMDB's list -- often a foreign release's artwork
-        // with its own title burned in -- and the logo fell through to
-        // "highest vote of any language" whenever no English wordmark existed,
-        // which is what put foreign clearlogos in the hero.
+        // English + untagged images only. The hero is the largest art on screen,
+        // so non-English art cannot be missed: before the filter the backdrop
+        // was just the first entry in TMDB's list -- often a foreign release's
+        // artwork with its own title burned in.
         //
-        // Removing the filter entirely was an earlier attempt at a different
-        // problem (a title with no English logo silently losing its clearlogo).
-        // It is not needed: `null` keeps the textless logos, and a title with
-        // neither an English nor a textless image is rare -- when it happens the
-        // hero's own fallback chain (addon/item logo, then the plain title)
-        // covers it. Verified against TMDB that international titles still
-        // return their en/null art under this filter.
+        // `null` is kept in the REQUEST only for BACKDROPS: for those it means
+        // "no language set", which is what 99% of backdrops are, and a textless
+        // backdrop is exactly what the hero wants under its clearlogo. It is
+        // NOT kept for LOGOS below -- see the logo pick for why a `null` logo is
+        // an unset-language wordmark and not a safe English one.
         val url = "https://api.themoviedb.org/3/$mediaType/$tmdbId/images" +
             "?api_key=${BuildConfig.TMDB_API_KEY}" +
             "&include_image_language=en,null"
@@ -289,14 +284,19 @@ class TmdbHeroArtworkRepository(
                     ?.filePath
                     ?.let { TmdbRepository.BACKDROP_BASE + it }
 
-                // English wordmark first, then the textless one, then the best
-                // of whatever the language filter returned.
+                // The English wordmark, and NOTHING else: no `null` fallback.
+                // TMDB's `null` means "language not set" (the default value it
+                // assigns on upload), so a `null` logo is an untagged wordmark -
+                // frequently the title's ORIGINAL-language mark. Preferring
+                // English and then falling through to that is what put a foreign
+                // clearlogo in the hero whenever a title had no English mark.
+                // With no English mark the hero shows no logo and falls to its
+                // next rung (the add-on/item logo, then the plain title), which
+                // is correct for an English-only app.
                 val logo = images.logos
-                    .filter { !it.filePath.isNullOrBlank() }
+                    .filter { !it.filePath.isNullOrBlank() && it.iso6391 == "en" }
                     .sortedWith(
-                        compareByDescending<TmdbImage> { it.iso6391 == "en" }
-                            .thenByDescending { it.iso6391 == null }
-                            .thenByDescending { it.voteAverage ?: 0.0 }
+                        compareByDescending<TmdbImage> { it.voteAverage ?: 0.0 }
                             .thenByDescending { it.width ?: 0 }
                     )
                     .firstOrNull()
@@ -332,11 +332,14 @@ class TmdbHeroArtworkRepository(
     private companion object {
         const val MEMORY_CACHE_TTL_MS = 12L * 60L * 60L * 1000L
         const val DISK_CACHE_TTL_MS = 30L * 24L * 60L * 60L * 1000L
-        // Bumped from "hero_artwork:" when the language filter landed: the
-        // disk cache held 30 days of foreign-language backdrops/logos, and a
-        // key bump drops them all at once instead of serving them until they
-        // expire.
-        const val DISK_KEY_PREFIX = "hero_artwork_en:"
+        // Bumped from "hero_artwork:" when the language filter landed, and
+        // again to "hero_artwork_enlogo:" when the logo pick stopped falling
+        // back to TMDB's `null` (unset-language) wordmarks: this cache stores
+        // the RESOLVED URL, so a foreign logo already resolved and written here
+        // would otherwise be served for its full 30 days. Bumping the prefix
+        // drops every one of them at once - the cache is keyed BY prefix, so
+        // the old rows are simply never read again.
+        const val DISK_KEY_PREFIX = "hero_artwork_enlogo:"
         const val MEMORY_CACHE_MAX_ENTRIES = 128
 
         /** Concurrent artwork fetches (prefetch + foreground hero together). */

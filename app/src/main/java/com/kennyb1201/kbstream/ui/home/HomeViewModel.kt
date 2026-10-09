@@ -6704,7 +6704,6 @@ private suspend fun calculateEpisodesRemaining(
                     id = meta.id,
                     type = meta.type,
                     addonBackdrop = meta.background,
-                    addonLogo = meta.logo,
                     tmdbOnly = tmdbOnly
                 )
             },

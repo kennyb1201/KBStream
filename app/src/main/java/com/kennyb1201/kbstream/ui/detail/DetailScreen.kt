@@ -773,10 +773,12 @@ fun DetailScreen(
     val trailerVideo = remember(tmdbDetail) {
         TrailerPick.best(tmdbDetail?.videos?.results)
     }
-    // TMDB clearlogo first (more reliable); add-on logo (fanart.tv etc.) as
-    // fallback when TMDB has nothing for this title.
+    // TMDB's English clearlogo, or nothing. The add-on's own `logo` (fanart.tv
+    // etc.) used to be the fallback, but it is a bare URL with no language on
+    // it, so a localized catalog's wordmark could reach this header and the
+    // pre-playback splash it feeds. With no English TMDB mark the header shows
+    // its plain title instead.
     val clearLogoUrl = tmdbImage(tmdbDetail?.bestLogoPath(), "w500")
-        ?: meta?.logo?.takeIf { it.isNotBlank() }
     // Hand the resolved logo up as soon as it exists.
     LaunchedEffect(clearLogoUrl) {
         clearLogoUrl?.takeIf { it.isNotBlank() }?.let(onClearLogoResolved)

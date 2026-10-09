@@ -874,14 +874,27 @@ private fun parseReleaseDate(raw: String?): LocalDate? {
     }.getOrNull()
 }
 
+/**
+ * The title's English wordmark, or null when TMDB has none.
+ *
+ * ENGLISH ONLY, and deliberately with no `null`-language fallback. TMDB's
+ * `null` is not "textless" - it is "language not set", which is the value
+ * TMDB assigns by default when an image is uploaded without one (see
+ * developer.themoviedb.org/docs/image-languages: `en,null` returns "those that
+ * haven't been set yet"). For a backdrop that is close enough to textless, but
+ * for a LOGO it means an untagged wordmark - and a title's untagged wordmark is
+ * very often its ORIGINAL-language mark, so falling back to it is what put a
+ * foreign clearlogo on the landscape cards and in the hero. This app is
+ * English-only by default (Settings > Browse & discover), so a title with no
+ * English mark shows NO mark; every caller already falls back (the add-on's own
+ * logo, then the plain title), so nothing goes blank.
+ */
 fun TmdbDetail.bestLogoPath(): String? =
     images?.logos
         ?.asSequence()
-        ?.filter { !it.filePath.isNullOrBlank() }
+        ?.filter { !it.filePath.isNullOrBlank() && it.iso6391 == "en" }
         ?.sortedWith(
-            compareByDescending<TmdbImageAsset> { it.iso6391 == "en" }
-                .thenByDescending { it.iso6391 == null }
-                .thenByDescending { it.voteAverage ?: 0.0 }
+            compareByDescending<TmdbImageAsset> { it.voteAverage ?: 0.0 }
                 .thenByDescending { it.width ?: 0 }
         )
         ?.mapNotNull { it.filePath }

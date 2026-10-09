@@ -29,12 +29,15 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  * so a caller that pins its own container to the poster width has to widen it
  * too; [rememberGlobalLandscape] and [landscapeTileWidth] are there for that.
  *
- * [backdropUrl] and [logoUrl] are what the caller already has. When they are
- * missing, landscape mode resolves the item's own art from [artId]/[artType]
- * through [rememberGlobalLandscapeArt] - the shared backdrop + clearlogo
- * resolver - so a surface that ships only a poster still draws a real backdrop
- * with a corner clearlogo. Whatever is still absent falls back to [posterUrl],
- * because a cropped poster reads better than a blank 16:9 hole.
+ * [backdropUrl] is what the caller already has. When it is missing, landscape
+ * mode resolves the item's own art from [artId]/[artType] through
+ * [rememberGlobalLandscapeArt] - the shared backdrop + clearlogo resolver - so a
+ * surface that ships only a poster still draws a real backdrop with a corner
+ * clearlogo. The clearlogo is TMDB's English wordmark or nothing: an add-on's
+ * own `logo` is a bare URL with no language on it, so it is not drawn (a
+ * localized catalog would put its locale's wordmark on the card). Whatever
+ * backdrop is still absent falls back to [posterUrl], because a cropped poster
+ * reads better than a blank 16:9 hole.
  */
 @Composable
 fun GlobalPosterCard(
@@ -46,12 +49,11 @@ fun GlobalPosterCard(
     posterHeight: Dp,
     modifier: Modifier = Modifier,
     backdropUrl: String? = null,
-    logoUrl: String? = null,
     /**
      * The item's raw id and type for the shared landscape-art resolver (any id
      * `TmdbRepository.fetchEnrichedMetaCached` can resolve: "tt...",
      * "tmdb:...", or a bare numeric TMDB id). Null skips the lookup and keeps
-     * [backdropUrl]/[logoUrl] as the whole story.
+     * [backdropUrl] and [posterUrl] as the whole story.
      */
     artId: String? = null,
     artType: String? = null,
@@ -75,8 +77,7 @@ fun GlobalPosterCard(
         enabled = useLandscape,
         addonId = artId,
         addonType = artType,
-        addonBackdrop = backdropUrl,
-        addonLogo = logoUrl
+        addonBackdrop = backdropUrl
     )
     if (useLandscape) {
         LandscapeCard(

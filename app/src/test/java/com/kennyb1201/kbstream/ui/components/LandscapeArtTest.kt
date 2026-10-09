@@ -5,6 +5,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbImageAsset
 import com.kennyb1201.kbstream.data.tmdb.TmdbImagesResponse
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
@@ -34,13 +35,11 @@ class LandscapeArtTest {
         id: String = "tt1",
         type: String = "movie",
         addonBackdrop: String? = null,
-        addonLogo: String? = null,
         tmdbOnly: Boolean = false
     ) = LandscapeArtRequest(
         id = id,
         type = type,
         addonBackdrop = addonBackdrop,
-        addonLogo = addonLogo,
         tmdbOnly = tmdbOnly
     )
 
@@ -135,11 +134,11 @@ class LandscapeArtTest {
     }
 
     @Test
-    fun `the logo offered is TMDB's`() {
+    fun `the logo offered is TMDB's English wordmark`() {
         val detail = TmdbDetail(
             id = 603,
             images = TmdbImagesResponse(
-                logos = listOf(TmdbImageAsset(filePath = "/logo.png"))
+                logos = listOf(TmdbImageAsset(filePath = "/logo.png", iso6391 = "en"))
             )
         )
 
@@ -149,41 +148,83 @@ class LandscapeArtTest {
         )
     }
 
+    @Test
+    fun `an untagged or foreign logo is never offered`() {
+        // TMDB's `null` is "language not set" (the default on upload), NOT
+        // "textless" - so an untagged logo is often the title's
+        // original-language wordmark, which is what put foreign clearlogos on
+        // the cards and in the hero. Only an `en` logo may be drawn; with none
+        // the card falls to the add-on's logo or its plain title.
+        val untaggedOnly = TmdbDetail(
+            id = 603,
+            images = TmdbImagesResponse(
+                logos = listOf(TmdbImageAsset(filePath = "/native.png", iso6391 = null))
+            )
+        )
+        assertNull(untaggedOnly.bestLogoPath())
+        assertNull(untaggedOnly.landscapeArtUrls().second)
+
+        val foreignOnly = TmdbDetail(
+            id = 603,
+            images = TmdbImagesResponse(
+                logos = listOf(TmdbImageAsset(filePath = "/ja.png", iso6391 = "ja"))
+            )
+        )
+        assertNull(foreignOnly.bestLogoPath())
+        assertNull(foreignOnly.landscapeArtUrls().second)
+    }
+
+    @Test
+    fun `an English logo wins even when an untagged one is better voted`() {
+        val detail = TmdbDetail(
+            id = 603,
+            images = TmdbImagesResponse(
+                logos = listOf(
+                    TmdbImageAsset(filePath = "/native.png", iso6391 = null, voteAverage = 9.9),
+                    TmdbImageAsset(filePath = "/en.png", iso6391 = "en", voteAverage = 1.0)
+                )
+            )
+        )
+        assertEquals("/en.png", detail.bestLogoPath())
+    }
+
     // ---- the merge -------------------------------------------------------
 
     @Test
-    fun `TMDB's backdrop wins while the add-on's logo is kept`() {
-        // The two halves of the entry are picked by opposite rules, which is
-        // the part worth pinning: the add-on's background is usually the same
-        // primary image the hero is showing (so TMDB's alternate wins), while
-        // its clearlogo is already the right language and styling for the title
-        // it ships with (so it wins over TMDB's).
+    fun `TMDB's backdrop and TMDB's logo are the card's art`() {
+        // The two halves are both TMDB's now: the add-on's background is usually
+        // the same primary image the hero is showing, so TMDB's alternate wins,
+        // and TMDB's English wordmark is the card's logo.
         assertEquals(
-            "tmdb-backdrop" to "addon-logo",
+            "tmdb-backdrop" to "tmdb-logo",
             landscapeArtEntry(
                 tmdbArt = "tmdb-backdrop" to "tmdb-logo",
-                request = request(addonBackdrop = "addon-backdrop", addonLogo = "addon-logo")
+                request = request(addonBackdrop = "addon-backdrop")
             )
         )
     }
 
     @Test
-    fun `the add-on's clearlogo wins over TMDB's, and TMDB's wins over nothing`() {
-        // Deliberate, and the one rule that reads backwards next to the
-        // backdrop: a provider's logo is already the right language and styling
-        // for the title it ships with, so it is preferred over TMDB's.
-        assertEquals(
-            "addon-logo",
-            landscapeArtEntry(
-                tmdbArt = null to "tmdb-logo",
-                request = request(addonLogo = "addon-logo")
-            ).second
-        )
+    fun `the add-on's clearlogo is never the card's logo`() {
+        // The request no longer carries a logo at all, so this pins the type as
+        // much as the rule: a catalog's `logo` is a bare URL with no language on
+        // it, and a localized catalog ships its own locale's wordmark - which is
+        // how a foreign clearlogo reached the cards even after the TMDB pick was
+        // made English-only. There is nothing to test the language against, so
+        // the untestable source is not drawn.
         assertEquals(
             "tmdb-logo",
             landscapeArtEntry(
                 tmdbArt = null to "tmdb-logo",
                 request = request()
+            ).second
+        )
+        // No English TMDB mark means NO mark, not the add-on's of unknown
+        // language - the card then draws its plain title.
+        assertNull(
+            landscapeArtEntry(
+                tmdbArt = blank,
+                request = request(addonBackdrop = "addon-backdrop")
             ).second
         )
     }
@@ -205,7 +246,7 @@ class LandscapeArtTest {
             blank,
             landscapeArtEntry(
                 tmdbArt = blank,
-                request = request(addonBackdrop = "   ", addonLogo = "")
+                request = request(addonBackdrop = "   ")
             )
         )
     }
@@ -218,7 +259,6 @@ class LandscapeArtTest {
         // blank exactly like missing.
         val pinned = request(
             addonBackdrop = "promo-backdrop",
-            addonLogo = "promo-logo",
             tmdbOnly = true
         )
 

@@ -86,13 +86,13 @@ internal fun landscapeRank(ranked: Boolean, index: Int): Int? =
  * The two screens hold different item types (Home's [MetaPreview], the folder
  * screens' `KBContentItem`) with different field names for the same things, so
  * this is the shape they can both state: what to look up, and what the add-on
- * already offers as a fallback.
+ * already offers for the backdrop (its clearlogo is deliberately NOT carried -
+ * see [landscapeArtEntry]).
  */
 internal data class LandscapeArtRequest(
     val id: String,
     val type: String,
     val addonBackdrop: String? = null,
-    val addonLogo: String? = null,
     /**
      * Pinned "Top ... Today" rails: their add-on backgrounds carry burned-in
      * promo text, so they are never usable as card art - TMDB or nothing.
@@ -151,13 +151,20 @@ internal fun landscapeArtEntry(
     }
 
     val addonBackdrop = request.addonBackdrop?.takeIf { it.isNotBlank() }
-    val addonLogo = request.addonLogo?.takeIf { it.isNotBlank() }
 
     // Backdrop: an ALTERNATE TMDB image wins over the add-on's own background,
-    // which is usually the same primary image the hero is showing. Logo keeps
-    // add-on-first priority in the other direction: a provider's clearlogo is
-    // already the right language and styling for the title it ships with.
-    return (tmdbArt.first ?: addonBackdrop) to (addonLogo ?: tmdbArt.second)
+    // which is usually the same primary image the hero is showing.
+    //
+    // Logo: TMDB's English wordmark is the ONLY source. The add-on's own
+    // clearlogo used to be preferred here, on the theory that a provider ships
+    // the right language for the title it carries - but a catalog's `logo` is a
+    // bare URL with no language on it, and a localized catalog ships its own
+    // locale's wordmark, so that rule is what put a FOREIGN clearlogo on the
+    // cards even after the TMDB pick had been made English-only. There is
+    // nothing in the URL to test the language against, so the untestable source
+    // is simply not drawn: with no English TMDB mark the card shows its plain
+    // title rather than a mark of unknown language.
+    return (tmdbArt.first ?: addonBackdrop) to tmdbArt.second
 }
 
 /**

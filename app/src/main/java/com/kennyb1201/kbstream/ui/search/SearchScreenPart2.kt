@@ -429,7 +429,6 @@ internal fun TitlePosterTile(
         GlobalPosterCard(
             posterUrl = result.poster,
             backdropUrl = result.meta.background,
-            logoUrl = result.meta.logo,
             contentDescription = result.name,
             isWatched = watched,
             isPartiallyWatched = isPartiallyWatched,

@@ -1030,9 +1030,12 @@ private fun HomeHero(
         ?: meta?.poster
         ?: preview.poster
 
+    // TMDB's English wordmark, and nothing else. The hero used to fall back to
+    // the add-on's own `logo` (via the resolved meta and the raw preview) when
+    // no English TMDB mark existed - and an add-on's logo is a bare URL with no
+    // language on it, so a localized catalog put its locale's wordmark in the
+    // hero. With no English mark the hero shows its plain title instead.
     val clearLogo = heroLogoUrl
-        ?: meta?.logo
-        ?: preview.logo
 
     // Whether the browse brand mark was rejected in full: the hero then shows
     // the shortcut's name, mirroring the tile's own fallback.
@@ -3926,8 +3929,15 @@ fun HomeScreen(
                                                             backdropUrl = art?.first
                                                                 ?: meta.background
                                                                 ?: meta.poster,
-                                                            logoUrl = art?.second
-                                                                ?: meta.logo,
+                                                            // The card's logo is TMDB's English
+                                                            // wordmark or nothing: the add-on's
+                                                            // own `logo` is a bare URL with no
+                                                            // language on it, so it is never
+                                                            // drawn (see LandscapeArt). The
+                                                            // background above keeps its add-on
+                                                            // fallback, which is artwork, not a
+                                                            // wordmark.
+                                                            logoUrl = art?.second,
                                                             fallbackTitle = meta.name,
                                                             contentDescription = meta.name,
                                                             isWatched = watched,
