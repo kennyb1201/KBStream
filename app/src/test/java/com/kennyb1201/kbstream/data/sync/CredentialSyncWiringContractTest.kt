@@ -1,12 +1,13 @@
 package com.kennyb1201.kbstream.data.sync
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
  * Where the two credential blobs are wired: the IPTV source config and the
- * service API keys (TorBox / OpenSubtitles / MDBList).
+ * service API keys (TorBox / OpenSubtitles / MDBList / OMDb).
  *
  * Both failures these pin are invisible from the device that configured things,
  * which is why they went unnoticed for so long:
@@ -139,7 +140,14 @@ class CredentialSyncWiringContractTest {
 
     @Test
     fun `pasting a key stamps an edit and publishes it at once`() {
-        for (key in listOf("KEY_TORBOX_API_KEY", "KEY_OPENSUBTITLES_API_KEY", "KEY_MDBLIST_API_KEY")) {
+        for (
+            key in listOf(
+                "KEY_TORBOX_API_KEY",
+                "KEY_OPENSUBTITLES_API_KEY",
+                "KEY_MDBLIST_API_KEY",
+                "KEY_OMDB_API_KEY"
+            )
+        ) {
             assertTrue(
                 "$key must stamp its edit, or the blob has no idea when it changed",
                 prefs.contains("stampApiKeyEdit(context, $key, System.currentTimeMillis())")
@@ -159,6 +167,71 @@ class CredentialSyncWiringContractTest {
             "an adopted key carries the REMOTE edit time, so the pull is never " +
                 "mistaken for a local edit: $adopt",
             adopt.contains("putLong(apiKeySyncStampKey(keyName), editedAt)")
+        )
+    }
+
+    @Test
+    fun `the OMDB key rides the credentials blob without touching the legacy slot`() {
+        val synced = memberText(prefs, "val SYNCED_API_KEYS")
+        assertTrue(
+            "the OMDB key must be in the sync set, or a paste on one TV never reaches " +
+                "the other: $synced",
+            synced.contains("KEY_OMDB_API_KEY")
+        )
+
+        val build = functionBody(payload, "fun buildApiKeys(context: Context): JsonObject")
+        assertTrue(
+            "the blob must read OMDB directly rather than through storedApiKey, which " +
+                "would migrate MDBList's legacy plaintext slot and publish the ratings " +
+                "key under OMDB's name: $build",
+            build.contains("AppPreferences.KEY_OMDB_API_KEY") &&
+                build.contains("AppPreferences.getOmdbApiKey(context)")
+        )
+        assertTrue(
+            "every other key still goes through storedApiKey: $build",
+            build.contains("storedApiKey(context, key)")
+        )
+
+        val omdb = memberText(prefs, "fun getOmdbApiKey(context: Context): String")
+        assertFalse(
+            "the OMDB getter must never read the legacy slot through the migration " +
+                "path: $omdb",
+            omdb.contains("storedApiKey") || omdb.contains("migrateApiKey")
+        )
+    }
+
+    @Test
+    fun `the MDBList migration still owns the legacy omdb slot`() {
+        val mdb = memberText(prefs, "fun getMdbListApiKey(context: Context): String")
+        assertTrue(
+            "the pre-MDBList ratings key still migrates out of the omdb_api_key slot: $mdb",
+            mdb.contains("migrateApiKey(context, KEY_OMDB_API_KEY)")
+        )
+    }
+
+    @Test
+    fun `the OMDB path never clears MDBList's legacy plaintext slot`() {
+        val adopt = functionBody(
+            prefs,
+            "fun adoptApiKeyFromSync(context: Context, keyName: String, value: String, editedAt: Long)"
+        )
+        assertTrue(
+            "the plaintext remove must be skipped for OMDB on the pull side: the " +
+                "`omdb_api_key` plaintext slot is the pre-MDBLIST ratings slot, not OMDB's " +
+                "own legacy copy, and clearing it would lose a key getMdbListApiKey has " +
+                "not migrated yet: $adopt",
+            adopt.contains("if (keyName != KEY_OMDB_API_KEY)")
+        )
+
+        // Comments are stripped so an explanatory mention of the removal does
+        // not read as the removal itself.
+        val setterCode = functionBody(prefs, "fun setOmdbApiKey(context: Context, key: String)")
+            .lines()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+        assertFalse(
+            "...nor on a local paste: the same slot is not OMDB's to clear: $setterCode",
+            setterCode.contains("prefs(context).edit().remove(KEY_OMDB_API_KEY)")
         )
     }
 
@@ -183,6 +256,20 @@ class CredentialSyncWiringContractTest {
         throw AssertionError(
             "main source root not found walking up from " + System.getProperty("user.dir")
         )
+    }
+
+    /**
+     * The member starting at [signature], up to the next member (a line indented
+     * by exactly four spaces). Unlike [functionBody] this works for
+     * expression-bodied members, which have no opening brace of their own.
+     */
+    private fun memberText(src: String, signature: String): String {
+        val start = src.indexOf(signature)
+        assertTrue("source missing member: $signature", start >= 0)
+        val rest = src.substring(start)
+        val end = Regex("""\n {4}(private |internal |public )?(fun|val|const val|@)""")
+            .find(rest)?.range?.first ?: rest.length
+        return rest.substring(0, end)
     }
 
     /**

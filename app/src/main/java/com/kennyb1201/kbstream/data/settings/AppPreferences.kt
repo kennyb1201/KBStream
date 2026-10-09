@@ -91,8 +91,12 @@ object AppPreferences {
     private const val KEY_POSTER_CAPTION_TITLE = "poster_caption_title"
     private const val KEY_POSTER_CAPTION_YEAR = "poster_caption_year"
     private const val KEY_POSTER_CAPTION_RATING = "poster_caption_rating"
-    // Back-compat: a key pasted into the old OMDb field pre-migration.
-    private const val KEY_OMDB_API_KEY = "omdb_api_key"
+    // The OMDb key's secure-store slot, named `omdb_api_key` for back-compat.
+    // Public because the credentials blob must single it out (see
+    // SyncPrefsPayload.buildApiKeys): this is ALSO the name of the pre-MDBList
+    // plaintext ratings slot, and the OMDB path must never read that slot
+    // through migrateApiKey.
+    const val KEY_OMDB_API_KEY = "omdb_api_key"
     private const val KEY_MDBLIST_API_KEY = "mdblist_api_key"
     private const val KEY_OPENSUBTITLES_API_KEY = "opensubtitles_api_key"
     private const val KEY_TORBOX_API_KEY = "torbox_api_key"
@@ -1340,7 +1344,8 @@ object AppPreferences {
     val SYNCED_API_KEYS: List<String> = listOf(
         KEY_TORBOX_API_KEY,
         KEY_OPENSUBTITLES_API_KEY,
-        KEY_MDBLIST_API_KEY
+        KEY_MDBLIST_API_KEY,
+        KEY_OMDB_API_KEY
     )
 
     private fun apiKeySyncStampKey(keyName: String) = "__sync_ts__$keyName"
@@ -1397,8 +1402,15 @@ object AppPreferences {
             .putString(keyName, value.trim())
             .putLong(apiKeySyncStampKey(keyName), editedAt)
             .apply()
-        // Never leave a plaintext copy behind (a remote clear included).
-        prefs(context).edit().remove(keyName).apply()
+        // Never leave a plaintext copy behind (a remote clear included). The
+        // OMDB key is the one exception: its plaintext `omdb_api_key` slot is
+        // NOT OMDB's own legacy copy - it is the pre-MDBList ratings slot that
+        // getMdbListApiKey's migration still owns. An adopted OMDB key must not
+        // clear that slot out from under a migration the device has not run yet,
+        // or the viewer's ratings key would be lost.
+        if (keyName != KEY_OMDB_API_KEY) {
+            prefs(context).edit().remove(keyName).apply()
+        }
     }
 
     /**
@@ -1481,21 +1493,25 @@ object AppPreferences {
     // does not appear (see data/omdb/OmdbRepository); a blank key is never an
     // error. Stored encrypted and profile-scoped like the other credentials.
     //
-    // Deliberately NOT read through [storedApiKey]/[migrateApiKey], and
-    // deliberately not in [SYNCED_API_KEYS]: the plaintext `omdb_api_key` pref
-    // is the PRE-MDBLIST ratings slot, whose contents belong to
-    // getMdbListApiKey's own one-time migration (a key pasted there was an
-    // MDBList key). Migrating that slot here — or letting the credentials blob
-    // read it via storedApiKey — would race that migration and could take the
-    // viewer's ratings key away. This key therefore lives only in the secure
-    // store, under the same slot name it has always had.
+    // The key SYNCS (it is in [SYNCED_API_KEYS]) so a paste on one TV reaches
+    // the account's other devices, but it is never read through
+    // [storedApiKey]/[migrateApiKey]: the plaintext `omdb_api_key` pref is the
+    // PRE-MDBLIST ratings slot, whose contents belong to getMdbListApiKey's own
+    // one-time migration (a key pasted there was an MDBList key). Migrating that
+    // slot here — or letting the credentials blob read it via storedApiKey —
+    // would race that migration and could publish the viewer's ratings key
+    // under OMDB's name. The getter and the publish path both read the secure
+    // store directly, under the same slot name this key has always had.
     fun getOmdbApiKey(context: Context): String =
         apiKeyPrefs(context).getString(KEY_OMDB_API_KEY, "")?.trim().orEmpty()
 
     fun setOmdbApiKey(context: Context, key: String) {
         apiKeyPrefs(context).edit().putString(KEY_OMDB_API_KEY, key.trim()).apply()
-        // Never leave a plaintext copy behind.
-        prefs(context).edit().remove(KEY_OMDB_API_KEY).apply()
+        // Deliberately NO prefs(context).edit().remove(KEY_OMDB_API_KEY) here:
+        // that plaintext slot is the pre-MDBList ratings key getMdbListApiKey
+        // still migrates out of, not an OMDB copy, so clearing it on a paste
+        // could lose the viewer's ratings key. (The other keys can clear their
+        // plaintext copies because those slots really were their own.)
         stampApiKeyEdit(context, KEY_OMDB_API_KEY, System.currentTimeMillis())
         pushApiKeysBlob()
     }

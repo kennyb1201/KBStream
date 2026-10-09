@@ -663,8 +663,17 @@ object PrefsPayloadBuilder {
         val stamps = mutableMapOf<String, Long>()
         val values = mutableMapOf<String, String>()
         com.kennyb1201.kbstream.data.settings.AppPreferences.SYNCED_API_KEYS.forEach { key ->
-            val value = com.kennyb1201.kbstream.data.settings.AppPreferences
-                .storedApiKey(context, key)
+            val value = if (
+                key == com.kennyb1201.kbstream.data.settings.AppPreferences.KEY_OMDB_API_KEY
+            ) {
+                // Never through storedApiKey/migrateApiKey: the plaintext
+                // `omdb_api_key` slot is MDBList's legacy ratings key, and
+                // migrating it here would race getMdbListApiKey's own migration.
+                com.kennyb1201.kbstream.data.settings.AppPreferences.getOmdbApiKey(context)
+            } else {
+                com.kennyb1201.kbstream.data.settings.AppPreferences
+                    .storedApiKey(context, key)
+            }
             var stamp = com.kennyb1201.kbstream.data.settings.AppPreferences
                 .apiKeyEditedAt(context, key)
             if (stamp == 0L && value.isNotBlank()) {
