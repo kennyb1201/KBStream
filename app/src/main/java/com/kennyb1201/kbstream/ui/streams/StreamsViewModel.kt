@@ -21,6 +21,7 @@ import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.SourceAddonPreference
 import com.kennyb1201.kbstream.domain.streamengine.StreamDedup
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -149,6 +150,26 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private val _loadedKey = MutableStateFlow<String?>(null)
     val loadedKey: StateFlow<String?> = _loadedKey.asStateFlow()
 
+    /**
+     * The request [load] was last given, so [refresh] can ask for the same
+     * target again.
+     *
+     * Kept here rather than handed back in by the route: the picker's refresh
+     * button has no target of its own - it re-runs the fetch this ViewModel
+     * already knows how to make - and the navigation's target is the
+     * navigation's business.
+     */
+    private var lastRequest: StreamsRequest? = null
+
+    private data class StreamsRequest(
+        val contentType: String,
+        val streamId: String,
+        val runtimeMinutes: Int?
+    )
+
+    /** The in-flight [load], so a second one supersedes it instead of racing it. */
+    private var loadJob: Job? = null
+
     private sealed class AddonLoadResult {
         data class Success(val addonName: String, val streams: List<Stream>) : AddonLoadResult()
         data class Failure(val addonName: String, val message: String?) : AddonLoadResult()
@@ -161,7 +182,14 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
      * same way (see StreamRanker).
      */
     fun load(contentType: String, streamId: String, runtimeMinutes: Int? = null) {
-        viewModelScope.launch {
+        // One load at a time: a second request - the picker's REFRESH, or a new
+        // target - supersedes the first. Without this the two coroutines
+        // interleave, and because each one appends to `_streams` through the
+        // per-add-on callback, the list could end up showing a mix of the two
+        // requests' sources.
+        loadJob?.cancel()
+        lastRequest = StreamsRequest(contentType, streamId, runtimeMinutes)
+        loadJob = viewModelScope.launch {
             _isLoading.value = true
             _streams.value = emptyList()
             _sourceAddons.value = emptyList()
@@ -188,6 +216,23 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
             _loadedKey.value = "$contentType:$streamId"
             _isLoading.value = false
         }
+    }
+
+    /**
+     * Re-asks for the target [load] last resolved - the streams screen's
+     * refresh button.
+     *
+     * A fresh request, not a cache read: the picker is open BECAUSE the viewer
+     * wants sources, and a provider that answered thin - or that did not answer
+     * in time - a moment ago is exactly what they are pressing for. Sources
+     * appear per add-on as they arrive, the same as the first load.
+     *
+     * A no-op only when nothing has been loaded yet, which is a state the
+     * button cannot be drawn in.
+     */
+    fun refresh() {
+        val request = lastRequest ?: return
+        load(request.contentType, request.streamId, request.runtimeMinutes)
     }
 
     // Resolve sources for a target in the background (autoselect flow) and

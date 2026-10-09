@@ -1,6 +1,10 @@
 package com.kennyb1201.kbstream.ui.streams
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -15,12 +19,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -63,6 +73,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 
@@ -118,12 +129,21 @@ fun StreamsScreen(
     // "contentType:streamId" key the request carried.
     val manualPick = ManualSourceSelection.isPendingPickFor(loadedKey)
 
+    // A manual REFRESH must not relaunch the player. Re-asking for sources runs
+    // the same isLoading/streams transition the auto-select effect below fires
+    // on, so without this a viewer pressing REFRESH on a picker with auto-play
+    // on would be thrown straight into the top source - the opposite of what
+    // they asked for. One press therefore suppresses auto-select for the rest
+    // of this picker's life, exactly as backing out of the player does.
+    var refreshed by remember(loadedKey) { mutableStateOf(false) }
+    val autoSelectSuppressed = suppressAutoSelect || refreshed
+
     // Auto-play: when streams finish loading and autoplay is on, auto-select the
     // top result. Fire only once per target: after the user backs out of the
     // player, MainActivity marks this target as already-played and passes
     // suppressAutoSelect=true so the player isn't relaunched in a loop.
     LaunchedEffect(isLoading, streams, manualPick) {
-        if (!isLoading && streams.isNotEmpty() && !suppressAutoSelect && !manualPick && AppPreferences.getAutoSelectStream(context)) {
+        if (!isLoading && streams.isNotEmpty() && !autoSelectSuppressed && !manualPick && AppPreferences.getAutoSelectStream(context)) {
             // Skip dead placeholder streams (blank URLs) at the top of the
             // list — picking one would silently do nothing and look like
             // auto-select is broken — and skip a source that declares another
@@ -296,13 +316,33 @@ fun StreamsScreen(
                 mismatchNotice = mismatchNotice
             )
 
-            if (addonGroups.size > 1) {
-                AddonTabs(
-                    addonNames = addonGroups.map { it.addonName },
-                    selectedIndex = selectedAddonTab,
-                    onSelect = { selectedAddonTab = it }
-                )
-            }
+            // The row is drawn whenever the screen has a control for it, and
+            // its first chip is REFRESH - which has to be reachable in exactly
+            // the states a viewer wants it in (one add-on answering, none
+            // answering at all) and those are the states the old
+            // `addonGroups.size > 1` gate hid the whole row in. The All tab and
+            // the per-add-on tabs still appear only when there is more than one
+            // add-on to choose between, so a lone All tab - a control that does
+            // nothing - remains impossible; with one add-on the row is the
+            // refresh control alone.
+            AddonTabs(
+                addonNames = if (addonGroups.size > 1) {
+                    addonGroups.map { it.addonName }
+                } else {
+                    emptyList()
+                },
+                selectedIndex = selectedAddonTab,
+                // Only a viewer-initiated refresh is reported as running. The
+                // chip is the ACTION it offers, so showing the FIRST load as a
+                // refresh (isLoading starts true) would have the control announce
+                // that the viewer had pressed something they had not.
+                refreshing = refreshed && isLoading,
+                onRefresh = {
+                    refreshed = true
+                    viewModel.refresh()
+                },
+                onSelect = { selectedAddonTab = it }
+            )
 
             LazyColumn(
                 state = streamListState,
@@ -617,42 +657,132 @@ private fun Stream.displayText(): String {
 }
 
 /**
- * The add-on filter chips: "All" then one per answering stream add-on. Only
- * rendered when at least two add-ons answered (see [StreamsScreen]). Moving ONTO
- * a chip swaps the list below it - the whole point of the row is to show what
- * each provider offers, and making the viewer press Select on a chip they are
- * already sitting on reads as a chip that does nothing; the chips scroll
- * horizontally so a viewer with many installed add-ons can still reach every
- * one.
+ * The picker's control row: REFRESH first, then the add-on filter chips - "All"
+ * and one per answering stream add-on when there is more than one to choose
+ * between (see [StreamsScreen], which hands an empty [addonNames] to leave the
+ * row as the refresh control alone).
+ *
+ * Moving ONTO a tab chip swaps the list below it - the whole point of the row is
+ * to show what each provider offers, and making the viewer press Select on a chip
+ * they are already sitting on reads as a chip that does nothing; the chips scroll
+ * horizontally so a viewer with many installed add-ons can still reach every one.
  *
  * Select still works: it lands on the tab that was adopted when focus arrived.
+ *
+ * The inset below is what keeps the first chip from being cut off. A focused
+ * chip grows by [com.kennyb1201.kbstream.ui.theme.KBFocusChip] and draws a
+ * [com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall] glow, both OUTSIDE its own
+ * bounds, and a scroll container clips at its edge - so the chip the row opens
+ * on lost its left border and glow to a flat cut. The room has to be INSIDE the
+ * clip: a parent's padding sits outside it, which is why padding the row from
+ * the outside did not help. So the inset is added as scroll CONTENT padding and
+ * cancelled on the outside by the negative offset, which leaves the row's left
+ * alignment exactly as it was. See [KBFocusChipInset].
  */
 @Composable
 private fun AddonTabs(
     addonNames: List<String>,
     selectedIndex: Int,
+    refreshing: Boolean,
+    onRefresh: () -> Unit,
     onSelect: (Int) -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 14.dp)
-            .horizontalScroll(rememberScrollState()),
+            .offset(x = -KBFocusChipInset)
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = KBFocusChipInset),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        StreamTabChip(
-            label = "All",
-            selected = selectedIndex == ALL_ADDONS_TAB,
-            onSelect = { onSelect(ALL_ADDONS_TAB) }
-        )
-        addonNames.forEachIndexed { index, name ->
+        StreamRefreshChip(refreshing = refreshing, onRefresh = onRefresh)
+        if (addonNames.isNotEmpty()) {
             StreamTabChip(
-                label = name,
-                selected = selectedIndex == index,
-                onSelect = { onSelect(index) }
+                label = "All",
+                selected = selectedIndex == ALL_ADDONS_TAB,
+                onSelect = { onSelect(ALL_ADDONS_TAB) }
+            )
+            addonNames.forEachIndexed { index, name ->
+                StreamTabChip(
+                    label = name,
+                    selected = selectedIndex == index,
+                    onSelect = { onSelect(index) }
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The row's refresh control: the first chip, to the left of "All".
+ *
+ * A chip because it shares this row's plate, and an ACTION rather than a tab -
+ * unlike the tabs beside it, which adopt on focus because moving onto them IS
+ * the choice, this one fires only on the press.
+ *
+ * It is the refresh SYMBOL alone - the same `Icons.Filled.Refresh` mark the
+ * add-on screen's own refresh buttons carry, so the app's refresh control looks
+ * the same wherever it appears - rather than a "REFRESH" word: beside one-word
+ * tab chips a second word reads as another tab, and a mark that means "refresh"
+ * on its own does not need one spelled next to it.
+ *
+ * What the word used to say - that a refresh the viewer asked for is still
+ * running - is the turn instead: the mark rotates for exactly as long as
+ * [refreshing] is true, and an idle picker animates nothing.
+ *
+ * The chip stays pressable while a fetch is in flight, because a load that is
+ * hanging (a provider that never answers) is exactly when a viewer reaches for
+ * it - and a second press supersedes the first rather than stacking on it (see
+ * [StreamsViewModel.load]).
+ */
+@Composable
+private fun StreamRefreshChip(
+    refreshing: Boolean,
+    onRefresh: () -> Unit
+) {
+    // Built only while a refresh is in flight, so the picker runs no frame loop
+    // for a mark that is standing still. Read back INSIDE graphicsLayer below,
+    // which keeps the turning mark on the draw phase rather than recomposing the
+    // chip every frame (the same shape KBSkeleton's shimmer uses).
+    val spin = if (refreshing) rememberRefreshSpin() else null
+
+    KBCard(onClick = onRefresh) {
+        Box(
+            modifier = Modifier
+                .background(KBSurface.copy(alpha = 0.82f), KBShapeCard)
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Refresh,
+                // A symbol with no label needs its meaning for a screen reader.
+                contentDescription = "Refresh sources",
+                // Icons render in the app text color, not material3's dark
+                // default - the same treatment every other icon in the app gets.
+                tint = KBAccent,
+                modifier = Modifier
+                    .size(18.dp)
+                    .graphicsLayer { rotationZ = spin?.value ?: 0f }
             )
         }
     }
+}
+
+/**
+ * The refresh mark's angle while a fetch is in flight: one steady turn a second,
+ * from zero each time a refresh begins (see [StreamRefreshChip]).
+ */
+@Composable
+private fun rememberRefreshSpin(): State<Float> {
+    val transition = rememberInfiniteTransition(label = "streamRefreshSpin")
+    return transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = LinearEasing)
+        ),
+        label = "streamRefreshAngle"
+    )
 }
 
 /**
