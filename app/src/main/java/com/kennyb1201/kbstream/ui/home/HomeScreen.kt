@@ -3754,7 +3754,12 @@ fun HomeScreen(
                                                 // diagnosis - remove with the logs
                                                 // in KBHomeSlots): proves whether a
                                                 // tile's focus gain propagated up.
-                                                Log.d(
+                                                // Log.w, not Log.d: R8 strips
+                                                // Log.d from release builds (see
+                                                // app/proguard-rules.pro), which is
+                                                // the build this is diagnosed on;
+                                                // Log.w is never stripped.
+                                                Log.w(
                                                     "FOCUS_DIAG",
                                                     "onFolderFocused id=${folder.id} " +
                                                         "title=\"${folder.title}\""

@@ -610,6 +610,13 @@ fun KBHomeCollectionRail(
         // TEMP FOCUS_DIAG (focus-oscillation diagnosis - remove with the logs
         // below): hoisted so a tile's focus event can report the rail's scroll
         // position alongside it.
+        //
+        // Logged at Log.w, NOT the Log.d the spec wrote: release builds run
+        // with isMinifyEnabled and proguard-rules.pro strips Log.v/Log.d call
+        // sites entirely (assumenosideeffects), so a Log.d FOCUS_DIAG line does
+        // not exist in the APK a bug report - or this device - runs. Log.w is
+        // never stripped, so this survives into the release build being
+        // diagnosed.
         val listState = rememberLazyListState()
 
         // Only the drawable tiles: see [collectionRailTiles] for why the
@@ -619,7 +626,7 @@ fun KBHomeCollectionRail(
             // TEMP FOCUS_DIAG: fires only when this block actually RE-RUNS, so a
             // burst of these between two focus events means the list is churning
             // (and the id order across them says whether the keys rebind).
-            Log.d(
+            Log.w(
                 "FOCUS_DIAG",
                 "tiles rebuilt: size=${t.size} ids=${t.take(20).joinToString { it.first }}"
             )
@@ -677,7 +684,7 @@ private fun CollectionFolderTile(
         // TEMP FOCUS_DIAG (remove once the oscillation cause is found): every
         // focus transition with the rail's scroll position, so focus gain/loss
         // can be read against the list moving under it.
-        Log.d(
+        Log.w(
             "FOCUS_DIAG",
             "tile ${if (it.isFocused) "GAINED" else "LOST"} " +
                 "id=${folder.id} title=\"${folder.title}\" " +
