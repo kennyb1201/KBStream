@@ -18,6 +18,9 @@ import com.kennyb1201.kbstream.data.sports.EspnSportsRepository
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 
 /**
  * "Yankees @ Red Sox starts in 15 minutes" for the teams the profile follows.
@@ -66,10 +69,18 @@ class SportsNotificationWorker(
         // The shared repository, so a round that lands while the hub is open
         // reads the same cache the hub is reading.
         val repository = EspnSportsRepository.shared()
-        val games = leagues.flatMap { league ->
-            runCatchingCancellable { repository.scoreboard(league.path) }
-                .getOrDefault(emptyList())
-        }
+        // Every enabled league AT ONCE. With the whole catalog on by default a
+        // sequential flatMap would put sixteen scoreboard hops end to end inside
+        // a half-hourly job; the fetches share nothing, and the shared
+        // repository answers a repeat one from its cache.
+        val games = coroutineScope {
+            leagues.map { league ->
+                async {
+                    runCatchingCancellable { repository.scoreboard(league.path) }
+                        .getOrDefault(emptyList())
+                }
+            }.awaitAll()
+        }.flatten()
         if (games.isEmpty()) return
 
         val now = System.currentTimeMillis()

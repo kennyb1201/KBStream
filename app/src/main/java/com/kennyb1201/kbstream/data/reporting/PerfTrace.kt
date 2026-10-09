@@ -32,7 +32,14 @@ internal object PerfTrace {
         val label: String,
         val ms: Long,
         val atMs: Long,
-        val ok: Boolean
+        val ok: Boolean,
+        /**
+         * The value is a COUNT, not a duration. See [recordCount]: it stays in
+         * the ring so [latestByPrefix] can read it beside the stages, and is
+         * kept out of the duration views ([summary]'s ranking and slow list) so
+         * "340 programs" is never read as 340 milliseconds.
+         */
+        val count: Boolean = false
     )
 
     private val lock = Any()
@@ -93,11 +100,7 @@ internal object PerfTrace {
 
     /** Records one finished operation. Safe from any thread. */
     fun record(label: String, ms: Long, ok: Boolean = true) {
-        val sample = Sample(label, ms, SystemClock.elapsedRealtime(), ok)
-        synchronized(lock) {
-            samples.addLast(sample)
-            while (samples.size > MAX_SAMPLES) samples.removeFirst()
-        }
+        add(Sample(label, ms, SystemClock.elapsedRealtime(), ok))
         // The ring above is only readable on this device. The slow outliers
         // also leave as a Sentry distribution (a no-op without a DSN or in a
         // test), which is what makes "this rail is slow only on this model of
@@ -106,6 +109,28 @@ internal object PerfTrace {
         // samples at or above SLOW_MS are forwarded, so ordinary traffic costs
         // nothing.
         if (ms >= SLOW_MS) SentryPerf.slowSample(label, ms)
+    }
+
+    /**
+     * Records a COUNT under [label] rather than a duration.
+     *
+     * The ring is one list of labeled numbers, and [latestByPrefix] reads a
+     * count exactly as it reads a duration - which is what lets one report line
+     * carry "8 matched, 340 programs" beside "channels 1200ms". It is separate
+     * from [record] for one reason: [record] forwards anything at or above
+     * [SLOW_MS] to Sentry as a slow sample, and a card count of four thousand is
+     * not a four-second stall. Same storage, no slow-sample forward.
+     */
+    fun recordCount(label: String, value: Long) {
+        add(Sample(label, value, SystemClock.elapsedRealtime(), true, count = true))
+    }
+
+    /** The ring's one insertion point; both recorders go through it. */
+    private fun add(sample: Sample) {
+        synchronized(lock) {
+            samples.addLast(sample)
+            while (samples.size > MAX_SAMPLES) samples.removeFirst()
+        }
     }
 
     /** Times [block] under [label], recording even when it throws. */
@@ -221,7 +246,11 @@ internal object PerfTrace {
         val snapshot = synchronized(lock) { samples.toList() }
         if (snapshot.isEmpty()) return ""
 
-        val byLabel = snapshot.groupBy { it.label }
+        // Durations only: a count is not a duration, and a ranking of "where
+        // the time went" that a big card count could win would send whoever
+        // reads the report after the wrong thing (see [recordCount]).
+        val durations = snapshot.filter { !it.count }
+        val byLabel = durations.groupBy { it.label }
         val lines = mutableListOf<String>()
         // `uptime`, not `startup`. The value is how long the PROCESS has been
         // alive, and a report taken 82 minutes in printed "startup=4930806ms" -
@@ -246,7 +275,7 @@ internal object PerfTrace {
                 (if (host == null) "" else " host=$host")
         }
 
-        val slowest = snapshot
+        val slowest = durations
             .filter { it.ms >= SLOW_MS }
             .sortedByDescending { it.ms }
             .take(3)

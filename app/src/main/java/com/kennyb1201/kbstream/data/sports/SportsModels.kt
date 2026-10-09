@@ -248,8 +248,22 @@ object SportsLeagues {
         SportsLeague("baseball/mlb", "MLB", SportsKind.HEAD_TO_HEAD, hasStandings = true),
         SportsLeague("hockey/nhl", "NHL", SportsKind.HEAD_TO_HEAD, hasStandings = true),
         SportsLeague("basketball/wnba", "WNBA", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("football/ncf", "College Football", SportsKind.HEAD_TO_HEAD, hasStandings = true),
-        SportsLeague("basketball/ncb", "College Basketball", SportsKind.HEAD_TO_HEAD, hasStandings = true),
+        // The long-form ESPN spellings, not the "ncf"/"ncb" shorthands the
+        // site's own URLs use: `site.api.espn.com/.../football/ncf/scoreboard`
+        // and `/basketball/ncb/scoreboard` answer HTTP 400 every time, so those
+        // two tabs could only ever render "Couldn't reach ESPN".
+        SportsLeague(
+            "football/college-football",
+            "College Football",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true
+        ),
+        SportsLeague(
+            "basketball/mens-college-basketball",
+            "College Basketball",
+            SportsKind.HEAD_TO_HEAD,
+            hasStandings = true
+        ),
         SportsLeague("soccer/eng.1", "Premier League", SportsKind.HEAD_TO_HEAD, hasStandings = true),
         SportsLeague("soccer/esp.1", "La Liga", SportsKind.HEAD_TO_HEAD, hasStandings = true),
         SportsLeague("soccer/uefa.champions", "Champions League", SportsKind.HEAD_TO_HEAD, hasStandings = true),
@@ -276,13 +290,22 @@ object SportsLeagues {
     /** The favourites tab's id, which is also the hub's selected-tab value. */
     const val FAVORITES_PATH = "sports:favorites"
 
-    /** The four US leagues every install starts with. */
-    val DEFAULT_ENABLED: Set<String> = setOf(
-        "football/nfl",
-        "basketball/nba",
-        "baseball/mlb",
-        "hockey/nhl",
-    )
+    /**
+     * Every league in [ALL], on out of the box.
+     *
+     * The whole catalog rather than a US-league starter set. The hub is a
+     * scoreboard, and a viewer who watches one sport is served just as well by
+     * the leagues panel as one who watches them all - while a default that
+     * silently hides a sport leaves its games reading "No games today" for no
+     * reason the viewer can see. A league out of season renders its own empty
+     * state and costs nothing; the panel's toggles are what narrow the hub to
+     * whatever a profile actually follows.
+     *
+     * Built from [ALL] rather than a hand-written list so a league added to the
+     * catalog is on by default too, instead of being invisible until someone
+     * remembers to touch this set.
+     */
+    val DEFAULT_ENABLED: Set<String> = ALL.map { it.path }.toSet()
 
     fun byPath(path: String): SportsLeague? = ALL.firstOrNull { it.path == path }
 

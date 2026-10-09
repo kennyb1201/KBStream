@@ -30,6 +30,7 @@ import com.kennyb1201.kbstream.data.simkl.UPCOMING_DIAGNOSTICS
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbDiscoverItem
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
 import com.kennyb1201.kbstream.data.tmdb.TmdbHeroArtworkRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -7606,6 +7607,45 @@ private suspend fun calculateEpisodesRemaining(
 
 
     /**
+     * Reads [fetchPage] until [target] items have SURVIVED [filter], the feed
+     * runs out, or [PINNED_RAIL_MAX_PAGE] pages have been read.
+     *
+     * The filters are what make the loop necessary rather than greedy: a TMDB
+     * page is twenty raw rows, and the digital-release and kids-ceiling passes
+     * can drop most of them - which is how a rail built from a single page
+     * ended up six items long (or empty, for "New Kids Shows"). Filtering each
+     * page as it arrives and stopping as soon as enough has survived keeps the
+     * cost proportional to what is actually used.
+     *
+     * Deduplicated by id across pages: a popularity-sorted discover page shifts
+     * as titles gain votes, so page two can repeat a row page one already had.
+     *
+     * A page that comes back EMPTY ends the read - that is TMDB saying there is
+     * nothing past it. A page that comes back short does not, deliberately: a
+     * caller may have already filtered rows out of the raw page (the guest rows
+     * drop non-English titles), so "fewer than twenty" is not a reliable last-
+     * page signal. Continuing costs at most one extra request per rail.
+     */
+    private suspend fun deepenPinnedRail(
+        target: Int,
+        fetchPage: suspend (Int) -> List<TmdbDiscoverItem>?,
+        toMeta: (TmdbDiscoverItem) -> MetaPreview,
+        // Suspending because the ceiling pass ([kidsFilterMetas]) and the
+        // digital-availability pass are both suspending lookups.
+        filter: suspend (List<MetaPreview>) -> List<MetaPreview>,
+    ): List<MetaPreview> {
+        val kept = LinkedHashMap<String, MetaPreview>()
+        var page = 1
+        while (page <= PINNED_RAIL_MAX_PAGE && kept.size < target) {
+            val items = runCatchingCancellable { fetchPage(page) }.getOrNull().orEmpty()
+            if (items.isEmpty()) break
+            filter(items.map(toMeta)).forEach { meta -> kept.putIfAbsent(meta.id, meta) }
+            page++
+        }
+        return kept.values.toList()
+    }
+
+    /**
      * Kids-profile replacement for the pinned "Top ... Today" rails: six
      * hardcoded rails sourced from TMDB discover — the two standing rows
      * ("Top Kids Movies" / "Top Kids Shows": popular family + animation,
@@ -7663,48 +7703,56 @@ private suspend fun calculateEpisodesRemaining(
             queries.map { query ->
                 async {
                     try {
-                        val items = tmdbRepository.discoverKB(
-                            mediaType = query.mediaType,
-                            page = 1,
-                            sortBy = query.sortBy,
-                            filters = query.filters
-                        ).orEmpty()
-                            .take(INITIAL_RAIL_PAGE_SIZE)
-
-                        val metas = items.map { item ->
-                            MetaPreview(
-                                id = "tmdb:" + item.id,
-                                type = query.type,
-                                name = item.name ?: item.title.orEmpty(),
-                                poster = item.posterPath
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?.let { TmdbRepository.POSTER_BASE + it },
-                                background = item.backdropPath
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?.let { TmdbRepository.BACKDROP_BASE + it },
-                                releaseInfo = (item.firstAirDate ?: item.releaseDate)
-                                    ?.takeIf { it.length >= 4 }
-                                    ?.take(4)
-                            )
-                        }
-
-                        // The app-wide digital-release filter applies to the
-                        // kids rails too. It did not: these rails were the one
-                        // path that opted out, so a not-yet-at-home title - an
-                        // upcoming family movie whose only copies are
-                        // theatrical rips - showed here while every add-on rail
-                        // hid it. Then the belt-and-braces ceiling re-check
-                        // (discoverKB already filters when kids mode is on).
-                        val filtered =
-                            if (hideUpcoming) {
-                                tmdbRepository.kidsFilterMetas(
-                                    applyDigitalAvailabilityFilter(
-                                        filterUpcoming(metas)
-                                    )
+                        // Read pages until enough rows have SURVIVED the
+                        // filters - see [deepenPinnedRail]. A single page is
+                        // twenty raw rows, and the digital and ceiling passes
+                        // can cut that to a handful (or to nothing at all:
+                        // "New Kids Shows" came back empty).
+                        val filtered = deepenPinnedRail(
+                            target = PINNED_RAIL_TARGET_ITEMS,
+                            fetchPage = { page ->
+                                tmdbRepository.discoverKB(
+                                    mediaType = query.mediaType,
+                                    page = page,
+                                    sortBy = query.sortBy,
+                                    filters = query.filters
                                 )
-                            } else {
-                                tmdbRepository.kidsFilterMetas(metas)
+                            },
+                            toMeta = { item ->
+                                MetaPreview(
+                                    id = "tmdb:" + item.id,
+                                    type = query.type,
+                                    name = item.name ?: item.title.orEmpty(),
+                                    poster = item.posterPath
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { TmdbRepository.POSTER_BASE + it },
+                                    background = item.backdropPath
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { TmdbRepository.BACKDROP_BASE + it },
+                                    releaseInfo = (item.firstAirDate ?: item.releaseDate)
+                                        ?.takeIf { it.length >= 4 }
+                                        ?.take(4)
+                                )
+                            },
+                            // The app-wide digital-release filter applies to the
+                            // kids rails too. It did not: these rails were the one
+                            // path that opted out, so a not-yet-at-home title - an
+                            // upcoming family movie whose only copies are
+                            // theatrical rips - showed here while every add-on rail
+                            // hid it. Then the belt-and-braces ceiling re-check
+                            // (discoverKB already filters when kids mode is on).
+                            filter = { metas ->
+                                if (hideUpcoming) {
+                                    tmdbRepository.kidsFilterMetas(
+                                        applyDigitalAvailabilityFilter(
+                                            filterUpcoming(metas)
+                                        )
+                                    )
+                                } else {
+                                    tmdbRepository.kidsFilterMetas(metas)
+                                }
                             }
+                        )
 
                         if (filtered.isEmpty()) return@async null
 
@@ -7816,8 +7864,7 @@ private suspend fun calculateEpisodesRemaining(
             val source: GuestRailSource = GuestRailSource.DISCOVER,
             val sortBy: String = "popularity.desc",
             val filters: com.kennyb1201.kbstream.data.kb.KBFilters? = null,
-            val ranked: Boolean = false,
-            val limit: Int = 20
+            val ranked: Boolean = false
         )
 
         fun filters(
@@ -7901,66 +7948,73 @@ private suspend fun calculateEpisodesRemaining(
             specs.map { spec ->
                 async {
                     try {
-                        val items = when (spec.source) {
-                            GuestRailSource.ON_THE_AIR -> tmdbRepository.onTheAir(page = 1)
-                            GuestRailSource.TRENDING ->
-                                tmdbRepository.trendingWeek(spec.mediaType, page = 1)
-                            GuestRailSource.DISCOVER -> tmdbRepository.discoverKB(
-                                mediaType = spec.mediaType,
-                                page = 1,
-                                sortBy = spec.sortBy,
-                                filters = spec.filters
-                            )
-                        }.orEmpty()
-                            .let { list ->
-                                if (language == null) {
-                                    list
-                                } else {
-                                    // Fails open on a missing language: only a
-                                    // title that positively names a different
-                                    // one is dropped.
-                                    list.filter { item ->
-                                        item.originalLanguage == null ||
-                                            item.originalLanguage.equals(
-                                                language,
-                                                ignoreCase = true
-                                            )
+                        // Same page-deepening the kids rails get: one page is
+                        // twenty raw rows, and a guest row that read a single
+                        // page rendered barely a dozen items once the language
+                        // and digital-availability filters had run. Read until
+                        // enough has survived.
+                        val filtered = deepenPinnedRail(
+                            target = PINNED_RAIL_TARGET_ITEMS,
+                            fetchPage = { page ->
+                                when (spec.source) {
+                                    GuestRailSource.ON_THE_AIR ->
+                                        tmdbRepository.onTheAir(page = page)
+                                    GuestRailSource.TRENDING ->
+                                        tmdbRepository.trendingWeek(spec.mediaType, page = page)
+                                    GuestRailSource.DISCOVER -> tmdbRepository.discoverKB(
+                                        mediaType = spec.mediaType,
+                                        page = page,
+                                        sortBy = spec.sortBy,
+                                        filters = spec.filters
+                                    )
+                                }.orEmpty()
+                                    .let { list ->
+                                        if (language == null) {
+                                            list
+                                        } else {
+                                            // Fails open on a missing language:
+                                            // only a title that positively names
+                                            // a different one is dropped.
+                                            list.filter { item ->
+                                                item.originalLanguage == null ||
+                                                    item.originalLanguage.equals(
+                                                        language,
+                                                        ignoreCase = true
+                                                    )
+                                            }
+                                        }
                                     }
+                            },
+                            toMeta = { item ->
+                                MetaPreview(
+                                    id = "tmdb:" + item.id,
+                                    type = spec.railType,
+                                    name = item.name ?: item.title.orEmpty(),
+                                    poster = item.posterPath
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { TmdbRepository.POSTER_BASE + it },
+                                    background = item.backdropPath
+                                        ?.takeIf { it.isNotBlank() }
+                                        ?.let { TmdbRepository.BACKDROP_BASE + it },
+                                    releaseInfo = (item.firstAirDate ?: item.releaseDate)
+                                        ?.takeIf { it.length >= 4 }
+                                        ?.take(4)
+                                )
+                            },
+                            // Same two filters the add-on rails run: the app-wide
+                            // digital-release filter (when "hide upcoming" is on)
+                            // and the kids ceiling (a no-op unless the profile is
+                            // also a kids profile).
+                            filter = { metas ->
+                                if (hideUpcoming) {
+                                    tmdbRepository.kidsFilterMetas(
+                                        applyDigitalAvailabilityFilter(filterUpcoming(metas))
+                                    )
+                                } else {
+                                    tmdbRepository.kidsFilterMetas(metas)
                                 }
                             }
-                            .take(spec.limit)
-
-                        if (items.isEmpty()) return@async null
-
-                        val metas = items.map { item ->
-                            MetaPreview(
-                                id = "tmdb:" + item.id,
-                                type = spec.railType,
-                                name = item.name ?: item.title.orEmpty(),
-                                poster = item.posterPath
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?.let { TmdbRepository.POSTER_BASE + it },
-                                background = item.backdropPath
-                                    ?.takeIf { it.isNotBlank() }
-                                    ?.let { TmdbRepository.BACKDROP_BASE + it },
-                                releaseInfo = (item.firstAirDate ?: item.releaseDate)
-                                    ?.takeIf { it.length >= 4 }
-                                    ?.take(4)
-                            )
-                        }
-
-                        // Same two filters the add-on rails run: the app-wide
-                        // digital-release filter (when "hide upcoming" is on)
-                        // and the kids ceiling (a no-op unless the profile is
-                        // also a kids profile).
-                        val filtered =
-                            if (hideUpcoming) {
-                                tmdbRepository.kidsFilterMetas(
-                                    applyDigitalAvailabilityFilter(filterUpcoming(metas))
-                                )
-                            } else {
-                                tmdbRepository.kidsFilterMetas(metas)
-                            }
+                        )
 
                         if (filtered.isEmpty()) return@async null
 
@@ -8683,12 +8737,35 @@ private suspend fun calculateEpisodesRemaining(
         internal const val MAX_CONCURRENT_CATALOG_REQUESTS =
             12
 
-        // How many items a TMDB-sourced rail (the kids picks) keeps from its
-        // single discover page. Addon catalogs no longer cap the first page:
-        // they page by the addon's own batch size via railSourceOffset, so a
-        // small-page addon still reaches its whole catalog.
-        private const val INITIAL_RAIL_PAGE_SIZE =
-            30
+        // How many items an app-built TMDB rail (the kids and guest picks)
+        // aims to KEEP once its filters have run, and how many TMDB pages it
+        // may read to get there.
+        //
+        // One page was the old rule, and one page is twenty raw rows - which
+        // the digital-availability and kids-ceiling passes routinely cut to a
+        // handful ("New Kids Shows" came back empty, "Trending Kids Shows"
+        // two rows long). Reading more pages makes those filters thin a long
+        // list instead of a short one.
+        //
+        // Addon catalogs are deliberately NOT capped here: they page by the
+        // addon's own batch size via railSourceOffset, so a small-page addon
+        // still reaches its whole catalog.
+        private const val PINNED_RAIL_TARGET_ITEMS =
+            120
+
+        /**
+         * Ceiling on the pages one app-built rail reads. Eight pages is a
+         * hundred and sixty raw rows - enough that even a filter dropping four
+         * in five still leaves the row full at the target above - while keeping
+         * one screen's fan-out to a bounded few requests per rail.
+         *
+         * The pages are read one after another (each can end the read early), so
+         * this is also a ceiling on the rail's first paint: a rail that keeps
+         * hitting the cap is one whose filters are thin, and it costs its own
+         * round trips rather than the screen's.
+         */
+        private const val PINNED_RAIL_MAX_PAGE =
+            8
 
         // Hard ceiling on how many items one rail / grid accumulates. Real
         // addons page far below this; it exists only so a misbehaving addon

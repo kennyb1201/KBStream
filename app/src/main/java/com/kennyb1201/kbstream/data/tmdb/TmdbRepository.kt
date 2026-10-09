@@ -294,8 +294,8 @@ class TmdbRepository private constructor(context: Context) :
      * [RAIL_DEPTH_TARGET_ITEMS] rows, capped at [RAIL_DEPTH_MAX_PAGE] so
      * opening one screen costs at most a few requests per rail.
      */
-    internal val RAIL_DEPTH_TARGET_ITEMS = 60
-    internal val RAIL_DEPTH_MAX_PAGE = 3
+    internal val RAIL_DEPTH_TARGET_ITEMS = 140
+    internal val RAIL_DEPTH_MAX_PAGE = 6
 
     internal val today: String
         get() = LocalDate.now().toString()
@@ -367,7 +367,7 @@ class TmdbRepository private constructor(context: Context) :
      *
      * Opening a browse screen (genre / network / studio / decade / tag)
      * fires six rails at once, and every rail deepens through up to
-     * [RAIL_DEPTH_MAX_PAGE] TMDB pages - so each open was ~18 fresh requests,
+     * [RAIL_DEPTH_MAX_PAGE] TMDB pages - so each open was ~36 fresh requests,
      * and coming back to the screen you were just on (Detail and back, or a
      * genre chip toggled twice) cost exactly as much as the first visit. The
      * raw rows are reusable for a few minutes: these are the same lists for
@@ -2519,6 +2519,29 @@ class TmdbRepository private constructor(context: Context) :
     )
 
     /**
+     * The brand's OWN catalog, in three orders per media type.
+     *
+     * A service whose watch-provider catalog is thin - ESPN+ is the reported
+     * case, since TMDB lists almost none of its live sports as movies or
+     * shows - would otherwise draw almost all of its screen from six provider
+     * rails that have little to say. The three orders of what the brand
+     * produced (its network/company discover: 30-for-30 films and ESPN
+     * originals for that entry) are the dimensions that actually have depth.
+     *
+     * The third segment is the order and defaults to RECENT, so the original
+     * two-segment titles ("ORIGINALS · SERIES") still parse to what they always
+     * meant.
+     */
+    private val ORIGINALS_RAIL_TITLES = listOf(
+        "ORIGINALS · SERIES · RECENT",
+        "ORIGINALS · SERIES · POPULAR",
+        "ORIGINALS · SERIES · TOP RATED",
+        "ORIGINALS · MOVIES · RECENT",
+        "ORIGINALS · MOVIES · POPULAR",
+        "ORIGINALS · MOVIES · TOP RATED"
+    )
+
+    /**
      * Service-page rails. The six provider rails cover everything streaming
      * on the service NOW; the ORIGINALS rails (network + company discover)
      * add everything the brand PRODUCED — including titles that have since
@@ -2545,8 +2568,7 @@ class TmdbRepository private constructor(context: Context) :
         // the list exactly as the old build-a-list-and-filter-the-empties
         // assembly did, and the rails behind it keep their positions.
         val titles = buildList {
-            add("ORIGINALS · SERIES")
-            add("ORIGINALS · MOVIES")
+            addAll(ORIGINALS_RAIL_TITLES)
             addAll(SERVICE_RAIL_TITLES)
         }
 
@@ -2555,28 +2577,23 @@ class TmdbRepository private constructor(context: Context) :
         // not that the whole service screen fails.
         return streamBrowseSections(titles, onSection) { title, deepen ->
             runCatchingCancellable {
-                when (title) {
-                    "ORIGINALS · SERIES" ->
-                        if (networkOrCompanyId != null && !networkIsCompany) {
-                            getNetworkRailPage(
-                                networkOrCompanyId,
-                                "SERIES · RECENT",
-                                1,
-                                null,
-                                deepen
-                            )
-                        } else {
-                            TagRailPage(emptyList(), false)
-                        }
-
-                    "ORIGINALS · MOVIES" ->
-                        if (originalsCompanyId != null) {
-                            getCompanyRailPage(originalsCompanyId, "MOVIES · RECENT", 1, deepen)
-                        } else {
-                            TagRailPage(emptyList(), false)
-                        }
-
-                    else -> providerId
+                // Originals and provider rails both go through
+                // [getServiceRailPage] - the same entry point
+                // [StudioViewModel.loadMoreSection] uses for a rail's second
+                // page - so a rail's first page and its later pages take one
+                // identical path.
+                if (title.startsWith("ORIGINALS")) {
+                    getServiceRailPage(
+                        providerId = providerId,
+                        title = title,
+                        page = 1,
+                        networkOrCompanyId = networkOrCompanyId,
+                        networkIsCompany = networkIsCompany,
+                        originalsCompanyId = originalsCompanyId,
+                        deepen = deepen
+                    )
+                } else {
+                    providerId
                         ?.let { getServiceRailPage(it, title, 1, deepen = deepen) }
                         ?: TagRailPage(emptyList(), false)
                 }
@@ -2607,17 +2624,33 @@ class TmdbRepository private constructor(context: Context) :
         // A company id discovers movies AND TV; a network id is TV-only.
         if (parts.getOrNull(0)?.uppercase() == "ORIGINALS") {
             val isMoviesRail = parts.getOrNull(1)?.uppercase() == "MOVIES"
+            // The third segment is the ORDER, and RECENT is the default: the
+            // two-segment spelling this used to be called with still means the
+            // newest-first originals rail. POPULAR and TOP RATED are the extra
+            // dimensions a service with a thin provider catalog needs (see
+            // [ORIGINALS_RAIL_TITLES]).
+            val chart = when (parts.getOrNull(2)?.uppercase()) {
+                "POPULAR" -> "POPULAR"
+                "TOP RATED", "TOP_RATED" -> "TOP RATED"
+                else -> "RECENT"
+            }
             val companyId = when {
                 isMoviesRail -> originalsCompanyId
                 networkIsCompany -> networkOrCompanyId
                 else -> originalsCompanyId
             }
             if (companyId != null) {
-                val railTitle = (if (isMoviesRail) "MOVIES" else "SERIES") + " \u00B7 RECENT"
+                val railTitle = (if (isMoviesRail) "MOVIES" else "SERIES") + " \u00B7 " + chart
                 return getCompanyRailPage(companyId, railTitle, page, deepen)
             }
             if (!networkIsCompany && networkOrCompanyId != null) {
-                return getNetworkRailPage(networkOrCompanyId, "SERIES \u00B7 RECENT", page, null, deepen)
+                return getNetworkRailPage(
+                    networkOrCompanyId,
+                    "SERIES \u00B7 " + chart,
+                    page,
+                    null,
+                    deepen
+                )
             }
             return TagRailPage(emptyList(), false)
         }

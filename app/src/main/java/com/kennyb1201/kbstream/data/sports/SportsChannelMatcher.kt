@@ -249,6 +249,111 @@ internal object SportsChannelMatcher {
         return cap(event.broadcastNames.flatMap { networkChannels(it, channels) })
     }
 
+    // ── Search ───────────────────────────────────────────────────────
+
+    /**
+     * Whether a search [query] names either side of [game].
+     *
+     * The hub's search field is a filter over cards the viewer can already see,
+     * so it answers a different question from [matches] - "is this the game I
+     * meant?" rather than "which channel carries it?" - and it does that with
+     * the SAME team names the EPG tier reads: the forms [strongVariants]
+     * resolves (full name, abbreviation, nickname, short-form aliases) and the
+     * city alone, which [namesBothTeams] also accepts as a weaker form. Nothing
+     * about a name lives here; [searchVariants] is the one place that says what
+     * a team answers to.
+     *
+     * Partial input matches, because typing is incremental on a remote: see
+     * [matchesWords] for the two shapes a query can have (half a name, or a
+     * whole name inside something longer), and [searchVariants] for what a team
+     * answers to.
+     *
+     * Two additions over [namesBothTeams], both because this is a viewer typing
+     * rather than a program title: the feed's own short name ([SportsTeam.shortName]
+     * - "Yankees", where the tier deliberately reads the last word of the
+     * display name instead) and the city alone, both of which are what a person
+     * actually types. The tiers are untouched by this: it is a separate entry
+     * point, not a change to [strongVariants].
+     */
+    fun matchesQuery(game: SportsGame, query: String): Boolean {
+        val typed = words(query)
+        if (typed.isEmpty()) return false
+        return namesQuery(typed, game.away) || namesQuery(typed, game.home)
+    }
+
+    /**
+     * Whether a search [query] names [event] - the tournament twin of
+     * [matchesQuery].
+     *
+     * A golf round or a Grand Prix has no two sides to name, so the event's own
+     * name is what is matched (and its venue, which is how a viewer refers to a
+     * race - "Silverstone").
+     */
+    fun matchesQuery(event: TournamentEvent, query: String): Boolean {
+        val typed = words(query)
+        if (typed.isEmpty()) return false
+        return matchesWords(typed, words(event.name)) ||
+            matchesWords(typed, words(event.venue.orEmpty()))
+    }
+
+    private fun namesQuery(typed: List<String>, team: SportsTeam): Boolean =
+        searchVariants(team).any { variant -> matchesWords(typed, variant) }
+
+    /**
+     * The names a viewer may type to find [team].
+     *
+     * Everything [strongVariants] reads - which now includes the feed's short
+     * name, so a guide and a search box agree on it - plus the city on its own,
+     * which [matchesQuery] allows for search but a tier does not (see
+     * [namesBothTeams]).
+     */
+    private fun searchVariants(team: SportsTeam): List<List<String>> = buildList {
+        addAll(strongVariants(team))
+        cityOf(team)?.let { add(it) }
+    }.filter { it.isNotEmpty() }
+
+    /**
+     * True when [typed] names the name [name], in either of the two shapes a
+     * half-typed query takes on a TV remote.
+     *
+     *  - **What was typed sits inside the name**, its last word allowed to be
+     *    half-typed: "lak" -> "Los Angeles Lakers" (via its own "Lakers"),
+     *    "open champ" -> "The Open Championship". The run may start anywhere in
+     *    the name, because a viewer skips the "The".
+     *  - **The whole name sits inside what was typed**, matched exactly - a
+     *    matchup read off a card and typed back ("Lakers at Celtics" ->
+     *    "Lakers").
+     *
+     * Word runs rather than raw substrings, so "lal" cannot match "Florida" and
+     * a one-letter query cannot match every team with that letter anywhere in its
+     * name.
+     */
+    private fun matchesWords(typed: List<String>, name: List<String>): Boolean =
+        containsRun(needle = name, haystack = typed, partialLast = false) ||
+            containsRun(needle = typed, haystack = name, partialLast = true)
+
+    /**
+     * Whether [needle] occurs as a consecutive run of words inside [haystack],
+     * with its last word allowed to match only the start of the haystack's own
+     * ([partialLast] - the half-typed word at the end of a query).
+     */
+    private fun containsRun(
+        needle: List<String>,
+        haystack: List<String>,
+        partialLast: Boolean,
+    ): Boolean {
+        if (needle.isEmpty() || needle.size > haystack.size) return false
+        for (start in 0..(haystack.size - needle.size)) {
+            val hit = needle.withIndex().all { (index, word) ->
+                val other = haystack[start + index]
+                if (partialLast && index == needle.lastIndex) other.startsWith(word)
+                else other == word
+            }
+            if (hit) return true
+        }
+        return false
+    }
+
     /**
      * The caller's list: de-duplicated by channel and truncated to
      * [MAX_MATCHES], in the order it was handed in.
@@ -360,6 +465,17 @@ internal object SportsChannelMatcher {
 
     private fun strongVariants(team: SportsTeam): List<List<String>> = buildList {
         team.displayName.takeIf { it.isNotBlank() }?.let { add(words(it)) }
+        // The feed's OWN short name, which is the name a guide titles a game
+        // with far more often than any word of the full one: "Washington" for
+        // the Washington Huskies (the full name's last word is "Huskies", which
+        // a guide almost never writes), "Leeds" for Leeds United ("United"),
+        // "White Sox" for the Chicago White Sox. Without it, tier 1 could not
+        // see the row for whole sports - college football and basketball, and
+        // every soccer league - no matter how many channels the guide carried
+        // the game on. It is ADDITIVE: the full name, the abbreviation and the
+        // last word are all still read, so a guide that spells any of them out
+        // keeps matching exactly as before.
+        team.shortName?.takeIf { it.isNotBlank() }?.let { add(words(it)) }
         team.abbreviation.takeIf { it.length >= 2 }?.let { add(words(it)) }
         team.displayName.trim().split(' ').lastOrNull()?.takeIf { it.length >= 3 }?.let { add(words(it)) }
         shortFormNames(team).forEach { add(words(it)) }
@@ -447,10 +563,53 @@ internal object SportsChannelMatcher {
         return 0
     }
 
-    /** Normalized broadcast name resolved through the alias table. */
+    /**
+     * Brand prefixes of ONE regional-sports family, newest name first: what a
+     * channel was called under FanDuel, before that under Bally, and before
+     * that under FOX. See [foldRsnBrand].
+     */
+    private val RSN_BRANDS = listOf(
+        "fanduelsportsnetwork",
+        "ballysports",
+        "foxsports",
+    )
+
+    /** What a folded regional brand becomes; see [foldRsnBrand]. */
+    private const val RSN_PREFIX = "rsn:"
+
+    /** Normalized broadcast name resolved through the alias table and the RSN fold. */
     private fun canonicalNetwork(raw: String): String {
         val normalized = compact(raw)
-        return NETWORK_ALIASES[normalized] ?: normalized
+        return foldRsnBrand(NETWORK_ALIASES[normalized] ?: normalized)
+    }
+
+    /**
+     * Folds a regional network's brand onto its region, so a channel named
+     * before the last rebranding still matches the feed's own name for it.
+     *
+     * FOX Sports North became Bally Sports North, and that became FanDuel
+     * Sports Network North: one channel, three names, and an M3U written during
+     * any of those years carries the same feed. The BRAND is not what makes a
+     * regional network that channel - the region is - so both sides of a
+     * comparison fold the family to one prefix and meet on the part that has
+     * not changed. Only the family that has actually been renamed folds:
+     * "NBC Sports Boston" and "MSG Network" are different channels and stay
+     * distinct, and FS1/FS2 stay national.
+     *
+     * Two shapes are left alone here. A BARE brand ("Bally Sports", with no
+     * region) has nothing to fold onto, and a broadcast listed as plain "FOX
+     * Sports" should keep matching a channel named exactly that. A brand
+     * followed by a DIGIT is the national pair - FS1, FS2 and their HD
+     * spellings - which are not regional networks and must never fold onto one.
+     */
+    private fun foldRsnBrand(normalized: String): String {
+        RSN_BRANDS.forEach { brand ->
+            if (!normalized.startsWith(brand)) return@forEach
+            val region = normalized.removePrefix(brand)
+            if (region.isEmpty() || region.first().isDigit()) return@forEach
+            return RSN_PREFIX + region
+        }
+        return normalized
     }
 
     // ── normalization ────────────────────────────────────────────────

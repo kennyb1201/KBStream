@@ -1644,9 +1644,10 @@ object AppPreferences {
      * [com.kennyb1201.kbstream.data.sports.SportsLeagues.enabled].
      *
      * Per profile via [prefs], like the other content preferences - a profile
-     * with a tiny playlist wants a smaller hub. The four US leagues are the
-     * default because they are the ones a sports-hub-curious viewer is most
-     * likely to have a channel for.
+     * with a tiny playlist wants a smaller hub. Every league is the default (see
+     * [com.kennyb1201.kbstream.data.sports.SportsLeagues.DEFAULT_ENABLED]), so
+     * no sport is hidden from a viewer who watches all of them; the hub's
+     * leagues panel is what narrows it.
      */
     fun getSportsEnabledLeagues(context: Context): Set<String> =
         prefs(context).getStringSet(KEY_SPORTS_LEAGUES, null)?.toSet()

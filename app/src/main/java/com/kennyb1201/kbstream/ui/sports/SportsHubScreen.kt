@@ -87,6 +87,7 @@ import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
+import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.rememberReducedMotion
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -119,6 +120,15 @@ private const val CARD_GAP_DP = 12
  * into a third of the screen each.
  */
 private const val TWO_COLUMN_MIN_WIDTH_DP = 900
+
+/**
+ * The search field's width.
+ *
+ * Fixed rather than a fraction of the row: the field is one control on a line
+ * of its own, and a box stretched to the width of a 55" screen would read as a
+ * banner rather than as something to type into.
+ */
+private const val SEARCH_FIELD_WIDTH_DP = 360
 
 /**
  * The sports hub: every league the profile turned on, its games, and the
@@ -224,6 +234,19 @@ fun SportsHubScreen(
 
     var showLeagues by remember { mutableStateOf(false) }
 
+    // ── Search (see [SportsSearchRules]) ─────────────────────────────
+    //
+    // Screen state, not ViewModel state, and deliberately: searching filters
+    // what is already loaded, so nothing here belongs in the data layer, and
+    // nothing here can fetch. The query is dropped with the composition, like
+    // any other scroll position.
+    var searchQuery by remember { mutableStateOf("") }
+    var searchFocused by remember { mutableStateOf(false) }
+    var searchEditing by remember { mutableStateOf(false) }
+    // Hung on the field to end its editing session when this screen decides a
+    // Back belonged to the keyboard rather than to the field (see KBTextField).
+    var searchEndEditingSignal by remember { mutableStateOf(0) }
+
     // The game whose detail sheet is raised. A tap on a card opens this rather
     // than playing it: the sheet carries the matchup, and its Watch button is
     // what plays, through the same channel-match path the tap used to take.
@@ -233,6 +256,31 @@ fun SportsHubScreen(
     // this: the card itself stays one focus stop, and the two teams - the
     // things a viewer actually follows - are chosen inside the dialog.
     var favoriteEditor by remember { mutableStateOf<SportsGame?>(null) }
+
+    // The field's own Back ladder, in the order the spec asks for: the first
+    // Back gives up the FIELD (its editing session if it still has one, then its
+    // focus), and only a Back with nothing of the field's left to give up clears
+    // the query. That ordering is what stops a Back meant for the keyboard from
+    // throwing away what the viewer typed.
+    //
+    // Registered before the overlays below, so an open panel keeps its own Back
+    // (the last enabled handler wins): a Back inside the leagues panel closes
+    // the panel, as it always did.
+    BackHandler(enabled = searchEditing || searchFocused || searchQuery.isNotEmpty()) {
+        when {
+            // On Fire OS the IME closes and hands the press on, so the session
+            // can still be open when the press arrives here: end it and keep the
+            // query - this press was the keyboard's.
+            searchEditing -> searchEndEditingSignal++
+            // The field has focus and no session: this Back is the one that gives
+            // up the field.
+            searchFocused -> focusManager.clearFocus()
+            // Nothing of the field's left: the query goes, and the hub is back on
+            // the exact view it had before - no re-fetch, see
+            // [SportsSearchRules].
+            else -> searchQuery = ""
+        }
+    }
 
     Box(
         modifier = modifier
@@ -303,6 +351,19 @@ fun SportsHubScreen(
                 onSelect = viewModel::selectLeague,
             )
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // One search field, below the tabs: it filters the cards under it
+            // rather than opening a surface of its own, so what it searches
+            // stays visible behind it.
+            SportsSearchField(
+                query = searchQuery,
+                onQueryChanged = { searchQuery = it },
+                onFocusChanged = { searchFocused = it },
+                onEditingChanged = { searchEditing = it },
+                endEditingSignal = searchEndEditingSignal,
+            )
+
             Spacer(modifier = Modifier.height(16.dp))
 
             // Said once, at the top, when the hub has no lineup at all: every
@@ -319,6 +380,53 @@ fun SportsHubScreen(
                 favoritesSection
             } else {
                 sections.firstOrNull { it.league.path == selectedPath }
+            }
+
+            // ── Search results ──────────────────────────────────────
+            //
+            // One behavior, as the spec asks: the favourites tab searches the
+            // followed list, and every other tab searches ALL of the enabled
+            // leagues - "which tab was that game on?" is the question this field
+            // exists to save the viewer from answering by hand.
+            //
+            // It reads the loaded sections and nothing else: a league the hub
+            // has not fetched yet cannot match, and is never fetched on the
+            // field's account (see [SportsSearchRules]).
+            if (SportsSearchRules.isActive(searchQuery)) {
+                val searchSections = if (favoritesTab) listOf(favoritesSection) else sections
+                val searchLeague = if (favoritesTab) {
+                    SportsLeagues.FAVORITES
+                } else {
+                    SportsSearchRules.RESULTS_LEAGUE
+                }
+                val results = SportsSearchRules.results(searchSections, searchQuery, searchLeague)
+                if (results == null) {
+                    KBStatusMessage(
+                        title = "No games found",
+                        message = "Nothing matching \"${searchQuery.trim()}\" is on the loaded schedule.",
+                        icon = KB_STATUS_ICON_EMPTY,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    SearchResultsLine(
+                        games = results.games.size,
+                        events = results.tournaments.size,
+                        leagues = SportsSearchRules.leaguesWithHits(searchSections, searchQuery)
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    LeagueBody(
+                        section = results,
+                        matches = matches,
+                        favoriteKeys = favoriteKeys,
+                        listState = listState,
+                        lineupMissing = lineupMissing,
+                        matchingDone = matchingDone,
+                        onOpenDetail = { detailGame = it },
+                        onPlayChannels = onPlayChannels,
+                        onEditFavorites = { favoriteEditor = it },
+                    )
+                }
+                return@Column
             }
 
             // The standings toggle exists only where a table does, and only
@@ -356,7 +464,7 @@ fun SportsHubScreen(
                 // are different questions: "you have not picked anyone" is a
                 // how-to, and "nobody you follow is on" is a schedule.
                 favoritesTab && favoriteKeys.isEmpty() -> KBStatusMessage(
-                    title = "No favourite teams yet",
+                    title = "No favorite teams yet",
                     message = "Long-press a game on any league tab and pick the teams you follow.",
                     icon = KB_STATUS_ICON_EMPTY,
                     modifier = Modifier.fillMaxSize()
@@ -532,6 +640,64 @@ private fun LeagueTabRow(
             )
         }
     }
+}
+
+/**
+ * The hub's search field.
+ *
+ * The app's one text field ([KBTextField]) rather than a new input: it already
+ * carries the TV keyboard and D-pad contract every other screen relies on (OK
+ * starts editing, Up/Down leaves the field instead of being swallowed by the
+ * leanback IME, Back ends the session without eating the screen's own Back).
+ * Two of its switches matter here:
+ *
+ *  - [KBTextField.openKeyboardOnFocus] = false, so merely walking the D-pad over
+ *    the field does not throw a full-screen keyboard over the scores: the field
+ *    takes focus silently and OK opens the keyboard - "focusable, opens the TV
+ *    keyboard on select".
+ *  - [KBTextField.closeKeyboardOnBlur] = true, because the results sit BELOW the
+ *    field in the same focus walk: an always-editable field re-opens the
+ *    keyboard every time the D-pad comes back up to it, which is how a result
+ *    list ends up reachable only by pressing Back.
+ */
+@Composable
+private fun SportsSearchField(
+    query: String,
+    onQueryChanged: (String) -> Unit,
+    onFocusChanged: (Boolean) -> Unit,
+    onEditingChanged: (Boolean) -> Unit,
+    endEditingSignal: Int,
+    modifier: Modifier = Modifier,
+) {
+    KBTextField(
+        value = query,
+        onValueChange = onQueryChanged,
+        placeholder = "Search teams or events…",
+        modifier = modifier.width(SEARCH_FIELD_WIDTH_DP.dp),
+        openKeyboardOnFocus = false,
+        closeKeyboardOnBlur = true,
+        onFocusChanged = onFocusChanged,
+        onEditingChanged = onEditingChanged,
+        endEditingSignal = endEditingSignal,
+    )
+}
+
+/**
+ * "12 RESULTS · 4 LEAGUES", above the cards it describes.
+ *
+ * The league count is the part that cannot be read off the list: three hits can
+ * be one league's slate or one game carried on three tabs, and the second figure
+ * is what says which. Counts only - the cards below say what they are.
+ */
+@Composable
+private fun SearchResultsLine(games: Int, events: Int, leagues: Int) {
+    val total = games + events
+    Text(
+        text = "$total RESULT${if (total == 1) "" else "S"} · " +
+            "$leagues LEAGUE${if (leagues == 1) "" else "S"}",
+        style = MaterialTheme.typography.labelSmall,
+        color = KBTextLo
+    )
 }
 
 @Composable

@@ -3,14 +3,17 @@ package com.kennyb1201.kbstream.ui.sports
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
+import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.epgProgramChannelKey
 import com.kennyb1201.kbstream.data.iptv.playlistUrlsOf
+import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.sports.EspnSportsRepository
@@ -28,8 +31,11 @@ import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.data.sports.involvesFavorite
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.work.SportsNotificationWorker
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -38,6 +44,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -253,6 +260,20 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     private var playlistChannels: List<IptvChannel>? = null
 
     /**
+     * The lineup read itself, started as early as the ViewModel exists.
+     *
+     * Stage 1 of matching is the one stage that cannot be made cheaper: it is a
+     * paged read of every channel in every configured playlist, and on a large
+     * provider it is the bulk of the 40-60s pass. The only win available is to
+     * START it earlier - in parallel with the ESPN scoreboard fetch the screen
+     * would otherwise wait for before touching the playlist at all - so [init]
+     * launches it and every later pass awaits this one job instead of reading
+     * the same rows again. Dropped by [retryLineup], which is what makes the NO
+     * LINEUP notice's retry a real re-read.
+     */
+    private var channelsJob: Deferred<List<IptvChannel>>? = null
+
+    /**
      * The guide index built for [playlistChannels], kept for the ViewModel's
      * lifetime.
      *
@@ -265,6 +286,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     private var guideIndexCache: Map<String, IptvChannel>? = null
 
     init {
+        // The lineup read goes out NOW, alongside the refresh below rather than
+        // behind it: the two are independent (a playlist cache and an ESPN
+        // scoreboard), and serializing them added the lineup's whole read to the
+        // time before the first card could be matched. See [channelsJob].
+        prewarmLineup()
         refresh()
     }
 
@@ -324,6 +350,13 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     fun retryLineup() {
         playlistChannels = null
         guideIndexCache = null
+        // The in-flight (or finished) prewarm read is dropped with the cache it
+        // filled, so the refresh below genuinely asks the playlist again rather
+        // than awaiting the same empty answer. It is re-started here rather than
+        // left to the matching pass so the retry is already in flight by the
+        // time the sections land.
+        channelsJob = null
+        prewarmLineup()
         refresh()
     }
 
@@ -522,12 +555,24 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         super.onCleared()
     }
 
+    /**
+     * Fetches every enabled league AT ONCE.
+     *
+     * With the whole catalog on by default that is sixteen independent
+     * scoreboards, and a sequential `map` put all sixteen round trips end to
+     * end before the first tab could draw. The fetches share nothing, and the
+     * repository answers a repeat one from its per-league cache, so running
+     * them together is the whole win: the screen is bound by the slowest single
+     * feed rather than by their sum.
+     */
     private suspend fun fetchSections(leagues: List<SportsLeague>): List<LeagueSection> =
         withContext(Dispatchers.IO) {
             leagues.map { league ->
-                val previous = _sections.value.firstOrNull { it.league.path == league.path }
-                fetchSection(league, previous)
-            }
+                async {
+                    val previous = _sections.value.firstOrNull { it.league.path == league.path }
+                    fetchSection(league, previous)
+                }
+            }.awaitAll()
         }
 
     private suspend fun fetchSection(
@@ -586,9 +631,14 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             _matchingDone.value = true
             return
         }
-        val channelsStarted = System.currentTimeMillis()
+        val channelsStarted = SystemClock.elapsedRealtime()
         val channels = channelsOrEmpty()
-        val channelsMs = System.currentTimeMillis() - channelsStarted
+        val channelsMs = SystemClock.elapsedRealtime() - channelsStarted
+        // One measurement, two sinks: the SPORTS PERF line below and this
+        // PerfTrace sample are the same number, so the report and the live log
+        // can never disagree about which stage was slow.
+        PerfTrace.record("sports.match.channels", channelsMs)
+        Log.d(TAG, "SPORTS PERF channels=${channels.size} took=${channelsMs}ms")
         if (channels.isEmpty()) {
             // The same line shape as the one below, so a logcat grep for
             // `SPORTS DIAG` answers "is the lineup even loaded?" first: a zero
@@ -606,16 +656,23 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         // figures - enough that doing it in the composition's own dispatcher
         // would be a visible frame hit on the leagues a viewer actually has.
         val matches = withContext(Dispatchers.Default) {
-            val guideStarted = System.currentTimeMillis()
+            val guideStarted = SystemClock.elapsedRealtime()
             val guideIndex = cachedGuideIndex(channels)
-            val guideMs = System.currentTimeMillis() - guideStarted
-            val epgStarted = System.currentTimeMillis()
+            val guideMs = SystemClock.elapsedRealtime() - guideStarted
+            // ~0 on every pass after the first, which is the cached index doing
+            // its job: the guide index is a pure function of the lineup and the
+            // guide URLs, both fixed while the hub is open.
+            PerfTrace.record("sports.match.guide_index", guideMs)
+            Log.d(TAG, "SPORTS PERF guideIndex=${guideIndex.size} took=${guideMs}ms")
+            val epgStarted = SystemClock.elapsedRealtime()
             val programs = if (guideIndex.isEmpty()) {
                 emptyList()
             } else {
                 runCatchingCancellable { epgCandidates(games, guideIndex) }.getOrDefault(emptyList())
             }
-            val epgMs = System.currentTimeMillis() - epgStarted
+            val epgMs = SystemClock.elapsedRealtime() - epgStarted
+            PerfTrace.record("sports.match.epg_query", epgMs)
+            Log.d(TAG, "SPORTS PERF programs=${programs.size} took=${epgMs}ms")
             // One greppable line, and the three counts say which stage came back
             // empty without a debugger: channels=N guideIndex=0 is a lineup with
             // no EPG URLs, channels=N guideIndex=M programs=0 is a guide with
@@ -626,7 +683,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 "SPORTS DIAG channels=${channels.size} guideIndex=${guideIndex.size} " +
                     "programs=${programs.size}"
             )
-            val matchStarted = System.currentTimeMillis()
+            val matchStarted = SystemClock.elapsedRealtime()
             // The viewer's own corrections, resolved once for the whole pass:
             // the memory is keyed by team, so every game's two teams are read
             // against the same channel list. A remembered channel beats all
@@ -642,28 +699,55 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 Log.v(TAG, "SPORTS DIAG game=${game.id} broadcasts=${game.broadcastNames}")
                 SportsChannelMatcher.matches(game, channels, programs, remembered)
                     .takeIf { it.isNotEmpty() }
-                    ?.let { found[game.id] = it }
+                    ?.let { feeds ->
+                        found[game.id] = feeds
+                        // Progressive publish: the card flips from "Finding
+                        // channel…" to the channel name the moment ITS match
+                        // lands, instead of every card waiting out the whole
+                        // slate. Position is untouched - a card's place comes
+                        // from the section it was built in and nothing here can
+                        // reorder anything; only its own channel line changes.
+                        //
+                        // An entry is ADDED on top of whatever is published,
+                        // never cleared first: on the 30-second live tick that
+                        // leaves a settled card showing its channel while the
+                        // rest of the pass re-matches, instead of blinking every
+                        // card back to "Finding channel…". The publish below is
+                        // what reconciles the map exactly, including dropping a
+                        // game whose match is gone.
+                        _matches.update { it + (game.id to feeds) }
+                    }
             }
             events.forEach { event ->
                 Log.v(TAG, "SPORTS DIAG event=${event.id} broadcasts=${event.broadcastNames}")
                 SportsChannelMatcher.matches(event, channels, programs)
                     .takeIf { it.isNotEmpty() }
-                    ?.let { found[event.id] = it }
+                    ?.let { feeds ->
+                        found[event.id] = feeds
+                        _matches.update { it + (event.id to feeds) }
+                    }
             }
             // Per-stage timing, at debug, in the order the stages run: which of
             // the four is the slow one is a grep rather than a guess. The guide
             // number is ~0 on every pass after the first, which is the cached
-            // index doing its job.
-            Log.d(
-                TAG,
-                "SPORTS TIMING channels=${channelsMs}ms guide=${guideMs}ms epg=${epgMs}ms " +
-                    "match=${System.currentTimeMillis() - matchStarted}ms"
-            )
+            // index doing its job. `SPORTS PERF` is the live view; the same
+            // numbers are also recorded into PerfTrace, which is what the
+            // one-tap diagnostics report carries (see Diagnostics.sportsLine) -
+            // two sinks, one measurement each (taken just above).
+            val matchMs = SystemClock.elapsedRealtime() - matchStarted
+            PerfTrace.record("sports.match.match_loop", matchMs)
+            Log.d(TAG, "SPORTS PERF matched=${found.size} took=${matchMs}ms")
             Log.d(
                 TAG,
                 "SPORTS MATCHES cards=${games.size + events.size} matched=${found.size} " +
                     "programs=${programs.size} feeds=${found.values.sumOf { it.size }}"
             )
+            // Counts, not durations: [PerfTrace.recordCount] keeps a card count
+            // in the thousands from being forwarded to Sentry as a multi-second
+            // sample, while still being what the report line reads them as.
+            PerfTrace.recordCount("sports.match.cards", (games.size + events.size).toLong())
+            PerfTrace.recordCount("sports.match.matched", found.size.toLong())
+            PerfTrace.recordCount("sports.match.programs", programs.size.toLong())
             found
         }
         _matches.value = matches
@@ -703,6 +787,38 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun channelsOrEmpty(): List<IptvChannel> {
         playlistChannels?.let { return it }
+        // The read caches its own result (see [readPlaylistChannels]) - which is
+        // what makes the prewarm share it with the matching pass instead of
+        // reading the playlist twice.
+        return (channelsJob ?: startLineupRead()).await()
+    }
+
+    /** Starts the lineup read if none is in flight, and returns that read. */
+    private fun startLineupRead(): Deferred<List<IptvChannel>> =
+        viewModelScope.async(Dispatchers.IO) {
+            // A failed read degrades to an empty lineup, exactly as the
+            // synchronous version did: the hub then says it has no lineup to
+            // match against (see [LineupStatus.MISSING]) rather than failing the
+            // pass. It is NOT cached, so the next pass reads again.
+            runCatchingCancellable { readPlaylistChannels() }.getOrDefault(emptyList())
+        }.also { channelsJob = it }
+
+    /**
+     * Starts the lineup read early. See [channelsJob]; a no-op when one is
+     * already in flight or the playlist is already in hand.
+     */
+    private fun prewarmLineup() {
+        if (channelsJob != null || playlistChannels != null) return
+        startLineupRead()
+    }
+
+    /**
+     * The paged lineup read: the cache, not the network, and merged in the order
+     * the playlists are configured. See [channelsOrEmpty] for why it comes from
+     * the cache, and the guide's own loading for why extra playlists get their
+     * channel ids namespaced.
+     */
+    private suspend fun readPlaylistChannels(): List<IptvChannel> {
         val entries = playlistUrlsOf(
             playlistUrl = prefs.getString(KEY_PLAYLIST_URL, ""),
             extraPlaylistUrls = prefs.getString(KEY_EXTRA_PLAYLIST_URLS, "")
@@ -739,7 +855,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         val distinct = merged.distinctBy { it.id }
-        playlistChannels = distinct
+        if (distinct.isNotEmpty()) playlistChannels = distinct
         Log.d(TAG, "SPORTS LINEUP channels=${distinct.size} playlists=${loaded.size}")
         return distinct
     }
@@ -791,7 +907,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * The EPG rows worth handing the matcher, for the games that can still be
+     * The EPG rows worth handing the matcher, for EVERY game that can still be
      * watched.
      *
      * The whole reason this is a search rather than a window read: a playlist
@@ -802,6 +918,30 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * tier 1's rule - and the rows come back already narrowed to the ones that
      * could be the game.
      *
+     * Every game, not the first league's worth of them. This pass used to stop
+     * after [MAX_EPG_LOOKUPS]'s predecessor (24) games, taken in league order
+     * from every enabled league's slate - and because the hub matches all of
+     * them at once (see [resolveMatches]), a viewer with all the sports on got
+     * EPG candidates for the first league or two and NOTHING for every league
+     * behind it. Those games could only ever match on the feed's own broadcast
+     * names - which for a regional or streaming game name no channel in an
+     * IPTV lineup - so they read "Not in your playlist" while the guide was
+     * carrying the game on half a dozen channels. That is the reported
+     * symptom, and the fix is coverage: a lookup per matchup, for the whole
+     * slate, with the count bounded by the slate rather than by an arbitrary
+     * constant.
+     *
+     * Two games between the same teams ask the same question, so a matchup is
+     * looked up once (a doubleheader, a home-and-home).
+     *
+     * A guide that titles a game by ABBREVIATION ("MIN @ TB", "LAL vs BOS") -
+     * which plenty do, especially for the leagues a provider gives a bare
+     * "NHL Hockey" channel - names neither team's full name, so the nickname
+     * lookup cannot see the row at all. When it comes back empty the same
+     * matchup is asked again on the two abbreviations, and the matcher's own
+     * name check (which already accepts an abbreviation as a strong name) does
+     * the rest.
+     *
      * Final games are skipped: the index only reaches programs that have not
      * ended yet, and a game that is over is not on air to be matched.
      */
@@ -810,15 +950,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         guideIndex: Map<String, IptvChannel>
     ): List<MatcherProgram> {
         val out = LinkedHashMap<String, MatcherProgram>()
+        val asked = HashSet<String>()
+        var lookups = 0
         games.asSequence()
             .filter { it.state != GameState.FINAL }
-            .take(MAX_EPG_GAMES)
             .forEach { game ->
+                if (lookups >= MAX_EPG_LOOKUPS) return@forEach
                 val terms = listOf(game.away, game.home).mapNotNull(::titleSearchTerm)
                 if (terms.size < 2) return@forEach
-                val rows = runCatchingCancellable {
-                    iptv.searchProgramsByTitleTerms(terms, EPG_SEARCH_LIMIT)
-                }.getOrDefault(emptyList())
+                if (!asked.add(terms.sorted().joinToString("|"))) return@forEach
+                lookups++
+                val rows = searchTerms(terms)
+                    .ifEmpty { searchTerms(abbreviationSearchTerms(game)) }
                 rows.forEach { row ->
                     val channel = guideIndex[row.channelId] ?: return@forEach
                     out.putIfAbsent(
@@ -840,15 +983,66 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
+     * One indexed title/description lookup for a pair of teams.
+     *
+     * Never throws and never fails the pass: a lookup is an optimization over
+     * the tiers below it, so a guide that is unreadable or an index that is not
+     * there degrades to "no EPG signal for these two teams" and the cards fall
+     * through to the network tiers - exactly as they did before tier 1 existed.
+     */
+    private suspend fun searchTerms(terms: List<String>): List<EpgProgramRow> {
+        if (terms.size < 2) return emptyList()
+        return runCatchingCancellable {
+            iptv.searchProgramsByTitleTerms(terms, EPG_SEARCH_LIMIT)
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * The two teams' abbreviations, for the guides that title a game by them.
+     *
+     * Both are required, and the pair is what makes a two-letter term safe: the
+     * search asks for the two TOGETHER, so "tb" alone never pulls the guide's
+     * back catalog into the candidate pool - and the matcher still has to find
+     * both sides in the row before a card may play it.
+     */
+    private fun abbreviationSearchTerms(game: SportsGame): List<String> =
+        listOf(game.away, game.home).mapNotNull { team ->
+            team.abbreviation.trim().lowercase()
+                .takeIf { it.length >= MIN_ABBREV_SEARCH_TERM_LENGTH }
+        }
+
+    /**
      * The one word to search a team by.
      *
-     * The nickname ("Yankees") where the feed gives a full name, because it is
-     * what broadcasters actually put in a program title, and the abbreviation
-     * otherwise (a tennis player's name has no nickname - the feed's display
-     * name is already the shortest thing that identifies them). Null when there
-     * is nothing worth searching for.
+     * The feed's OWN short name first, because that is the name a guide titles a
+     * game with: "Washington" for the Washington Huskies (the full name's last
+     * word is "Huskies"), "Leeds" for Leeds United ("United"), "White Sox" for
+     * the Chicago White Sox. Reading only the last word of the full name left
+     * whole sports - college football and basketball, every soccer league - with
+     * NO EPG candidates at all, so those games could only ever match on the
+     * feed's own broadcast name and read "Not in your playlist" over a guide
+     * that was carrying them on half a dozen channels.
+     *
+     * The LAST token of the short name, not the whole string: the lookup is an
+     * AND across the two teams, so every extra word narrows it, and the last
+     * token is the distinctive one ("White Sox" -> "sox", "Iowa State" ->
+     * "state", "Aston Villa" -> "villa"). A broad term costs nothing but a
+     * wider candidate set - the matcher still has to find BOTH sides in the row
+     * before a card may play it.
+     *
+     * Falls back to the last word of the full name - which is what every US
+     * league's short name is anyway - and then to the abbreviation, for a feed
+     * (or an athlete) that carries no short name at all. Null when there is
+     * nothing worth searching for.
      */
     private fun titleSearchTerm(team: SportsTeam): String? {
+        val shortToken = team.shortName
+            .orEmpty()
+            .trim()
+            .split(' ')
+            .lastOrNull { it.length >= MIN_SEARCH_TERM_LENGTH }
+        if (shortToken != null) return shortToken
+
         val lastWord = team.displayName
             .trim()
             .split(' ')
@@ -883,18 +1077,33 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         const val KEY_EPG_URL = "epg_url"
         const val KEY_EXTRA_EPG_URLS = "extra_epg_urls"
 
-        /** Rows per game from the indexed title search. */
-        const val EPG_SEARCH_LIMIT = 40
+        /** Rows per matchup from the indexed title search. */
+        const val EPG_SEARCH_LIMIT = 60
 
         /**
-         * How many games one refresh spends indexed lookups on. The hub shows a
-         * single league at a time and a full schedule is a couple of dozen
-         * cards; past this the marginal game is a final whose program has
-         * already ended anyway.
+         * Ceiling on the indexed EPG lookups one pass makes.
+         *
+         * Sized for a full slate with every league enabled (a Saturday of
+         * college football plus the pros and the soccer), because a cap below
+         * the slate is how whole leagues used to be left with no EPG signal at
+         * all - see [epgCandidates]. Each lookup is an indexed FTS query the
+         * size of a handful of rows, and a matchup is asked once however many
+         * cards it covers, so this is a safety net rather than a budget:
+         * reaching it means a slate bigger than any single day's.
          */
-        const val MAX_EPG_GAMES = 24
+        const val MAX_EPG_LOOKUPS = 200
 
         /** A term shorter than this matches too much of the guide to be useful. */
         const val MIN_SEARCH_TERM_LENGTH = 3
+
+        /**
+         * The floor for an ABBREVIATION used as a search term.
+         *
+         * Two, not [MIN_SEARCH_TERM_LENGTH]: "TB" and "LA" are exactly the
+         * forms a guide uses in a title like "MIN @ TB", and they are only
+         * ever searched as a two-team pair - the matcher still has to find
+         * both of them in the row.
+         */
+        const val MIN_ABBREV_SEARCH_TERM_LENGTH = 2
     }
 }

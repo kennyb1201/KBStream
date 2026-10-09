@@ -41,13 +41,19 @@ class SportsChannelMatcherTest {
         providerChannelId = null,
     )
 
-    private fun team(abbreviation: String, name: String, home: Boolean) = SportsTeam(
+    private fun team(
+        abbreviation: String,
+        name: String,
+        home: Boolean,
+        shortName: String? = null,
+    ) = SportsTeam(
         abbreviation = abbreviation,
         displayName = name,
         logoUrl = null,
         score = null,
         isHome = home,
         record = null,
+        shortName = shortName,
     )
 
     private fun game(
@@ -311,6 +317,72 @@ class SportsChannelMatcherTest {
 
         // Boston is home, so NESN is the home broadcast and the one to try first.
         assertEquals(nesn, hit)
+    }
+
+    @Test
+    fun `tier three matches a regional network by an older brand name`() {
+        // The feed's own table says FanDuel Sports Network North. A playlist
+        // last written under Bally - or under FOX before that - carries the
+        // same channel, and it is the one airing the game. Before the brand
+        // fold this was a "Not in your playlist" on a channel the viewer has.
+        val bally = channel("ballynorth", "Bally Sports North")
+        val wild = team("MIN", "Minnesota Wild", home = true)
+        val avalanche = team("COL", "Colorado Avalanche", home = false)
+
+        val hit = SportsChannelMatcher.match(
+            game = game(avalanche, wild, broadcasts = listOf("Nobody Carries This")),
+            channels = listOf(bally),
+            programs = emptyList(),
+        )
+
+        assertEquals(bally, hit)
+    }
+
+    @Test
+    fun `the brand fold leaves the national FOX channels national`() {
+        // FS1 and FS2 sit in the same brand family and are NOT regional
+        // networks: folding them onto one would play a national channel for a
+        // game it does not carry.
+        val fs1 = channel("fs1", "FOX Sports 1")
+        val fs1hd = channel("fs1hd", "FOX Sports 1 HD")
+        val wild = team("MIN", "Minnesota Wild", home = true)
+        val avalanche = team("COL", "Colorado Avalanche", home = false)
+
+        assertNull(
+            SportsChannelMatcher.match(
+                game = game(avalanche, wild, broadcasts = listOf("Nobody Carries This")),
+                channels = listOf(fs1),
+                programs = emptyList(),
+            )
+        )
+        assertNull(
+            SportsChannelMatcher.match(
+                game = game(avalanche, wild, broadcasts = listOf("Nobody Carries This")),
+                channels = listOf(fs1hd),
+                programs = emptyList(),
+            )
+        )
+    }
+
+    @Test
+    fun `an abbreviation-only guide title still finds the game`() {
+        // "MIN @ TB" names neither team's full name, and it is how plenty of
+        // providers title a game. The matcher already reads an abbreviation as
+        // a strong name; the row only has to reach it (see the hub's
+        // abbreviation fallback lookup).
+        val nhlNetwork = channel("nhl", "NHL Network")
+        val wild = team("MIN", "Minnesota Wild", home = false)
+        val lightning = team("TB", "Tampa Bay Lightning", home = true)
+
+        val hit = SportsChannelMatcher.match(
+            game = game(wild, lightning),
+            channels = listOf(nhlNetwork),
+            programs = listOf(
+                program("nhl", "MIN @ TB", firstPitch, firstPitch + 150 * minute)
+            ),
+        )
+
+        assertEquals(nhlNetwork, hit)
     }
 
     @Test
@@ -723,6 +795,95 @@ class SportsChannelMatcherTest {
         // The map is grown from observed EPG misses, never from imagination: an
         // entry without a cited real title does not belong in it.
         assertEquals(emptyMap<String, String>(), SportsChannelMatcher.TEAM_SHORT_FORMS)
+    }
+
+    // ── The feed's own short name ──────────────────────────────────
+
+    @Test
+    fun `a guide that titles a game by the feed's short name matches`() {
+        // College football: ESPN's display name is "Washington Huskies", but a
+        // guide titles the game "Washington vs Iowa" - the short name, not the
+        // last word "Huskies". Before the short name was a tier variant this
+        // game could not be found on any channel, however many carried it.
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(
+            team("WASH", "Washington Huskies", home = false, shortName = "Washington"),
+            team("IOWA", "Iowa Hawkeyes", home = true, shortName = "Iowa"),
+        )
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(rsn),
+            programs = listOf(
+                program("rsn", "Washington vs Iowa", firstPitch, firstPitch + 3 * 60 * minute)
+            ),
+        )
+
+        assertEquals(rsn, hit)
+    }
+
+    @Test
+    fun `a soccer club is found by its short name, not the last word of its full one`() {
+        // "Leeds United"'s last word is "United": a guide writes "Leeds", and
+        // that is the name the feed's short name carries. Same for a club whose
+        // display name is a single word - the short name is itself.
+        val nbc = channel("nbc", "NBC Sports")
+        val game = game(
+            team("LEE", "Leeds United", home = false, shortName = "Leeds"),
+            team("ARS", "Arsenal", home = true, shortName = "Arsenal"),
+        )
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(nbc),
+            programs = listOf(
+                program("nbc", "Leeds United v Arsenal", firstPitch, firstPitch + 3 * 60 * minute)
+            ),
+        )
+
+        assertEquals(nbc, hit)
+    }
+
+    @Test
+    fun `the short name is additive, so a nickname-only title still matches`() {
+        // The full name's last word stays a variant: a guide that writes the
+        // mascot alone keeps matching exactly as it did before.
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(
+            team("WASH", "Washington Huskies", home = false, shortName = "Washington"),
+            team("IOWA", "Iowa Hawkeyes", home = true, shortName = "Iowa"),
+        )
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(rsn),
+            programs = listOf(
+                program("rsn", "Huskies vs Hawkeyes", firstPitch, firstPitch + 3 * 60 * minute)
+            ),
+        )
+
+        assertEquals(rsn, hit)
+    }
+
+    @Test
+    fun `one side's short name alone still does not name a game`() {
+        // The rule is unchanged by the new variant: BOTH sides must be named, so
+        // a show about one of them is still not the game.
+        val travel = channel("travel", "Travel Channel")
+        val game = game(
+            team("WASH", "Washington Huskies", home = false, shortName = "Washington"),
+            team("IOWA", "Iowa Hawkeyes", home = true, shortName = "Iowa"),
+        )
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(travel),
+            programs = listOf(
+                program("travel", "Washington Travel Guide", firstPitch, firstPitch + 3 * 60 * minute)
+            ),
+        )
+
+        assertNull(hit)
     }
 
     // ── The viewer's own correction memory ──────────────────────────

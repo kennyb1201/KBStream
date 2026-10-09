@@ -46,6 +46,12 @@ object Diagnostics {
     private const val MAX_CACHE_ENTRIES = 8
     private const val MAX_DB_ENTRIES = 6
 
+    /**
+     * The label family the sports hub's matching pass records under (see
+     * [sportsLine]) - the four stages as durations and three counts.
+     */
+    private const val SPORTS_PREFIX = "sports.match."
+
 
 
     suspend fun build(context: Context): String {
@@ -80,6 +86,12 @@ object Diagnostics {
         // session whose player never had a decoder problem (see
         // PlaybackEngineTrace), so a clean report stays short.
         PlaybackEngineTrace.summary()?.let { report.appendLine(it) }
+        // What the last sports-hub matching pass cost, stage by stage. The same
+        // figures go to logcat as `SPORTS PERF`, and logcat is exactly what is
+        // not reachable from the couch - so the pass that a viewer reports as
+        // "it takes a minute to find the channels" travels with the report.
+        // Absent until the hub has run (see [sportsLine]).
+        sportsLine()?.let { report.appendLine(it) }
         artLine()?.let { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
         // the bookkeeping behind "the binge offered an episode I had already
@@ -220,6 +232,46 @@ object Diagnostics {
             }
             append(" rebuilds=").append(rebuilds)
             if (zapCount > 0) append(" zaps-warm=").append(zapWarm).append("/").append(zapCount)
+        }
+    }
+
+    /**
+     * What the last sports-hub matching pass cost, stage by stage.
+     *
+     * `resolveMatches` is the one place in the app that can take the better part
+     * of a minute (a paged lineup read, a guide index over five figures of
+     * channels, an indexed EPG search, then the honest per-card matching), and
+     * the four stages are what says WHICH of them did it. The labels are the
+     * same ones the `SPORTS PERF` lines print, recorded from the same
+     * measurement, so the live view and the report can never disagree.
+     *
+     * `channels` is the lineup read - the one stage that cannot be made cheaper,
+     * since it reads every channel of every playlist - and `guide_index` is ~0
+     * on every pass after the first, because the index is cached for the
+     * ViewModel's life. The three counts say what the stages had to work with,
+     * which is the difference between a slow pass and a big one: twelve cards
+     * that took 40s is a machine problem, and 4000 programs is a guide problem.
+     *
+     * Counts and timings only - never a channel name, a team or a game title - so
+     * nothing here can carry the viewer's lineup or their city into a report
+     * that gets pasted into a chat. Null until the hub has actually run a pass
+     * (an empty slate returns before any of this is recorded), so a report from
+     * a session that never opened Sports keeps the length it had.
+     */
+    internal fun sportsLine(): String? {
+        val stages = PerfTrace.latestByPrefix(SPORTS_PREFIX).toMap()
+        if (stages.isEmpty()) return null
+        fun count(label: String): Long = stages[label] ?: 0L
+        fun ms(label: String): String = stages[label]?.let { "${it}ms" } ?: "\u2014"
+        return buildString {
+            append("sports: ")
+            append(count("sports.match.cards")).append(" cards, ")
+            append(count("sports.match.matched")).append(" matched, ")
+            append(count("sports.match.programs")).append(" programs, ")
+            append("channels ").append(ms("sports.match.channels")).append(", ")
+            append("guide_index ").append(ms("sports.match.guide_index")).append(", ")
+            append("epg_query ").append(ms("sports.match.epg_query")).append(", ")
+            append("match_loop ").append(ms("sports.match.match_loop"))
         }
     }
 
