@@ -83,6 +83,41 @@ class SportsFavoritesTest {
     }
 
     @Test
+    fun `a tournament is keyed by its own name, not its per-round id`() {
+        // The inversion of the team rule, on purpose: a golf tournament's id is
+        // per-round on some feeds, so a pick keyed on it would be forgotten
+        // between days, while the name is the same string all week.
+        val event = TournamentEvent(
+            id = "401",
+            league = "golf/pga",
+            name = "  Baycurrent Classic ",
+            dateMs = 0L,
+            state = GameState.LIVE,
+            statusDetail = "",
+            leaders = emptyList(),
+            broadcastNames = emptyList(),
+        )
+
+        assertEquals("baycurrent classic", event.favoriteKey)
+    }
+
+    @Test
+    fun `a tournament the feed gives no name falls back to its id`() {
+        val event = TournamentEvent(
+            id = "401",
+            league = "golf/pga",
+            name = "   ",
+            dateMs = 0L,
+            state = GameState.LIVE,
+            statusDetail = "",
+            leaders = emptyList(),
+            broadcastNames = emptyList(),
+        )
+
+        assertEquals("401", event.favoriteKey)
+    }
+
+    @Test
     fun `the favourites tab is not one of the leagues`() {
         // The tab is a view over the enabled leagues; if it ever leaked into the
         // catalog it would be listed in the leagues panel as a switchable league

@@ -29,6 +29,7 @@ import com.kennyb1201.kbstream.data.sports.SportsLeague
 import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import com.kennyb1201.kbstream.data.sports.SportsTeam
 import com.kennyb1201.kbstream.data.sports.StandingGroup
+import com.kennyb1201.kbstream.data.sports.TeamVariants
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.data.sports.involvesFavorite
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
@@ -39,6 +40,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -555,6 +557,21 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         SportsChannelMemory.rememberPick(getApplication(), game, channelId)
     }
 
+    /**
+     * Records the viewer's own channel choice for [event].
+     *
+     * The tournament twin of [rememberChannel], and the missing half of the fix
+     * that threads the memory into the tournament matcher: reading the memory is
+     * worth nothing unless something writes it, so a viewer who moved a golf
+     * tournament to Golf Channel would have had the correction evaporate by the
+     * next round. Keyed by the event's own stable name (see
+     * [TournamentEvent.favoriteKey]); nothing on screen changes now, because the
+     * memory is read at the start of the next [resolveMatches].
+     */
+    fun rememberTournamentChannel(event: TournamentEvent, channelId: String) {
+        SportsChannelMemory.rememberTournamentPick(getApplication(), event, channelId)
+    }
+
     /** Drops every remembered team -> channel mapping. The settings panel's row. */
     fun clearChannelMemory() {
         SportsChannelMemory.clear(getApplication())
@@ -772,10 +789,19 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             PerfTrace.record("sports.match.guide_index", guideMs)
             Log.d(TAG, "SPORTS PERF guideIndex=${guideIndex.size} took=${guideMs}ms")
             val epgStarted = SystemClock.elapsedRealtime()
+            // Games and tournaments draw from ONE ceiling over the one index
+            // (see [EpgLookups]); the tournament rows are the fix for a golf
+            // card reading "not in your playlist" while Golf Channel carries it
+            // - the index was never asked about a tournament at all (see
+            // [epgTournamentCandidates]).
+            val budget = EpgLookups(MAX_EPG_LOOKUPS)
             val programs = if (guideIndex.isEmpty()) {
                 emptyList()
             } else {
-                runCatchingCancellable { epgCandidates(games, guideIndex) }.getOrDefault(emptyList())
+                runCatchingCancellable {
+                    epgCandidates(games, guideIndex, budget) +
+                        epgTournamentCandidates(events, guideIndex, budget)
+                }.getOrDefault(emptyList())
             }
             val epgMs = SystemClock.elapsedRealtime() - epgStarted
             PerfTrace.record("sports.match.epg_query", epgMs)
@@ -798,13 +824,29 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             val remembered: (String) -> IptvChannel? = { key ->
                 SportsChannelMemory.recall(getApplication(), key, channels)
             }
+            // Built ONCE for the whole pass, not once per game or per program:
+            // the channel list is fixed under the pass, and a team's name forms
+            // do not change between programs. Rebuilding both per program is what
+            // made this loop take 82s on a full slate (see [TeamVariants]).
+            val channelById = channels.associateBy { it.id }
+            val gameVariants: Map<String, TeamVariants> = games.associate { game ->
+                game.id to TeamVariants(
+                    away = SportsChannelMatcher.strongVariants(game.away),
+                    home = SportsChannelMatcher.strongVariants(game.home),
+                )
+            }
             val found = HashMap<String, List<IptvChannel>>()
             games.forEach { game ->
+                ensureActive()
+                // A superseded pass - the live tick or a profile switch cancelled
+                // it - dies here rather than running out its whole 82 seconds in
+                // the background.
+
                 // Verbose, with the feed's own broadcast names beside the id:
                 // a card that matched nothing can then be read against the very
                 // strings tiers 2 and 3 match on.
                 Log.v(TAG, "SPORTS DIAG game=${game.id} broadcasts=${game.broadcastNames}")
-                SportsChannelMatcher.matches(game, channels, programs, remembered)
+                SportsChannelMatcher.matches(game, channels, programs, remembered, channelById, gameVariants.getValue(game.id))
                     .takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[game.id] = feeds
@@ -826,8 +868,13 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     }
             }
             events.forEach { event ->
+                ensureActive()
                 Log.v(TAG, "SPORTS DIAG event=${event.id} broadcasts=${event.broadcastNames}")
-                SportsChannelMatcher.matches(event, channels, programs)
+                // The tournament path takes the SAME correction memory, keyed by
+                // the event's own stable name (see [TournamentEvent.favoriteKey]):
+                // a viewer who moved a golf tournament to Golf Channel gets that
+                // back on the next pass instead of the matcher's guess.
+                SportsChannelMatcher.matches(event, channels, programs, remembered, channelById)
                     .takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[event.id] = feeds
@@ -1070,19 +1117,18 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      */
     private suspend fun epgCandidates(
         games: List<SportsGame>,
-        guideIndex: Map<String, IptvChannel>
+        guideIndex: Map<String, IptvChannel>,
+        budget: EpgLookups,
     ): List<MatcherProgram> {
         val out = LinkedHashMap<String, MatcherProgram>()
         val asked = HashSet<String>()
-        var lookups = 0
         games.asSequence()
             .filter { it.state != GameState.FINAL }
             .forEach { game ->
-                if (lookups >= MAX_EPG_LOOKUPS) return@forEach
                 val terms = listOf(game.away, game.home).mapNotNull(::titleSearchTerm)
                 if (terms.size < 2) return@forEach
                 if (!asked.add(terms.sorted().joinToString("|"))) return@forEach
-                lookups++
+                if (!budget.take()) return@forEach
                 val rows = searchTerms(terms)
                     .ifEmpty { searchTerms(abbreviationSearchTerms(game)) }
                 rows.forEach { row ->
@@ -1097,6 +1143,58 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                             // The guide's synopsis travels with the row so tier
                             // 1 can fall back to it when the title names no
                             // team; see [SportsChannelMatcher.epgHits].
+                            description = row.description,
+                        )
+                    )
+                }
+            }
+        return out.values.toList()
+    }
+
+    /**
+     * The EPG rows worth handing the matcher, for every tournament on the slate.
+     *
+     * The tournament twin of [epgCandidates], and the fix for a golf card
+     * reading "not in your playlist" with Golf Channel carrying it: the index
+     * was only ever asked about a GAME's two team names, so a tournament's rows
+     * were never in the candidate list at all - `epgNameHits` searched a pool
+     * built for other games and, when ESPN's payload also carried no broadcast
+     * names, had nothing to answer with. A tournament has no teams, so its OWN
+     * name is the lookup: "The Players Championship" asks the index for
+     * ["the", "players", "championship"], and the matcher still requires the
+     * whole name in the row before a card may play it, so a broad term cannot
+     * invent a match.
+     *
+     * Final tournaments are skipped for the same reason a final game is, and the
+     * whole pass shares ONE [MAX_EPG_LOOKUPS] ceiling with the games above (see
+     * [EpgLookups]) - it is one index, so it is one budget.
+     */
+    private suspend fun epgTournamentCandidates(
+        events: List<TournamentEvent>,
+        guideIndex: Map<String, IptvChannel>,
+        budget: EpgLookups,
+    ): List<MatcherProgram> {
+        val out = LinkedHashMap<String, MatcherProgram>()
+        val asked = HashSet<String>()
+        events.asSequence()
+            .filter { it.state != GameState.FINAL }
+            .forEach { event ->
+                val terms = SportsChannelMatcher.words(event.name)
+                if (terms.isEmpty()) return@forEach
+                if (!asked.add(terms.joinToString("|"))) return@forEach
+                if (!budget.take()) return@forEach
+                val rows = runCatchingCancellable {
+                    iptv.searchProgramsByTitleTerms(terms, EPG_SEARCH_LIMIT)
+                }.getOrDefault(emptyList())
+                rows.forEach { row ->
+                    val channel = guideIndex[row.channelId] ?: return@forEach
+                    out.putIfAbsent(
+                        "${channel.id}|${row.startUtcMillis}|${row.title}",
+                        MatcherProgram(
+                            channelId = channel.id,
+                            title = row.title,
+                            startMs = row.startUtcMillis,
+                            endMs = row.endUtcMillis,
                             description = row.description,
                         )
                     )
@@ -1188,6 +1286,25 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     .forEach(::add)
             }
         }.distinct()
+
+    /**
+     * The shared ceiling on indexed EPG lookups for one matching pass.
+     *
+     * Games and tournaments draw from the SAME counter: it is one index, so it is
+     * one budget, and a tournament question is the same kind of work as a game's.
+     * A safety net rather than an allowance (see [MAX_EPG_LOOKUPS]) - reaching it
+     * means a slate bigger than any single day's.
+     */
+    private class EpgLookups(private val max: Int) {
+        private var used = 0
+
+        /** Reserves a lookup when one is left; false means the ceiling is reached. */
+        fun take(): Boolean {
+            if (used >= max) return false
+            used++
+            return true
+        }
+    }
 
     private companion object {
         const val TAG = "SPORTS_HUB"

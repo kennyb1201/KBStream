@@ -638,6 +638,10 @@ fun SportsHubScreen(
                 channels = matches[event.id].orEmpty(),
                 lineupMissing = lineupMissing,
                 matchingDone = matchingDone,
+                // A backup tap is the viewer correcting the matcher, so record
+                // it against the tournament's own key; the game sheet does the
+                // same for a game's two teams. See [SportsChannelMemory].
+                onManualPick = { chosen -> viewModel.rememberTournamentChannel(event, chosen.id) },
                 onPlay = { feeds ->
                     detailTournament = null
                     onPlayChannels(feeds)
@@ -2219,11 +2223,18 @@ private fun TournamentDetailSheet(
     channels: List<IptvChannel>,
     lineupMissing: Boolean,
     matchingDone: Boolean,
+    /**
+     * Reports a feed the viewer chose themselves, so the correction survives to
+     * the next round. The tournament twin of the game sheet's own callback; see
+     * `SportsChannelMemory`.
+     */
+    onManualPick: (IptvChannel) -> Unit = {},
     onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit,
 ) {
     val watchButton = remember { FocusRequester() }
     val channel = channels.firstOrNull()
+    val backups = channels.drop(1)
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
@@ -2359,6 +2370,34 @@ private fun TournamentDetailSheet(
                                 label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
                                 enabled = false
                             )
+                        }
+                    }
+
+                    // The other feeds the playlist holds for this tournament -
+                    // the same rows the game sheet offers. Picking one is the
+                    // viewer correcting the matcher, and the game sheet's own
+                    // pattern is what records it (see `onManualPick`); with no
+                    // backup there is no heading, so the sheet never promises a
+                    // choice it does not have.
+                    if (backups.isNotEmpty()) {
+                        Text(
+                            text = "BACKUP CHANNELS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = KBTextLo,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        backups.forEach { backup ->
+                            KBCard(
+                                onClick = {
+                                    onManualPick(backup)
+                                    onPlay(listOf(backup) + channels.filter { it.id != backup.id })
+                                },
+                                focusedScale = KBFocusRow,
+                                shape = KBShapePill,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                BackupChannelLabel(channel = backup)
+                            }
                         }
                     }
                 }

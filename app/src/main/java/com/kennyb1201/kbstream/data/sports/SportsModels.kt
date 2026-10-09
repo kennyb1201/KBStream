@@ -186,7 +186,20 @@ data class TournamentEvent(
     val venue: String? = null,
     /** ESPN's own context line, as on [SportsGame.note]. */
     val note: String? = null,
-)
+) {
+    /**
+     * The key a correction for this event is remembered under.
+     *
+     * The event's own NAME, lowercased, where a team is keyed by its ESPN id.
+     * The inversion is deliberate: a golf tournament's id is per-round on some
+     * feeds, so keying on it would forget a viewer's picked channel between
+     * days, while "Baycurrent Classic" is the same string all week and is how
+     * the viewer refers to it. The id is the fallback for a feed that carries
+     * no name, exactly as a team's display name is its fallback.
+     */
+    val favoriteKey: String
+        get() = name.trim().lowercase().takeIf { it.isNotEmpty() } ?: id.trim()
+}
 
 /** One top performer in a game, as ESPN carries them on the competition. */
 data class GameLeader(

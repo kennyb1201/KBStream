@@ -50,15 +50,18 @@ class SportsMatchCoverageContractTest {
     fun `the pass covers the whole slate rather than the first league of it`() {
         assertFalse(
             "no per-slate game cap: taken in league order it left every league behind the first uncovered",
-            candidates.contains(".take(")
+            // A COUNT, not the bare `.take(` the budget's own `budget.take()` also
+            // spells: the bug was a fixed number of GAMES, and it is what has to
+            // stay gone.
+            Regex("""\.take\(\d+\)""").containsMatchIn(candidates)
         )
         assertTrue(
             "every non-final game is considered",
             candidates.contains(".filter { it.state != GameState.FINAL }")
         )
         assertTrue(
-            "and the ceiling that remains is a safety net, not a budget",
-            candidates.contains("if (lookups >= MAX_EPG_LOOKUPS) return@forEach")
+            "and the ceiling that remains is a safety net, shared by games and tournaments",
+            candidates.contains("if (!budget.take()) return@forEach")
         )
         val ceiling = Regex("const val MAX_EPG_LOOKUPS = (\\d+)")
             .find(model)?.groupValues?.get(1)?.toInt()
@@ -70,6 +73,28 @@ class SportsMatchCoverageContractTest {
         assertFalse(
             "the old per-slate cap is gone, not merely unused",
             model.contains("MAX_EPG_GAMES")
+        )
+    }
+
+    @Test
+    fun `a tournament is looked up by its own name, sharing the one ceiling`() {
+        assertTrue(
+            "the tournament pass exists and considers every non-final event",
+            candidates.contains("private suspend fun epgTournamentCandidates(") &&
+                candidates.contains(".filter { it.state != GameState.FINAL }")
+        )
+        assertTrue(
+            "its lookups are the event's own name, tokenized the way the matcher does it",
+            candidates.contains("val terms = SportsChannelMatcher.words(event.name)")
+        )
+        assertTrue(
+            "a tournament asks the index about itself, and dedupes its name",
+            candidates.contains("if (!asked.add(terms.joinToString(\"|\"))) return@forEach")
+        )
+        assertTrue(
+            "and it draws from the SAME budget the games pass does",
+            candidates.contains("budget: EpgLookups,") &&
+                candidates.contains("if (!budget.take()) return@forEach")
         )
     }
 

@@ -105,6 +105,35 @@ class SportsMatchSpeedContractTest {
     }
 
     @Test
+    fun `the loop's per-pass invariants are hoisted out of it`() {
+        assertTrue(
+            "the pass's channel id map is built once, not per game - 60+ rebuilds of the " +
+                "same map was the first of the two costs",
+            resolve.contains("val channelById = channels.associateBy { it.id }")
+        )
+        assertTrue(
+            "and a game's two name-form lists once per game, not once per program",
+            resolve.contains("SportsChannelMatcher.strongVariants(game.away)") &&
+                resolve.contains("SportsChannelMatcher.strongVariants(game.home)")
+        )
+        val beforeLoops = resolve.substringBefore("games.forEach")
+        assertTrue(
+            "both live BEFORE the first card is matched",
+            beforeLoops.contains("val channelById = channels.associateBy { it.id }") &&
+                beforeLoops.contains("SportsChannelMatcher.strongVariants(game.away)")
+        )
+        assertFalse(
+            "and the per-card loops never rebuild a team's forms",
+            resolve.substringAfter("games.forEach").contains("strongVariants(")
+        )
+        assertTrue(
+            "a superseded pass stops at the top of each iteration rather than running to the end",
+            resolve.contains("games.forEach { game -> ensureActive()") &&
+                resolve.contains("events.forEach { event -> ensureActive()")
+        )
+    }
+
+    @Test
     fun `the diagnostics report carries the sports line`() {
         assertTrue(
             "the line is built from the same label family",
@@ -187,7 +216,9 @@ class SportsMatchSpeedContractTest {
         // with. Those games could not be found on any channel, however many were
         // carrying them. The short name is ADDITIVE, so every spelling that
         // matched before still does.
-        val variants = slice(matcher, "private fun strongVariants(", "private fun shortFormNames(")
+        // `strongVariants` is internal now: the hub precomputes a game's forms
+        // once per pass rather than letting the tiers rebuild them per program.
+        val variants = slice(matcher, "fun strongVariants(", "private fun shortFormNames(")
         assertTrue(
             "the tiers must read the feed's own short name - a guide titles a game " +
                 "\"Washington\", not \"Huskies\"",

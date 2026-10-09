@@ -24,7 +24,7 @@ class SportsChannelMemoryWiringContractTest {
         )
         assertTrue(
             "and the lambda is passed into the match call",
-            vm.contains("SportsChannelMatcher.matches(game, channels, programs, remembered)")
+            vm.contains("SportsChannelMatcher.matches(game, channels, programs, remembered,")
         )
         assertTrue(
             "the write path: a manual pick records BOTH teams",
@@ -33,6 +33,28 @@ class SportsChannelMemoryWiringContractTest {
         assertTrue(
             "the settings row clears it",
             vm.contains("SportsChannelMemory.clear(getApplication())")
+        )
+    }
+
+    @Test
+    fun `a tournament's own pick is remembered and consulted too`() {
+        val vm = source(VIEW_MODEL)
+        assertTrue(
+            "the tournament matcher is handed the same memory, keyed by the event",
+            vm.contains("SportsChannelMatcher.matches(event, channels, programs, remembered,")
+        )
+        assertTrue(
+            "and a manual tournament pick has a write path of its own",
+            vm.contains(
+                "SportsChannelMemory.rememberTournamentPick(getApplication(), event, channelId)"
+            )
+        )
+        val screen = source(SCREEN)
+        assertTrue(
+            "which the tournament sheet reports from a backup tap",
+            screen.contains(
+                "onManualPick = { chosen -> viewModel.rememberTournamentChannel(event, chosen.id) }"
+            )
         )
     }
 

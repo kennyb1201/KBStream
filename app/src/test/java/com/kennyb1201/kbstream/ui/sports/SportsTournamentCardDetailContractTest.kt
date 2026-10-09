@@ -140,6 +140,30 @@ class SportsTournamentCardDetailContractTest {
         assertFalse("and has no loading state of its own", sheet.contains("loading = true"))
     }
 
+    @Test
+    fun `the sheet offers the other feeds and reports a manual pick`() {
+        assertTrue(
+            "the sheet takes the pick callback, defaulted so the call site is the only wiring",
+            sheet.contains("onManualPick: (IptvChannel) -> Unit = {}")
+        )
+        assertTrue(
+            "the other feeds the playlist holds are the sheet's own rows",
+            sheet.contains("val backups = channels.drop(1)") &&
+                sheet.contains("text = \"BACKUP CHANNELS\"")
+        )
+        assertTrue(
+            "and a tap on one reports the viewer's choice, then plays it first",
+            sheet.contains("onManualPick(backup)") &&
+                sheet.contains("onPlay(listOf(backup) + channels.filter { it.id != backup.id })")
+        )
+        assertTrue(
+            "the screen records that choice against the tournament's own key",
+            hub.contains(
+                "onManualPick = { chosen -> viewModel.rememberTournamentChannel(event, chosen.id) }"
+            )
+        )
+    }
+
     // ── raising and dismissing it ─────────────────────────────────────────
 
     @Test

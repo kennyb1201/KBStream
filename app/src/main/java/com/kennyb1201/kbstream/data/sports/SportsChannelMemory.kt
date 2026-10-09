@@ -99,6 +99,16 @@ internal object SportsChannelMemory {
     }
 
     /**
+     * Records one manual pick for [event]: a tournament has no teams to key, so
+     * the pick hangs off the event's own stable name (see
+     * [TournamentEvent.favoriteKey]) and the next round or broadcast of it opens
+     * where the viewer put it.
+     */
+    fun rememberTournamentPick(context: Context, event: TournamentEvent, channelId: String) {
+        remember(context, event.favoriteKey, channelId)
+    }
+
+    /**
      * The remembered channel for [teamKey], or null.
      *
      * Null when nothing is remembered, and null when the remembered id is not

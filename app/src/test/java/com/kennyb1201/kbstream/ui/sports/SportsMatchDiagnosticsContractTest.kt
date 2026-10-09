@@ -92,11 +92,11 @@ class SportsMatchDiagnosticsContractTest {
         )
         assertTrue(
             "and resolves them through the ordered matcher",
-            // A game is matched with the correction memory handed in (the viewer's
-            // own past pick beats the tiers); a tournament has no team to key it
-            // by, so it is matched without one.
-            model.contains("SportsChannelMatcher.matches(game, channels, programs, remembered)") &&
-                model.contains("SportsChannelMatcher.matches(event, channels, programs)")
+            // Both card shapes are matched with the correction memory handed in
+            // (the viewer's own past pick beats the tiers): a game keyed by its
+            // teams, a tournament by its own stable name.
+            model.contains("SportsChannelMatcher.matches(game, channels, programs, remembered,") &&
+                model.contains("SportsChannelMatcher.matches(event, channels, programs, remembered,")
         )
         assertTrue(
             "an id absent from the map is still no match, never a guess",

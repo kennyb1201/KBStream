@@ -545,6 +545,89 @@ class SportsChannelMatcherTest {
         assertEquals(golf, hit)
     }
 
+    @Test
+    fun `a tournament with no EPG hit and no broadcast names matches nothing`() {
+        // The new candidate path must not manufacture a match: the guide row a
+        // tournament lookup happens to return is not the tournament unless the
+        // matcher finds the whole name in it, so this stays a no-match.
+        val golf = channel("golf", "Golf Channel")
+        val event = TournamentEvent(
+            id = "t1",
+            league = "golf/pga",
+            name = "Baycurrent Classic",
+            dateMs = firstPitch,
+            state = GameState.LIVE,
+            statusDetail = "",
+            leaders = emptyList(),
+            broadcastNames = emptyList(),
+        )
+
+        val hit = SportsChannelMatcher.match(
+            event = event,
+            channels = listOf(golf),
+            programs = listOf(
+                program("golf", "PGA Tour Highlights", firstPitch, firstPitch + 60 * minute)
+            ),
+        )
+
+        assertNull(hit)
+    }
+
+    @Test
+    fun `a remembered tournament channel wins over its tiers`() {
+        // The same correction memory the game path has: a viewer who moved a
+        // golf tournament to its own channel gets that back, keyed by the
+        // event's stable name.
+        val golf = channel("golf", "Golf Channel")
+        val other = channel("other", "Other Sports")
+        val event = TournamentEvent(
+            id = "t1",
+            league = "golf/pga",
+            name = "Baycurrent Classic",
+            dateMs = firstPitch,
+            state = GameState.LIVE,
+            statusDetail = "",
+            leaders = emptyList(),
+            broadcastNames = listOf("Other Sports"),
+        )
+        val remembered: (String) -> IptvChannel? = { key -> golf.takeIf { key == event.favoriteKey } }
+
+        val hit = SportsChannelMatcher.match(
+            event = event,
+            channels = listOf(other, golf),
+            programs = emptyList(),
+            remembered = remembered,
+        )
+
+        assertEquals(golf, hit)
+    }
+
+    @Test
+    fun `a remembered tournament channel that is gone falls through to its tiers`() {
+        val other = channel("other", "Other Sports")
+        val dead = channel("dead", "Gone Channel")
+        val event = TournamentEvent(
+            id = "t1",
+            league = "golf/pga",
+            name = "Baycurrent Classic",
+            dateMs = firstPitch,
+            state = GameState.LIVE,
+            statusDetail = "",
+            leaders = emptyList(),
+            broadcastNames = listOf("Other Sports"),
+        )
+        val remembered: (String) -> IptvChannel? = { dead }
+
+        val hit = SportsChannelMatcher.match(
+            event = event,
+            channels = listOf(other),
+            programs = emptyList(),
+            remembered = remembered,
+        )
+
+        assertEquals(other, hit)
+    }
+
     // ── Backups: every feed the playlist holds, not just the best one ───
     //
     // A game carried on two feeds is the case this list exists for: the head is

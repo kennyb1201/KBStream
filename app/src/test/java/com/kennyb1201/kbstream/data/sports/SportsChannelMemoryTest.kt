@@ -110,6 +110,32 @@ class SportsChannelMemoryTest {
     }
 
     @Test
+    fun `a manual tournament pick is remembered under the event's own name`() {
+        // A tournament has no teams, so its pick hangs off the event's stable
+        // name (see TournamentEvent.favoriteKey) - the missing half of the
+        // tournament correction-memory fix.
+        val golf = channel("golf", "Golf Channel")
+        val event = TournamentEvent(
+            id = "t1",
+            league = "golf/pga",
+            name = "Baycurrent Classic",
+            dateMs = 1_700_000_000_000L,
+            state = GameState.LIVE,
+            statusDetail = "",
+            leaders = emptyList(),
+            broadcastNames = emptyList(),
+        )
+
+        SportsChannelMemory.rememberTournamentPick(context, event, golf.id)
+
+        assertEquals(golf, SportsChannelMemory.recall(context, event.favoriteKey, listOf(golf)))
+        assertNull(
+            "and a tournament the viewer never picked recalls nothing",
+            SportsChannelMemory.recall(context, "some other event", listOf(golf))
+        )
+    }
+
+    @Test
     fun `the newest correction for a team wins`() {
         SportsChannelMemory.remember(context, "TBL", "ch1")
         SportsChannelMemory.remember(context, "TBL", "ch2")

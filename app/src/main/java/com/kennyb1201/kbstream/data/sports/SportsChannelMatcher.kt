@@ -29,6 +29,20 @@ data class MatcherProgram(
 )
 
 /**
+ * A game's two sides' name forms, resolved ONCE for a matching pass.
+ *
+ * The tiers used to call [SportsChannelMatcher.strongVariants] for every program
+ * they looked at, which on a full slate is tens of thousands of rebuilds of the
+ * same two teams' word-lists - the single biggest cost in the match loop. The
+ * forms do not change between programs, so the caller builds this once per game
+ * and hands it back on each call; the matching rules themselves are untouched.
+ */
+data class TeamVariants(
+    val away: List<List<String>>,
+    val home: List<List<String>>,
+)
+
+/**
  * Picks the playlist channel that is carrying a game, or null.
  *
  * Tiers, strongest first, and it never guesses past them: a wrong game on the
@@ -132,7 +146,7 @@ internal object SportsChannelMatcher {
      *
      * EMPTY on purpose. An entry goes in only when a real EPG title that missed
      * proves the need, and the title goes in the comment beside it - this is data
-     * grown from observed misses, never from imagination. [strongNamesTeam] reads
+     * grown from observed misses, never from imagination. [strongVariants] reads
      * it, so an entry here is the last team-name variant before city-alone.
      */
     val TEAM_SHORT_FORMS: Map<String, String> = emptyMap()
@@ -213,6 +227,21 @@ internal object SportsChannelMatcher {
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
         remembered: (String) -> IptvChannel? = { null },
+        /**
+         * The id -> channel map the caller already built for this pass. Defaults
+         * to building it here, which is what a one-off call wants; a pass over a
+         * whole slate passes the shared one and never rebuilds it per game.
+         */
+        channelById: Map<String, IptvChannel> = channels.associateBy { it.id },
+        /**
+         * The game's two sides' name forms, built once by the caller. Defaults to
+         * resolving them here; see [TeamVariants] for why a pass must not let
+         * this happen per program.
+         */
+        variants: TeamVariants = TeamVariants(
+            away = strongVariants(game.away),
+            home = strongVariants(game.home),
+        ),
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
         // The viewer's own past pick beats every heuristic: if they once chose a
@@ -224,7 +253,7 @@ internal object SportsChannelMatcher {
             remembered(game.away.favoriteKey),
         ).filter { it.id in present }
         if (recalled.isNotEmpty()) return cap(recalled)
-        epgHits(game, channels, programs).let { if (it.isNotEmpty()) return cap(it) }
+        epgHits(game, programs, channelById, variants).let { if (it.isNotEmpty()) return cap(it) }
         // Home before away: a regional playlist is likelier to carry the home
         // broadcast. Within a family, the best-named channel comes first.
         val networks = game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)
@@ -236,16 +265,29 @@ internal object SportsChannelMatcher {
         event: TournamentEvent,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
-    ): IptvChannel? = matches(event, channels, programs).firstOrNull()
+        remembered: (String) -> IptvChannel? = { null },
+    ): IptvChannel? = matches(event, channels, programs, remembered).firstOrNull()
 
-    /** The channels carrying a tournament event, strongest first. See [matches]. */
+    /**
+     * The channels carrying a tournament event, strongest first. See [matches].
+     *
+     * [remembered] is the viewer's own correction memory, keyed by the event's
+     * own [TournamentEvent.favoriteKey] - a tournament has no teams to key it by,
+     * so its stable name is what a past pick hangs off. It is checked before the
+     * EPG and broadcast tiers, exactly as on the game path, and a pick that is
+     * gone from the playlist falls through to them.
+     */
     fun matches(
         event: TournamentEvent,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
+        remembered: (String) -> IptvChannel? = { null },
+        channelById: Map<String, IptvChannel> = channels.associateBy { it.id },
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
-        epgNameHits(event, channels, programs).let { if (it.isNotEmpty()) return cap(it) }
+        val present = channels.mapTo(HashSet()) { it.id }
+        remembered(event.favoriteKey)?.takeIf { it.id in present }?.let { return cap(listOf(it)) }
+        epgNameHits(event, programs, channelById).let { if (it.isNotEmpty()) return cap(it) }
         return cap(event.broadcastNames.flatMap { networkChannels(it, channels) })
     }
 
@@ -384,37 +426,38 @@ internal object SportsChannelMatcher {
      */
     private fun epgHits(
         game: SportsGame,
-        channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
+        channelById: Map<String, IptvChannel>,
+        variants: TeamVariants,
     ): List<IptvChannel> {
-        val titleHits = programHits(game, channels, programs) { it.title }
+        val titleHits = programHits(game, programs, channelById, variants) { it.title }
         if (titleHits.isNotEmpty()) return titleHits
-        return programHits(game, channels, programs) { it.description.orEmpty() }
+        return programHits(game, programs, channelById, variants) { it.description.orEmpty() }
     }
 
     private fun programHits(
         game: SportsGame,
-        channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
+        channelById: Map<String, IptvChannel>,
+        variants: TeamVariants,
         textOf: (MatcherProgram) -> String,
     ): List<IptvChannel> {
         val hits = programs.filter { program ->
             overlapsWindow(program, game.dateMs) &&
-                namesBothTeams(textOf(program), game.away, game.home)
+                namesBothTeams(textOf(program), game.away, game.home, variants)
         }
         if (hits.isEmpty()) return emptyList()
         // The program whose start sits closest to the game's own start comes
         // first, when a provider carries the same game on more than one channel.
-        val byId = channels.associateBy { it.id }
         return hits
             .sortedBy { abs(it.startMs - game.dateMs) }
-            .mapNotNull { byId[it.channelId] }
+            .mapNotNull { channelById[it.channelId] }
     }
 
     private fun epgNameHits(
         event: TournamentEvent,
-        channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
+        channelById: Map<String, IptvChannel>,
     ): List<IptvChannel> {
         val eventWords = words(event.name)
         if (eventWords.isEmpty()) return emptyList()
@@ -423,10 +466,9 @@ internal object SportsChannelMatcher {
                 words(program.title).containsSequence(eventWords)
         }
         if (hits.isEmpty()) return emptyList()
-        val byId = channels.associateBy { it.id }
         return hits
             .sortedBy { abs(it.startMs - event.dateMs) }
-            .mapNotNull { byId[it.channelId] }
+            .mapNotNull { channelById[it.channelId] }
     }
 
     private fun overlapsWindow(program: MatcherProgram, startMs: Long): Boolean =
@@ -441,11 +483,16 @@ internal object SportsChannelMatcher {
      * ("Tampa Bay vs Florida", "Tampa Bay vs Panthers") - a lone "Tampa Bay" is
      * a travel show, not a game, so it must never match on its own.
      */
-    private fun namesBothTeams(text: String, away: SportsTeam, home: SportsTeam): Boolean {
+    private fun namesBothTeams(
+        text: String,
+        away: SportsTeam,
+        home: SportsTeam,
+        variants: TeamVariants,
+    ): Boolean {
         val tokens = words(text)
         if (tokens.isEmpty()) return false
-        val awayStrong = strongNamesTeam(tokens, away)
-        val homeStrong = strongNamesTeam(tokens, home)
+        val awayStrong = namesStrongTeam(tokens, variants.away)
+        val homeStrong = namesStrongTeam(tokens, variants.home)
         val awayCity = cityNamesTeam(tokens, away)
         val homeCity = cityNamesTeam(tokens, home)
         if (!(awayStrong || awayCity) || !(homeStrong || homeCity)) return false
@@ -456,14 +503,23 @@ internal object SportsChannelMatcher {
     }
 
     /**
-     * The team's real names, whole-word matched: the full display name, the
-     * abbreviation, the nickname on its own, then any [TEAM_SHORT_FORMS] alias
-     * (in this order, so an earlier form's hit is preferred by callers that care).
+     * Whether [tokens] carry one of the team's real names, whole-word matched:
+     * the full display name, the abbreviation, the nickname on its own, then any
+     * [TEAM_SHORT_FORMS] alias (in this order, so an earlier form's hit is
+     * preferred by callers that care). The forms are the caller's, resolved once
+     * per pass - see [TeamVariants].
      */
-    private fun strongNamesTeam(tokens: List<String>, team: SportsTeam): Boolean =
-        strongVariants(team).any { tokens.containsSequence(it) }
+    private fun namesStrongTeam(tokens: List<String>, variants: List<List<String>>): Boolean =
+        variants.any { tokens.containsSequence(it) }
 
-    private fun strongVariants(team: SportsTeam): List<List<String>> = buildList {
+    /**
+     * The name forms [team] answers to, in the order the tiers prefer them.
+     *
+     * INTERNAL because the hub precomputes these once per matching pass (see
+     * [TeamVariants]) rather than letting the tiers rebuild them for every
+     * program; this stays the single definition of what a team is called.
+     */
+    internal fun strongVariants(team: SportsTeam): List<List<String>> = buildList {
         team.displayName.takeIf { it.isNotBlank() }?.let { add(words(it)) }
         // The feed's OWN short name, which is the name a guide titles a game
         // with far more often than any word of the full one: "Washington" for
@@ -622,7 +678,7 @@ internal object SportsChannelMatcher {
      * matched the ESPN cable channel. Every other punctuation mark still folds:
      * "t.n.t" and "TNT" must stay the same network.
      */
-    private fun words(raw: String): List<String> =
+    internal fun words(raw: String): List<String> =
         raw.lowercase()
             .map { if (it.isLetterOrDigit() || it == '+') it else ' ' }
             .joinToString("")
