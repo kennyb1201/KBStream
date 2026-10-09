@@ -339,7 +339,13 @@ fun CatalogGridScreen(
                             PosterCaptions(
                                 title = meta.name,
                                 year = meta.yearOrNull?.toString(),
-                                rating = meta.imdbRating?.toDoubleOrNull(),
+                                // The add-on's IMDb score where there is one,
+                                // else the TMDB score the app's own rails carry
+                                // (see MetaPreview.tmdbRating): a built-in rail
+                                // has no add-on preview behind it, so this is
+                                // the only number its tiles have.
+                                rating = meta.imdbRating?.toDoubleOrNull()
+                                    ?: meta.tmdbRating,
                                 focused = focused,
                                 modifier = Modifier.padding(top = 5.dp)
                             )

@@ -60,7 +60,7 @@ internal object KidsTrendingRailRules {
             catalogId = MOVIE_CATALOG_ID,
             catalogName = "Trending Kids Movies",
             filters = KBFilters(
-                withGenres = "16,10751",
+                withGenres = "16|10751",
                 certificationCountry = CERTIFICATION_COUNTRY,
                 certificationLte = CERTIFICATION_CEILING,
                 voteCountGte = MIN_VOTE_COUNT,
@@ -74,7 +74,7 @@ internal object KidsTrendingRailRules {
             catalogId = SHOW_CATALOG_ID,
             catalogName = "Trending Kids Shows",
             filters = KBFilters(
-                withGenres = "10762,16",
+                withGenres = "10762|16",
                 certificationCountry = CERTIFICATION_COUNTRY,
                 certificationLte = CERTIFICATION_CEILING,
                 voteCountGte = MIN_VOTE_COUNT,

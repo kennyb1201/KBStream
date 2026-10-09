@@ -28,6 +28,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
 import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.home.looksLikeRawMediaId
@@ -207,10 +208,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var bufferingView: View? = null
     private var loadingBackdropView: ImageView? = null
     private var loadingLogoView: ImageView? = null
-    // The one shared overlay (player_chrome.xml), and this engine's own note
-    // inflated into its slot.
+    // The one shared overlay (player_chrome.xml).
     private var chrome: PlayerChrome? = null
-    private var engineNoteView: TextView? = null
     // The overlay clock's own 1 Hz tick: the shared chrome paints the clock and
     // the readouts, so this just nudges it while the bar is up (mpv's progress
     // callback is roughly once a second, but a paused session reports nothing
@@ -1305,11 +1304,6 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         loadingLogoView = findViewById(R.id.mpv_loading_logo)
         // Engine-only views inflated into the shared chrome's slots, so they keep
         // the exact place they had in this layout before it was unified.
-        val noteSlot = findViewById<LinearLayout>(R.id.chrome_extra_note)
-        engineNoteView = layoutInflater
-            .inflate(R.layout.player_mpv_engine_note, noteSlot, false) as TextView
-        noteSlot.addView(engineNoteView)
-        noteSlot.visibility = View.VISIBLE
         val chapterSlot = findViewById<LinearLayout>(R.id.chrome_extra_seek)
         val chapterStrip = layoutInflater.inflate(
             R.layout.player_mpv_chapter_row,
@@ -1362,6 +1356,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         pickerContainer = findViewById(R.id.mpv_picker_container)
         pickerTitle = findViewById(R.id.mpv_picker_title)
         pickerList = findViewById(R.id.mpv_picker_list)
+        // A RecyclerView lays out NOTHING without a layout manager, and this
+        // layout declares none - the main player's picker sets one in code for
+        // exactly that reason (see NativePlayerActivity). Without this the
+        // SOURCES / AUDIO / SUBTITLES panels opened with their title and an
+        // empty box under it, which is what "the lists are empty on the MPV
+        // player" was: the rows were handed to the adapter and never placed.
+        pickerList?.layoutManager = LinearLayoutManager(this)
         // Picker rows are inflated on demand, long after the chrome above was
         // themed, so each one is retinted as it attaches (a recycled row keeps
         // whatever background it was themed with).
@@ -1726,41 +1727,17 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     /**
-     * The engine note that stands where the main player's source badges sit, and
-     * the two buttons that read state out in place (aspect, and the speed label
+     * The two buttons that read state out in place (aspect, and the speed label
      * the picker leaves behind).
      *
-     * Badges and status only, exactly like the main player's overlay: the file's
-     * own details (resolution, codec, bitrate, decode mode) used to be appended
-     * here, which put a line of diagnostics under the picture for the whole
-     * session. They belong to the INFO readout and the settings panel's stream
-     * row, which is where they are now - see [diagnosticsText].
+     * The overlay is the badges, exactly like the main player's badge row: this
+     * engine's own note - which source file is playing, that mpv is the engine,
+     * and why the handoff happened - used to be pinned under them, and it read
+     * as a file name plus a line of diagnostics left on screen for the whole
+     * session. Which FILE is playing is the badges' job, and how it is being
+     * played belongs to the INFO readout (see [diagnosticsText]).
      */
     private fun updateControlsInfo() {
-        engineNoteView?.text = buildString {
-            // Which source is playing comes first: it is what the main player's
-            // badge row says there, and it can change mid-session now that
-            // SOURCES can switch without leaving the title.
-            currentSourceLabel?.takeIf { it.isNotBlank() }?.let { append("$it  \u00b7  ") }
-            append(
-                when {
-                    !isFallbackSession -> "MPV engine"
-                    fallbackReason == FALLBACK_REASON_MANUAL ->
-                        "MPV engine  \u00b7  switched from ExoPlayer on the remote"
-                    else -> "MPV backup engine"
-                }
-            )
-            if (isFallbackSession && fallbackReason == FALLBACK_REASON_DECODER) {
-                append("  \u00b7  ExoPlayer had run out of video decoders")
-            }
-            if (isFallbackSession && fallbackReason == FALLBACK_REASON_CONTAINER) {
-                append("  \u00b7  ExoPlayer could not read this file's container")
-            }
-            if (isFallbackSession && fallbackReason == FALLBACK_REASON_SUBTITLE) {
-                append("  \u00b7  ExoPlayer cannot render this file's subtitle format")
-            }
-        }
-        engineNoteView?.visibility = View.VISIBLE
         speedButton?.text = "${playbackSpeed}x"
         aspectButton?.text = ASPECT_MODES.getOrElse(resizeModeIndex) { "Fit" }
         // This runs as the file opens and whenever a title fact changes, which
@@ -3736,11 +3713,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             scrobbleStarted = true
             scrobble("start")
         }
-        // A hand switch needs no notice - the button press said it, and the
-        // engine note above the control bar now reads "switched from
-        // ExoPlayer" - so this stays the automatic handoff's announcement.
-        if (isFallbackSession && fallbackReason != FALLBACK_REASON_MANUAL) {
+        // Every handoff announces itself. A manual switch used to be the
+        // exception because the engine note above the control bar said
+        // "switched from ExoPlayer" for it - that note is gone now (the overlay
+        // is the badges, see [updateControlsInfo]), so the press is the one
+        // thing left to say which engine this is.
+        if (isFallbackSession) {
             val hint = when (fallbackReason) {
+                FALLBACK_REASON_MANUAL ->
+                    "\u2014 switch back from the bar's own SWITCH button"
                 FALLBACK_REASON_DECODER ->
                     "\u2014 if it stutters, open the gear and set Decoding to Software"
                 FALLBACK_REASON_SUBTITLE ->

@@ -927,6 +927,13 @@ class MpvPlayerView @JvmOverloads constructor(
         // packaged for.
         mpv.setOptionString("vo", "gpu")
         mpv.setOptionString("gpu-context", "android")
+        // Pin the API as well as the context. `gpu-api` defaults to auto, and a
+        // box that advertises Vulkan can be answered with the Vulkan path while
+        // `gpu-context=android` + `opengl-es=yes` below ask for OpenGL ES - a
+        // mismatched pair that does not fail the open (audio plays, the track
+        // list populates) but never puts a frame on screen: black picture over
+        // playing sound. "opengl" is the API this app already configures for.
+        mpv.setOptionString("gpu-api", "opengl")
         mpv.setOptionString("opengl-es", "yes")
 
         // Decoding: try MediaCodec zero-copy, then copy-back, then software.

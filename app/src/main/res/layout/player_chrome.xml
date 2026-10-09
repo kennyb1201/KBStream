@@ -10,8 +10,8 @@
      `controls_overlay` / activity_mpv_player.xml's `mpv_controls` attribute for
      attribute, so an included layout draws pixel-identically. The engine-specific
      pieces stay in the activities as siblings of the include - the Exo-only live
-     program block and channel/guide buttons, the MPV-only engine note and chapter
-     strip - because they are not chrome the two engines share.
+     program block and channel/guide buttons, and the MPV-only chapter strip -
+     because they are not chrome the two engines share.
 
      The root is a FrameLayout so the SKIP INTRO control keeps the exact anchor it
      had as a direct child of the activity's own FrameLayout (bottom-start, 96dp
@@ -177,15 +177,6 @@
                 android:orientation="horizontal"
                 android:visibility="gone" />
         </HorizontalScrollView>
-
-        <!-- Slot: engine-only content that stands where the badges do - the
-             MPV-only engine note. Empty here; MPV inflates its note into it. -->
-        <LinearLayout
-            android:id="@+id/chrome_extra_note"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:visibility="gone" />
 
         <!-- Cast band: pinned between the info scroll and the seekbar, the same
              placement both players use, so avatars + names are always fully

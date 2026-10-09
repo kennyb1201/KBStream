@@ -11,10 +11,11 @@
      shared chrome cannot hold for it (see the includes and slots below).
 
      What is missing is missing because libmpv cannot do it, not by choice: no
-     cast band and no badge row (both are ExoPlayer-session state), and no
-     Dolby Vision / P5 controls (mpv has no DV path). Their replacements live in
+     Dolby Vision / P5 controls (mpv has no DV path). Those replacements live in
      the settings panel behind the gear, which is where the engine-specific
-     controls sit.
+     controls sit. The overlay carries the same title block and the same source
+     badge chips as the main player's, and nothing else: what is playing is the
+     badges' job and how it is being played belongs to the INFO readout.
 
      The source button IS here, and so is the picker side panel: the whole
      ranked list rides along in the launch extras (sources_json), so picking
@@ -195,11 +196,10 @@
 
     <!-- The shared overlay: gradient chrome, clock, title block, badges, cast
          band, seek bar and the 11 control buttons, hidden by default and driven
-         by PlayerChrome. The MPV-only engine note and chapter strip are inflated
-         into its chrome_extra_note / chrome_extra_seek slots at runtime (see
-         MpvPlayerActivity.bindViews), so they keep the exact place they had
-         here. Declared before the end-of-episode cards and side panels so those
-         still paint above it. -->
+         by PlayerChrome. The MPV-only chapter strip is inflated into its
+         chrome_extra_seek slot at runtime (see MpvPlayerActivity.bindViews), so
+         it keeps the exact place it had here. Declared before the end-of-episode
+         cards and side panels so those still paint above it. -->
     <include layout="@layout/player_chrome" />
 
     <!-- Up Next (shown as the episode's credits roll) - the same compact card

@@ -30,7 +30,22 @@ data class MetaPreview(
     val year: Any? = null,
     // IMDb rating when the addon includes it in catalog/search previews
     // (Cinemeta does); powers the search-tile star-rating caption.
-    @Json(name = "imdbRating") val imdbRating: String? = null
+    @Json(name = "imdbRating") val imdbRating: String? = null,
+    /**
+     * TMDB's own `vote_average`, on a preview this app BUILT from its own
+     * discover/list call rather than one an add-on served - i.e. every
+     * built-in Home rail (the kids rows, the pinned "Top ... Today" rows, a
+     * guest profile's).
+     *
+     * Kept apart from [imdbRating] on purpose: that field is an IMDb score and
+     * the detail page prints it as one, so filling it with TMDB's average
+     * would put a wrong number under an "IMDb" label. The star caption under a
+     * poster reads either - see PosterCaptions - and a built-in rail has only
+     * this one, which is why those tiles drew no stars at all.
+     *
+     * Null for every add-on preview, which is every other caller.
+     */
+    val tmdbRating: Double? = null
 ) {
     /**
      * Release year from whichever field the catalog filled: the standard

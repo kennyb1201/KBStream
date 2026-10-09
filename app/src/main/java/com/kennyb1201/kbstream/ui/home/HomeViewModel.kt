@@ -7677,9 +7677,13 @@ private suspend fun calculateEpisodesRemaining(
                 catalogId = "top_kids_movies",
                 catalogName = "Top Kids Movies",
                 filters = com.kennyb1201.kbstream.data.kb.KBFilters(
-                    // Animation OR Family. (OR-comma on purpose; adult-tagged
-                    // genres like Action & Adventure or News would leak in.)
-                    withGenres = "16,10751",
+                    // Animation OR Family. The PIPE is the OR: TMDB reads a
+                    // COMMA as an AND, so "16,10751" was asking for titles that
+                    // are animated AND family-tagged at once, which is a far
+                    // smaller pool than the row was written for. (The kids
+                    // ceiling below still drops anything adult-tagged, so
+                    // widening the genre set cannot leak one in.)
+                    withGenres = "16|10751",
                     voteCountGte = 20,
                     releaseDateGte = "1970-01-01"
                 )
@@ -7690,8 +7694,9 @@ private suspend fun calculateEpisodesRemaining(
                 catalogId = "top_kids_shows",
                 catalogName = "Top Kids Shows",
                 filters = com.kennyb1201.kbstream.data.kb.KBFilters(
-                    // Kids, Animation — the series twin of the list above.
-                    withGenres = "10762,16",
+                    // Kids OR Animation, the series twin of the list above - a
+                    // pipe, for the reason spelled out there.
+                    withGenres = "10762|16",
                     voteCountGte = 20,
                     releaseDateGte = "1970-01-01"
                 )
@@ -7731,7 +7736,13 @@ private suspend fun calculateEpisodesRemaining(
                                         ?.let { TmdbRepository.BACKDROP_BASE + it },
                                     releaseInfo = (item.firstAirDate ?: item.releaseDate)
                                         ?.takeIf { it.length >= 4 }
-                                        ?.take(4)
+                                        ?.take(4),
+                                    // The star caption's own score. These rows come
+                                    // straight from TMDB, so the discover item's
+                                    // vote average is all there is - without it
+                                    // every built-in rail drew no stars while an
+                                    // add-on rail beside it did (see tmdbRating).
+                                    tmdbRating = item.voteAverage?.takeIf { it > 0.0 }
                                 )
                             },
                             // The app-wide digital-release filter applies to the
@@ -7998,7 +8009,8 @@ private suspend fun calculateEpisodesRemaining(
                                         ?.let { TmdbRepository.BACKDROP_BASE + it },
                                     releaseInfo = (item.firstAirDate ?: item.releaseDate)
                                         ?.takeIf { it.length >= 4 }
-                                        ?.take(4)
+                                        ?.take(4),
+                                    tmdbRating = item.voteAverage?.takeIf { it > 0.0 }
                                 )
                             },
                             // Same two filters the add-on rails run: the app-wide
@@ -8148,7 +8160,8 @@ private suspend fun calculateEpisodesRemaining(
                                     ?.let { TmdbRepository.BACKDROP_BASE + it },
                                 releaseInfo = (item.firstAirDate ?: item.releaseDate)
                                     ?.takeIf { it.length >= 4 }
-                                    ?.take(4)
+                                    ?.take(4),
+                                tmdbRating = item.voteAverage?.takeIf { it > 0.0 }
                             )
                         }
 

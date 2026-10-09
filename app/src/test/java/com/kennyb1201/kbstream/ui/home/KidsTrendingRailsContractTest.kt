@@ -55,7 +55,11 @@ class KidsTrendingRailsContractTest {
         // here would make this row the recency pair drawn twice.
         assertEquals("popularity.desc", movie.sortBy)
 
-        assertEquals("16,10751", movie.filters.withGenres)
+        // Animation (16) OR Family (10751), spelled the way TMDB's OR is: a
+        // PIPE. A comma is an AND there, which narrows the row instead of
+        // widening it - the bug that emptied "New Kids Shows" (see
+        // KidsNewRailRules); it is the same query shape on both pairs.
+        assertEquals("16|10751", movie.filters.withGenres)
         assertEquals("US", movie.filters.certificationCountry)
         assertEquals("PG", movie.filters.certificationLte)
         assertNull(
@@ -76,7 +80,7 @@ class KidsTrendingRailsContractTest {
         assertEquals("trending_kids_shows", show.catalogId)
         assertEquals("Trending Kids Shows", show.catalogName)
         assertEquals("popularity.desc", show.sortBy)
-        assertEquals("10762,16", show.filters.withGenres)
+        assertEquals("10762|16", show.filters.withGenres)
         assertEquals("US", show.filters.certificationCountry)
         assertEquals("PG", show.filters.certificationLte)
         assertNull(show.filters.certification)

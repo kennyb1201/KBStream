@@ -53,10 +53,12 @@ class KidsNewRailsContractTest {
         assertEquals("New Kids Movies", movie.catalogName)
         assertEquals("primary_release_date.desc", movie.sortBy)
 
-        // Animation (16) OR Family (10751), spelled the way TMDB's OR is: one
-        // comma-separated param. An AND here - or the wrong ids - narrows the
-        // rail instead of widening it, which reads as an empty row.
-        assertEquals("16,10751", movie.filters.withGenres)
+        // Animation (16) OR Family (10751), spelled the way TMDB's OR is: a
+        // PIPE. A comma is an AND on TMDB's side, which narrows the rail
+        // instead of widening it - and over the ninety-day window below an AND
+        // is a query with zero results, so the row disappears from Home
+        // entirely (verified against the live API; see KidsNewRailRules).
+        assertEquals("16|10751", movie.filters.withGenres)
 
         // The age rule is the CEILING, and there is no exact match beside it:
         // `certification=PG` would exclude every G title, which is the opposite
@@ -89,7 +91,8 @@ class KidsNewRailsContractTest {
         // TV sorts and windows on its own fields; the filters carry the same
         // release bounds because discoverKB maps them onto first_air_date.
         assertEquals("first_air_date.desc", show.sortBy)
-        assertEquals("10762,16", show.filters.withGenres)
+        // Kids OR Animation, a pipe for the reason on the movie rail above.
+        assertEquals("10762|16", show.filters.withGenres)
         assertEquals("US", show.filters.certificationCountry)
         assertEquals("PG", show.filters.certificationLte)
         assertNull(show.filters.certification)

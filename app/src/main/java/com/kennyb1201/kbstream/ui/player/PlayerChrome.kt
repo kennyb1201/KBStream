@@ -159,7 +159,7 @@ interface PlayerChromeHost {
  * `root` is the included layer ([R.id.chrome_layer]): the overlay container is
  * found inside it, so an activity that includes the layout passes the layer and
  * nothing else. The engine-specific views (the Exo-only live block and channel
- * buttons, the MPV-only engine note) stay in the activity as siblings of the
+ * buttons, the MPV-only chapter strip) stay in the activity as siblings of the
  * include and are not touched here.
  */
 class PlayerChrome(

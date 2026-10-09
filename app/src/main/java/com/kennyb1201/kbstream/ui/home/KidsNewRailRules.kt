@@ -37,11 +37,18 @@ internal data class KidsRailQuery(
  * the rows "new" rather than "not yet", and keeps them populated in the slow
  * months a shorter window would empty.
  *
- * The genre lists are the standing kids rows' own, character for character
- * ("16,10751" for films, "10762,16" for series) so the two families of row
- * select from the same pool. Note what a comma means on TMDB's side: it is an
- * AND of the ids, not an OR (a pipe is the OR). That is the standing rows'
- * existing behaviour and is deliberately not changed here.
+ * The genre lists are the standing kids rows' own ("16|10751" for films,
+ * "10762|16" for series) so the two families of row select from the same pool.
+ *
+ * Those are PIPES, and that is the whole fix for "New Kids Shows is missing":
+ * TMDB reads a COMMA as an AND of the ids, not an OR, so "10762,16" asked for
+ * series that are kids AND animation at once - and over a ninety-day window
+ * that is a query with **zero** results (verified against the live API:
+ * `discover/tv?with_genres=10762,16` over the last 90 days answers
+ * `total_results: 0`, while the pipe answers eleven). The row was therefore
+ * dropped from Home entirely, because an empty rail is not drawn. The kids
+ * ceiling re-check below still drops anything the profile's age rating does
+ * not allow, so the wider genre set cannot leak an adult title in.
  *
  * The age rule is a CEILING (`certification.lte`), never the exact-match
  * `certification`: TMDB reads the latter as one value, so `certification=PG`
@@ -90,7 +97,7 @@ internal object KidsNewRailRules {
             catalogId = MOVIE_CATALOG_ID,
             catalogName = "New Kids Movies",
             filters = KBFilters(
-                withGenres = "16,10751",
+                withGenres = "16|10751",
                 certificationCountry = CERTIFICATION_COUNTRY,
                 certificationLte = CERTIFICATION_CEILING,
                 voteCountGte = MIN_VOTE_COUNT,
@@ -104,7 +111,7 @@ internal object KidsNewRailRules {
             catalogId = SHOW_CATALOG_ID,
             catalogName = "New Kids Shows",
             filters = KBFilters(
-                withGenres = "10762,16",
+                withGenres = "10762|16",
                 certificationCountry = CERTIFICATION_COUNTRY,
                 certificationLte = CERTIFICATION_CEILING,
                 voteCountGte = MIN_VOTE_COUNT,
