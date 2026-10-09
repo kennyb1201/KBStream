@@ -116,6 +116,31 @@ class SportsLeaguesPanelContractTest {
         )
     }
 
+    @Test
+    fun `a move keeps focus on the league being moved`() {
+        // Reported: pressing ▲/▼ dropped D-pad focus, so the viewer had to
+        // scroll back to the league they were moving before pressing again.
+        // The rows are keyed by path (so a move carries the focused arrow),
+        // and the panel remembers the pressed stop and re-aims at it once the
+        // order change has rebuilt the list.
+        assertTrue(
+            "the rows must be keyed by league path, or a move rebinds the focused arrow to another league",
+            panel.contains("key(league.path)")
+        )
+        assertTrue(
+            "the panel remembers the last move stop that was pressed",
+            panel.contains("moveFocus")
+        )
+        assertTrue(
+            "and restores focus when the order changes, rather than leaving it lost",
+            panel.contains("LaunchedEffect(order)")
+        )
+        assertTrue(
+            "falling back to the row's toggle when the stop is disabled at an end of the list",
+            panel.contains("leagueFocus.toggle")
+        )
+    }
+
     private fun source(): String {
         val file = File(findSourceRoot(), SCREEN)
         assertTrue("source missing: $file", file.isFile)

@@ -414,6 +414,26 @@ val KBFocusGlowSmall = 8.dp
 // width per side, so only a 400dp chip would outgrow it) plus the 8dp glow.
 val KBFocusChipInset = 12.dp
 
+// Side room a vertical list of ROWS must leave inside its own scroll bounds -
+// the counterpart of [KBFocusChipInset] one axis over, and needed for the same
+// reason: a LazyColumn clips its content to its own bounds, so a card that
+// focus had to scroll to was sheared off flat along the bottom edge of the
+// list, its 2dp border and its glow simply ending there. The FIRST card of a
+// section never showed it - focus arrives from the row above with that card
+// already fully visible, so nothing scrolls - and every card after it, which
+// the D-pad does have to scroll to, did.
+//
+// It cannot be fixed by padding the list: `contentPadding` sits inside the
+// clip, and the default bring-into-view is handed the scrollable's whole
+// viewport and counts the focused node's LAYOUT rectangle as visible the
+// moment it fits in that. The margin therefore has to be given to the scroll in
+// a BringIntoViewSpec, which IS handed the viewport and can inset it by this
+// (see the sports hub's HubList).
+//
+// 16dp is the 12dp glow plus the ~1% of its own height that [KBFocusRow] grows
+// a card by per side; a 400dp row is still inside it.
+val KBFocusRowInset = 16.dp
+
 val OswaldFamily = FontFamily(
     Font(R.font.oswald_medium, FontWeight.Medium),
     Font(R.font.oswald_semibold, FontWeight.SemiBold),

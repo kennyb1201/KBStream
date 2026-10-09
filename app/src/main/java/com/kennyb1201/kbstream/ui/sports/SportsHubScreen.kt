@@ -6,9 +6,12 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,8 +38,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,6 +61,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -95,6 +101,7 @@ import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
@@ -105,6 +112,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.OswaldFamily
+import kotlin.math.abs
 import kotlinx.coroutines.launch
 
 /** The gap between the two cards of a grid row. */
@@ -726,6 +734,100 @@ private fun LeagueTab(
     }
 }
 
+// ── The card lists' focus landing ───────────────────────────────────────
+
+/**
+ * A hub list of cards: the screen's one vertical scroll container, with the
+ * focus landing its cards need and nothing else.
+ *
+ * The landing is the point. A LazyColumn clips its content to its own bounds,
+ * and Compose's default bring-into-view scrolls the focused node the least
+ * distance that makes its LAYOUT rectangle visible - flush with the physical
+ * edge of the viewport. A game card's focus cue is not inside that rectangle:
+ * it grows by [KBFocusRow] (about 1% of its own height per side) and carries a
+ * 12dp glow shadow drawn outside its bounds, so a card that focus had to scroll
+ * to landed with its 2dp accent border and its glow sheared off flat along the
+ * bottom of the list. The FIRST card of a section never showed it - focus
+ * arrives from the search field above with that card already fully visible, so
+ * nothing scrolls - and every card after it, which the D-pad does have to
+ * scroll to, did.
+ *
+ * `contentPadding` cannot fix that: it sits inside the clip, and the default
+ * spec is handed the scrollable's whole viewport and counts the focused
+ * rectangle as visible the moment it fits in it, so padding never changes where
+ * an item focus lands on comes to rest. The margin has to be in the spec
+ * (see [SportsCardBringIntoViewSpec]) - the same switch Home's rail column and
+ * the detail screen throw.
+ *
+ * It is supplied around the list rather than on the screen, so the tab row
+ * above - a horizontal chip row whose own [KBFocusChipInset] landing must not
+ * be re-tuned - is left alone.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HubList(
+    listState: LazyListState,
+    modifier: Modifier = Modifier,
+    content: LazyListScope.() -> Unit
+) {
+    val density = LocalDensity.current
+    val bringIntoViewSpec = remember(density) {
+        SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
+    }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
+        LazyColumn(
+            state = listState,
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
+            // The list's own slack AFTER the last card (the 24dp it always had),
+            // written as the landing margin plus the breathing room on top of it
+            // because the two are coupled: the spec can only bring the LAST row
+            // to its margin if the list is able to scroll that far past it.
+            contentPadding = PaddingValues(bottom = KBFocusRowInset + 8.dp),
+            content = content
+        )
+    }
+}
+
+/**
+ * Focus scrolling that keeps [KBFocusRowInset] of room between the focused card
+ * and the edge of the viewport it is being scrolled to; see [HubList] for why
+ * the default landing is not enough.
+ *
+ * The rule is the default one with a margin at each edge: scroll the child only
+ * as far as it takes to clear that margin, and not at all when it already has.
+ * Landing ON the margin rather than on a fixed line is what keeps it steady -
+ * the distance depends on the focused card's own rectangle and nothing else, so
+ * every card lands the same way and the scroll cannot bounce mid-flight.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+private class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringIntoViewSpec {
+
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float
+    ): Float {
+        // A margin can never eat the viewport: a card taller than the room the
+        // two of them leave still lands on the nearest edge, rather than being
+        // scrolled to somewhere it could not be seen at all.
+        val margin = insetPx.coerceAtMost(containerSize / 3f)
+        // The rect arrives as the focused node's leading edge plus its extent -
+        // the card that asked to be brought into view, which is also the thing
+        // carrying the cue.
+        val trailingEdge = offset + abs(size)
+        return when {
+            // Past the bottom margin: scroll forward just far enough to clear it.
+            trailingEdge > containerSize - margin -> trailingEdge - (containerSize - margin)
+            // Above the top one: back off by the same amount.
+            offset < margin -> offset - margin
+            // Already clear of both: no scroll at all, which is also what keeps
+            // the spring quiet as focus moves around the visible part of a row.
+            else -> 0f
+        }
+    }
+}
+
 // ── A league's cards ────────────────────────────────────────────────────
 
 @Composable
@@ -758,11 +860,9 @@ private fun LeagueBody(
     // animation clocks, each recomposing its own card on its own frame.
     val livePulse = rememberLivePulse()
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
-        contentPadding = PaddingValues(bottom = 24.dp)
+    HubList(
+        listState = listState,
+        modifier = Modifier.fillMaxSize()
     ) {
         if (live.isNotEmpty()) {
             item(key = "header-live") {
@@ -1840,11 +1940,9 @@ private fun StandingsColumn(
     listState: LazyListState,
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(
-        state = listState,
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
-        contentPadding = PaddingValues(bottom = 24.dp)
+    HubList(
+        listState = listState,
+        modifier = modifier
     ) {
         groups.forEach { group ->
             item(key = "std-head-" + group.name) {
@@ -2286,6 +2384,24 @@ private fun WatchButtonLabel(label: String, enabled: Boolean) {
 // ── The league toggles ──────────────────────────────────────────────────
 
 /**
+ * Per-row focus anchors for the league panel.
+ *
+ * Reordering a league rebuilds the list, which disposes the focused move arrow
+ * and used to drop D-pad focus back to the top of the list: the viewer then had
+ * to scroll to the league they were moving before pressing the arrow again.
+ * After a move the SAME league's SAME stop is re-focused (see
+ * [LeagueTogglesPanel]), so repeated presses just keep working. The row's
+ * toggle is the fallback for when that stop is disabled at an end of the list.
+ */
+private class LeagueRowFocus {
+    enum class Slot { UP, DOWN }
+
+    val toggle = FocusRequester()
+    val up = FocusRequester()
+    val down = FocusRequester()
+}
+
+/**
  * The hub's own league picker - the single place league visibility is set.
  *
  * Every league in the catalog is listed, in catalog order, with its state.
@@ -2306,6 +2422,18 @@ private fun LeagueTogglesPanel(
     // Handed to the first row, so opening the panel puts focus INSIDE it
     // instead of leaving it on the LEAGUES button that raised it.
     val firstRow = remember { FocusRequester() }
+
+    // Per-row focus anchors plus the (league, stop) the viewer last pressed a
+    // move arrow on. Reordering rebuilds the list, which disposes the focused
+    // arrow and used to drop D-pad focus - the viewer then had to scroll back
+    // to the league they were moving before pressing again. The effect below
+    // re-aims at the SAME league's SAME stop once the order changes, so
+    // repeated presses just keep working. Keying the rows by path (see the
+    // loop below) is what lets the anchors survive the rebuild.
+    val rowFocus = remember { mutableMapOf<String, LeagueRowFocus>() }
+    var moveFocus by remember {
+        mutableStateOf<Pair<String, LeagueRowFocus.Slot>?>(null)
+    }
 
     // A real dialog WINDOW (the way the home manager and the PIN prompt are
     // raised), not a scrim painted over the hub's own layout - which is what
@@ -2332,6 +2460,30 @@ private fun LeagueTogglesPanel(
                 runCatching { firstRow.requestFocus() }
             }
 
+            // Restore after a reorder: the order changed, so the arrow the
+            // viewer was pressing was disposed with the rebuilt row. Put focus
+            // back on the SAME league's move stop - or on that league's toggle
+            // when the stop is now disabled because it reached an end.
+            LaunchedEffect(order) {
+                val target = moveFocus ?: return@LaunchedEffect
+                val focus = rowFocus[target.first] ?: return@LaunchedEffect
+                val ordered = SportsLeagues.ordered(order)
+                val index = ordered.indexOfFirst { it.path == target.first }
+                if (index < 0) return@LaunchedEffect
+                val requester = when {
+                    target.second == LeagueRowFocus.Slot.UP && index > 0 -> focus.up
+                    target.second == LeagueRowFocus.Slot.DOWN &&
+                        index < ordered.lastIndex -> focus.down
+                    index == 0 -> firstRow
+                    else -> focus.toggle
+                }
+                runCatching { requester.requestFocus() }
+                // Consume the target: the next press sets it again before its
+                // move, and an unrelated order change (a sync pull) must not
+                // yank focus back to the last league that was moved.
+                moveFocus = null
+            }
+
             Text(
                 text = "Only enabled leagues are fetched and shown. " +
                     "Use ▲ ▼ to set the tab order.",
@@ -2351,16 +2503,26 @@ private fun LeagueTogglesPanel(
                 // what the hub shows, in that order.
                 val orderedLeagues = remember(order) { SportsLeagues.ordered(order) }
                 orderedLeagues.forEachIndexed { index, league ->
-                    LeagueToggleRow(
-                        league = league,
-                        checked = league.path in enabled,
-                        onToggle = { on -> onToggle(league.path, on) },
-                        canMoveUp = index > 0,
-                        canMoveDown = index < orderedLeagues.lastIndex,
-                        onMoveUp = { onMove(league.path, -1) },
-                        onMoveDown = { onMove(league.path, 1) },
-                        focusRequester = firstRow.takeIf { index == 0 }
-                    )
+                    // Keyed by path so a move carries the row's whole group -
+                    // including its focus anchors - to the new index instead of
+                    // rebinding the group at the old index to another league.
+                    key(league.path) {
+                        val leagueFocus = remember { LeagueRowFocus() }
+                        rowFocus[league.path] = leagueFocus
+                        LeagueToggleRow(
+                            league = league,
+                            checked = league.path in enabled,
+                            onToggle = { on -> onToggle(league.path, on) },
+                            canMoveUp = index > 0,
+                            canMoveDown = index < orderedLeagues.lastIndex,
+                            onMoveUp = { onMove(league.path, -1) },
+                            onMoveDown = { onMove(league.path, 1) },
+                            focusRequester = firstRow.takeIf { index == 0 }
+                                ?: leagueFocus.toggle,
+                            rowFocus = leagueFocus,
+                            onMoveFocus = { slot -> moveFocus = league.path to slot }
+                        )
+                    }
                 }
             }
 
@@ -2402,6 +2564,8 @@ private fun LeagueToggleRow(
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     focusRequester: FocusRequester? = null,
+    rowFocus: LeagueRowFocus,
+    onMoveFocus: (LeagueRowFocus.Slot) -> Unit,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -2447,8 +2611,26 @@ private fun LeagueToggleRow(
         // Siblings of the toggle, not children of it: a nested focusable inside
         // a focusable card is a D-pad dead zone, and these two have to be
         // reachable on their own to be usable with a remote.
-        LeagueMoveButton(up = true, enabled = canMoveUp, onClick = onMoveUp)
-        LeagueMoveButton(up = false, enabled = canMoveDown, onClick = onMoveDown)
+        LeagueMoveButton(
+            up = true,
+            enabled = canMoveUp,
+            onClick = {
+                // Record the stop BEFORE the move lands, so the panel can put
+                // focus back on this same arrow after the list rebuilds.
+                onMoveFocus(LeagueRowFocus.Slot.UP)
+                onMoveUp()
+            },
+            focusRequester = rowFocus.up
+        )
+        LeagueMoveButton(
+            up = false,
+            enabled = canMoveDown,
+            onClick = {
+                onMoveFocus(LeagueRowFocus.Slot.DOWN)
+                onMoveDown()
+            },
+            focusRequester = rowFocus.down
+        )
     }
 }
 
@@ -2461,7 +2643,12 @@ private fun LeagueToggleRow(
  * control that cannot do anything.
  */
 @Composable
-private fun LeagueMoveButton(up: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun LeagueMoveButton(
+    up: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    focusRequester: FocusRequester? = null,
+) {
     val glyph = if (up) "▲" else "▼"
     if (!enabled) {
         Box(
@@ -2482,7 +2669,12 @@ private fun LeagueMoveButton(up: Boolean, enabled: Boolean, onClick: () -> Unit)
         onClick = onClick,
         shape = KBShapePill,
         focusedScale = KBFocusChip,
-        modifier = Modifier.size(40.dp)
+        modifier = Modifier
+            .size(40.dp)
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester)
+                else Modifier
+            )
     ) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text(

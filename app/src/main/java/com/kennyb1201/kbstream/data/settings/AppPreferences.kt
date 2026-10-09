@@ -1647,14 +1647,16 @@ object AppPreferences {
      * with a tiny playlist wants a smaller hub. Every league is the default (see
      * [com.kennyb1201.kbstream.data.sports.SportsLeagues.DEFAULT_ENABLED]), so
      * no sport is hidden from a viewer who watches all of them; the hub's
-     * leagues panel is what narrows it.
+     * leagues panel is what narrows it. Synced to the account (see
+     * [syncDisplayPrefsBlob]), so the other TV comes up with the same hub.
      */
     fun getSportsEnabledLeagues(context: Context): Set<String> =
-        prefs(context).getStringSet(KEY_SPORTS_LEAGUES, null)?.toSet()
+        readSportsSet(context, KEY_SPORTS_LEAGUES)
             ?: com.kennyb1201.kbstream.data.sports.SportsLeagues.DEFAULT_ENABLED
 
     fun setSportsEnabledLeagues(context: Context, leagues: Set<String>) {
-        prefs(context).edit().putStringSet(KEY_SPORTS_LEAGUES, leagues).apply()
+        prefs(context).edit().putString(KEY_SPORTS_LEAGUES, encodeSportsSet(leagues)).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     /**
@@ -1684,8 +1686,7 @@ object AppPreferences {
      * Stored as paths for the same reason the enabled set is: the catalog can
      * gain a league or be relabelled without silently shuffling somebody's
      * arrangement, and a path this build no longer knows is ignored rather than
-     * crashing the order. Device-local per profile, like the enabled set beside
-     * it.
+     * crashing the order. Synced per profile, like the enabled set beside it.
      */
     fun getSportsLeagueOrder(context: Context): List<String> =
         prefs(context).getString(KEY_SPORTS_LEAGUE_ORDER, "").orEmpty()
@@ -1697,6 +1698,7 @@ object AppPreferences {
         prefs(context).edit()
             .putString(KEY_SPORTS_LEAGUE_ORDER, order.joinToString("\n"))
             .apply()
+        syncDisplayPrefsBlob(context)
     }
 
     /**
@@ -1705,13 +1707,15 @@ object AppPreferences {
      *
      * Per profile via [prefs], exactly like the league toggles beside it: who
      * you follow is part of whose hub it is, and a kids profile's fandom is not
-     * the parent's.
+     * the parent's. Synced to the account, so a followed team follows the
+     * viewer onto every TV.
      */
     fun getSportsFavoriteTeams(context: Context): Set<String> =
-        prefs(context).getStringSet(KEY_SPORTS_FAVORITE_TEAMS, null)?.toSet().orEmpty()
+        readSportsSet(context, KEY_SPORTS_FAVORITE_TEAMS).orEmpty()
 
     fun setSportsFavoriteTeams(context: Context, teams: Set<String>) {
-        prefs(context).edit().putStringSet(KEY_SPORTS_FAVORITE_TEAMS, teams).apply()
+        prefs(context).edit().putString(KEY_SPORTS_FAVORITE_TEAMS, encodeSportsSet(teams)).apply()
+        syncDisplayPrefsBlob(context)
     }
 
     /**
@@ -1748,6 +1752,26 @@ object AppPreferences {
     fun setSportsGameReminders(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_SPORTS_GAME_REMINDERS, enabled).apply()
     }
+
+    /**
+     * A stored league/team set, or null when the key was never written.
+     *
+     * Newline-separated String rather than a StringSet so the value can ride the
+     * display-prefs sync blob, whose payload carries JSON primitives only - a
+     * StringSet has no representation there and so could never leave the device.
+     * A set written by an older build is still read back as one, so the format
+     * change is invisible to an upgrading install.
+     */
+    private fun readSportsSet(context: Context, key: String): Set<String>? =
+        when (val raw = prefs(context).all[key]) {
+            is String -> raw.split('\n').map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            is Set<*> -> raw.filterIsInstance<String>().toSet()
+            else -> null
+        }
+
+    /** The stored form of a sports set. Paths and keys carry no newline of their own. */
+    private fun encodeSportsSet(values: Set<String>): String =
+        values.filter { it.isNotBlank() }.joinToString("\n")
 
     /**
      * Cross-device sync: called by every setter of a SYNCED pref. Debounced

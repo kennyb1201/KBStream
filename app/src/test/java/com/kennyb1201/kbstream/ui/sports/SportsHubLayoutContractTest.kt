@@ -196,6 +196,49 @@ class SportsHubLayoutContractTest {
         )
     }
 
+    // ── The focus-ring landing ──────────────────────────────────────
+
+    @Test
+    fun `a focused card lands with room for its ring, not flush with the edge`() {
+        // The cut this pins: a LazyColumn clips its content to its own bounds,
+        // and the default bring-into-view lands the focused card's LAYOUT
+        // rectangle flush with the bottom edge - so the 2dp accent border and
+        // the glow, which draw OUTSIDE that rectangle, were sheared off flat
+        // along the list. The first card of a section never showed it, because
+        // focus arrives with that card already fully visible and nothing
+        // scrolls; every card after it, which the D-pad does have to scroll to,
+        // did.
+        assertTrue(
+            "the games list and the standings columns both land through the one wrapper",
+            flat.contains("HubList( listState = listState, modifier = Modifier.fillMaxSize() )") &&
+                flat.contains("HubList( listState = listState, modifier = modifier )")
+        )
+        assertTrue(
+            "which hands the scroll a spec instead of leaving it the default one",
+            flat.contains(
+                "CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec)"
+            )
+        )
+        assertTrue(
+            "with the margin taken from the theme's own row inset",
+            flat.contains(
+                "SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })"
+            )
+        )
+        assertTrue(
+            "a margin that can never eat the viewport out from under a tall card",
+            flat.contains("val margin = insetPx.coerceAtMost(containerSize / 3f)")
+        )
+        assertTrue(
+            "and a card already clear of both edges is not scrolled at all - no bounce",
+            flat.contains("else -> 0f")
+        )
+        assertTrue(
+            "the list keeps enough slack past its last card for that same landing",
+            flat.contains("contentPadding = PaddingValues(bottom = KBFocusRowInset + 8.dp)")
+        )
+    }
+
     // ── Source access ───────────────────────────────────────────────
 
     private fun slice(startMarker: String, endMarker: String): String {

@@ -222,8 +222,18 @@ object PrefsPayloadBuilder {
         "preferred_subtitle_language",
         "subtitle_mode",                     // off / forced only / on: a viewing preference
         "auto_fetch_subtitles",              // subtitle auto-fetch: a viewing preference
-        "spoiler_free"                       // spoiler-free browsing: how much of a show's
+        "spoiler_free",                      // spoiler-free browsing: how much of a show's
                                              // own episode list the viewer wants to see
+        // The sports hub's arrangement follows the viewer's account: which
+        // leagues are on, the tab order they were dragged into, and who they
+        // follow are all viewing choices, not device capabilities - so the
+        // other TV comes up with the same hub. Each is stored as a
+        // newline-separated String (see AppPreferences.readSportsSet) precisely
+        // because a StringSet has no representation in this primitive-only
+        // blob and so could never sync.
+        "sports_enabled_leagues",
+        "sports_league_order",
+        "sports_favorite_teams"
     )
 
     /**
