@@ -347,7 +347,16 @@ private data class StudioChipMenuTarget(
 
 private data class DetailFactItem(
     val label: String,
-    val value: String
+    val value: String,
+    /**
+     * Whether [value] may run past the two lines every other fact card is
+     * capped at. Only the Awards fact sets it: OMDB answers with a whole
+     * sentence ("Won 2 Oscars. 159 wins & 220 nominations total"), and
+     * truncating that to "Won 2 Oscars. 159 wins & 220 nom…" would hide the
+     * half of it that carries the counts. Left false elsewhere so the existing
+     * facts keep the exact sizing they have today.
+     */
+    val wrap: Boolean = false
 )
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalComposeUiApi::class)
@@ -765,6 +774,7 @@ fun DetailScreen(
 
     val meta by viewModel.meta.collectAsStateWithLifecycle()
     val mdbListRatings by viewModel.mdbListRatings.collectAsStateWithLifecycle()
+    val awards by viewModel.awards.collectAsStateWithLifecycle()
     val allReviews by viewModel.allReviews.collectAsStateWithLifecycle()
     val tmdbDetail by viewModel.tmdbDetail.collectAsStateWithLifecycle()
     // The trailer the button offers IS the trailer the button plays: one pick,
@@ -2675,23 +2685,30 @@ fun DetailScreen(
                                     }
                             }
 
+                            // Awards, from OMDB (TMDB carries none). Movies
+                            // AND shows: unlike budget/revenue above, a series
+                            // has awards too. Shown only when the lookup
+                            // answered with real text — no "Awards: —"
+                            // placeholder — and in full: the fact row wraps
+                            // rather than truncating.
+                            awards
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let {
+                                    add(
+                                        DetailFactItem(
+                                            "Awards",
+                                            it,
+                                            wrap = true
+                                        )
+                                    )
+                                }
+
                             m.country
                                 ?.takeIf { it.isNotBlank() }
                                 ?.let {
                                     add(
                                         DetailFactItem(
                                             "Country",
-                                            it
-                                        )
-                                    )
-                                }
-
-                            m.awards
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let {
-                                    add(
-                                        DetailFactItem(
-                                            "Awards",
                                             it
                                         )
                                     )
@@ -4757,7 +4774,10 @@ private fun DetailFactCard(
     ) {
         Column(
             modifier = Modifier
-                .width(150.dp)
+                // A wrapping fact gets room to be read: the two-line cap below
+                // is what truncated it, but at 150dp even an uncapped sentence
+                // would stack into a column taller than the posters above it.
+                .width(if (fact.wrap) 280.dp else 150.dp)
                 .padding(
                     horizontal = 11.dp,
                     vertical = 9.dp
@@ -4775,7 +4795,9 @@ private fun DetailFactCard(
                 text = fact.value,
                 color = KBTextHi,
                 style = MaterialTheme.typography.bodySmall,
-                maxLines = 2,
+                // Only a wrapping fact may exceed two lines (see [wrap]):
+                // everything else keeps the ellipsis it has always had.
+                maxLines = if (fact.wrap) Int.MAX_VALUE else 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 4.dp)
             )

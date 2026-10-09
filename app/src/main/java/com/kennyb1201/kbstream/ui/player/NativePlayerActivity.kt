@@ -10288,7 +10288,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 buildBecauseYouWatchedPicks(
                     this@NativePlayerActivity,
                     tmdbId,
-                    bywMediaType(parentType)
+                    bywMediaType(parentType),
+                    // The profile's own ceiling (null on an ordinary profile):
+                    // a kids profile's credits row is held to it, exactly like
+                    // every rail behind the player.
+                    activeKidsMaxAge()
                 )
             }
 

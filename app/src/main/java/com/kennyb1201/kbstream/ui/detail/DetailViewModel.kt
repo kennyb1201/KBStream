@@ -32,6 +32,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.tmdb.UNSCRIPTED_TV_GENRES
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListRatings
+import com.kennyb1201.kbstream.data.omdb.OmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
@@ -181,6 +182,10 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     // Second-source air dates (see [AirDateCorrection]). Display-only: it
     // never writes back to history, watch state or the metadata caches.
     private val airDateRepository = TvmazeAirDateRepository.getInstance(app)
+    // Awards text from OMDB (see [OmdbRepository]). Display-only, and fetched
+    // concurrently with the rest of the load rather than as a dependency of
+    // anything the screen paints with.
+    internal val omdbRepository = OmdbRepository(app)
 
     private val _meta = MutableStateFlow<Meta?>(null)
     val meta: StateFlow<Meta?> = _meta.asStateFlow()
@@ -262,6 +267,15 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _mdbListRatings = MutableStateFlow<MdbListRatings?>(null)
     val mdbListRatings: StateFlow<MdbListRatings?> = _mdbListRatings.asStateFlow()
+
+    /**
+     * Awards text from OMDB for the loaded title, or null when there is none
+     * (no key saved, no IMDb id, a failed lookup, or a title nobody has
+     * awarded). The Detail screen shows its Awards fact only when this is
+     * non-blank — there is no placeholder.
+     */
+    private val _awards = MutableStateFlow<String?>(null)
+    val awards: StateFlow<String?> = _awards.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -800,6 +814,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         latestEpisodeSeasonRequest = initialSeason
         _collection.value = null
         _mdbListRatings.value = null
+        _awards.value = null
         _allReviews.value = emptyList()
         _simklSeriesWatched.value = false
         _resolvedPosterIds.value = emptyMap()
@@ -1011,6 +1026,13 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 // (TMDB-only titles) retries via the enrich pass once the
                 // external-ids lookup resolves.
                 fetchMdbListRatings(normalizedType)
+
+                // OMDB awards: fired EARLY and concurrently, exactly like the
+                // ratings above, and never awaited by this load. The fact row
+                // recomposes when the answer lands, so a slow, absent or
+                // keyless OMDB leaves the screen looking exactly as it does
+                // today and can never delay the TMDB detail paint.
+                fetchAwards(normalizedType)
 
                 // Local watch state for this title (resume row, per-episode
                 // in-progress map, completed ids) plus the Simkl/MDBList cloud
@@ -1342,11 +1364,19 @@ for ((metaAddon, response, error) in probeResults) {
     private fun fetchMdbListRatings(normalizedType: String) =
         DetailRatingEnrichment.ratings(this, normalizedType)
 
+    /** OMDB awards text (display-only; see [awards]). */
+    private fun fetchAwards(normalizedType: String) =
+        DetailRatingEnrichment.awards(this, normalizedType)
+
     private fun fetchExtraReviews(normalizedType: String) =
         DetailRatingEnrichment.extraReviews(this, normalizedType)
 
     internal fun setMdbListRatings(value: MdbListRatings?) {
         _mdbListRatings.value = value
+    }
+
+    internal fun setAwards(value: String?) {
+        _awards.value = value
     }
 
     internal fun setAllReviews(value: List<TmdbReview>) {

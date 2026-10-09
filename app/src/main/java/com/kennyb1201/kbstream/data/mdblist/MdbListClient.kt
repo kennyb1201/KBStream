@@ -400,12 +400,15 @@ object MdbListClient {
                     ")"
             )
             // Callers already fail soft on any non-2xx, and the status says
-            // plainly that the budget, not the API, was the limit.
+            // plainly that the budget, not the API, was the limit. The code
+            // and message are the constants the watched-snapshot back-off
+            // matches on (see MdbListBudgetBlock.kt), so the two ends cannot
+            // drift apart: a real 429 must keep reading as transient.
             Response.Builder()
                 .request(request)
                 .protocol(Protocol.HTTP_1_1)
-                .code(429)
-                .message("KBStream local MDBList budget")
+                .code(MDBLIST_LOCAL_BUDGET_CODE)
+                .message(MDBLIST_LOCAL_BUDGET_MESSAGE)
                 .body("".toResponseBody(null))
                 .build()
         }
@@ -474,6 +477,23 @@ object MdbListClient {
      * refetches instead of being served from someone else's snapshot.
      */
     @Volatile private var cachedSnapshotKey = ""
+
+    /*
+     * When the local budget interceptor last turned the watched-snapshot
+     * download away, and WHICH key it happened to.
+     *
+     * The interceptor answers a spent budget with its own 429, so the failure
+     * is permanent for the rest of the day while the download path read it as
+     * transient and cached nothing - every later caller missed the cache and
+     * tried again, which is the retry storm the field log showed (~40
+     * attempts in 30 s). This stamp is what the next calls back off on.
+     *
+     * Per KEY, like the rest of the cache state: the allowance belongs to the
+     * account the call is billed to, so one profile's spent day must not hold
+     * another profile's key off.
+     */
+    @Volatile private var budgetBlockedAt = 0L
+    @Volatile private var budgetBlockedKey = ""
 
     /**
      * Per-title audience ratings, keyed "<apiKey>|<mediaType>|<id>".
@@ -1453,6 +1473,23 @@ object MdbListClient {
         val apiKey = apiKey(context)
         if (apiKey.isBlank()) return MdbListWatchedSnapshot()
 
+        // A budget block means the day's allowance is gone: the interceptor
+        // answers every attempt with the same synthetic 429, so re-entering
+        // the download path can only produce the retry storm. Answer from
+        // what is already in hand instead - stale if there is one, empty if
+        // there is not - for as long as the block is fresh.
+        //
+        // Deliberately ahead of the disk layer and regardless of
+        // [forceRefresh]: a refresh cannot conjure an allowance that has been
+        // spent, and the stamp is per key, so a profile that still has quota
+        // is unaffected.
+        if (budgetBlockedKey == apiKey &&
+            isBudgetBlockActive(budgetBlockedAt, System.currentTimeMillis(), SNAPSHOT_TTL_MS)
+        ) {
+            return cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey }
+                ?: MdbListWatchedSnapshot()
+        }
+
         // Fast path: a fresh cached snapshot answers instantly, so series
         // detail loads never block on the full-history download. It only
         // counts when the KEY matches: the cache is per object, the key is
@@ -1505,6 +1542,13 @@ object MdbListClient {
             val startedShowKeys = mutableSetOf<String>()
             val episodeKeys = mutableSetOf<String>()
 
+            // Set when the loop is turned away by the local budget
+            // interceptor. Answered after the download unwinds rather than
+            // from inside it, so the write-back below is never reached for a
+            // block: this path serves the snapshot already in hand and only
+            // stamps the time, as the cache comment there says.
+            var blockedByLocalBudget = false
+
             val result = withContext(Dispatchers.IO) {
             runCatching {
                 var cursor: String? = null
@@ -1521,6 +1565,18 @@ object MdbListClient {
                         Request.Builder().url(url).get().build()
                     ).execute().use { response ->
                         if (!response.isSuccessful) {
+                            // The interceptor's synthetic 429 is not a failed
+                            // request, it is a spent budget: retrying cannot
+                            // bring the day's allowance back, so the transient
+                            // path below (empty result, nothing cached, caller
+                            // retries) is exactly the storm. Matched on the
+                            // exact message - a real MDBList 429 is still
+                            // transient and keeps that path.
+                            if (isLocalBudgetBlock(response.code, response.message)) {
+                                Log.w(TAG, "sync/watched blocked by the local MDBList budget")
+                                blockedByLocalBudget = true
+                                return@withContext MdbListWatchedSnapshot()
+                            }
                             Log.w(
                                 TAG,
                                 "sync/watched failed code=${response.code} " +
@@ -1579,6 +1635,23 @@ object MdbListClient {
                     episodeKeys = episodeKeys
                 )
             }.getOrDefault(MdbListWatchedSnapshot())
+            }
+
+            // A budget block is served here, and only here: the snapshot the
+            // caller gets is the one already in hand (or empty), and the
+            // block's timestamp is stamped so the next calls short-circuit
+            // instead of re-entering the download that just failed.
+            if (blockedByLocalBudget) {
+                val now = System.currentTimeMillis()
+                budgetBlockedAt = now
+                budgetBlockedKey = apiKey
+                // The generation check is not consulted on this path because
+                // nothing is written back: an invalidate that landed while
+                // the fetch was in flight has already nulled (or re-keyed)
+                // the cache, so this reads empty and the invalidation stands.
+                val stale = cachedSnapshot?.takeIf { cachedSnapshotKey == apiKey }
+                if (stale != null) cachedSnapshotAt = now
+                return@withLock stale ?: MdbListWatchedSnapshot()
             }
 
             // Only cache successful non-empty fetches: an empty result from

@@ -423,6 +423,11 @@ fun SettingsScreen(
     var subsKeySaved by remember { mutableStateOf(false) }
     var torboxKeyInput by remember { mutableStateOf(AppPreferences.getTorboxApiKey(context)) }
     var torboxKeySaved by remember { mutableStateOf(false) }
+    // OMDb key: awards text on the detail screen. Saved-only feedback like the
+    // OpenSubtitles/TorBox fields — OMDb has no cheap verification endpoint, so
+    // this does not claim a connection it has not tested.
+    var omdbKeyInput by remember { mutableStateOf(AppPreferences.getOmdbApiKey(context)) }
+    var omdbKeySaved by remember { mutableStateOf(false) }
     var autoFetchSubtitles by remember { mutableStateOf(AppPreferences.getAutoFetchSubtitles(context)) }
     var spoilerFree by remember { mutableStateOf(AppPreferences.getSpoilerFree(context)) }
     var torboxLibrarySync by remember { mutableStateOf(AppPreferences.getTorboxLibrarySync(context)) }
@@ -742,6 +747,85 @@ fun SettingsScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+
+                // ── OMDB KEY (awards on the detail screen) ────────────
+                // The one fact on a detail page TMDB cannot supply: it has no
+                // awards field at all. Optional — with no key the AWARDS fact
+                // simply does not appear (see data/omdb/OmdbRepository).
+                Spacer(modifier = Modifier.height(12.dp))
+                val omdbFocusRequester = remember { FocusRequester() }
+                KBCard(
+                    onClick = { omdbFocusRequester.requestFocus() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(KBSurfaceRaised, KBShapeSmall)
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Text(
+                            text = "OMDb API Key",
+                            color = KBTextHi,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = "Free key from omdbapi.com — adds an AWARDS fact to " +
+                                "detail pages, next to budget and revenue. The free tier " +
+                                "allows 1,000 lookups a day; each title is looked up at " +
+                                "most once and then cached.",
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        // Shared KB field: card OK raises the IME, PASTE chip
+                        // reads the clipboard, blur and Done both save.
+                        val omdbPaste: (String) -> Unit = { pasted ->
+                            omdbKeyInput = pasted.trim()
+                            AppPreferences.setOmdbApiKey(context, omdbKeyInput)
+                            omdbKeySaved = omdbKeyInput.isNotBlank()
+                        }
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .padding(top = 6.dp)
+                                .fillMaxWidth()
+                        ) {
+                            KBTextField(
+                                value = omdbKeyInput,
+                                onValueChange = {
+                                    omdbKeyInput = it.trim()
+                                    omdbKeySaved = false
+                                },
+                                placeholder = "Paste key",
+                                modifier = Modifier.weight(1f),
+                                focusRequester = omdbFocusRequester,
+                                onDone = {
+                                    AppPreferences.setOmdbApiKey(context, omdbKeyInput)
+                                    omdbKeySaved = omdbKeyInput.isNotBlank()
+                                },
+                                onFocusChanged = { focusedNow ->
+                                    // Save on focus loss too — remote users often
+                                    // just navigate away after pasting.
+                                    if (!focusedNow) {
+                                        AppPreferences.setOmdbApiKey(context, omdbKeyInput)
+                                        omdbKeySaved = omdbKeyInput.isNotBlank()
+                                    }
+                                }
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            KBPasteChip(onPaste = omdbPaste)
+                        }
+                        if (omdbKeySaved) {
+                            Text(
+                                text = "Saved — the AWARDS fact appears on the next title you open.",
+                                color = KBAccent,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 5.dp)
+                            )
                         }
                     }
                 }

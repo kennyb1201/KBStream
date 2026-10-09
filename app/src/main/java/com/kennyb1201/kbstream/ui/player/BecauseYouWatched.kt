@@ -40,6 +40,8 @@ import com.kennyb1201.kbstream.data.tmdb.displayMetaLine
 import com.kennyb1201.kbstream.data.tmdb.keepRecommendedGenre
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.KidsMode
+import com.kennyb1201.kbstream.data.sync.ProfileManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -94,6 +96,19 @@ internal fun bywMediaType(parentType: String): String = when (parentType.lowerca
 private const val BYW_PICK_COUNT = 7
 
 /**
+ * How many scored candidates the kids gate certifies: twice the row, so a
+ * candidate the ceiling turns away still leaves room for the row to fill.
+ */
+internal const val BYW_KIDS_CERT_POOL = BYW_PICK_COUNT * 2
+
+/** Animation (16) and Family (10751): the two genres a kids title's picks should
+ * come from when the finished title is one of them. */
+internal val BYW_KIDS_GENRES = setOf(16, 10751)
+
+/** Ceiling on one candidate's certification fetch (see [bywKidsGate]). */
+internal const val BYW_CERT_TIMEOUT_MS = 4_000L
+
+/**
  * Weighted-rating rank (IMDB-style) for one credit of a person: the rating
  * blended toward a 6.5 prior worth 200 votes. The cast tier used to sort by
  * `popularity`, which is why "Because you watched Ted Lasso" filled up with talk
@@ -145,11 +160,21 @@ private fun isSelfAppearance(character: String?): Boolean {
  * Earlier tiers win ties; within a tier the source order stands (TMDB sorts by
  * its own relevance). Already-watched titles, the finished title itself, and
  * unposter-ed entries are dropped.
+ *
+ * On a KIDS profile every one of those tiers can surface adult content - the
+ * ratings are never consulted while the blend is built, so a kids profile was
+ * recommended That '70s Show after Moana - and [kidsMaxAge] is what stops it:
+ * the candidates are scored exactly as above, then the profile's own ceiling
+ * ([KidsMode.allowed], the same rule every rail uses) decides who survives, and
+ * the row shows what survives rather than backfilling with content the ceiling
+ * rejected. [kidsMaxAge] is null for an ordinary profile, which keeps this
+ * function's output byte-for-byte what it was and makes no certification call.
  */
 internal suspend fun buildBecauseYouWatchedPicks(
     ctx: Context,
     tmdbId: Int,
-    mediaType: String
+    mediaType: String,
+    kidsMaxAge: Int? = null
 ): List<BywPick> {
     val repo = TmdbRepository.getInstance(ctx)
     val detail = runCatchingCancellable {
@@ -178,13 +203,7 @@ internal suspend fun buildBecauseYouWatchedPicks(
             .toHashSet()
     }.getOrNull() ?: HashSet()
 
-    data class Candidate(
-        val pick: BywPick,
-        val score: Int,
-        val order: Int
-    )
-
-    val candidates = LinkedHashMap<Int, Candidate>()
+    val candidates = LinkedHashMap<Int, BywCandidate>()
     var order = 0
 
     fun addCandidate(
@@ -194,21 +213,26 @@ internal suspend fun buildBecauseYouWatchedPicks(
         poster: String?,
         backdrop: String?,
         overview: String?,
-        score: Int
+        score: Int,
+        genreIds: List<Int>? = null
     ) {
         if (candidateTmdbId <= 0) return
         if (candidateTmdbId == detail.id) return
         if (poster.isNullOrBlank()) return
         val existing = candidates[candidateTmdbId]
         if (existing != null) {
-            // Keep the higher score but original position.
-            if (score > existing.score) {
-                candidates[candidateTmdbId] = existing.copy(score = score)
-            }
+            // Keep the higher score but original position. A genre-less first
+            // sighting (the franchise tier) adopts the ids a later tier knows,
+            // so the kids pre-filter below can see what the list endpoints saw.
+            val merged = existing.copy(
+                score = maxOf(score, existing.score),
+                genreIds = existing.genreIds ?: genreIds
+            )
+            if (merged != existing) candidates[candidateTmdbId] = merged
             return
         }
-        candidates[candidateTmdbId] = Candidate(
-            BywPick(
+        candidates[candidateTmdbId] = BywCandidate(
+            pick = BywPick(
                 tmdbId = candidateTmdbId,
                 type = type,
                 name = name,
@@ -219,7 +243,8 @@ internal suspend fun buildBecauseYouWatchedPicks(
                 imdbId = null
             ),
             score = score,
-            order = order++
+            order = order++,
+            genreIds = genreIds
         )
     }
 
@@ -291,7 +316,8 @@ internal suspend fun buildBecauseYouWatchedPicks(
                         poster = credit.posterPath,
                         backdrop = null,
                         overview = null,
-                        score = 60
+                        score = 60,
+                        genreIds = credit.genreIds
                     )
                 }
         }
@@ -309,7 +335,8 @@ internal suspend fun buildBecauseYouWatchedPicks(
                 poster = rec.posterPath,
                 backdrop = rec.backdropPath,
                 overview = rec.overview,
-                score = 30
+                score = 30,
+                genreIds = rec.genreIds
             )
         }
 
@@ -338,13 +365,16 @@ internal suspend fun buildBecauseYouWatchedPicks(
     // Resolve imdb ids only for the survivors (the final ordering), so the
     // stream resolution on PLAY doesn't burn a lookup burst. The pool is a few
     // wider than the row: the watched-history filter below cuts into it, and a
-    // pool the same size as the row would then show a short row.
+    // pool the same size as the row would then show a short row. A kids profile
+    // needs a deeper pool still, because its ceiling can turn away candidates
+    // after this cut and the row must still be able to fill.
+    val poolSize = if (kidsMaxAge == null) BYW_PICK_COUNT + 5 else BYW_KIDS_CERT_POOL
     val ranked = candidates.values
-        .sortedWith(compareByDescending<Candidate> { it.score }.thenBy { it.order })
+        .sortedWith(compareByDescending<BywCandidate> { it.score }.thenBy { it.order })
         .toList()
-        .take(BYW_PICK_COUNT + 5)
+        .take(poolSize)
 
-    val filtered = ranked.filter { candidate ->
+    val deduped = ranked.filter { candidate ->
         val pick = candidate.pick
         // Cross-check watch history by tmdb id: history stores imdb ids, so
         // resolve lazily (single lookup per finalist) - candidates whose imdb id
@@ -355,10 +385,113 @@ internal suspend fun buildBecauseYouWatchedPicks(
         pick.imdbId = imdb
         val seen = imdb != null && imdb in watchedParentIds
         !seen
-    }.map { it.pick }
+    }
 
-    return filtered.take(BYW_PICK_COUNT)
+    // An ordinary profile: exactly the row this always built, from exactly the
+    // pool it always used, with no certification lookups at all.
+    if (kidsMaxAge == null) return deduped.take(BYW_PICK_COUNT).map { it.pick }
+
+    // A kids profile: the cheap genre pre-filter, then the profile's own
+    // ceiling, then the row. Certifications are CACHED TMDB detail reads (see
+    // TmdbRepository.usCertification), so a second build for the same finished
+    // title pays for nothing it already resolved.
+    val gated = bywKidsGate(
+        candidates = bywKidsGenrePool(
+            candidates = deduped,
+            parentGenreIds = detail.genres.map { it.id }
+        ),
+        kidsMaxAge = kidsMaxAge,
+        certify = { candidate ->
+            repo.usCertification(
+                tmdbId = candidate.pick.tmdbId,
+                mediaType = candidate.pick.type,
+                timeoutMs = BYW_CERT_TIMEOUT_MS
+            )
+        }
+    )
+    return gated.map { it.pick }
 }
+
+/**
+ * One scored because-you-watched candidate, before the kids gate.
+ *
+ * [genreIds] is what the candidate's own list endpoint carried: the
+ * recommendation and combined-credits tiers have them, the franchise and
+ * keyword tiers do not. Null means "not known", never "neither".
+ */
+internal data class BywCandidate(
+    val pick: BywPick,
+    val score: Int,
+    val order: Int,
+    val genreIds: List<Int>? = null
+)
+
+/**
+ * The kids ceiling's cheap pre-filter: when the finished title is itself
+ * Animation (16) or Family (10751), a candidate that shares NEITHER genre is
+ * obviously not the same kind of thing the child was watching, so it is dropped
+ * before anything is spent certifying it.
+ *
+ * A pre-filter, not the gate - the certification check decides. Candidates
+ * whose genres are unknown are KEPT: "unknown" is not "neither", and dropping
+ * them here would empty a row the ceiling itself would have passed.
+ */
+internal fun bywKidsGenrePool(
+    candidates: List<BywCandidate>,
+    parentGenreIds: List<Int>
+): List<BywCandidate> {
+    if (parentGenreIds.none { it in BYW_KIDS_GENRES }) return candidates
+    return candidates.filter { candidate ->
+        val genres = candidate.genreIds
+        genres.isNullOrEmpty() || genres.any { it in BYW_KIDS_GENRES }
+    }
+}
+
+/**
+ * The kids ceiling's gate over an already-scored, already-deduped list:
+ * certify every candidate concurrently, keep the ones the profile's ceiling
+ * allows, and take the top [BYW_PICK_COUNT] survivors.
+ *
+ * A null ceiling is not this profile's business: the list comes back exactly as
+ * it went in and [certify] is never called, which is what keeps an ordinary
+ * profile's row identical - and free of certification requests.
+ *
+ * Fewer than seven survivors means a shorter row. It is never backfilled with
+ * content above the ceiling: the whole point of the ceiling is that the
+ * alternative is worse than a gap.
+ */
+internal suspend fun bywKidsGate(
+    candidates: List<BywCandidate>,
+    kidsMaxAge: Int?,
+    certify: suspend (BywCandidate) -> String?
+): List<BywCandidate> {
+    if (kidsMaxAge == null) return candidates
+    return coroutineScope {
+        val ratings = candidates
+            .map { candidate ->
+                async(Dispatchers.IO) {
+                    // A lookup that fails or runs out of time reads as
+                    // "unrated", which KidsMode.allowed resolves with its
+                    // known-unknown rule: one unresolvable certification must
+                    // not take the whole row down with it.
+                    runCatchingCancellable { certify(candidate) }.getOrNull()
+                }
+            }
+            .awaitAll()
+        candidates
+            .filterIndexed { index, _ -> KidsMode.allowed(kidsMaxAge, ratings[index]) }
+            .take(BYW_PICK_COUNT)
+    }
+}
+
+/**
+ * The active profile's Kids Mode ceiling, or null for an ordinary profile.
+ *
+ * The players hand this to [buildBecauseYouWatchedPicks], so the credits row is
+ * gated by the same per-profile setting every other surface uses (see
+ * TmdbRepository.kidsMaxAge, which reads it for the rails).
+ */
+internal fun activeKidsMaxAge(): Int? = ProfileManager.activeProfile.value?.kidsMaxAge
 
 /** AMOLED-aware stand-in for @color/kb_surface (card / artwork fills). */
 internal fun playerPanelSurfaceColor(context: Context): Int = when {

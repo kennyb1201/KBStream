@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -533,6 +534,44 @@ internal fun rememberHomeTopBarHoldUpHook(
     }
 }
 
+/**
+ * The tiles a collection rail can actually draw, in order.
+ *
+ * A folder without an id can't be opened ([KBHomeCollectionRail] needs the id
+ * to navigate) and can't be keyed, so it is dropped here rather than inside the
+ * item block. Dropping it inside left the keyed, focusable slot behind while
+ * emitting nothing: an invisible position in the middle of the rail. With one
+ * sitting between real tiles, the lazy list's item state and focus search
+ * disagreed about where that position's content was, which is what locked the
+ * row up and made it oscillate - data-dependently, silently, at the same
+ * position every time.
+ *
+ * Filtering at the rail (rather than in the ViewModel) keeps the change local:
+ * the folder screen's own loading path also reads the collection's folder list
+ * and already resolves by id, so the ViewModel's shape does not need to change.
+ *
+ * The id is carried alongside the folder so the tile's click target is a
+ * non-null `String` - the "can't be opened without an id" invariant is then in
+ * the type instead of in a `!!`.
+ */
+internal fun collectionRailTiles(folders: List<KBFolder>): List<Pair<String, KBFolder>> =
+    folders.mapNotNull { folder -> folder.id?.let { id -> id to folder } }
+
+/**
+ * The lazy-list key for the tile at [index].
+ *
+ * Unique per POSITION, not merely per id. The key used to be `id ?: title`, so
+ * two folders sharing an id (or a null id beside a blank title) produced
+ * identical keys - and duplicate keys make a lazy list lose item identity, so a
+ * tile's state (focus included) attaches to whichever item the key was last
+ * bound to and the row bounces between the confused items. The position suffix
+ * makes a collision impossible however malformed the manifest is, while
+ * remaining stable for a given list, so a rail whose folders all have unique
+ * ids is keyed the same way it was before apart from the suffix.
+ */
+internal fun collectionRailKey(index: Int, tile: Pair<String, KBFolder>): String =
+    "${tile.first}#$index"
+
 @Composable
 fun KBHomeCollectionRail(
     collection: KBCollectionProfile,
@@ -564,6 +603,11 @@ fun KBHomeCollectionRail(
         // every other rail: the focused first tile scaled up and glowed
         // straight off the left edge of the screen, so a collection always
         // looked a little clipped compared with the catalog rail below it.
+
+        // Only the drawable tiles: see [collectionRailTiles] for why the
+        // null-id folders are dropped here and not inside the item block.
+        val tiles = remember(collection) { collectionRailTiles(collection.folders) }
+
         LazyRow(
             contentPadding = PaddingValues(
                 start = RailHorizontalStartPadding,
@@ -573,22 +617,23 @@ fun KBHomeCollectionRail(
             ),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(
-                items = collection.folders,
-                key = { it.id ?: it.title }
-            ) { folder ->
-                val folderId = folder.id
+            // itemsIndexed rather than items: the key has to include the
+            // position to stay unique (see [collectionRailKey]).
+            itemsIndexed(
+                items = tiles,
+                key = { index, tile -> collectionRailKey(index, tile) }
+            ) { _, (folderId, folder) ->
+                // Every item emits a tile - the null guard and its empty branch
+                // are gone, so no position can be a focusable no-op.
                 val requester = remember { FocusRequester() }
-                if (folderId != null) {
-                    CollectionFolderTile(
-                        folder = folder,
-                        onClick = { onOpenFolder(folderId) },
-                        onFocus = onFolderFocused?.let { callback -> { callback(folder) } },
-                        modifier = Modifier
-                            .focusRequester(requester)
-                            .homeTopRailUpHook(requester, onUpPressed)
-                    )
-                }
+                CollectionFolderTile(
+                    folder = folder,
+                    onClick = { onOpenFolder(folderId) },
+                    onFocus = onFolderFocused?.let { callback -> { callback(folder) } },
+                    modifier = Modifier
+                        .focusRequester(requester)
+                        .homeTopRailUpHook(requester, onUpPressed)
+                )
             }
         }
     }

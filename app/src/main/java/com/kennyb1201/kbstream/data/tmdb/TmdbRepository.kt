@@ -27,6 +27,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -1987,6 +1988,47 @@ class TmdbRepository private constructor(context: Context) :
     fun isKidsModeStrict(): Boolean = kidsMaxAge() != null && kidsMaxAge() != KidsMode.CEIL_PG13
 
     /**
+     * US certification for one (tmdbId, mediaType) pair, read from the same
+     * cached detail the ceiling check uses, or null when it cannot be
+     * resolved (a title with no US rating, a miss, a timeout).
+     *
+     * Null is deliberately not "allowed": every caller hands the answer to
+     * [KidsMode.allowed], which owns the known-unknown rule (kept only on the
+     * loosest ceiling).
+     *
+     * The detail appends `release_dates` for a film and `content_ratings` for
+     * a series (see TmdbApiService), and [railProjection] keeps both on the slim
+     * row - so this is cached exactly like every other detail read (12 h in
+     * memory, 30 d on disk) and a repeat read issues no request at all. That is
+     * what makes the player's credits-row gate free on a second view.
+     *
+     * [timeoutMs] bounds the fetch for callers that cannot wait (see
+     * BecauseYouWatched); null is the unbounded form the rails use, where the
+     * page is already parallel and a slow title must not read as "unrated"
+     * earlier than the request would have failed anyway.
+     */
+    internal suspend fun usCertification(
+        tmdbId: Int,
+        mediaType: String,
+        timeoutMs: Long? = null
+    ): String? {
+        val isSeries = mediaType.equals("series", ignoreCase = true) ||
+            mediaType.equals("tv", ignoreCase = true)
+        val fetch: suspend () -> TmdbDetail? = {
+            availabilitySemaphore.withPermit {
+                runCatchingCancellable {
+                    fetchEnrichedMetaCached(
+                        imdbId = "tmdb:$tmdbId",
+                        type = if (isSeries) "series" else "movie"
+                    )
+                }.getOrNull()
+            }
+        }
+        val detail = if (timeoutMs == null) fetch() else withTimeoutOrNull(timeoutMs) { fetch() }
+        return detail?.certification(isMovie = !isSeries)
+    }
+
+    /**
      * Certification check for one (tmdbId, mediaType) pair under the active
      * ceiling. Internal so a caller that resolves a SINGLE id rather than
      * filtering a list - a tapped global-search suggestion's deep link - can
@@ -1994,17 +2036,7 @@ class TmdbRepository private constructor(context: Context) :
      */
     internal suspend fun kidsAllowed(tmdbId: Int, mediaType: String): Boolean {
         val ceiling = kidsMaxAge() ?: return true
-        val isSeries = mediaType.equals("series", ignoreCase = true) ||
-            mediaType.equals("tv", ignoreCase = true)
-        val detail = availabilitySemaphore.withPermit {
-            runCatchingCancellable {
-                fetchEnrichedMetaCached(
-                    imdbId = "tmdb:$tmdbId",
-                    type = if (isSeries) "series" else "movie"
-                )
-            }.getOrNull()
-        } ?: return ceiling == KidsMode.CEIL_PG13
-        return KidsMode.allowed(ceiling, detail.certification(isMovie = !isSeries))
+        return KidsMode.allowed(ceiling, usCertification(tmdbId, mediaType))
     }
 
     /**

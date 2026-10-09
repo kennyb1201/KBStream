@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.detail
 import android.util.Log
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -85,6 +86,40 @@ internal object DetailRatingEnrichment {
                 )
             }
             vm.setMdbListRatings(ratings)
+        }
+    }
+
+    /**
+     * Awards text from OMDB, published into the view model's `awards` flow.
+     *
+     * Fire-and-forget like [ratings]: it owns its own [DetailViewModel.viewModelScope]
+     * launch and is never awaited by the detail load, so a slow or unreachable
+     * OMDB cannot delay the screen's first paint — the fact row simply
+     * recomposes if and when an answer arrives.
+     *
+     * The IMDb id comes from the route id when it is already a tt-id (the
+     * addon meta carries one for most movies/series) and otherwise from TMDB's
+     * external-ids lookup, which [ratings] has usually already resolved and
+     * cached by the time this runs.
+     */
+    fun awards(vm: DetailViewModel, normalizedType: String) {
+        val rawId = vm.meta.value?.id ?: vm.imdbId
+        val tmdbId = vm.tmdbDetail.value?.id?.takeIf { it > 0 }
+        // Captured before the launch: a later load for a different title
+        // retargets vm.imdbId, and this answer must not land under it.
+        val requestParentId = vm.imdbId
+
+        vm.viewModelScope.launch {
+            val imdbId = rawId.takeIf { it.startsWith("tt") }
+                ?: tmdbId?.let { id ->
+                    runCatchingCancellable { vm.tmdbRepository.resolveImdbId(id, normalizedType) }
+                        .getOrNull()
+                }
+            if (imdbId.isNullOrBlank()) return@launch
+
+            val awards = vm.omdbRepository.awardsFor(imdbId)
+            if (vm.imdbId != requestParentId) return@launch
+            vm.setAwards(awards)
         }
     }
 

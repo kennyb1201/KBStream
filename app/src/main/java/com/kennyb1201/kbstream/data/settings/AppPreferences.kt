@@ -1476,6 +1476,30 @@ object AppPreferences {
         pushApiKeysBlob()
     }
 
+    // ── OMDb API key (awards text on the Detail screen) ──────────────
+    // Optional key from omdbapi.com. With none saved the Awards fact simply
+    // does not appear (see data/omdb/OmdbRepository); a blank key is never an
+    // error. Stored encrypted and profile-scoped like the other credentials.
+    //
+    // Deliberately NOT read through [storedApiKey]/[migrateApiKey], and
+    // deliberately not in [SYNCED_API_KEYS]: the plaintext `omdb_api_key` pref
+    // is the PRE-MDBLIST ratings slot, whose contents belong to
+    // getMdbListApiKey's own one-time migration (a key pasted there was an
+    // MDBList key). Migrating that slot here — or letting the credentials blob
+    // read it via storedApiKey — would race that migration and could take the
+    // viewer's ratings key away. This key therefore lives only in the secure
+    // store, under the same slot name it has always had.
+    fun getOmdbApiKey(context: Context): String =
+        apiKeyPrefs(context).getString(KEY_OMDB_API_KEY, "")?.trim().orEmpty()
+
+    fun setOmdbApiKey(context: Context, key: String) {
+        apiKeyPrefs(context).edit().putString(KEY_OMDB_API_KEY, key.trim()).apply()
+        // Never leave a plaintext copy behind.
+        prefs(context).edit().remove(KEY_OMDB_API_KEY).apply()
+        stampApiKeyEdit(context, KEY_OMDB_API_KEY, System.currentTimeMillis())
+        pushApiKeysBlob()
+    }
+
     // ── Add TorBox cloud files to the Library ────────────────────────
     // Off by default. With a TorBox key entered and this on, the account's
     // TorBox torrents are resolved and added to My List (see TorBoxLibrarySync).
