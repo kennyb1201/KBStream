@@ -90,6 +90,32 @@ class SportsLeaguesPanelContractTest {
         )
     }
 
+    @Test
+    fun `each league can be moved a place, and the ends cannot`() {
+        assertTrue(
+            "the panel renders the catalog in the viewer's own order, not the raw list",
+            panel.contains("SportsLeagues.ordered(order)")
+        )
+        assertTrue(
+            "with a stop up and a stop down for every row",
+            panel.contains("onMoveUp = { onMove(league.path, -1) }") &&
+                panel.contains("onMoveDown = { onMove(league.path, 1) }")
+        )
+        assertTrue(
+            "the first row cannot move up and the last cannot move down",
+            panel.contains("canMoveUp = index > 0") &&
+                panel.contains("canMoveDown = index < orderedLeagues.lastIndex")
+        )
+        assertTrue(
+            "and the hub persists the move rather than only redrawing the panel",
+            source().contains("onMove = viewModel::moveLeague")
+        )
+        assertTrue(
+            "so the tabs themselves follow the new order",
+            source().contains("SportsLeagues.enabled(enabled, leagueOrder)")
+        )
+    }
+
     private fun source(): String {
         val file = File(findSourceRoot(), SCREEN)
         assertTrue("source missing: $file", file.isFile)

@@ -5,7 +5,13 @@ import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 /**
- * Full-text index over EPG program titles, used by the guide-wide search.
+ * Full-text index over EPG program titles AND descriptions.
+ *
+ * Descriptions are indexed for one consumer: the sports hub's tier-1 lookup,
+ * which needs to find a game whose guide TITLE is generic ("NHL Hockey") but
+ * whose DESCRIPTION names the two teams. The guide-wide search deliberately
+ * reads titles only - see [IptvRepository.searchPrograms], which scopes its
+ * `MATCH` to the title column - so that viewer-facing search is unchanged.
  *
  * The search used to be a leading-wildcard `LIKE '%q%'` across every program
  * row. That cannot use an index, so SQLite scanned and sorted all programs
@@ -39,8 +45,9 @@ object EpgSearchIndex {
     /**
      * Creates the index and its triggers when they are missing, backfilling
      * from the programs already in the table. Safe to call on every database
-     * open: the DDL is `IF NOT EXISTS` and the backfill only runs when the
-     * index is first created.
+     * open: the DDL is `IF NOT EXISTS`, and the backfill runs only when the
+     * index was just created, widened (title-only to title+description), or
+     * rebuilt after an orphaned migration.
      *
      * The triggers are (re)created unconditionally. A destructive migration
      * drops `epg_programs` and its triggers but leaves this table behind, so a
@@ -53,9 +60,24 @@ object EpgSearchIndex {
     fun ensure(db: SupportSQLiteDatabase) {
         try {
             val created = !tableExists(db)
-            if (created) {
+            // An index built before descriptions were indexed has a title-only
+            // schema. SQLite cannot add a column to an FTS4 table, so the only
+            // way to widen it is to drop and rebuild it - the backfill below
+            // then refills both columns in one pass. One-time, on the first
+            // open after the upgrade; after that the schema check is a single
+            // sqlite_master read.
+            val widened = !created && !hasDescriptionColumn(db)
+            if (created || widened) {
+                if (widened) {
+                    Log.w(TAG, "INDEX TITLE-ONLY — rebuilding to index descriptions")
+                    // The old triggers write the title column alone, so they
+                    // must go with the old table or the rebuild would leave new
+                    // imports with an empty description column.
+                    dropTriggers(db)
+                    db.execSQL("DROP TABLE IF EXISTS `$TABLE`")
+                }
                 db.execSQL(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS `$TABLE` USING FTS4(`title`)"
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS `$TABLE` USING FTS4(`title`, `description`)"
                 )
             }
             // An index whose programs are gone is a destructive migration that
@@ -64,19 +86,22 @@ object EpgSearchIndex {
             // a copy of every title the old guide had, which is the space the
             // migration was there to reclaim. Both checks are O(1) (an EXISTS
             // with LIMIT 1), so this costs nothing on the normal open.
-            val rebuilt = !created && hasRows(db, TABLE) && !hasRows(db, CONTENT_TABLE)
+            val rebuilt = !created && !widened && hasRows(db, TABLE) &&
+                !hasRows(db, CONTENT_TABLE)
             if (rebuilt) {
                 Log.w(TAG, "INDEX ORPHANED by a destructive migration — rebuilding")
                 db.execSQL("DROP TABLE IF EXISTS `$TABLE`")
-                db.execSQL("CREATE VIRTUAL TABLE IF NOT EXISTS `$TABLE` USING FTS4(`title`)")
+                db.execSQL(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS `$TABLE` USING FTS4(`title`, `description`)"
+                )
             }
             createTriggers(db)
-            if (created || rebuilt) {
+            if (created || widened || rebuilt) {
                 // Programs imported before this index existed are not covered
                 // by the triggers, so index the existing rows now.
                 db.execSQL(
-                    "INSERT INTO `$TABLE`(rowid, title) " +
-                        "SELECT id, title FROM `$CONTENT_TABLE`"
+                    "INSERT INTO `$TABLE`(rowid, title, description) " +
+                        "SELECT id, title, description FROM `$CONTENT_TABLE`"
                 )
                 Log.w(TAG, "INDEX BUILT rows=${countOf(db, TABLE)}")
             }
@@ -120,10 +145,13 @@ object EpgSearchIndex {
     private fun createTriggers(db: SupportSQLiteDatabase) {
         // The FTS row's `rowid` is the program's `id`, which is what the
         // search joins on. DELETE-then-INSERT on UPDATE keeps a retitled
-        // program from leaving its old title searchable.
+        // program from leaving its old title searchable. Both indexed columns
+        // are written, so the description a program was imported with is
+        // searchable as readily as its title.
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS ${TABLE}_ai AFTER INSERT ON `$CONTENT_TABLE` " +
-                "BEGIN INSERT INTO `$TABLE`(rowid, title) VALUES (new.id, new.title); END"
+                "BEGIN INSERT INTO `$TABLE`(rowid, title, description) " +
+                "VALUES (new.id, new.title, new.description); END"
         )
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS ${TABLE}_ad AFTER DELETE ON `$CONTENT_TABLE` " +
@@ -132,9 +160,25 @@ object EpgSearchIndex {
         db.execSQL(
             "CREATE TRIGGER IF NOT EXISTS ${TABLE}_au AFTER UPDATE ON `$CONTENT_TABLE` " +
                 "BEGIN DELETE FROM `$TABLE` WHERE rowid = old.id; " +
-                "INSERT INTO `$TABLE`(rowid, title) VALUES (new.id, new.title); END"
+                "INSERT INTO `$TABLE`(rowid, title, description) " +
+                "VALUES (new.id, new.title, new.description); END"
         )
     }
+
+    /**
+     * Whether the index was built to hold descriptions as well as titles.
+     *
+     * Read from the table's own DDL: how a virtual table reports columns to a
+     * `PRAGMA` is an implementation detail, whereas the CREATE statement is
+     * exactly what decides whether the description column exists.
+     */
+    private fun hasDescriptionColumn(db: SupportSQLiteDatabase): Boolean =
+        db.query(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            arrayOf<Any?>(TABLE)
+        ).use { cursor ->
+            cursor.moveToFirst() && !cursor.isNull(0) && cursor.getString(0).contains("description")
+        }
 
     private fun tableExists(db: SupportSQLiteDatabase): Boolean =
         db.query(

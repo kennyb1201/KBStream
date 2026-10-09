@@ -55,6 +55,19 @@ class EpgSearchQueryTest {
         assertEquals("one* two* three* four* five* six*", expression)
     }
 
+    @Test
+    fun `a column scope is applied to every term`() {
+        // The index holds titles AND descriptions. The viewer-facing search
+        // scopes to the title column so it does not start matching on a
+        // program's synopsis; the sports lookup leaves it unscoped on purpose.
+        assertEquals("title:simps*", ftsPrefixExpression("simps", column = "title"))
+        assertEquals(
+            "title:Hawaii* title:Five*",
+            ftsPrefixExpression("Hawaii Five", column = "title")
+        )
+        assertEquals("simps*", ftsPrefixExpression("simps", column = null))
+    }
+
     // ── LIKE substring fallback ──────────────────────────────────────────
 
     @Test

@@ -116,6 +116,8 @@ object AppPreferences {
     private const val KEY_BADGES_ABOVE_FILE = "badges_above_file"            // badge chips above (true) or below the file name
     // Which ESPN leagues the sports hub renders; a Set<String> of league paths.
     private const val KEY_SPORTS_LEAGUES = "sports_enabled_leagues"
+    // The viewer's own league order, a newline-separated run of league paths.
+    private const val KEY_SPORTS_LEAGUE_ORDER = "sports_league_order"
     private const val KEY_SPORTS_FAVORITE_TEAMS = "sports_favorite_teams"
     private const val KEY_SPORTS_GAME_REMINDERS = "sports_game_reminders"
     // Which settings pane to reopen on, by SettingsPane name. Device-local on
@@ -1669,6 +1671,32 @@ object AppPreferences {
 
     fun isSportsLeagueEnabled(context: Context, path: String): Boolean =
         path in getSportsEnabledLeagues(context)
+
+    /**
+     * The viewer's own league order, as a run of league paths.
+     *
+     * Empty means "catalog order", which is what a fresh install gets and what
+     * an install that never touched the move controls keeps: nothing has to be
+     * written for the default to be right, and a partial list still resolves
+     * (see [com.kennyb1201.kbstream.data.sports.SportsLeagues.ordered]).
+     *
+     * Stored as paths for the same reason the enabled set is: the catalog can
+     * gain a league or be relabelled without silently shuffling somebody's
+     * arrangement, and a path this build no longer knows is ignored rather than
+     * crashing the order. Device-local per profile, like the enabled set beside
+     * it.
+     */
+    fun getSportsLeagueOrder(context: Context): List<String> =
+        prefs(context).getString(KEY_SPORTS_LEAGUE_ORDER, "").orEmpty()
+            .split('\n')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+    fun setSportsLeagueOrder(context: Context, order: List<String>) {
+        prefs(context).edit()
+            .putString(KEY_SPORTS_LEAGUE_ORDER, order.joinToString("\n"))
+            .apply()
+    }
 
     /**
      * The teams the hub's FAVORITES tab is built from, as

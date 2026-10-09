@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.sports.EspnSportsRepository
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.MatcherProgram
 import com.kennyb1201.kbstream.data.sports.SportsChannelMatcher
+import com.kennyb1201.kbstream.data.sports.SportsChannelMemory
 import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsKind
 import com.kennyb1201.kbstream.data.sports.SportsLeague
@@ -101,6 +102,13 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _enabledLeagues = MutableStateFlow(AppPreferences.getSportsEnabledLeagues(app))
     val enabledLeagues: StateFlow<Set<String>> = _enabledLeagues.asStateFlow()
+
+    /**
+     * The viewer's own league order, as a run of league paths. Empty means
+     * catalog order; see [moveLeague].
+     */
+    private val _leagueOrder = MutableStateFlow(AppPreferences.getSportsLeagueOrder(app))
+    val leagueOrder: StateFlow<List<String>> = _leagueOrder.asStateFlow()
 
     private val _selectedLeaguePath = MutableStateFlow<String?>(null)
     val selectedLeaguePath: StateFlow<String?> = _selectedLeaguePath.asStateFlow()
@@ -263,10 +271,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     // ── The leagues the profile turned on ────────────────────────────
 
     /**
-     * The enabled leagues, in catalog order - the order the tabs are drawn in.
+     * The enabled leagues, in the viewer's own order - the order the tabs are
+     * drawn in and the order [refresh] fetches them in.
      */
     val leagues: List<SportsLeague>
-        get() = SportsLeagues.enabled(_enabledLeagues.value)
+        get() = SportsLeagues.enabled(_enabledLeagues.value, _leagueOrder.value)
 
     /**
      * Selects a league tab.
@@ -385,6 +394,48 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         _enabledLeagues.value = AppPreferences.getSportsEnabledLeagues(getApplication())
         if (enabled) _selectedLeaguePath.value = path
         refresh()
+    }
+
+    /**
+     * Moves one league one step in the viewer's own order.
+     *
+     * [delta] is -1 for up and +1 for down; a move off either end is a no-op.
+     * The whole order is materialized and written on the first move, so every
+     * later move is a swap on a COMPLETE list - which is what stops a league
+     * the panel never touched from jumping when the stored order was partial.
+     *
+     * No refetch: the sections are looked up by league path, so re-ordering is
+     * a redraw rather than a round trip, and the hub must not spend a fetch on
+     * a preference.
+     */
+    fun moveLeague(path: String, delta: Int) {
+        val full = SportsLeagues.ordered(_leagueOrder.value).map { it.path }.toMutableList()
+        val from = full.indexOf(path)
+        if (from < 0) return
+        val to = (from + delta).coerceIn(0, full.lastIndex)
+        if (to == from) return
+        full.removeAt(from)
+        full.add(to, path)
+        AppPreferences.setSportsLeagueOrder(getApplication(), full)
+        _leagueOrder.value = full
+    }
+
+    /**
+     * Records the viewer's own channel choice for [game], for BOTH teams.
+     *
+     * The write half of the correction memory: the sheet calls this when a game
+     * is played on a channel other than the matched one, so the next game
+     * involving either team opens there instead of on the same wrong guess.
+     * Nothing on screen changes now - the memory is read at the start of the
+     * next [resolveMatches] - so there is no state to republish.
+     */
+    fun rememberChannel(game: SportsGame, channelId: String) {
+        SportsChannelMemory.rememberPick(getApplication(), game, channelId)
+    }
+
+    /** Drops every remembered team -> channel mapping. The settings panel's row. */
+    fun clearChannelMemory() {
+        SportsChannelMemory.clear(getApplication())
     }
 
     // ── Fetching ─────────────────────────────────────────────────────
@@ -576,13 +627,20 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     "programs=${programs.size}"
             )
             val matchStarted = System.currentTimeMillis()
+            // The viewer's own corrections, resolved once for the whole pass:
+            // the memory is keyed by team, so every game's two teams are read
+            // against the same channel list. A remembered channel beats all
+            // three tiers; see [SportsChannelMemory].
+            val remembered: (String) -> IptvChannel? = { key ->
+                SportsChannelMemory.recall(getApplication(), key, channels)
+            }
             val found = HashMap<String, List<IptvChannel>>()
             games.forEach { game ->
                 // Verbose, with the feed's own broadcast names beside the id:
                 // a card that matched nothing can then be read against the very
                 // strings tiers 2 and 3 match on.
                 Log.v(TAG, "SPORTS DIAG game=${game.id} broadcasts=${game.broadcastNames}")
-                SportsChannelMatcher.matches(game, channels, programs)
+                SportsChannelMatcher.matches(game, channels, programs, remembered)
                     .takeIf { it.isNotEmpty() }
                     ?.let { found[game.id] = it }
             }
@@ -770,6 +828,10 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                             title = row.title,
                             startMs = row.startUtcMillis,
                             endMs = row.endUtcMillis,
+                            // The guide's synopsis travels with the row so tier
+                            // 1 can fall back to it when the title names no
+                            // team; see [SportsChannelMatcher.epgHits].
+                            description = row.description,
                         )
                     )
                 }

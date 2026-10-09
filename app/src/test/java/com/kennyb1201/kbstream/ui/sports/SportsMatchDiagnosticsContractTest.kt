@@ -92,7 +92,10 @@ class SportsMatchDiagnosticsContractTest {
         )
         assertTrue(
             "and resolves them through the ordered matcher",
-            model.contains("SportsChannelMatcher.matches(game, channels, programs)") &&
+            // A game is matched with the correction memory handed in (the viewer's
+            // own past pick beats the tiers); a tournament has no team to key it
+            // by, so it is matched without one.
+            model.contains("SportsChannelMatcher.matches(game, channels, programs, remembered)") &&
                 model.contains("SportsChannelMatcher.matches(event, channels, programs)")
         )
         assertTrue(

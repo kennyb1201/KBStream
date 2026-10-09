@@ -1076,7 +1076,12 @@ class IptvRepository(
             val fromMillis = System.currentTimeMillis()
 
             val indexed = runCatchingCancellable {
-                ftsPrefixExpression(q)?.let { expression ->
+                // Scoped to the title column: the viewer-facing search must
+                // stay a TITLE search even though the index now also holds
+                // descriptions (for the sports hub). Without the scope, a query
+                // would start returning programs that only mention the words in
+                // their synopsis.
+                ftsPrefixExpression(q, column = "title")?.let { expression ->
                     Log.d(TAG, "PROGRAM SEARCH indexed terms=\"$expression\"")
                     dao.searchProgramsByTitleFts(ftsSearchQuery(expression, fromMillis, limit))
                 }
@@ -1098,13 +1103,18 @@ class IptvRepository(
     }
 
     /**
-     * Guide rows that have not finished yet and whose title contains EVERY
-     * word in [terms], ordered by start time.
+     * Guide rows that have not finished yet and that name EVERY word in
+     * [terms], in the title OR the description, ordered by start time.
      *
      * The sports hub's tier-1 lookup: it hands in the two teams of a game
-     * together ("yankees red"), and FTS5's implicit AND means only a program
+     * together ("yankees red"), and FTS4's implicit AND means only a program
      * naming both comes back - a pregame show or the same channel's next game
      * is excluded by the index rather than by a later pass.
+     *
+     * Deliberately unscoped: a guide frequently titles a game generically
+     * ("NHL Hockey") and names the teams only in the description, so both
+     * columns are wanted here. The matcher sorts out which is which - a title
+     * hit outranks a description hit - so this only has to be generous.
      *
      * This stops at the index on purpose. [searchPrograms] falls back to a
      * `LIKE '%…%'` scan when the index returns nothing, which is the right

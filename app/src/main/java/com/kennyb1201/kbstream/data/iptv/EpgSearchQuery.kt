@@ -26,12 +26,19 @@ package com.kennyb1201.kbstream.data.iptv
  * user input would otherwise be a syntax error that fails the whole query
  * instead of returning results.
  */
-internal fun ftsPrefixExpression(raw: String): String? =
-    raw.split(TOKEN_SEPARATORS)
+internal fun ftsPrefixExpression(raw: String, column: String? = null): String? {
+    // The index has two columns (title, description) and a bare term would
+    // match either. Callers that must not see description hits - the
+    // viewer-facing guide search - scope every term to one column with FTS's
+    // `column:term` syntax; callers that want both (the sports hub's tier-1
+    // lookup) leave this null and get the whole row.
+    val prefix = column?.takeIf { it.isNotBlank() }?.let { "$it:" }.orEmpty()
+    return raw.split(TOKEN_SEPARATORS)
         .filter { it.isNotEmpty() }
         .take(MAX_SEARCH_TOKENS)
-        .joinToString(" ") { term -> term + "*" }
+        .joinToString(" ") { term -> prefix + term + "*" }
         .ifEmpty { null }
+}
 
 /**
  * `LIKE` pattern for the substring fallback, with `%`, `_` and the escape

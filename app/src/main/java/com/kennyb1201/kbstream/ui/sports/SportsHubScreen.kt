@@ -142,6 +142,7 @@ fun SportsHubScreen(
     onPlayChannels: (List<IptvChannel>) -> Unit = {},
 ) {
     val enabled by viewModel.enabledLeagues.collectAsStateWithLifecycle()
+    val leagueOrder by viewModel.leagueOrder.collectAsStateWithLifecycle()
     val sections by viewModel.sections.collectAsStateWithLifecycle()
     val selectedPath by viewModel.selectedLeaguePath.collectAsStateWithLifecycle()
     val matches by viewModel.matches.collectAsStateWithLifecycle()
@@ -163,7 +164,9 @@ fun SportsHubScreen(
     // ordinary sentence until the answer is in.
     val lineupMissing = lineupStatus == LineupStatus.MISSING
 
-    val leagues = remember(enabled) { SportsLeagues.enabled(enabled) }
+    // The viewer's own order, so a rearrangement in the leagues panel moves the
+    // tabs with it rather than only the panel.
+    val leagues = remember(enabled, leagueOrder) { SportsLeagues.enabled(enabled, leagueOrder) }
     // FAVOURITES leads the row: it is the tab whose contents the viewer chose,
     // so it is the one they are most likely to want, and it is the only place
     // the feature is discoverable from. The leagues panel never lists it - it
@@ -429,9 +432,12 @@ fun SportsHubScreen(
             BackHandler { showLeagues = false }
             LeagueTogglesPanel(
                 enabled = enabled,
+                order = leagueOrder,
                 reminders = gameReminders,
                 onToggle = { path, on -> viewModel.setLeagueEnabled(path, on) },
                 onToggleReminders = viewModel::setGameReminders,
+                onMove = viewModel::moveLeague,
+                onClearMemory = viewModel::clearChannelMemory,
                 onClose = { showLeagues = false },
             )
         }
@@ -459,6 +465,10 @@ fun SportsHubScreen(
                 channels = matches[game.id].orEmpty(),
                 lineupMissing = lineupMissing,
                 matchingDone = matchingDone,
+                // Picking a feed OTHER than the matched head is the viewer
+                // correcting the matcher; record it so the next game with
+                // either team opens there. See [SportsChannelMemory].
+                onManualPick = { chosen -> viewModel.rememberChannel(game, chosen.id) },
                 onPlay = { feeds ->
                     detailGame = null
                     onPlayChannels(feeds)
@@ -1860,6 +1870,7 @@ private fun GameDetailSheet(
     channels: List<IptvChannel>,
     lineupMissing: Boolean,
     matchingDone: Boolean,
+    onManualPick: (IptvChannel) -> Unit = {},
     onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit,
 ) {
@@ -1877,14 +1888,18 @@ private fun GameDetailSheet(
                 .padding(horizontal = 24.dp, vertical = 24.dp),
             contentAlignment = Alignment.BottomCenter
         ) {
+            // Bounded against the window (the leagues panel's own remedy for
+            // the same class of bug): a plate that wrapped its content grew
+            // taller than the screen and then SCROLLED, and the scroll cropped
+            // the crests off the top edge.
             Column(
                 modifier = Modifier
                     .fillMaxWidth(0.72f)
+                    .fillMaxHeight(0.92f)
                     .focusGroup()
                     .background(KBSurface, KBShapePanel)
                     .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
-                    .padding(22.dp)
-                    .verticalScroll(rememberScrollState()),
+                    .padding(22.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
@@ -1937,91 +1952,110 @@ private fun GameDetailSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Every row is already filtered to the non-blanks, so a game
-                // with no venue and no leaders simply draws fewer rows.
-                SportsDetailRules.detailRows(game).forEach { row ->
-                    DetailRow(label = row.label, value = row.value)
-                }
+                // The crests, the matchup and the score are PINNED - only the
+                // body below them scrolls. That split is the actual fix: the
+                // sheet focuses WATCH the moment it opens, Compose brings the
+                // focused button into view by scrolling, and scrolling the whole
+                // column carried the crest row out through the plate's top edge,
+                // which is the cropped logos. A pinned header cannot be scrolled
+                // away.
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    // Every row is already filtered to the non-blanks, so a game
+                    // with no venue and no leaders simply draws fewer rows.
+                    SportsDetailRules.detailRows(game).forEach { row ->
+                        DetailRow(label = row.label, value = row.value)
+                    }
 
-                val leaderLines = SportsDetailRules.leaderLines(game)
-                if (leaderLines.isNotEmpty()) {
-                    Text(
-                        text = "LEADERS",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = KBTextLo,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                    leaderLines.forEach { line ->
+                    val leaderLines = SportsDetailRules.leaderLines(game)
+                    if (leaderLines.isNotEmpty()) {
                         Text(
-                            text = line,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = KBTextHi,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            text = "LEADERS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = KBTextLo,
+                            modifier = Modifier.padding(top = 4.dp)
                         )
+                        leaderLines.forEach { line ->
+                            Text(
+                                text = line,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = KBTextHi,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
-                }
 
-                Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
-                if (channel != null) {
-                    KBCard(
-                        // The whole ordered list, head first: the one-press path
-                        // is the feed the matcher chose, and the rest ride along
-                        // behind it so the player's own ladder has somewhere to
-                        // fall when that feed will not open.
-                        onClick = { onPlay(channels) },
-                        focusedScale = KBFocusRow,
-                        shape = KBShapePill,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(watchButton)
-                    ) {
-                        WatchButtonLabel(label = SportsDetailRules.watchLabel(true), enabled = true)
-                    }
-                    LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
-                } else {
-                    // Not focusable: a disabled action must not be a D-pad stop.
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = KBShapePill,
-                        colors = SurfaceDefaults.colors(
-                            containerColor = KBSurfaceRaised,
-                            contentColor = KBTextLo
-                        )
-                    ) {
-                        WatchButtonLabel(
-                            label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
-                            enabled = false
-                        )
-                    }
-                }
-
-                // The other feeds the playlist holds for this game - the second
-                // channel the guide is airing it on, the network's alternates,
-                // the team's own regional network. Drawn only when there is
-                // one: a "backups" heading over an empty list would promise a
-                // choice that does not exist.
-                if (backups.isNotEmpty()) {
-                    Text(
-                        text = "BACKUP CHANNELS",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = KBTextLo,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                    backups.forEach { backup ->
+                    if (channel != null) {
                         KBCard(
-                            // The chosen feed goes first and the rest follow in
-                            // their own order, so picking a backup is a switch
-                            // rather than a decision to lose the other feeds.
-                            onClick = {
-                                onPlay(listOf(backup) + channels.filter { it.id != backup.id })
-                            },
+                            // The whole ordered list, head first: the one-press
+                            // path is the feed the matcher chose, and the rest
+                            // ride along behind it so the player's own ladder
+                            // has somewhere to fall when that feed will not open.
+                            onClick = { onPlay(channels) },
                             focusedScale = KBFocusRow,
                             shape = KBShapePill,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .focusRequester(watchButton)
                         ) {
-                            BackupChannelLabel(channel = backup)
+                            WatchButtonLabel(
+                                label = SportsDetailRules.watchLabel(true),
+                                enabled = true
+                            )
+                        }
+                        LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
+                    } else {
+                        // Not focusable: a disabled action must not be a D-pad stop.
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = KBShapePill,
+                            colors = SurfaceDefaults.colors(
+                                containerColor = KBSurfaceRaised,
+                                contentColor = KBTextLo
+                            )
+                        ) {
+                            WatchButtonLabel(
+                                label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
+                                enabled = false
+                            )
+                        }
+                    }
+
+                    // The other feeds the playlist holds for this game - the
+                    // second channel the guide is airing it on, the network's
+                    // alternates, the team's own regional network. Drawn only
+                    // when there is one: a "backups" heading over an empty list
+                    // would promise a choice that does not exist.
+                    if (backups.isNotEmpty()) {
+                        Text(
+                            text = "BACKUP CHANNELS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = KBTextLo,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                        backups.forEach { backup ->
+                            KBCard(
+                                // The chosen feed goes first and the rest follow
+                                // in their own order, so picking a backup is a
+                                // switch rather than a decision to lose the
+                                // other feeds.
+                                onClick = {
+                                    onManualPick(backup)
+                                    onPlay(listOf(backup) + channels.filter { it.id != backup.id })
+                                },
+                                focusedScale = KBFocusRow,
+                                shape = KBShapePill,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                BackupChannelLabel(channel = backup)
+                            }
                         }
                     }
                 }
@@ -2095,9 +2129,12 @@ private fun WatchButtonLabel(label: String, enabled: Boolean) {
 @Composable
 private fun LeagueTogglesPanel(
     enabled: Set<String>,
+    order: List<String>,
     reminders: Boolean,
     onToggle: (String, Boolean) -> Unit,
     onToggleReminders: (Boolean) -> Unit,
+    onMove: (String, Int) -> Unit,
+    onClearMemory: () -> Unit,
     onClose: () -> Unit,
 ) {
     // Handed to the first row, so opening the panel puts focus INSIDE it
@@ -2130,7 +2167,8 @@ private fun LeagueTogglesPanel(
             }
 
             Text(
-                text = "Only enabled leagues are fetched and shown.",
+                text = "Only enabled leagues are fetched and shown. " +
+                    "Use ▲ ▼ to set the tab order.",
                 style = MaterialTheme.typography.bodySmall,
                 color = KBTextLo
             )
@@ -2142,11 +2180,19 @@ private fun LeagueTogglesPanel(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SportsLeagues.ALL.forEachIndexed { index, league ->
+                // The catalog in the viewer's own order: the same list the
+                // tabs are drawn from, so what is arranged here is exactly
+                // what the hub shows, in that order.
+                val orderedLeagues = remember(order) { SportsLeagues.ordered(order) }
+                orderedLeagues.forEachIndexed { index, league ->
                     LeagueToggleRow(
                         league = league,
                         checked = league.path in enabled,
                         onToggle = { on -> onToggle(league.path, on) },
+                        canMoveUp = index > 0,
+                        canMoveDown = index < orderedLeagues.lastIndex,
+                        onMoveUp = { onMove(league.path, -1) },
+                        onMoveDown = { onMove(league.path, 1) },
                         focusRequester = firstRow.takeIf { index == 0 }
                     )
                 }
@@ -2163,6 +2209,18 @@ private fun LeagueTogglesPanel(
             )
             ReminderToggleRow(checked = reminders, onToggle = onToggleReminders)
 
+            // Forgetting what the hub has been taught lives here beside the
+            // league toggles because it is the same kind of thing: a preference
+            // about the hub. One row, and it is the visible counterpart to the
+            // memory the matcher now keeps (see [SportsChannelMemory]).
+            Text(
+                text = "CHANNEL MEMORY",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = KBTextLo
+            )
+            ClearMemoryRow(onClear = onClearMemory)
+
             KBButton(label = "DONE", onClick = onClose)
         }
     }
@@ -2173,37 +2231,98 @@ private fun LeagueToggleRow(
     league: SportsLeague,
     checked: Boolean,
     onToggle: (Boolean) -> Unit,
+    canMoveUp: Boolean,
+    canMoveDown: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit,
     focusRequester: FocusRequester? = null,
 ) {
-    KBCard(
-        onClick = { onToggle(!checked) },
-        modifier = Modifier
-            .fillMaxWidth()
-            .then(
-                if (focusRequester != null) Modifier.focusRequester(focusRequester)
-                else Modifier
-            )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
+        // The toggle keeps the row's whole width minus the two move stops, as
+        // it had before they existed - and it is still the row's first focus
+        // target, which is what focus on open lands on.
+        KBCard(
+            onClick = { onToggle(!checked) },
             modifier = Modifier
-                .fillMaxWidth()
-                .background(KBSurfaceRaised, KBShapeChip)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .weight(1f)
+                .then(
+                    if (focusRequester != null) Modifier.focusRequester(focusRequester)
+                    else Modifier
+                )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, KBShapeChip)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = league.label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = KBTextHi
+                )
+                Text(
+                    text = if (checked) "ON" else "OFF",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (checked) KBVoid else KBTextLo,
+                    modifier = Modifier
+                        .background(if (checked) KBAccent else KBSurfaceRaised, KBShapePill)
+                        .padding(horizontal = 10.dp, vertical = 3.dp)
+                )
+            }
+        }
+
+        // Siblings of the toggle, not children of it: a nested focusable inside
+        // a focusable card is a D-pad dead zone, and these two have to be
+        // reachable on their own to be usable with a remote.
+        LeagueMoveButton(up = true, enabled = canMoveUp, onClick = onMoveUp)
+        LeagueMoveButton(up = false, enabled = canMoveDown, onClick = onMoveDown)
+    }
+}
+
+/**
+ * One reorder stop beside a league's toggle: ▲ moves it up a place, ▼ down.
+ *
+ * Disabled at the ends of the list, and rendered as a plain non-focusable plate
+ * there rather than a focusable dead stop - the same rule the sheet's WATCH
+ * button follows when a game has no channel, so the D-pad never lands on a
+ * control that cannot do anything.
+ */
+@Composable
+private fun LeagueMoveButton(up: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val glyph = if (up) "▲" else "▼"
+    if (!enabled) {
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .background(KBSurfaceRaised, KBShapePill),
+            contentAlignment = Alignment.Center
         ) {
             Text(
-                text = league.label,
-                style = MaterialTheme.typography.bodyMedium,
-                color = KBTextHi
-            )
-            Text(
-                text = if (checked) "ON" else "OFF",
+                text = glyph,
                 style = MaterialTheme.typography.labelSmall,
-                color = if (checked) KBVoid else KBTextLo,
-                modifier = Modifier
-                    .background(if (checked) KBAccent else KBSurfaceRaised, KBShapePill)
-                    .padding(horizontal = 10.dp, vertical = 3.dp)
+                color = KBTextLo.copy(alpha = 0.3f)
+            )
+        }
+        return
+    }
+    KBCard(
+        onClick = onClick,
+        shape = KBShapePill,
+        focusedScale = KBFocusChip,
+        modifier = Modifier.size(40.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = glyph,
+                style = MaterialTheme.typography.labelSmall,
+                color = KBTextHi
             )
         }
     }
@@ -2243,6 +2362,58 @@ private fun ReminderToggleRow(
                 color = if (checked) KBVoid else KBTextLo,
                 modifier = Modifier
                     .background(if (checked) KBAccent else KBSurfaceRaised, KBShapePill)
+                    .padding(horizontal = 10.dp, vertical = 3.dp)
+            )
+        }
+    }
+}
+
+/**
+ * The one row that forgets the matcher's learned team -> channel picks.
+ *
+ * A press clears the memory and the row reports "CLEARED" for a moment, so a
+ * remote press with no other visible effect is still acknowledged. The memory
+ * is only read at the start of a match pass, so nothing behind the panel
+ * changes now - the next refresh starts from the heuristics again.
+ */
+@Composable
+private fun ClearMemoryRow(onClear: () -> Unit) {
+    var cleared by remember { mutableStateOf(false) }
+    LaunchedEffect(cleared) {
+        if (cleared) {
+            kotlinx.coroutines.delay(1_500)
+            cleared = false
+        }
+    }
+    KBCard(
+        onClick = {
+            onClear()
+            cleared = true
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(KBSurfaceRaised, KBShapeChip)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Forget learned channel picks",
+                style = MaterialTheme.typography.bodyMedium,
+                color = KBTextHi,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = if (cleared) "CLEARED" else "CLEAR",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (cleared) KBVoid else KBTextLo,
+                modifier = Modifier
+                    .background(if (cleared) KBAccent else KBSurfaceRaised, KBShapePill)
                     .padding(horizontal = 10.dp, vertical = 3.dp)
             )
         }

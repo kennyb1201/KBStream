@@ -6,37 +6,51 @@ import kotlin.math.abs
 /**
  * One EPG program, as the matcher sees it.
  *
- * Deliberately not the guide's own row types: the matcher needs three facts per
- * program - which channel airs it, what it is called, and when it runs - and
- * taking those by value keeps the rule pure and testable without a database, a
- * playlist or a ViewModel.
+ * Deliberately not the guide's own row types: the matcher needs a few facts per
+ * program - which channel airs it, what it is called, what it is about, and when
+ * it runs - and taking those by value keeps the rule pure and testable without a
+ * database, a playlist or a ViewModel.
  */
 data class MatcherProgram(
     val channelId: String,
     val title: String,
     val startMs: Long,
     val endMs: Long,
+    /**
+     * The guide's own synopsis, where it has one.
+     *
+     * Providers routinely title a game generically ("NHL Hockey") and name the
+     * two teams only in the description ("The Tampa Bay Lightning visit the
+     * Florida Panthers at Amerant Bank Arena."). Tier 1 reads it as a strictly
+     * WEAKER signal than the title - a synopsis naming both teams can be a
+     * preview show, while a title naming both is the game itself.
+     */
+    val description: String? = null,
 )
 
 /**
  * Picks the playlist channel that is carrying a game, or null.
  *
- * Three tiers, strongest first, and it never guesses past them: a wrong game on
- * the wrong channel is worse than "Not in your playlist".
+ * Tiers, strongest first, and it never guesses past them: a wrong game on the
+ * wrong channel is worse than "Not in your playlist".
  *
- *  1. **EPG program match** (strongest). The program airing at the game's start
- *     names BOTH teams. This finds the game on any network - national, an RSN,
- *     or a team channel - without knowing the network in advance. A single-team
- *     hit is a pregame show or a repeat, not the game.
+ *  0. **The viewer's own past pick.** If they once chose a channel for a game
+ *     involving either team, that choice is remembered and wins outright (see
+ *     the `remembered` argument). A pick that is gone from the playlist falls
+ *     through to the tiers below.
+ *  1. **EPG program match** (strongest of the heuristics). The program airing at
+ *     the game's start names BOTH teams - first in its TITLE, and - only when no
+ *     title does - in its DESCRIPTION. This finds the game on any network -
+ *     national, an RSN, or a team channel - without knowing the network in
+ *     advance. A single-team hit is a pregame show or a repeat, not the game.
  *  2. **Broadcast network match.** ESPN's own `broadcasts[].names` resolved
  *     against the playlist by normalized name: exact, then prefix/word-boundary,
  *     then contains. "ESPN" must not land on "ESPN2" when a plain "ESPN" exists.
  *     A streaming-exclusive name ([STREAMING_EXCLUSIVES]) never matches here at
  *     all - no cable channel carries it - so a game ESPN+ streams is found by
- *     the other tiers: an EPG row naming both teams (tier 1, the RSN or local
- *     channel simulcasting it) or the team's own RSN (tier 3). If tier 1 keeps
- *     missing those, that is a bug in `epgHits` (team-name variants, window
- *     width) to fix THERE, not a reason to widen tier 2.
+ *     the EPG tier (the RSN or local channel simulcasting it) or the team's own
+ *     RSN. If tier 1 keeps missing those, that is a bug in `epgHits` (team-name
+ *     variants, window width) to fix THERE, not a reason to widen tier 2.
  *  3. **Team RSN fallback.** A small static map of team abbreviation -> the
  *     regional networks that carry them, home team first. Last resort, and
  *     best-effort by design.
@@ -112,6 +126,18 @@ internal object SportsChannelMatcher {
     )
 
     /**
+     * Alternate names a provider's EPG uses in place of a team's own, keyed by
+     * the short form seen in the guide and valued with the team's full name it
+     * stands for ("TBL" -> "Tampa Bay Lightning").
+     *
+     * EMPTY on purpose. An entry goes in only when a real EPG title that missed
+     * proves the need, and the title goes in the comment beside it - this is data
+     * grown from observed misses, never from imagination. [strongNamesTeam] reads
+     * it, so an entry here is the last team-name variant before city-alone.
+     */
+    val TEAM_SHORT_FORMS: Map<String, String> = emptyMap()
+
+    /**
      * Team abbreviation -> the regional networks that carry the team.
      *
      * Data, not code: a league's RSN situation changes every year and this is
@@ -166,7 +192,8 @@ internal object SportsChannelMatcher {
         game: SportsGame,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
-    ): IptvChannel? = matches(game, channels, programs).firstOrNull()
+        remembered: (String) -> IptvChannel? = { null },
+    ): IptvChannel? = matches(game, channels, programs, remembered).firstOrNull()
 
     /**
      * Every channel the playlist carries [game] on, strongest first.
@@ -177,17 +204,26 @@ internal object SportsChannelMatcher {
      * is airing it), then the networks the feed names, then the teams' own
      * regional networks.
      *
-     * The tiers are read as one ordered list rather than short-circuiting at the
-     * first hit, which is the whole point: "the game is on ESPN" and "the game is
-     * on YES" are both true when a provider carries the national feed AND the
-     * local one, and a dead national feed leaves the local one worth playing.
+     * [remembered] is the viewer's own correction memory, keyed by a team's
+     * [SportsTeam.favoriteKey]. It is a lambda so the matcher stays pure - the
+     * caller owns the storage - and a hit skips every tier below.
      */
     fun matches(
         game: SportsGame,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
+        remembered: (String) -> IptvChannel? = { null },
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
+        // The viewer's own past pick beats every heuristic: if they once chose a
+        // channel for a game involving either team, play that again. A hit skips
+        // all three tiers; a pick that is gone from the playlist falls through.
+        val present = channels.mapTo(HashSet()) { it.id }
+        val recalled = listOfNotNull(
+            remembered(game.home.favoriteKey),
+            remembered(game.away.favoriteKey),
+        ).filter { it.id in present }
+        if (recalled.isNotEmpty()) return cap(recalled)
         epgHits(game, channels, programs).let { if (it.isNotEmpty()) return cap(it) }
         // Home before away: a regional playlist is likelier to carry the home
         // broadcast. Within a family, the best-named channel comes first.
@@ -233,14 +269,33 @@ internal object SportsChannelMatcher {
 
     // ── Tier 1 ───────────────────────────────────────────────────────
 
+    /**
+     * The channels whose guide row names both teams, titles first.
+     *
+     * A title naming both teams IS the game, so it is read on its own and, when
+     * it finds anything, the description pass never runs. Only when no title
+     * matches do descriptions get a turn - strictly weaker, because a synopsis
+     * naming both teams can be a preview show rather than the game.
+     */
     private fun epgHits(
         game: SportsGame,
         channels: List<IptvChannel>,
         programs: List<MatcherProgram>,
     ): List<IptvChannel> {
+        val titleHits = programHits(game, channels, programs) { it.title }
+        if (titleHits.isNotEmpty()) return titleHits
+        return programHits(game, channels, programs) { it.description.orEmpty() }
+    }
+
+    private fun programHits(
+        game: SportsGame,
+        channels: List<IptvChannel>,
+        programs: List<MatcherProgram>,
+        textOf: (MatcherProgram) -> String,
+    ): List<IptvChannel> {
         val hits = programs.filter { program ->
             overlapsWindow(program, game.dateMs) &&
-                namesBothTeams(program.title, game.away, game.home)
+                namesBothTeams(textOf(program), game.away, game.home)
         }
         if (hits.isEmpty()) return emptyList()
         // The program whose start sits closest to the game's own start comes
@@ -273,30 +328,67 @@ internal object SportsChannelMatcher {
         program.startMs <= startMs + EPG_WINDOW_MS && program.endMs >= startMs - EPG_WINDOW_MS
 
     /**
-     * True when [title] names BOTH sides. One team is a pregame show, a repeat
-     * or a season-long magazine; only both together are the game.
+     * True when [text] names BOTH sides.
+     *
+     * A side is named STRONGLY by its full name, abbreviation, nickname or a
+     * short-form alias, or WEAKLY by its city alone. Both sides must be named,
+     * and a city-alone hit only counts when the other side carries a real name
+     * ("Tampa Bay vs Florida", "Tampa Bay vs Panthers") - a lone "Tampa Bay" is
+     * a travel show, not a game, so it must never match on its own.
      */
-    private fun namesBothTeams(title: String, away: SportsTeam, home: SportsTeam): Boolean {
-        val titleWords = words(title)
-        return titleNamesTeam(titleWords, away) && titleNamesTeam(titleWords, home)
+    private fun namesBothTeams(text: String, away: SportsTeam, home: SportsTeam): Boolean {
+        val tokens = words(text)
+        if (tokens.isEmpty()) return false
+        val awayStrong = strongNamesTeam(tokens, away)
+        val homeStrong = strongNamesTeam(tokens, home)
+        val awayCity = cityNamesTeam(tokens, away)
+        val homeCity = cityNamesTeam(tokens, home)
+        if (!(awayStrong || awayCity) || !(homeStrong || homeCity)) return false
+        if (awayStrong && homeStrong) return true
+        // At least one side rests on its city alone: allowed only because the
+        // other side carries a real name (checked above).
+        return awayCity || homeCity
     }
 
     /**
-     * Team-name matching, in the order the spec sets out: the full display name,
-     * the abbreviation, then the nickname on its own. All three are matched as
-     * whole words, so "Boston" cannot hit a title that merely contains "BOS"
-     * inside another word, and case/punctuation never matter.
+     * The team's real names, whole-word matched: the full display name, the
+     * abbreviation, the nickname on its own, then any [TEAM_SHORT_FORMS] alias
+     * (in this order, so an earlier form's hit is preferred by callers that care).
      */
-    private fun titleNamesTeam(titleWords: List<String>, team: SportsTeam): Boolean {
-        val candidates = listOfNotNull(
-            team.displayName.takeIf { it.isNotBlank() },
-            team.abbreviation.takeIf { it.length >= 2 },
-            team.displayName.trim().split(' ').lastOrNull()?.takeIf { it.length >= 3 },
-        )
-        return candidates.any { candidate ->
-            val target = words(candidate)
-            target.isNotEmpty() && titleWords.containsSequence(target)
-        }
+    private fun strongNamesTeam(tokens: List<String>, team: SportsTeam): Boolean =
+        strongVariants(team).any { tokens.containsSequence(it) }
+
+    private fun strongVariants(team: SportsTeam): List<List<String>> = buildList {
+        team.displayName.takeIf { it.isNotBlank() }?.let { add(words(it)) }
+        team.abbreviation.takeIf { it.length >= 2 }?.let { add(words(it)) }
+        team.displayName.trim().split(' ').lastOrNull()?.takeIf { it.length >= 3 }?.let { add(words(it)) }
+        shortFormNames(team).forEach { add(words(it)) }
+    }.filter { it.isNotEmpty() }
+
+    /**
+     * The aliases in [TEAM_SHORT_FORMS] that stand for [team]: the short forms
+     * whose value is this team's full name, so a title carrying one names the
+     * team. Empty while the map is empty, which is the shipped state.
+     */
+    private fun shortFormNames(team: SportsTeam): List<String> {
+        val full = words(team.displayName)
+        if (full.isEmpty()) return emptyList()
+        return TEAM_SHORT_FORMS.filterValues { words(it) == full }.keys.toList()
+    }
+
+    /**
+     * Whether [tokens] name the team by its CITY alone ("Tampa Bay" for the Tampa
+     * Bay Lightning). A one-word display name has no city and never matches here.
+     */
+    private fun cityNamesTeam(tokens: List<String>, team: SportsTeam): Boolean {
+        val city = cityOf(team) ?: return false
+        return tokens.containsSequence(city)
+    }
+
+    private fun cityOf(team: SportsTeam): List<String>? {
+        val parts = team.displayName.trim().split(' ').filter { it.isNotBlank() }
+        if (parts.size < 2) return null
+        return words(parts.dropLast(1).joinToString(" ")).takeIf { it.isNotEmpty() }
     }
 
     // ── Tiers 2 and 3 ────────────────────────────────────────────────

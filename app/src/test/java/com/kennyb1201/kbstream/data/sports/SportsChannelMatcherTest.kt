@@ -73,7 +73,14 @@ class SportsChannelMatcherTest {
         title: String,
         startMs: Long,
         endMs: Long,
-    ) = MatcherProgram(channelId = channelId, title = title, startMs = startMs, endMs = endMs)
+        description: String? = null,
+    ) = MatcherProgram(
+        channelId = channelId,
+        title = title,
+        startMs = startMs,
+        endMs = endMs,
+        description = description,
+    )
 
     private val yankees = team("NYY", "New York Yankees", home = false)
     private val redSox = team("BOS", "Boston Red Sox", home = true)
@@ -568,5 +575,190 @@ class SportsChannelMatcherTest {
                 programs = listOf(program("mlb", "Yankees vs Red Sox", firstPitch, firstPitch + minute)),
             )
         )
+    }
+
+    // ── Tier 1b: the description names both teams ───────────────────
+    //
+    // Providers routinely title a game generically ("NHL Hockey") and name the
+    // two teams only in the synopsis, so the title pass alone leaves those
+    // games unmatched. The description is read only when no title does, and it
+    // obeys the same both-teams rule.
+
+    @Test
+    fun `tier one matches the description when the title names no team`() {
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(
+            team("TB", "Tampa Bay Lightning", home = false),
+            team("FLA", "Florida Panthers", home = true),
+        )
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(rsn),
+            programs = listOf(
+                program(
+                    "rsn",
+                    "NHL Hockey",
+                    firstPitch - minute,
+                    firstPitch + 3 * 60 * minute,
+                    description = "The Tampa Bay Lightning visit the Florida Panthers at Amerant Bank Arena.",
+                )
+            ),
+        )
+
+        assertEquals(rsn, hit)
+    }
+
+    @Test
+    fun `a title hit beats a description hit for the same game`() {
+        // A synopsis naming both teams can be a preview show; the title naming
+        // both is the game itself.
+        val byTitle = channel("title", "Title Channel")
+        val byDesc = channel("desc", "Description Channel")
+
+        val hit = SportsChannelMatcher.match(
+            game = game(yankees, redSox),
+            channels = listOf(byDesc, byTitle),
+            programs = listOf(
+                program(
+                    "desc",
+                    "MLB Baseball",
+                    firstPitch - minute,
+                    firstPitch + 3 * 60 * minute,
+                    description = "Yankees and Red Sox meet tonight.",
+                ),
+                program("title", "Yankees vs. Red Sox", firstPitch, firstPitch + 3 * 60 * minute),
+            ),
+        )
+
+        assertEquals(byTitle, hit)
+    }
+
+    @Test
+    fun `a description naming only one team does not match`() {
+        val espn = channel("espn", "ESPN")
+
+        val hit = SportsChannelMatcher.match(
+            game = game(yankees, redSox),
+            channels = listOf(espn),
+            programs = listOf(
+                program(
+                    "espn",
+                    "MLB Baseball",
+                    firstPitch,
+                    firstPitch + 3 * 60 * minute,
+                    description = "The Yankees look to extend their winning streak.",
+                )
+            ),
+        )
+
+        assertNull(hit)
+    }
+
+    // ── Team-name variants: city alone, short forms ────────────────
+
+    @Test
+    fun `both cities alone name the game`() {
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(
+            team("TB", "Tampa Bay Lightning", home = false),
+            team("FLA", "Florida Panthers", home = true),
+        )
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(rsn),
+            programs = listOf(program("rsn", "Tampa Bay vs Florida", firstPitch, firstPitch + 3 * 60 * minute)),
+        )
+
+        assertEquals(rsn, hit)
+    }
+
+    @Test
+    fun `a lone city does not name anything`() {
+        // "Tampa Bay Travel Guide" is not a hockey game, and one city alone must
+        // never be enough.
+        val travel = channel("travel", "Travel Channel")
+        val game = game(
+            team("TB", "Tampa Bay Lightning", home = false),
+            team("FLA", "Florida Panthers", home = true),
+        )
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(travel),
+            programs = listOf(
+                program("travel", "Tampa Bay Travel Guide", firstPitch, firstPitch + 3 * 60 * minute)
+            ),
+        )
+
+        assertNull(hit)
+    }
+
+    @Test
+    fun `separators like vs and at are tokenized away`() {
+        // "vs"/"v"/"at" must not stand in the way of the two names on either
+        // side: the tokenizer splits on everything that is not a letter/digit.
+        val rsn = channel("rsn", "Local Sports")
+        val game = game(
+            team("TB", "Tampa Bay Lightning", home = false),
+            team("FLA", "Florida Panthers", home = true),
+        )
+        listOf("Lightning vs Panthers", "Lightning v Panthers", "Lightning at Panthers")
+            .forEach { title ->
+                assertEquals(
+                    title,
+                    rsn,
+                    SportsChannelMatcher.match(
+                        game = game,
+                        channels = listOf(rsn),
+                        programs = listOf(program("rsn", title, firstPitch, firstPitch + 3 * 60 * minute)),
+                    )
+                )
+            }
+    }
+
+    @Test
+    fun `the short-form map ships empty until a miss cites an entry`() {
+        // The map is grown from observed EPG misses, never from imagination: an
+        // entry without a cited real title does not belong in it.
+        assertEquals(emptyMap<String, String>(), SportsChannelMatcher.TEAM_SHORT_FORMS)
+    }
+
+    // ── The viewer's own correction memory ──────────────────────────
+
+    @Test
+    fun `a remembered channel wins over every tier`() {
+        // Tier 2 would answer "ESPN"; the viewer's own past pick overrides it.
+        val yes = channel("yes", "YES Network")
+        val espn = channel("espn", "ESPN")
+        val game = game(yankees, redSox, broadcasts = listOf("ESPN"))
+        val remembered: (String) -> IptvChannel? = { key -> yes.takeIf { key == game.home.favoriteKey } }
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(espn, yes),
+            programs = emptyList(),
+            remembered = remembered,
+        )
+
+        assertEquals(yes, hit)
+    }
+
+    @Test
+    fun `a remembered channel that is gone falls through to the tiers`() {
+        val espn = channel("espn", "ESPN")
+        val dead = channel("dead", "Gone Channel")
+        val game = game(yankees, redSox, broadcasts = listOf("ESPN"))
+        val remembered: (String) -> IptvChannel? = { dead }
+
+        val hit = SportsChannelMatcher.match(
+            game = game,
+            channels = listOf(espn),
+            programs = emptyList(),
+            remembered = remembered,
+        )
+
+        assertEquals(espn, hit)
     }
 }

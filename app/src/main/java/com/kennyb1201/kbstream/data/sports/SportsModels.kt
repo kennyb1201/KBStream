@@ -287,11 +287,28 @@ object SportsLeagues {
     fun byPath(path: String): SportsLeague? = ALL.firstOrNull { it.path == path }
 
     /**
-     * The leagues to render, in catalog order, for an enabled-path set.
+     * The leagues to render, in the viewer's order, for an enabled-path set.
      *
      * Unknown paths in [enabled] are ignored: the hub renders tabs only for
      * enabled leagues, and a league this build does not know cannot be one.
+     * [order] is the rearranged order from the leagues panel; empty means
+     * catalog order, which is what a fresh install has.
      */
-    fun enabled(enabled: Set<String>): List<SportsLeague> =
-        ALL.filter { it.path in enabled }
+    fun enabled(enabled: Set<String>, order: List<String> = emptyList()): List<SportsLeague> =
+        ordered(order).filter { it.path in enabled }
+
+    /**
+     * The whole catalog in the viewer's own order.
+     *
+     * [order] is a run of league paths, as arranged by the leagues panel's move
+     * controls. A path it names is ranked by its position; everything else - a
+     * league this build added after the order was written, a path it no longer
+     * knows - keeps catalog order behind those. `sortedBy` is stable, so two
+     * unranked leagues do not swap places from one read to the next.
+     */
+    fun ordered(order: List<String>): List<SportsLeague> {
+        if (order.isEmpty()) return ALL
+        val rank = order.withIndex().associate { (index, path) -> path to index }
+        return ALL.sortedBy { rank[it.path] ?: Int.MAX_VALUE }
+    }
 }
