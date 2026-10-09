@@ -3507,13 +3507,27 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             }
         }
 
+        initBingeScheme()
+        // The stream id names the FILE; the scheme maps the file to its TMDB
+        // episode(s). When the intent's s/e disagree with that mapping, the file
+        // is ground truth - it is what is actually playing. Correct the fields
+        // so filing, scrobbling, and next-episode all use the file's episode
+        // (see PlaybackHistoryIds.correctedSessionEpisode).
+        PlaybackHistoryIds.correctedSessionEpisode(
+            season,
+            episode,
+            episodeStreamId,
+            bingeScheme
+        )?.let { (correctedSeason, correctedEpisode) ->
+            season = correctedSeason
+            episode = correctedEpisode
+        }
         historyId = PlaybackHistoryIds.historyId(
             parentId = parentId,
             season = season,
             episode = episode,
             episodeStreamId = episodeStreamId
         )
-        initBingeScheme()
         // Into the diagnostics report: what this session will file itself
         // under, next to what the id it plays says. A binge that chains into
         // the wrong episode - or files the right ones under the wrong row - is

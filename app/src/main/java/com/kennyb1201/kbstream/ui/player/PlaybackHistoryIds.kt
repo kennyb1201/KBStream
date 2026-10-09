@@ -115,6 +115,60 @@ object PlaybackHistoryIds {
     fun episodeFromId(id: String?): Pair<Int, Int>? = EpisodeMatch.requestedFrom(id)
 
     /**
+     * The session's season/episode corrected from the FILE the id names, or null
+     * when the fields already name an episode that file holds.
+     *
+     * This is the repair the watchdog line ([playbackSessionLine]) deliberately
+     * is not, and the reason it is safe is that the two statements are not
+     * equals. The session's `season`/`episode` are a PREDICTION: they are carried
+     * from the launch intent, which the previous session's arithmetic computed.
+     * The stream id is what was RESOLVED and is now PLAYING, and the detected
+     * scheme turns that file number into its exact TMDB episode(s)
+     * ([EpisodeScheme.tmdbEpisodesOfFile]) - a mapping, not a guess. On a season
+     * that mixes 1:1 and sp2 files (Paw Patrol S06) the prediction drifts while
+     * the id stays right, so the wrong episode gets the watched marker, the
+     * scrobble and the resume point. When they disagree, the prediction lost to
+     * reality and the file wins.
+     *
+     * Only a genuine MISMATCH is repaired: when [EpisodeScheme.fileHolds] is
+     * true - a consistent 1:1 show, the second half of a split episode, any file
+     * of an fe group - this returns null and the session is byte-identical to
+     * its old self. A null id or a null episode is likewise left alone. The
+     * returned pair carries the id's season too, because the id is the same
+     * statement of the season the episode came from.
+     *
+     * Called once at session start, before the history id and the
+     * [playbackSessionLine] note are built, so the row, the line and everything
+     * downstream (filing, scrobbling, the next-episode handoff) see the file's
+     * episode. After it runs the line reads "id agrees", which is the check.
+     *
+     * Logged with the scheme, so a report shows not just that a correction
+     * happened but which mapping was read to make it.
+     */
+    fun correctedSessionEpisode(
+        season: Int?,
+        episode: Int?,
+        episodeStreamId: String?,
+        scheme: EpisodeScheme = EpisodeScheme.ONE_TO_ONE
+    ): Pair<Int, Int>? {
+        val fromId = episodeFromId(episodeStreamId) ?: return null
+        val sessionEpisode = episode ?: return null
+        val (idSeason, idFileEp) = fromId
+        if (scheme.fileHolds(idFileEp, sessionEpisode)) return null
+        val corrected = scheme.tmdbEpisodesOfFile(idFileEp).firstOrNull() ?: return null
+        if (corrected == sessionEpisode && idSeason == season) return null
+        if (corrected != sessionEpisode) {
+            val schemeLabel = scheme.encode() ?: "1:1"
+            Log.w(
+                TAG,
+                "session s=$season e=$sessionEpisode corrected to e=$corrected " +
+                    "from file $idFileEp (scheme $schemeLabel)"
+            )
+        }
+        return idSeason to corrected
+    }
+
+    /**
      * One diagnostics line naming a session's identity, and whether the id its
      * stream was resolved for agrees with the fields it will file itself under.
      *
@@ -132,8 +186,10 @@ object PlaybackHistoryIds {
      * in - this reduces to the strict equality it always was, so nothing about
      * the verdict changes for a show with no mapping.
      *
-     * Deliberately a report and not a repair: rewriting one from the other would
-     * be guessing which is wrong, and the whole question is which one is.
+     * Still a report and not itself a repair - this reads whatever the session
+     * now holds. The repair is [correctedSessionEpisode], run once at session
+     * start from the file the id names; this line is then its verification, so
+     * an 'id agrees' verdict after a correction is exactly the intended outcome.
      */
     fun playbackSessionLine(
         season: Int?,

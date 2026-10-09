@@ -839,8 +839,22 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
         readIntent(savedInstanceState)
         bindViews()
-        historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
         initBingeScheme()
+        // The stream id names the FILE; the scheme maps the file to its TMDB
+        // episode(s). When the intent's s/e disagree with that mapping, the file
+        // is ground truth - it is what is actually playing. Correct the fields
+        // so filing, scrobbling, and next-episode all use the file's episode
+        // (see PlaybackHistoryIds.correctedSessionEpisode).
+        PlaybackHistoryIds.correctedSessionEpisode(
+            season,
+            episode,
+            episodeStreamId,
+            bingeScheme
+        )?.let { (correctedSeason, correctedEpisode) ->
+            season = correctedSeason
+            episode = correctedEpisode
+        }
+        historyId = PlaybackHistoryIds.historyId(parentId, season, episode, episodeStreamId)
         // The same line the main player writes: what this session files itself
         // under, next to what the id it plays says (see PlaybackSessionTrace).
         // The stored scheme goes with it, so the comparison reads the id as the
