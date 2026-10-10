@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -249,18 +250,25 @@ class BecauseYouWatchedKidsGateTest {
 
     @Test
     fun `the pre-filter saves the certification calls for the candidates it drops`() = runBlocking {
-        var calls = 0
+        // The gate certifies on Dispatchers.IO, one coroutine per candidate, so
+        // the count is incremented from several threads at once: a plain `var`
+        // loses an increment under load and this test then reads 10 in a full
+        // suite run while passing on its own.
+        val calls = AtomicInteger()
         val pool = bywKidsGenrePool(moanaPool, parentGenreIds = listOf(16, 10751))
 
         bywKidsGate(pool, KidsMode.CEIL_PG) { candidate ->
-            calls++
+            calls.incrementAndGet()
             ratings[candidate.pick.name]
         }
 
         // That '70s Show, Deadpool and Barry share neither genre; the other
         // eleven get certified.
-        assertEquals(11, calls)
-        assertTrue("a pre-filter that certifies everything saves nothing", calls < moanaPool.size)
+        assertEquals(11, calls.get())
+        assertTrue(
+            "a pre-filter that certifies everything saves nothing",
+            calls.get() < moanaPool.size
+        )
     }
 
     // ── spec: an ordinary profile is untouched ──────────────────────────
