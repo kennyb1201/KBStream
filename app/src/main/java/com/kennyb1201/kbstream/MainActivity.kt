@@ -2433,6 +2433,10 @@ fun AppRoot(
                             val bywName = data.getStringExtra("byw_name").orEmpty()
                             val bywPoster = data.getStringExtra("byw_poster")
                             val bywBackdrop = data.getStringExtra("byw_backdrop")
+                            // The wordmark the popup's featured strip showed for
+                            // this pick. Null when the pick had no TMDB logo,
+                            // which the launch below already treats as "no logo".
+                            val bywClearLogo = data.getStringExtra("byw_clearlogo")
                             // A recommendation card names a SHOW, never one of
                             // its episodes, so a series pick carries no
                             // season/episode. Building a season-less stream
@@ -2472,19 +2476,29 @@ fun AppRoot(
                                         parentType = bywType,
                                         itemPoster = bywPoster,
                                         backdropUrl = bywBackdrop,
-                                        clearLogoUrl = null,
+                                        // Was hardcoded null, so a pick whose
+                                        // strip showed a clearlogo still reached
+                                        // the player with none.
+                                        clearLogoUrl = bywClearLogo,
                                         overview = null,
                                         cast = emptyList(),
                                         returnTo = stableBackDestination(current.returnTo)
                                     )
                                 } else {
+                                    // With auto-select off the pick goes on to
+                                    // the source list, so the clearlogo rides
+                                    // along and both the list's header and the
+                                    // player the list launches show what the
+                                    // strip showed - the same way the picker is
+                                    // opened from every other screen.
                                     screen = Screen.Streams(
                                         target = bywTarget,
                                         parentId = bywId,
                                         returnTo = stableBackDestination(current.returnTo),
                                         parentType = bywType,
                                         itemPoster = bywPoster,
-                                        backdropUrl = bywBackdrop
+                                        backdropUrl = bywBackdrop,
+                                        clearLogoUrl = bywClearLogo
                                     )
                                 }
                             }

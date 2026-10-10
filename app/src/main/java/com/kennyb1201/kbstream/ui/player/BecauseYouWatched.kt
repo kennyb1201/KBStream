@@ -864,6 +864,26 @@ internal class BecauseYouWatchedUi(
     }
 
     /**
+     * The clear logo the featured strip is showing for [pick], for the result
+     * handoff: the wordmark the per-pick fetch landed, or null when it landed
+     * none (the strip then draws nothing, and so does the player's splash).
+     */
+    fun clearLogoFor(pick: BywPick): String? = logoCache[pick.tmdbId]
+
+    /**
+     * The backdrop the featured strip is showing for [pick], for the result
+     * handoff.
+     *
+     * The fetched detail's backdrop first, then the pick's own - the strip's
+     * chain. It stops there on purpose: the strip's last-resort poster is not a
+     * backdrop, and the player already falls back to the item poster when none
+     * arrives, so handing one over as a backdrop would only get it cropped as
+     * one.
+     */
+    fun backdropFor(pick: BywPick): String? =
+        metaCache[pick.tmdbId]?.backdropUrl ?: pick.backdropUrl
+
+    /**
      * Parks focus on the first pick in the credits row. The panel owns LEFT/RIGHT
      * while it is up, but focus is not always inside it by then: the row is built
      * a beat after the panel opens, and a skip prompt hands focus back to the

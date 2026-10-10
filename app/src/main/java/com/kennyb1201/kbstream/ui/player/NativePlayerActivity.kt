@@ -10395,7 +10395,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 putExtra("byw_id", imdbId)
                 putExtra("byw_name", pick.name)
                 putExtra("byw_poster", pick.posterUrl)
-                putExtra("byw_backdrop", pick.backdropUrl)
+                // The pick's own backdrop is often absent (franchise and
+                // credits candidates carry a poster only), while the panel
+                // fetched one for its featured strip. Hand over what the strip
+                // showed - the pick's own value was the whole of it before, so
+                // the player's splash had nothing to draw.
+                putExtra("byw_backdrop", bywUi.backdropFor(pick))
+                // Never sent before: the fetched clearlogo stayed in the panel's
+                // own cache, so a pick's splash could only ever show the
+                // player's fallback lookup, not the strip's wordmark.
+                putExtra("byw_clearlogo", bywUi.clearLogoFor(pick))
             }
         )
         mediaSession?.release()

@@ -1313,7 +1313,10 @@ class ExternalPlayerActivity : ComponentActivity() {
                 putExtra("byw_id", imdbId)
                 putExtra("byw_name", pick.name)
                 putExtra("byw_poster", pick.posterUrl)
-                putExtra("byw_backdrop", pick.backdropUrl)
+                // The strip's backdrop / clearlogo, not the pick's own: see
+                // BecauseYouWatchedUi.backdropFor / clearLogoFor.
+                putExtra("byw_backdrop", bywUi?.backdropFor(pick) ?: pick.backdropUrl)
+                putExtra("byw_clearlogo", bywUi?.clearLogoFor(pick))
             }
         )
         finish()
