@@ -1,9 +1,11 @@
 package com.kennyb1201.kbstream.ui.kb
 
-import android.util.Log
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,12 +14,12 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +39,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,9 +72,11 @@ import com.kennyb1201.kbstream.ui.home.Rail
 import com.kennyb1201.kbstream.ui.home.RailHorizontalStartPadding
 import com.kennyb1201.kbstream.ui.home.TvSafeAreaHorizontal
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlin.math.abs
 
 /**
  * Which built-in rails are emitted, in default order.
@@ -575,6 +580,9 @@ internal fun collectionRailTiles(folders: List<KBFolder>): List<Pair<String, KBF
 internal fun collectionRailKey(index: Int, tile: Pair<String, KBFolder>): String =
     "${tile.first}#$index"
 
+// LocalBringIntoViewSpec is still experimental; the rails that install their
+// own landing spec opt in the same way (see HomeScreen's rail column).
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun KBHomeCollectionRail(
     collection: KBCollectionProfile,
@@ -607,61 +615,122 @@ fun KBHomeCollectionRail(
         // straight off the left edge of the screen, so a collection always
         // looked a little clipped compared with the catalog rail below it.
 
-        // TEMP FOCUS_DIAG (focus-oscillation diagnosis - remove with the logs
-        // below): hoisted so a tile's focus event can report the rail's scroll
-        // position alongside it.
-        //
-        // Logged at Log.w, NOT the Log.d the spec wrote: release builds run
-        // with isMinifyEnabled and proguard-rules.pro strips Log.v/Log.d call
-        // sites entirely (assumenosideeffects), so a Log.d FOCUS_DIAG line does
-        // not exist in the APK a bug report - or this device - runs. Log.w is
-        // never stripped, so this survives into the release build being
-        // diagnosed.
         val listState = rememberLazyListState()
 
         // Only the drawable tiles: see [collectionRailTiles] for why the
         // null-id folders are dropped here and not inside the item block.
-        val tiles = remember(collection) {
-            val t = collectionRailTiles(collection.folders)
-            // TEMP FOCUS_DIAG: fires only when this block actually RE-RUNS, so a
-            // burst of these between two focus events means the list is churning
-            // (and the id order across them says whether the keys rebind).
-            Log.w(
-                "FOCUS_DIAG",
-                "tiles rebuilt: size=${t.size} ids=${t.take(20).joinToString { it.first }}"
-            )
-            t
+        val tiles = remember(collection) { collectionRailTiles(collection.folders) }
+
+        // This rail's own focus landing (see [CollectionBringIntoViewSpec]):
+        // supplied around THIS LazyRow, not on the screen, so no other rail's
+        // bring-into-view is re-tuned. The spec the enclosing column installs
+        // is built for a LazyColumn of RAILS (a fixed header inset, a landing
+        // line derived from the focused row's height); a tile inside a
+        // horizontal row is not what it was written for, and letting it decide
+        // where the tile comes to rest is how the row ended up chasing its own
+        // scroll.
+        val density = LocalDensity.current
+        val bringIntoViewSpec = remember(density) {
+            CollectionBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
         }
 
-        LazyRow(
-            state = listState,
-            contentPadding = PaddingValues(
-                start = RailHorizontalStartPadding,
-                end = TvSafeAreaHorizontal,
-                top = 4.dp,
-                bottom = 12.dp
-            ),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // itemsIndexed rather than items: the key has to include the
-            // position to stay unique (see [collectionRailKey]).
-            itemsIndexed(
-                items = tiles,
-                key = { index, tile -> collectionRailKey(index, tile) }
-            ) { _, (folderId, folder) ->
-                // Every item emits a tile - the null guard and its empty branch
-                // are gone, so no position can be a focusable no-op.
-                val requester = remember { FocusRequester() }
-                CollectionFolderTile(
-                    folder = folder,
-                    listState = listState,
-                    onClick = { onOpenFolder(folderId) },
-                    onFocus = onFolderFocused?.let { callback -> { callback(folder) } },
-                    modifier = Modifier
-                        .focusRequester(requester)
-                        .homeTopRailUpHook(requester, onUpPressed)
-                )
+        CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
+            LazyRow(
+                state = listState,
+                contentPadding = PaddingValues(
+                    start = RailHorizontalStartPadding,
+                    end = TvSafeAreaHorizontal,
+                    top = 4.dp,
+                    bottom = 12.dp
+                ),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // itemsIndexed rather than items: the key has to include the
+                // position to stay unique (see [collectionRailKey]).
+                itemsIndexed(
+                    items = tiles,
+                    key = { index, tile -> collectionRailKey(index, tile) }
+                ) { _, (folderId, folder) ->
+                    // Every item emits a tile - the null guard and its empty
+                    // branch are gone, so no position can be a focusable no-op.
+                    val requester = remember { FocusRequester() }
+                    CollectionFolderTile(
+                        folder = folder,
+                        onClick = { onOpenFolder(folderId) },
+                        onFocus = onFolderFocused?.let { callback -> { callback(folder) } },
+                        modifier = Modifier
+                            .focusRequester(requester)
+                            .homeTopRailUpHook(requester, onUpPressed)
+                    )
+                }
             }
+        }
+    }
+}
+
+/**
+ * The collection rail's focus landing: keep [KBFocusRowInset] of room between
+ * the focused tile and the edge of the viewport it is being scrolled to.
+ *
+ * Reported problem (2026-10-09, build 0.6.4): with a tile focused and the rail
+ * otherwise at rest, the scroll offset oscillated 234 <-> 249 - a 15px bounce
+ * under a stationary focus, with no focus change in the log at all. The tile
+ * list was NOT churning (one "tiles rebuilt" line covered the whole scroll),
+ * so this was not the duplicate-key rebinding the positional keys fixed; the
+ * landing position itself was unstable.
+ *
+ * The default spec lands the focused node's LAYOUT rectangle flush with the
+ * viewport edge and counts it visible the moment it fits. A focused tile draws
+ * a 2dp accent border and a 12dp glow OUTSIDE that rectangle (see [KBCard] and
+ * [posterBorderModifier]), so the bounds a viewer judges by are ~15px larger
+ * than the ones the spec measures: the tile is brought to the edge, its own
+ * overflow reads as one step short, and the next pass scrolls again - which
+ * moves the item under the focus, which re-fires the focus modifier, which asks
+ * again. The bounce IS the spec and the focus event disagreeing about where the
+ * tile ends.
+ *
+ * The fix is the one the sports hub, the detail screen and Home's own rail
+ * column already use: inset the viewport by a margin at each edge, so the
+ * landing is a line the tile's LAYOUT rectangle can reach and then stay on -
+ * margin plus the overflow is still inside the viewport, so nothing asks for a
+ * corrective scroll once it is there. The distance depends only on the focused
+ * tile's own rectangle and not on where the row happens to be, so it is the
+ * same number on every pass and cannot oscillate.
+ *
+ * Nothing about focus navigation changes: the tiles, their keys and the focus
+ * callbacks are untouched, and only where the scroll comes to rest moves.
+ *
+ * `internal`, like the rail's own tile/`key` rules beside it, because the
+ * landing it computes is the thing this bug was - and the one property that
+ * matters (a node already clear of both margins asks for NO scroll, and asking
+ * again from where it landed asks for no scroll either) is arithmetic that a
+ * contract test can assert exactly, with no device and no D-pad.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+internal class CollectionBringIntoViewSpec(private val insetPx: Float) : BringIntoViewSpec {
+
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float
+    ): Float {
+        // A margin can never eat the viewport: a tile wider than the room the
+        // two margins leave still lands on the nearest edge, rather than being
+        // scrolled somewhere it could not be seen at all.
+        val margin = insetPx.coerceAtMost(containerSize / 3f)
+        // The rect arrives as the focused node's leading edge plus its extent -
+        // the tile that asked to be brought into view, which is also the thing
+        // carrying the border and the glow.
+        val trailingEdge = offset + abs(size)
+        return when {
+            // Past the trailing margin: scroll forward just far enough to clear it.
+            trailingEdge > containerSize - margin -> trailingEdge - (containerSize - margin)
+            // Before the leading one: back off by the same amount.
+            offset < margin -> offset - margin
+            // Already clear of both: no scroll at all - which is the case that
+            // has to stay at exactly 0f, because it is what keeps a rail whose
+            // tile is already in view from being nudged by its own focus.
+            else -> 0f
         }
     }
 }
@@ -669,10 +738,6 @@ fun KBHomeCollectionRail(
 @Composable
 private fun CollectionFolderTile(
     folder: KBFolder,
-    // TEMP FOCUS_DIAG: read for the scroll position in the focus log below, so
-    // a bring-into-view loop can be told from a real focus change. Remove the
-    // parameter with the logs.
-    listState: LazyListState,
     onClick: () -> Unit,
     onFocus: (() -> Unit)? = null,
     modifier: Modifier = Modifier
@@ -681,16 +746,6 @@ private fun CollectionFolderTile(
     var isFocused by remember { mutableStateOf(false) }
     val focusModifier = Modifier.onFocusChanged {
         isFocused = it.isFocused
-        // TEMP FOCUS_DIAG (remove once the oscillation cause is found): every
-        // focus transition with the rail's scroll position, so focus gain/loss
-        // can be read against the list moving under it.
-        Log.w(
-            "FOCUS_DIAG",
-            "tile ${if (it.isFocused) "GAINED" else "LOST"} " +
-                "id=${folder.id} title=\"${folder.title}\" " +
-                "scrollIdx=${listState.firstVisibleItemIndex} " +
-                "scrollOff=${listState.firstVisibleItemScrollOffset}"
-        )
         if (it.isFocused) onFocus?.invoke()
     }
 
