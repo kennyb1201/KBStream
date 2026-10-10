@@ -1668,23 +1668,24 @@ internal object DolbyVisionCompat {
         return false
     }
 
-    /** Subsequence match of the ST 2094-40 marker, tolerating emulation-prevention 0x03 bytes. */
+    /** Prefix match of the ST 2094-40 T35 header, tolerating emulation-prevention 0x03 bytes. */
     private fun containsHdr10PlusMarker(buf: ByteArray, from: Int, to: Int): Boolean {
         val limit = minOf(to, buf.size)
         var p = 0
         var i = from
+        // The marker is a header: it must open the T35 payload. Searching the
+        // whole payload false-positives on DV RPU data that happens to contain
+        // these bytes, and dropping the RPU stalls MTK decoders.
         while (i < limit && p < HDR10_PLUS_MARKER.size) {
             val v = buf[i].toInt() and 0xFF
             if (v == HDR10_PLUS_MARKER[p]) {
                 p++
                 i++
-            } else if (v == 0x03 && p > 0) {
-                // Emulation-prevention byte inserted into a 0x00 run.
+            } else if (v == 0x03 && p > 0 && HDR10_PLUS_MARKER[p - 1] == 0x00) {
+                // Emulation-prevention byte after a 0x00 run: skip it.
                 i++
             } else {
-                p = 0
-                if (v == HDR10_PLUS_MARKER[0]) p = 1
-                i++
+                return false
             }
         }
         return p == HDR10_PLUS_MARKER.size

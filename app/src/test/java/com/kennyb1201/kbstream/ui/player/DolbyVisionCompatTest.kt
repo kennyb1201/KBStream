@@ -389,6 +389,75 @@ class DolbyVisionCompatTest {
         )
     }
 
+    // ── HDR10+ detection is a PREFIX match ────────────────────────────────
+    //
+    // Field 2026-10-10 (MULTi dvhe.08.06): the relabel + HDR10+-only strip
+    // stalled — bitrate 0, no first frame — on a resume where the T35 SEI at
+    // the seek point carried DV RPU data. The detector used to search the WHOLE
+    // payload for the 6 marker bytes, so an RPU SEI that happened to contain
+    // them anywhere was misread as HDR10+, deleted, and the MTK decoder stalled
+    // waiting for the RPU its (untouched) VPS declares. The identifier is a
+    // HEADER: it has to open the T35 payload. A match anywhere else is RPU data
+    // and must be kept.
+
+    /** ST 2094-40 T35 header: country 0xB5, provider 0x003C, orientation 0x0001, app 0x04. */
+    private val HDR10_PLUS_HEADER = byteArrayOf(0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04)
+
+    /** A user-data-registered-ITU-T-T35 (payloadType 4) SEI NAL carrying [payload]. */
+    private fun t35Sei(payload: ByteArray): ByteArray =
+        nal(39, byteArrayOf(0x04, payload.size.toByte()) + payload)
+
+    /** True when `stripHdr10Plus`-only stripping removes the SEI from a SEI+VCL unit. */
+    private fun hdr10PlusSeiIsStripped(sei: ByteArray): Boolean {
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = sei + vcl
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            au.copyOf(), au.size, stripDv = false, stripHdr10Plus = true
+        )
+        return newLen == vcl.size
+    }
+
+    @Test
+    fun `an SEI whose T35 payload opens with the HDR10 plus header is stripped`() {
+        assertTrue(
+            "a genuine HDR10+ SEI (header at payload start) must still be dropped",
+            hdr10PlusSeiIsStripped(t35Sei(HDR10_PLUS_HEADER))
+        )
+    }
+
+    @Test
+    fun `an SEI whose T35 payload only CONTAINS those bytes mid-payload is kept`() {
+        // The regression: an RPU-shaped payload with the marker bytes 10 bytes
+        // in. Deleting this is what stalled the decoder in the field.
+        val rpuShaped = ByteArray(10) { (0x10 + it).toByte() } + HDR10_PLUS_HEADER
+        assertFalse(
+            "RPU data that merely contains the marker bytes must be kept",
+            hdr10PlusSeiIsStripped(t35Sei(rpuShaped))
+        )
+    }
+
+    @Test
+    fun `a header split by an emulation-prevention 0x03 is still the header`() {
+        // The escape only ever follows a 0x00 run, so it is tolerated after a
+        // matched 0x00 and nowhere else: B5 00 3C 00 [03] 01 04.
+        val escaped = byteArrayOf(0xB5.toByte(), 0x00, 0x3C, 0x00, 0x03, 0x01, 0x04)
+        assertTrue(
+            "an emulation-prevention byte must not hide the header",
+            hdr10PlusSeiIsStripped(t35Sei(escaped))
+        )
+    }
+
+    @Test
+    fun `a 0x03 after a byte that is not a zero is a mismatch, not an escape`() {
+        // The old matcher skipped a 0x03 after ANY partial match, which hid
+        // this payload: it opens B5 03, not B5 00, so it is not the header.
+        val notHeader = byteArrayOf(0xB5.toByte(), 0x03, 0x00, 0x3C, 0x00, 0x01, 0x04)
+        assertFalse(
+            "an escape byte cannot rescue a payload that does not open with the header",
+            hdr10PlusSeiIsStripped(t35Sei(notHeader))
+        )
+    }
+
     // ── relabel construction hardening (the 2026-10-10 fallback) ──────────
     //
     // The relabel that re-advertises P4/P8 as plain HEVC is built in two steps:
