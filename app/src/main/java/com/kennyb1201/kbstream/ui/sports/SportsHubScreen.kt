@@ -1198,9 +1198,17 @@ private fun GameCard(
     val body: @Composable () -> Unit = {
         Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.Top) {
+                // The ball, on the card too: the situation row below names where
+                // the ball is and the down, and never which side has it, so
+                // without this the card asked the viewer to know from the
+                // yardage alone - while the sheet they could open from it drew
+                // the answer. Same shared rule, asked of each side, exactly as
+                // the sheet's header asks it; a feed that named no possession
+                // resolves to neither side and draws no ball.
                 TeamColumn(
                     team = game.away,
                     favorite = game.away.favoriteKey in favoriteKeys,
+                    possession = SportsDetailRules.possesses(game, game.away),
                     modifier = Modifier.weight(1f)
                 )
                 Text(
@@ -1212,6 +1220,7 @@ private fun GameCard(
                 TeamColumn(
                     team = game.home,
                     favorite = game.home.favoriteKey in favoriteKeys,
+                    possession = SportsDetailRules.possesses(game, game.home),
                     alignEnd = true,
                     modifier = Modifier.weight(1f)
                 )
@@ -1286,8 +1295,11 @@ private fun TeamColumn(
     favorite: Boolean,
     alignEnd: Boolean = false,
     /**
-     * Whether the feed says this side has the ball. Only the sheet asks, so a
-     * card's column is the column it always was - see [PossessionBall].
+     * Whether the feed says this side has the ball. The sheet's header asks it
+     * of both sides and so does the game card's, through the one shared rule
+     * (see [SportsDetailRules.possesses] and [PossessionBall]); the default is
+     * the quiet column, which is what any caller that has no possession to
+     * report gets.
      */
     possession: Boolean = false,
     modifier: Modifier = Modifier,

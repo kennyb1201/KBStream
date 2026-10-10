@@ -249,9 +249,24 @@ class SportsGameDetailSheetContractTest {
             "the marker is one drawn accent shape, not a glyph the platform colours",
             ball.contains("KBAccent") && !ball.contains("Text(")
         )
+        // The card used to be left out of this on purpose, and the field report
+        // of 2026-10-10 is why that changed: "i see where the ball and [what] yd
+        // on the matchup sheet but not who has ball, but the detail sheet has
+        // who has ball." The card's situation row names WHERE the ball is, never
+        // whose it is, so the card was the one surface asking the viewer to infer
+        // the possessor from the yardage. It now asks the same shared rule the
+        // sheet does, of both of its own sides.
+        val card = slice("private fun GameCard(", "private fun TeamColumn(")
+        assertTrue(
+            "the card asks the rule about each of its sides, exactly as the sheet's header does, " +
+                "so the ball beside the code means the same thing on both surfaces",
+            card.contains("possession = SportsDetailRules.possesses(game, game.away),") &&
+                card.contains("possession = SportsDetailRules.possesses(game, game.home),")
+        )
         assertFalse(
-            "and the card never asks for it: the marker belongs to the sheet alone",
-            slice("private fun GameCard(", "private fun TeamColumn(").contains("possession =")
+            "and it never invents one: the flag is the rule's answer, not a literal - a feed that " +
+                "named no possessor, and every upcoming or final card, resolves to neither side",
+            card.contains("possession = true")
         )
     }
 
