@@ -5097,6 +5097,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // record expires / is cleared when the DV mode changes, so Dolby
         // Vision can come back on its own.
         val deviceNativeDvSupported = DolbyVisionCompat.supportsNativeDolbyVision()
+        // Sink check: the box decoding Dolby Vision is not enough — the TV has
+        // to show it. A DV decoder only proves the box can decode; the platform
+        // does not reliably downconvert for a non-DV sink (field: a Fire TV
+        // Stick 4K Max on a non-DV TV plays native P8 as a black screen with
+        // audio). In Auto, native passthrough is therefore withheld unless the
+        // display reports DV too. Fail-open: a platform that reports no display
+        // capabilities returns true and keeps today's behavior.
+        val displaySupportsDv = DolbyVisionCompat.displaySupportsDolbyVision(this)
+        val dvDisplayMismatch = dvCompatMode == AppPreferences.DV_COMPAT_AUTO &&
+            deviceNativeDvSupported && !displaySupportsDv
         val dvPassthroughFailedAt = AppPreferences.getDvPassthroughFailedAt(this)
         val nativeDvSuppressed =
             dvCompatMode == AppPreferences.DV_COMPAT_AUTO &&
@@ -5104,7 +5114,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     failedAtMillis = dvPassthroughFailedAt,
                     nowMillis = System.currentTimeMillis()
                 )
-        val nativeDvSupported = deviceNativeDvSupported && !nativeDvSuppressed
+        val nativeDvSupported = deviceNativeDvSupported && !nativeDvSuppressed &&
+            (dvCompatMode != AppPreferences.DV_COMPAT_AUTO || displaySupportsDv)
         dvPassthroughActive = nativeDvSupported
         if (nativeDvSuppressed) {
             Log.i(
@@ -5127,7 +5138,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // DolbyVisionCompatExtractorsFactory. The P5 GLES color path below
         // therefore runs exactly while a P5 conversion does; it has no
         // switch of its own any more.
-        val convertP7To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO
+        // P7 → 8.1 still routes through the Dolby Vision pipeline (the rewritten
+        // codec keeps the dvhe/dvh1 family), which black-screens a non-DV
+        // display, so the conversion is gated on the sink too: with a non-DV TV
+        // the display check fails and P7 falls into the existing HDR10 strip
+        // path instead (unchanged code — see DolbyVisionCompatExtractorsFactory).
+        val convertP7To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO && displaySupportsDv
         val convertP5To81 = dvCompatMode == AppPreferences.DV_COMPAT_AUTO &&
             AppPreferences.getConvertP5To81(this)
         val convertTo81 = convertP7To81 || convertP5To81
@@ -5219,6 +5235,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 "allProfiles=$convertAllProfiles to81=$convertTo81 " +
                 "(p7=$convertP7To81 p5=$convertP5To81) stripHdr10Plus=$stripHdr10Plus " +
                 "nativeDv=$nativeDvSupported deviceNativeDv=$deviceNativeDvSupported " +
+                "displaySupportsDv=$displaySupportsDv " +
                 "audioDecoder=$audioDecoderPriority " +
                 "audioOutput=$audioOutputMode decodeToPcm=$decodeToPcm " +
                 "audioSeparate=${!currentAudioUrl.isNullOrBlank()}"
@@ -5258,7 +5275,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     dvRewriteEnabled = dvRewriteEnabled,
                     convertP7To81 = convertP7To81,
                     convertP5To81 = convertP5To81,
-                    nativeDvSupported = nativeDvSupported
+                    nativeDvSupported = nativeDvSupported,
+                    nonDvDisplayOnDvDevice = dvDisplayMismatch
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(cachedFactory, extractorsFactory)

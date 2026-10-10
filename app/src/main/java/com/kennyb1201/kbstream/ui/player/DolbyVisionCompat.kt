@@ -1,6 +1,9 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.content.Context
 import android.util.Log
+import android.view.Display
+import android.view.WindowManager
 import java.io.ByteArrayOutputStream
 
 /**
@@ -57,6 +60,14 @@ internal fun dvPassthroughSuppressed(
     nowMillis: Long
 ): Boolean = failedAtMillis > 0L &&
     (nowMillis - failedAtMillis) < DV_PASSTHROUGH_FAILURE_TTL_MS
+
+/**
+ * True when [types] names Dolby Vision among its supported HDR types. Null
+ * means the platform reported no capabilities at all, which fails OPEN to true
+ * so a device that says nothing keeps today's behavior.
+ */
+internal fun hdrTypesIncludeDv(types: IntArray?): Boolean =
+    types?.contains(Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION) ?: true
 
 internal object DolbyVisionCompat {
 
@@ -128,6 +139,26 @@ internal object DolbyVisionCompat {
      */
     fun supportsNativeDolbyVision(): Boolean =
         com.kennyb1201.kbstream.data.player.DolbyVisionCapability.supportsNativeDolbyVision
+
+    /**
+     * True when the attached display reports Dolby Vision in its HDR
+     * capabilities (HDMI EDID via [Display.getHdrCapabilities]).
+     *
+     * A DV decoder on the box does NOT imply a DV-capable TV: the platform's
+     * DV pipeline does not reliably downconvert for a non-DV sink, so a
+     * DV-capable box on a non-DV display plays native P8 as a black screen
+     * with audio (field: Fire TV Stick 4K Max -> non-DV TV). Auto mode uses
+     * this to withhold native DV passthrough unless the SINK can show it.
+     *
+     * Fail-open: a missing window manager or unknown/null capabilities return
+     * true, so a platform that reports nothing keeps today's behavior.
+     */
+    fun displaySupportsDolbyVision(context: Context): Boolean {
+        val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+            ?: return true
+        val hdrTypes = windowManager.defaultDisplay?.hdrCapabilities?.supportedHdrTypes
+        return hdrTypesIncludeDv(hdrTypes)
+    }
 
     /** Generic Main10@L5.1 HEVC identifier describing the stripped base layer. */
     const val HDR10_CODEC: String = "hvc1.2.4.L153.B0"

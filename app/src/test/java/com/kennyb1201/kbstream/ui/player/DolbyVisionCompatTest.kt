@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import android.view.Display
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -231,5 +232,92 @@ class DolbyVisionCompatTest {
                 alreadyStripped = false
             )
         )
+    }
+
+    // ── display probe (drives display-aware native DV) ────────────────────
+
+    @Test
+    fun `an unknown display capability fails open`() {
+        // No platform answer must keep today's behavior, not force a strip.
+        assertTrue(hdrTypesIncludeDv(null))
+    }
+
+    @Test
+    fun `a DV-capable display is recognised and a non-DV one is not`() {
+        assertTrue(
+            hdrTypesIncludeDv(
+                intArrayOf(
+                    Display.HdrCapabilities.HDR_TYPE_HDR10,
+                    Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION
+                )
+            )
+        )
+        assertTrue(
+            hdrTypesIncludeDv(intArrayOf(Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION))
+        )
+        // HDR10 alone is the Fire TV Stick -> non-DV TV case: no DV sink.
+        assertFalse(
+            hdrTypesIncludeDv(
+                intArrayOf(
+                    Display.HdrCapabilities.HDR_TYPE_HDR10,
+                    Display.HdrCapabilities.HDR_TYPE_HLG
+                )
+            )
+        )
+        assertFalse(hdrTypesIncludeDv(intArrayOf()))
+    }
+
+    // ── P4/P8 handling (drives the extractor's branch selection) ──────────
+
+    @Test
+    fun `a DV box on a DV display passes P4 P8 through untouched`() {
+        assertEquals(
+            Hdr10BaseHandling.PASSTHROUGH,
+            selectHdr10BaseHandling(
+                nativeDvSupported = true,
+                nonDvDisplayOnDvDevice = false,
+                convertAllProfiles = false
+            )
+        )
+    }
+
+    @Test
+    fun `a DV box on a non-DV display relabels without touching the bitstream`() {
+        assertEquals(
+            Hdr10BaseHandling.RELABEL_ONLY,
+            selectHdr10BaseHandling(
+                nativeDvSupported = false,
+                nonDvDisplayOnDvDevice = true,
+                convertAllProfiles = false
+            )
+        )
+    }
+
+    @Test
+    fun `a box without a DV decoder keeps the existing strip path`() {
+        assertEquals(
+            Hdr10BaseHandling.STRIP,
+            selectHdr10BaseHandling(
+                nativeDvSupported = false,
+                nonDvDisplayOnDvDevice = false,
+                convertAllProfiles = false
+            )
+        )
+    }
+
+    @Test
+    fun `Strip All always strips, whatever the box and display say`() {
+        listOf(false, true).forEach { native ->
+            listOf(false, true).forEach { mismatch ->
+                assertEquals(
+                    Hdr10BaseHandling.STRIP,
+                    selectHdr10BaseHandling(
+                        nativeDvSupported = native,
+                        nonDvDisplayOnDvDevice = mismatch,
+                        convertAllProfiles = true
+                    )
+                )
+            }
+        }
     }
 }

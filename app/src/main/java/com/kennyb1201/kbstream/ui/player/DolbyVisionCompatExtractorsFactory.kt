@@ -74,6 +74,40 @@ import java.io.EOFException
  * files the base layer already reaches the decoder clean and the codec rewrite
  * above is what fixes playback.
  */
+/**
+ * How a declared single-layer Dolby Vision profile with an HDR10 base layer
+ * (P4 / P8) is handled once the mode has decided to rewrite it.
+ *
+ * Extracted as a pure value so the whole matrix is pinned by a unit test
+ * without a player: the three paths are materially different, and the wrong
+ * one black-screens a non-DV TV (native passthrough), stalls an MTK-class
+ * decoder (strip), or fixes playback (relabel-only).
+ */
+internal enum class Hdr10BaseHandling { PASSTHROUGH, RELABEL_ONLY, STRIP }
+
+/**
+ * The P4/P8 handling for one stream.
+ *
+ *  - [Hdr10BaseHandling.PASSTHROUGH]: a DV-capable box on a DV-capable display
+ *    in Auto (or any mode that is not the explicit "Strip All") — the platform
+ *    DV pipeline shows the real thing.
+ *  - [Hdr10BaseHandling.RELABEL_ONLY]: a DV-capable box on a NON-DV display in
+ *    Auto. The platform pipeline black-screens the sink, and mutating the
+ *    bitstream is what stalls MTK-class decoders, so the base layer is
+ *    re-advertised as plain HEVC with every sample bit-exact.
+ *  - [Hdr10BaseHandling.STRIP]: no DV decoder on the box, or the explicit
+ *    "Strip All" override — strip the RPU/EL/HDR10+ NALs to HDR10 as before.
+ */
+internal fun selectHdr10BaseHandling(
+    nativeDvSupported: Boolean,
+    nonDvDisplayOnDvDevice: Boolean,
+    convertAllProfiles: Boolean,
+): Hdr10BaseHandling = when {
+    nativeDvSupported && !convertAllProfiles -> Hdr10BaseHandling.PASSTHROUGH
+    nonDvDisplayOnDvDevice && !convertAllProfiles -> Hdr10BaseHandling.RELABEL_ONLY
+    else -> Hdr10BaseHandling.STRIP
+}
+
 internal class DolbyVisionCompatExtractorsFactory(
     private val delegate: ExtractorsFactory,
     private val stripHdr10Plus: Boolean = false,
@@ -81,7 +115,14 @@ internal class DolbyVisionCompatExtractorsFactory(
     private val dvRewriteEnabled: Boolean = true,
     private val convertP7To81: Boolean = false,
     private val convertP5To81: Boolean = false,
-    private val nativeDvSupported: Boolean = false
+    private val nativeDvSupported: Boolean = false,
+    /**
+     * A DV-capable box driving a NON-DV display in Auto. Native passthrough
+     * black-screens such a sink, and a bitstream-mutating strip is what stalls
+     * MTK-class decoders, so P4/P8 take the relabel-only path instead (see
+     * [selectHdr10BaseHandling]).
+     */
+    private val nonDvDisplayOnDvDevice: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -118,11 +159,11 @@ internal class DolbyVisionCompatExtractorsFactory(
             "Wrapping extractor=$simpleName framing=$framing " +
                 "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
                 "stripHdr10Plus=$stripHdr10Plus convertP7To81=$convertP7To81 convertP5To81=$convertP5To81 " +
-                "nativeDv=$nativeDvSupported"
+                "nativeDv=$nativeDvSupported nonDvDisplay=$nonDvDisplayOnDvDevice"
         )
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-            convertP7To81, convertP5To81, nativeDvSupported
+            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
         )
     }
 }
@@ -139,7 +180,8 @@ private class VideoCompatExtractor(
     private val dvRewriteEnabled: Boolean,
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
-    private val nativeDvSupported: Boolean
+    private val nativeDvSupported: Boolean,
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -147,7 +189,7 @@ private class VideoCompatExtractor(
         delegate.init(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
             )
         )
     }
@@ -172,7 +214,8 @@ private class VideoCompatExtractorOutput(
     private val dvRewriteEnabled: Boolean,
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
-    private val nativeDvSupported: Boolean
+    private val nativeDvSupported: Boolean,
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -180,7 +223,7 @@ private class VideoCompatExtractorOutput(
         return if (type == C.TRACK_TYPE_VIDEO) {
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
             )
         } else {
             track
@@ -205,7 +248,8 @@ private class VideoCompatTrackOutput(
     private val dvRewriteEnabled: Boolean,
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
-    private val nativeDvSupported: Boolean
+    private val nativeDvSupported: Boolean,
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
@@ -373,7 +417,12 @@ private class VideoCompatTrackOutput(
                 DolbyVisionCompat.hdr10Codec(format.codecs, true)
             } else null
         if (rewriteCodec != null && hdr10BaseLayerProfile) {
-            if (nativeDvSupported && !convertAllProfiles) {
+            val handling = selectHdr10BaseHandling(
+                nativeDvSupported = nativeDvSupported,
+                nonDvDisplayOnDvDevice = nonDvDisplayOnDvDevice,
+                convertAllProfiles = convertAllProfiles
+            )
+            if (handling == Hdr10BaseHandling.PASSTHROUGH) {
                 Log.i(
                     "PLAYER_DV",
                     "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — device has a " +
@@ -382,6 +431,52 @@ private class VideoCompatTrackOutput(
                 )
                 mode = Mode.NORMAL
                 delegate.format(format)
+                return
+            }
+            if (handling == Hdr10BaseHandling.RELABEL_ONLY) {
+                // DV-decoder box, non-DV display (Auto): re-advertise the HDR10
+                // base layer as plain HEVC but leave every sample bit-exact. No
+                // VPS rewrite, no RPU/EL/HDR10+ NAL removal — mutating the
+                // stream is what stalls MTK-class decoders (field: Strip All =
+                // configure OK, zero frames), and native DV passthrough
+                // black-screens the non-DV TV. The base layer is standard HDR10;
+                // a compliant HEVC decoder ignores the in-band RPU NALs.
+                Log.i(
+                    "PLAYER_DV",
+                    "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
+                        "display: re-advertising as hvc1, samples untouched " +
+                        "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
+                )
+                val relabeled = runCatching {
+                    var builder = format.buildUpon().setCodecs(rewriteCodec)
+                    // Keep the declared DV codec on the label for badging.
+                    if (!format.codecs.isNullOrBlank()) {
+                        builder = builder.setLabel(format.codecs)
+                    }
+                    if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
+                        builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
+                    }
+                    // Init data deliberately untouched — no VPS/SPS rewrite.
+                    // Only the Format-level fields change, so every sample stays
+                    // bit-exact. Explicit HDR10 color metadata on the negotiated
+                    // MediaFormat: without KEY_COLOR_TRANSFER / STANDARD / RANGE,
+                    // MTK-class OMX decoders can accept 10-bit input and never
+                    // emit an output frame.
+                    builder.build().buildUpon().setColorInfo(hdr10ColorInfo).build()
+                }
+                val relabeledFormat = relabeled.getOrNull()
+                if (relabeledFormat != null) {
+                    delegate.format(relabeledFormat)
+                    mode = Mode.NORMAL // samples pass through bit-exact; no NAL stripping
+                } else {
+                    Log.w(
+                        "PLAYER_DV",
+                        "DV relabel rewrite failed — playing unchanged",
+                        relabeled.exceptionOrNull()
+                    )
+                    mode = Mode.NORMAL
+                    delegate.format(format)
+                }
                 return
             }
             Log.i(
