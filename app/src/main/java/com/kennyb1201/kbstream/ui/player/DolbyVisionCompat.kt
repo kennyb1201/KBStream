@@ -289,6 +289,116 @@ internal object DolbyVisionCompat {
     // code 0x003C, provider-orientation 0x0001, application id 0x04.
     private val HDR10_PLUS_MARKER = intArrayOf(0xB5, 0x00, 0x3C, 0x00, 0x01, 0x04)
 
+    /** [stripHdr10PlusMessagesInPlace]: no HDR10+ message, the NAL is bit-exact. */
+    private const val SEI_STRIP_UNTOUCHED = -1
+
+    /** [stripHdr10PlusMessagesInPlace]: every message was HDR10+, so drop the NAL. */
+    private const val SEI_STRIP_DROP = -2
+
+    /**
+     * Surgically removes the HDR10+ (ST 2094-40) SEI message(s) from one SEI
+     * NAL's payload, keeping the NAL itself and every other message in it.
+     *
+     * The failure this fixes is about the *granularity* of removal, not the
+     * detector. `seiCarriesHdr10Plus` reports that a NAL carries an HDR10+
+     * message; dropping the whole NAL therefore also drops every other message
+     * sharing it. Field 2026-10-10 (AFTKRT, MULTi dvhe.08.06): the 39:69
+     * prefix-SEI NAL was dropped whole as "HDR10+" and playback stalled with
+     * the RPU-removal signature — the NAL carried data the decoder needs
+     * alongside the HDR10+ message. Only a matching message may go.
+     *
+     * [from] and [to] bound the SEI payload (the RBSP after the 2-byte NAL
+     * header). Kept messages are copied verbatim to [dest], which the caller
+     * has positioned at or before [from] so the compaction is in place and
+     * leftward, like the surrounding strip. The `rbsp_trailing_bits` byte that
+     * closes the RBSP is preserved whenever a message remains.
+     *
+     * Returns [SEI_STRIP_UNTOUCHED] when the NAL carries no HDR10+ message (it
+     * must be forwarded bit-exact), [SEI_STRIP_DROP] when every message was
+     * HDR10+ and nothing is left to keep, or the number of payload bytes
+     * written to [dest]. A malformed message (truncated varint, payload
+     * overrun) fails open as [SEI_STRIP_UNTOUCHED], so a parse quirk can never
+     * delete a NAL the decoder needs.
+     */
+    private fun stripHdr10PlusMessagesInPlace(
+        buf: ByteArray,
+        from: Int,
+        to: Int,
+        dest: Int
+    ): Int {
+        if (from >= to) return SEI_STRIP_UNTOUCHED
+        // Pass 1 validates the whole message sequence and decides, without
+        // touching the buffer: a malformed message after an already-compacted
+        // HDR10+ one cannot be undone, so nothing is written until the tail is
+        // known to parse.
+        var pos = from
+        var found = false
+        var kept = 0
+        while (pos < to) {
+            // A lone final 0x80 is rbsp_trailing_bits, not a message header.
+            if (pos + 1 == to && (buf[pos].toInt() and 0xFF) == 0x80) break
+            var payloadType = 0
+            var b: Int
+            do {
+                if (pos >= to) return SEI_STRIP_UNTOUCHED
+                b = buf[pos].toInt() and 0xFF
+                payloadType += b
+                pos++
+            } while (b == 0xFF)
+            var payloadSize = 0
+            do {
+                if (pos >= to) return SEI_STRIP_UNTOUCHED
+                b = buf[pos].toInt() and 0xFF
+                payloadSize += b
+                pos++
+            } while (b == 0xFF)
+            if (payloadSize > to - pos) return SEI_STRIP_UNTOUCHED
+            if (payloadType == 4 && containsHdr10PlusMarker(buf, pos, pos + payloadSize)) {
+                found = true
+            } else {
+                kept++
+            }
+            pos += payloadSize
+        }
+        if (!found) return SEI_STRIP_UNTOUCHED
+        if (kept == 0) return SEI_STRIP_DROP
+        // Pass 2: the sequence is known to parse, so copy the kept messages
+        // (and the trailing bits) down over the removed ones.
+        pos = from
+        var dst = dest
+        while (pos < to) {
+            if (pos + 1 == to && (buf[pos].toInt() and 0xFF) == 0x80) break
+            val start = pos
+            var b: Int
+            var payloadType = 0
+            do {
+                b = buf[pos].toInt() and 0xFF
+                payloadType += b
+                pos++
+            } while (b == 0xFF)
+            var payloadSize = 0
+            do {
+                b = buf[pos].toInt() and 0xFF
+                payloadSize += b
+                pos++
+            } while (b == 0xFF)
+            val payloadStart = pos
+            pos += payloadSize
+            val isHdr10Plus = payloadType == 4 &&
+                containsHdr10PlusMarker(buf, payloadStart, payloadStart + payloadSize)
+            if (!isHdr10Plus) {
+                val len = pos - start
+                if (dst != start) System.arraycopy(buf, start, buf, dst, len)
+                dst += len
+            }
+        }
+        if (pos < to) {
+            if (dst != pos) System.arraycopy(buf, pos, buf, dst, to - pos)
+            dst += to - pos
+        }
+        return dst - dest
+    }
+
     /**
      * The plain-HEVC rewrite target for a declared DV codec, or null when the
      * track must be left untouched.
@@ -350,7 +460,19 @@ internal object DolbyVisionCompat {
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) &&
                     seiCarriesHdr10Plus(buf, header + 2, nalEnd)
                 ) {
-                    keep = false
+                    // Surgical removal: only the HDR10+ messages go, the SEI NAL
+                    // and every other message in it stay (see the field case in
+                    // stripHdr10PlusMessagesInPlace).
+                    val dest = write + codeLen + 2
+                    if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
+                    when (val res = stripHdr10PlusMessagesInPlace(buf, header + 2, nalEnd, dest)) {
+                        SEI_STRIP_UNTOUCHED -> Unit
+                        SEI_STRIP_DROP -> keep = false
+                        else -> {
+                            write += codeLen + 2 + res
+                            keep = false
+                        }
+                    }
                 }
             }
             if (keep) {
@@ -404,10 +526,20 @@ internal object DolbyVisionCompat {
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
-                if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) &&
-                    nal >= 4 && seiCarriesHdr10Plus(buf, payload + 2, payload + nal)
+                if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) && nal >= 4 &&
+                    seiCarriesHdr10Plus(buf, payload + 2, payload + nal)
                 ) {
-                    keep = false
+                    val dest = write + fieldLen + 2
+                    if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                    when (val res = stripHdr10PlusMessagesInPlace(buf, payload + 2, payload + nal, dest)) {
+                        SEI_STRIP_UNTOUCHED -> Unit
+                        SEI_STRIP_DROP -> keep = false
+                        else -> {
+                            writeLength(buf, write, res + 2, fieldLen)
+                            write += fieldLen + 2 + res
+                            keep = false
+                        }
+                    }
                 }
             }
             if (keep) {
@@ -1426,9 +1558,24 @@ internal object DolbyVisionCompat {
                     }
                     isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
                         seiCarriesHdr10Plus(buf, header + 2, nalEnd) -> {
-                        keep = false
-                        changed = true
-                        if (stats != null) stats.hdr10PlusBytes += nalBytes
+                        val dest = write + codeLen + 2
+                        if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
+                        when (val res = stripHdr10PlusMessagesInPlace(
+                            buf, header + 2, nalEnd, dest
+                        )) {
+                            SEI_STRIP_UNTOUCHED -> Unit
+                            SEI_STRIP_DROP -> {
+                                keep = false
+                                changed = true
+                                if (stats != null) stats.hdr10PlusBytes += nalBytes
+                            }
+                            else -> {
+                                changed = true
+                                write += codeLen + 2 + res
+                                keep = false
+                                if (stats != null) stats.hdr10PlusBytes += (nalBytes - 2) - res
+                            }
+                        }
                     }
                 }
             }
@@ -1517,11 +1664,27 @@ internal object DolbyVisionCompat {
                         changed = true
                         if (stats != null) stats.elBytes += nal
                     }
-                    isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
-                        nal >= 4 && seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
-                        keep = false
-                        changed = true
-                        if (stats != null) stats.hdr10PlusBytes += nal
+                    isHdr10PlusSeiNal(nalType) && stripHdr10Plus && nal >= 4 &&
+                        seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
+                        val dest = write + fieldLen + 2
+                        if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                        when (val res = stripHdr10PlusMessagesInPlace(
+                            buf, payload + 2, payload + nal, dest
+                        )) {
+                            SEI_STRIP_UNTOUCHED -> Unit
+                            SEI_STRIP_DROP -> {
+                                keep = false
+                                changed = true
+                                if (stats != null) stats.hdr10PlusBytes += nal
+                            }
+                            else -> {
+                                changed = true
+                                writeLength(buf, write, res + 2, fieldLen)
+                                write += fieldLen + 2 + res
+                                keep = false
+                                if (stats != null) stats.hdr10PlusBytes += (nal - 2) - res
+                            }
+                        }
                     }
                 }
             }
@@ -2378,9 +2541,24 @@ internal object DolbyVisionCompat {
                     }
                     isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
                         seiCarriesHdr10Plus(buf, header + 2, nalEnd) -> {
-                        keep = false
-                        changed = true
-                        if (stats != null) stats.hdr10PlusBytes += nalBytes
+                        val dest = write + codeLen + 2
+                        if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
+                        when (val res = stripHdr10PlusMessagesInPlace(
+                            buf, header + 2, nalEnd, dest
+                        )) {
+                            SEI_STRIP_UNTOUCHED -> Unit
+                            SEI_STRIP_DROP -> {
+                                keep = false
+                                changed = true
+                                if (stats != null) stats.hdr10PlusBytes += nalBytes
+                            }
+                            else -> {
+                                changed = true
+                                write += codeLen + 2 + res
+                                keep = false
+                                if (stats != null) stats.hdr10PlusBytes += (nalBytes - 2) - res
+                            }
+                        }
                     }
                 }
             }
@@ -2476,11 +2654,27 @@ internal object DolbyVisionCompat {
                         changed = true
                         if (stats != null) stats.elBytes += nal
                     }
-                    isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
-                        nal >= 4 && seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
-                        keep = false
-                        changed = true
-                        if (stats != null) stats.hdr10PlusBytes += nal
+                    isHdr10PlusSeiNal(nalType) && stripHdr10Plus && nal >= 4 &&
+                        seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
+                        val dest = write + fieldLen + 2
+                        if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                        when (val res = stripHdr10PlusMessagesInPlace(
+                            buf, payload + 2, payload + nal, dest
+                        )) {
+                            SEI_STRIP_UNTOUCHED -> Unit
+                            SEI_STRIP_DROP -> {
+                                keep = false
+                                changed = true
+                                if (stats != null) stats.hdr10PlusBytes += nal
+                            }
+                            else -> {
+                                changed = true
+                                writeLength(buf, write, res + 2, fieldLen)
+                                write += fieldLen + 2 + res
+                                keep = false
+                                if (stats != null) stats.hdr10PlusBytes += (nal - 2) - res
+                            }
+                        }
                     }
                 }
             }

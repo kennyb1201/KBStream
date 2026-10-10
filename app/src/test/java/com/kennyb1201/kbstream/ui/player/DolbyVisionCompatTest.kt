@@ -458,6 +458,157 @@ class DolbyVisionCompatTest {
         )
     }
 
+    // ── Surgical removal: only the HDR10+ MESSAGE goes ───────────────
+    //
+    // Field 2026-10-10 (AFTKRT, MULTi dvhe.08.06): the 39:69 prefix-SEI NAL was
+    // dropped whole as "HDR10+" and playback stalled with the RPU-removal
+    // signature. The NAL carried more than the HDR10+ message — data the
+    // decoder needs alongside it — so the granularity of removal was wrong, not
+    // the detector. Only a matching SEI message may go; the NAL and every other
+    // message in it must survive, and a NAL with no HDR10+ message must be
+    // forwarded bit-exact.
+
+    /** A user-data-registered-ITU-T-T35 (payloadType 4) SEI message carrying [payload]. */
+    private fun t35Message(payload: ByteArray): ByteArray =
+        byteArrayOf(0x04, payload.size.toByte()) + payload
+
+    /** A user_data_unregistered (payloadType 5) SEI message carrying [payload]. */
+    private fun unregisteredMessage(payload: ByteArray): ByteArray =
+        byteArrayOf(0x05, payload.size.toByte()) + payload
+
+    /** A length-delimited (MP4/fMP4) NAL with a 4-byte length prefix. */
+    private fun ldNal(type: Int, payload: ByteArray): ByteArray {
+        val body = byteArrayOf(((type shl 1) and 0x7E).toByte(), 0x01) + payload
+        val len = body.size
+        return byteArrayOf(
+            ((len ushr 24) and 0xFF).toByte(),
+            ((len ushr 16) and 0xFF).toByte(),
+            ((len ushr 8) and 0xFF).toByte(),
+            (len and 0xFF).toByte()
+        ) + body
+    }
+
+    @Test
+    fun `a shared SEI NAL keeps its other message and drops only the HDR10 plus one`() {
+        val hdr10 = t35Message(HDR10_PLUS_HEADER)
+        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val sei = nal(39, hdr10 + other + byteArrayOf(0x80.toByte()))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = sei + vcl
+        val buf = au.copyOf()
+
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = false, stripHdr10Plus = true
+        )
+
+        assertTrue("the HDR10+ message must have been removed", newLen >= 0)
+        // The NAL survives, shrunk to the kept message plus its trailing bits.
+        val expectedSei = nal(39, other + byteArrayOf(0x80.toByte()))
+        assertArrayEquals(
+            "the NAL and the non-HDR10+ message must be byte-identical",
+            expectedSei + vcl,
+            buf.copyOf(newLen)
+        )
+    }
+
+    @Test
+    fun `a SEI with no HDR10 plus message passes through bit-exact`() {
+        val sei = nal(
+            39,
+            unregisteredMessage(byteArrayOf(0x11, 0x22)) + byteArrayOf(0x80.toByte())
+        )
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = sei + vcl
+        val buf = au.copyOf()
+
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = false, stripHdr10Plus = true
+        )
+
+        assertEquals("nothing to strip, so nothing may change", -1, newLen)
+        assertArrayEquals("the sample must be untouched", au, buf)
+    }
+
+    @Test
+    fun `a malformed SEI is forwarded untouched`() {
+        // A payload type with no size byte (truncated varint) and a size that
+        // overruns the NAL payload must both fail open: a parse quirk may never
+        // delete or rewrite a NAL.
+        val truncated = nal(39, byteArrayOf(0x04))
+        val overrun = nal(39, byteArrayOf(0x04, 0x10, 0x00))
+        listOf(truncated, overrun).forEachIndexed { i, sei ->
+            val vcl = nal(19, byteArrayOf(0x55, 0x66))
+            val au = sei + vcl
+            val buf = au.copyOf()
+            val newLen = DolbyVisionCompat.stripAnnexB(
+                buf, au.size, stripDv = false, stripHdr10Plus = true
+            )
+            assertEquals("case $i must be untouched", -1, newLen)
+            assertArrayEquals("case $i must be bit-exact", au, buf)
+        }
+    }
+
+    @Test
+    fun `the length-delimited path strips only the HDR10 plus message`() {
+        val hdr10 = t35Message(HDR10_PLUS_HEADER)
+        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val sei = ldNal(39, hdr10 + other + byteArrayOf(0x80.toByte()))
+        val vcl = ldNal(19, byteArrayOf(0x55, 0x66))
+        val sample = sei + vcl
+        val buf = sample.copyOf()
+
+        val newLen = DolbyVisionCompat.stripLengthDelimited(
+            buf, sample.size, 4, stripDv = false, stripHdr10Plus = true
+        )
+
+        assertTrue("the HDR10+ message must have been removed", newLen >= 0)
+        val expected = ldNal(39, other + byteArrayOf(0x80.toByte())) + vcl
+        assertArrayEquals(
+            "the NAL and the non-HDR10+ message must be byte-identical",
+            expected,
+            buf.copyOf(newLen)
+        )
+    }
+
+    @Test
+    fun `the length-delimited path drops a NAL whose only message is HDR10 plus`() {
+        val sei = ldNal(39, t35Message(HDR10_PLUS_HEADER))
+        val vcl = ldNal(19, byteArrayOf(0x55, 0x66))
+        val sample = sei + vcl
+        val buf = sample.copyOf()
+
+        val newLen = DolbyVisionCompat.stripLengthDelimited(
+            buf, sample.size, 4, stripDv = false, stripHdr10Plus = true
+        )
+
+        assertEquals("the whole SEI NAL must go", vcl.size, newLen)
+        assertArrayEquals("only the VCL NAL remains", vcl, buf.copyOf(newLen))
+    }
+
+    @Test
+    fun `the mutating strip keeps a shared SEI NAL and removes only the HDR10 plus message`() {
+        // The Strip All / no-DV-decoder path has the same bug and must go
+        // through the same surgical removal, not drop the whole NAL.
+        val hdr10 = t35Message(HDR10_PLUS_HEADER)
+        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val sei = nal(39, hdr10 + other + byteArrayOf(0x80.toByte()))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = sei + vcl
+        val buf = au.copyOf()
+
+        val newLen = DolbyVisionCompat.transformAnnexB(
+            buf, au.size, stripHdr10Plus = true, stats = null
+        )
+
+        assertTrue("the HDR10+ message must have been removed", newLen >= 0)
+        val expected = nal(39, other + byteArrayOf(0x80.toByte())) + vcl
+        assertArrayEquals(
+            "the NAL and the non-HDR10+ message must be byte-identical",
+            expected,
+            buf.copyOf(newLen)
+        )
+    }
+
     // ── relabel construction hardening (the 2026-10-10 fallback) ──────────
     //
     // The relabel that re-advertises P4/P8 as plain HEVC is built in two steps:
