@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.sports
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -159,6 +160,42 @@ class SportsLiveCardStabilityContractTest {
         assertTrue(
             "and no transition is composed at all in that state, so a paused beat costs no frames",
             pulse.indexOf("return held") < pulse.indexOf("rememberInfiniteTransition(")
+        )
+    }
+
+    @Test
+    fun `the pulse is a State the section shares, held at full strength off-clock`() {
+        val pulse = slice("private fun rememberLivePulse(", "private fun LiveDot(")
+        assertTrue(
+            "the clock is handed around as a State, never as a plain per-frame Float",
+            pulse.contains("private fun rememberLivePulse(pulseEnabled: Boolean = true): State<Float>")
+        )
+        assertTrue(
+            "reduced motion (and a paused beat) return a non-updating state held at exactly full strength",
+            pulse.contains("val held = remember { mutableStateOf(1f) }")
+        )
+    }
+
+    @Test
+    fun `no pulse value is read outside the dot`() {
+        // The whole point of the State: exactly one read, in the 9dp dot. A read
+        // one level up rebuilt every live card on the slate ~60 times a second,
+        // and the focused card's animated focus zoom never settled under that
+        // recomposition storm - the shiver the field reported, which is why the
+        // v1 slot reservations alone did not fix the bobbing.
+        assertFalse(
+            "the clock's value must never be read by a card or a status line",
+            hub.contains("livePulse.value")
+        )
+        assertEquals(
+            "exactly one read site in the whole section",
+            1,
+            Regex("pulse\\.value").findAll(hub).count()
+        )
+        assertTrue(
+            "and it is the dot's own",
+            slice("private fun LiveDot(", "private fun BroadcastChip(")
+                .contains("val alpha = pulse.value")
         )
     }
 
