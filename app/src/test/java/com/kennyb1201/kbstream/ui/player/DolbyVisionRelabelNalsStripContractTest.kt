@@ -7,11 +7,12 @@ import org.junit.Test
 
 /**
  * The relabel-only experiment (DV-decoder box, non-DV display, Auto) must strip
- * the DV RPU/EL and HDR10+ SEI NALs in place while NEVER rewriting the
- * VPS/SPS/PPS — neither the init data nor in-sample. That isolation is the
+ * the HDR10+ SEI in place while NEVER rewriting the VPS/SPS/PPS — neither the
+ * init data nor in-sample — and while KEEPING the DV RPU. That isolation is the
  * experiment's load-bearing property: `transformAnnexB` rewrites the VPS
- * in-sample, and routing through it would void the result (the field stall was
- * blamed on the parameter-set rewrite, not the NAL removal).
+ * in-sample and would void the result, and dropping the RPU from a DV-flagged
+ * track is what stalled the decoder (keep-RPU/strip-HDR10+ is the surviving
+ * combination).
  *
  * The branch lives inside a private `TrackOutput`, so this reads the source and
  * pins the wiring — the same pattern the other source-contract tests use.
@@ -82,11 +83,15 @@ class DolbyVisionRelabelNalsStripContractTest {
         assertTrue("the STRIP_NALS_ONLY handler end not found", end > start)
         val handler = source.substring(start, end)
         assertTrue(
-            "the handler must drop DV metadata",
+            "the handler must KEEP the DV RPU so the decoder does not stall",
+            handler.contains("stripDv = false")
+        )
+        assertFalse(
+            "the handler must not drop the DV metadata",
             handler.contains("stripDv = true")
         )
         assertTrue(
-            "the handler must drop HDR10+ SEI (the stream is presented as static HDR10)",
+            "the handler must drop the HDR10+ SEI (the stream is presented as static HDR10)",
             handler.contains("stripHdr10Plus = true")
         )
         assertFalse(

@@ -94,9 +94,9 @@ internal enum class Hdr10BaseHandling { PASSTHROUGH, RELABEL_ONLY, STRIP }
  *  - [Hdr10BaseHandling.RELABEL_ONLY]: a DV-capable box on a NON-DV display in
  *    Auto. The platform pipeline black-screens the sink, and rewriting the
  *    VPS/SPS is what stalls MTK-class decoders, so the base layer is
- *    re-advertised as plain HEVC and only the in-band metadata NALs (DV
- *    RPU/EL + HDR10+ SEI) are removed in place — the parameter sets are never
- *    touched (see `Mode.STRIP_NALS_ONLY`).
+ *    re-advertised as plain HEVC and only the HDR10+ SEI is removed in place —
+ *    the DV RPU/EL is kept (dropping it stalled the decoder) and the parameter
+ *    sets are never touched (see `Mode.STRIP_NALS_ONLY`).
  *  - [Hdr10BaseHandling.STRIP]: no DV decoder on the box, or the explicit
  *    "Strip All" override — strip the RPU/EL/HDR10+ NALs to HDR10 as before.
  */
@@ -437,8 +437,8 @@ private class VideoCompatTrackOutput(
             }
             if (handling == Hdr10BaseHandling.RELABEL_ONLY) {
                 // DV-decoder box, non-DV display (Auto): re-advertise the HDR10
-                // base layer as plain HEVC and strip only the metadata NALs
-                // (DV RPU/EL + HDR10+ SEI) in place — never rewrite the
+                // base layer as plain HEVC and strip only the HDR10+ SEI in
+                // place — the DV RPU/EL is kept — never rewrite the
                 // VPS/SPS/PPS, neither the init data nor in-sample. Mutating the
                 // parameter sets is what stalls MTK-class decoders (field: Strip
                 // All = configure OK, zero frames); leaving the in-band DV RPU /
@@ -782,18 +782,20 @@ private class VideoCompatTrackOutput(
             val inventory =
                 if (!stripReported) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
             // Pure removal — stripAnnexB/stripLengthDelimited never rewrite
-            // parameter sets. HDR10+ goes unconditionally: the stream is
-            // presented as static HDR10, and this file carries both DV RPU
-            // and HDR10+ SEI.
+            // parameter sets. The RPU/EL is KEPT (stripDv = false): dropping
+            // it left a DV-flagged track with no DV metadata, and the decoder
+            // stalled. Only the HDR10+ SEI goes, on the theory that the
+            // competing dynamic-metadata set is what black-screened a
+            // (intolerant) non-DV display.
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
-                        pendingBuf, sampleEnd, stripDv = true, stripHdr10Plus = true
+                        pendingBuf, sampleEnd, stripDv = false, stripHdr10Plus = true
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
-                        stripDv = true, stripHdr10Plus = true
+                        stripDv = false, stripHdr10Plus = true
                     )
             }
             if (!stripReported) {
