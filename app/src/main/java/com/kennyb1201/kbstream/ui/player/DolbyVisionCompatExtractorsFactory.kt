@@ -257,21 +257,9 @@ private class VideoCompatTrackOutput(
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
     private val convertTo81 = convertP7To81 || convertP5To81
 
-    // HDR10 color metadata (ST.2084 PQ / BT.2020, 10-bit) injected on every
-    // DV->HDR10 rewrite path below. Declared DV tracks don't reliably carry a
-    // populated Format.colorInfo through the wrapping extractor chain, and
-    // without KEY_COLOR_TRANSFER/STANDARD/RANGE on the negotiated MediaFormat,
-    // some hardware decoders (MTK-class OMX components in particular) accept
-    // 10-bit input samples but never emit an output frame — black screen with
-    // audio still playing, indistinguishable from the VPS-stall failure this
-    // file already guards against. Every rewrite branch must attach this.
-    private val hdr10ColorInfo = ColorInfo.Builder()
-        .setColorTransfer(C.COLOR_TRANSFER_ST2084)
-        .setColorSpace(C.COLOR_SPACE_BT2020)
-        .setColorRange(C.COLOR_RANGE_LIMITED)
-        .setLumaBitdepth(10)
-        .setChromaBitdepth(10)
-        .build()
+    // The HDR10 color metadata every DV->HDR10 rewrite path below attaches —
+    // see [DV_HDR10_COLOR_INFO] for why it is not optional.
+    private val hdr10ColorInfo = DV_HDR10_COLOR_INFO
 
     private enum class Mode { NORMAL, SNIFFING, STRIPPING, STRIP_NALS_ONLY }
 
@@ -447,41 +435,59 @@ private class VideoCompatTrackOutput(
                 // frames (black screen with audio). The base layer is standard
                 // HDR10; Mode.STRIP_NALS_ONLY isolates this experiment from
                 // transformAnnexB, which rewrites the VPS in-sample.
-                Log.i(
-                    "PLAYER_DV",
-                    "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
-                        "display: re-advertising as hvc1, samples: metadata NALs stripped, " +
-                        "VPS/SPS untouched (nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
-                )
-                val relabeled = runCatching {
-                    var builder = format.buildUpon().setCodecs(rewriteCodec)
-                    // Keep the declared DV codec on the label for badging.
-                    if (!format.codecs.isNullOrBlank()) {
-                        builder = builder.setLabel(format.codecs)
-                    }
-                    if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
-                        builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
-                    }
-                    // Init data deliberately untouched — no VPS/SPS rewrite.
-                    // Only the Format-level fields change, so every sample stays
-                    // bit-exact. Explicit HDR10 color metadata on the negotiated
-                    // MediaFormat: without KEY_COLOR_TRANSFER / STANDARD / RANGE,
-                    // MTK-class OMX decoders can accept 10-bit input and never
-                    // emit an output frame.
-                    builder.build().buildUpon().setColorInfo(hdr10ColorInfo).build()
-                }
-                val relabeledFormat = relabeled.getOrNull()
-                if (relabeledFormat != null) {
-                    delegate.format(relabeledFormat)
+                // The construction is stepwise: the full relabel (declared codec
+                // on the label + HDR10 color info) first, then a minimal
+                // codecs+mime-only relabel if that throws. A single construction
+                // failure is not hypothetical — a 2026-10-10 field capture
+                // (dvhe.08.10, AFTKRT) had it throw and fall back to native DV,
+                // which black-screened with per-frame "Resolution change" spam.
+                // Shipping the minimal relabel both recovers the working path and
+                // identifies which step threw. The success log is emitted only
+                // AFTER the build, so it can never announce a relabel that did
+                // not happen.
+                val relabeled = relabelDvFormat(format, rewriteCodec)
+                if (relabeled != null) {
+                    Log.i(
+                        "PLAYER_DV",
+                        "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
+                            "display: re-advertising as hvc1 " +
+                            "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
+                            "stripped, RPU kept, VPS/SPS untouched " +
+                            "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
+                    )
+                    delegate.format(relabeled.format)
                     // Bit-exact relabel plus in-place metadata NAL removal:
                     // VPS/SPS/PPS are never rewritten (see Mode.STRIP_NALS_ONLY).
                     mode = Mode.STRIP_NALS_ONLY
                 } else {
-                    Log.w(
+                    mode = Mode.NORMAL
+                    delegate.format(format)
+                }
+                return
+            }
+            if (hdr10BaseLayerProfile && nativeDvSupported) {
+                // DV-decoder hardware: the mutating strip (VPS rewrite + RPU
+                // removal) is field-dead here — zero-frame stall, proven twice.
+                // P4/P8 take the working path instead: relabel to hvc1/HDR10,
+                // strip HDR10+ SEI only, keep the RPU, leave VPS/SPS/PPS
+                // untouched. Same relabel the Auto non-DV-display branch above
+                // uses; this is where "Strip All" — and the 0x80001000 rescue,
+                // which forces Strip All for the session — lands on such a box.
+                // Boxes WITHOUT a DV decoder keep the mutating strip below: it
+                // is the tested working path there, so it is left alone.
+                val relabeled = relabelDvFormat(format, rewriteCodec)
+                if (relabeled != null) {
+                    Log.i(
                         "PLAYER_DV",
-                        "DV relabel rewrite failed — playing unchanged",
-                        relabeled.exceptionOrNull()
+                        "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV-decoder " +
+                            "hardware: re-advertising as hvc1 " +
+                            "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
+                            "stripped, RPU kept, VPS/SPS untouched " +
+                            "(the mutating strip is field-dead here)"
                     )
+                    delegate.format(relabeled.format)
+                    mode = Mode.STRIP_NALS_ONLY
+                } else {
                     mode = Mode.NORMAL
                     delegate.format(format)
                 }
@@ -802,7 +808,7 @@ private class VideoCompatTrackOutput(
                 stripReported = true
                 Log.i(
                     "PLAYER_DV",
-                    "Relabel NALS-strip: first sample metadata dropped " +
+                    "Relabel NALS-strip: first sample HDR10+ SEI dropped " +
                         "(codecs=${currentCodecs ?: "?"}) nals=$inventory"
                 )
             }
@@ -917,4 +923,112 @@ private class VideoCompatTrackOutput(
         private val PLAIN_HEVC_CODEC = Regex("(?i)^(hvc1|hev1)\\.")
         private const val SNIFF_BUDGET_SAMPLES = 24
     }
+}
+
+/**
+ * HDR10 color metadata (ST.2084 PQ / BT.2020, 10-bit) for every DV→HDR10 and
+ * relabel path in this file.
+ *
+ * Declared DV tracks don't reliably carry a populated Format.colorInfo through
+ * the wrapping extractor chain, and without KEY_COLOR_TRANSFER / STANDARD /
+ * RANGE on the negotiated MediaFormat, some hardware decoders (MTK-class OMX
+ * components in particular) accept 10-bit input samples but never emit an
+ * output frame — black screen with audio still playing, indistinguishable from
+ * the VPS-stall failure this file already guards against. Every rewrite branch
+ * attaches it; the minimal relabel fallback knowingly ships without it, because
+ * a degraded relabel still beats a native-DV black screen.
+ */
+internal val DV_HDR10_COLOR_INFO: ColorInfo = ColorInfo.Builder()
+    .setColorTransfer(C.COLOR_TRANSFER_ST2084)
+    .setColorSpace(C.COLOR_SPACE_BT2020)
+    .setColorRange(C.COLOR_RANGE_LIMITED)
+    .setLumaBitdepth(10)
+    .setChromaBitdepth(10)
+    .build()
+
+/** Which relabel attempt produced the format a session will play. */
+internal enum class RelabelAttempt { FULL, MINIMAL }
+
+/** A relabeled format plus the attempt that built it, for the success log. */
+internal class RelabelOutcome(val format: Format, val attempt: RelabelAttempt)
+
+/**
+ * The minimal relabel: codec string and mime only — no badging label, no color
+ * metadata. It is the fallback when the full relabel's construction throws, so
+ * a degraded relabel still ships instead of falling back to native Dolby Vision
+ * (which black-screens a non-DV sink).
+ */
+internal fun relabelDvMinimal(format: Format, rewriteCodec: String): Format {
+    val builder = format.buildUpon().setCodecs(rewriteCodec)
+    if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
+        builder.setSampleMimeType(MimeTypes.VIDEO_H265)
+    }
+    return builder.build()
+}
+
+/**
+ * The full relabel: the same codecs/mime as [relabelDvMinimal], plus the
+ * declared DV codec kept on the label (so the UI can still badge the source
+ * profile) and [DV_HDR10_COLOR_INFO] attached. Init data / VPS-SPS-PPS are
+ * never touched, so every sample stays bit-exact.
+ *
+ * [applyColorInfo] is the color-info step, injectable so a unit test can drive
+ * the throwing path this hardening exists for.
+ */
+internal fun relabelDvFull(
+    format: Format,
+    rewriteCodec: String,
+    applyColorInfo: (Format.Builder) -> Format.Builder = { it.setColorInfo(DV_HDR10_COLOR_INFO) }
+): Format {
+    var builder = format.buildUpon().setCodecs(rewriteCodec)
+    // Keep the declared DV codec on the label for badging.
+    if (!format.codecs.isNullOrBlank()) {
+        builder = builder.setLabel(format.codecs)
+    }
+    if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
+        builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
+    }
+    return applyColorInfo(builder.build().buildUpon()).build()
+}
+
+/**
+ * Relabels a declared P4/P8 track as plain HEVC, stepwise.
+ *
+ * [relabelDvFull] first; if its construction throws, [relabelDvMinimal] is
+ * retried, which both recovers the working relabel and identifies the throwing
+ * step by which attempt succeeds. If both throw, nothing is relabeled and the
+ * caller plays the stream unchanged — a relabel failure must never fail the
+ * load.
+ *
+ * @return the relabeled format and the attempt that produced it, or null when
+ * both attempts threw.
+ */
+internal fun relabelDvFormat(
+    format: Format,
+    rewriteCodec: String,
+    applyColorInfo: (Format.Builder) -> Format.Builder = { it.setColorInfo(DV_HDR10_COLOR_INFO) },
+    minimal: (Format, String) -> Format = { f, codec -> relabelDvMinimal(f, codec) },
+    warn: (String, Throwable) -> Unit = { message, cause -> Log.w("PLAYER_DV", message, cause) }
+): RelabelOutcome? {
+    val full = runCatching { relabelDvFull(format, rewriteCodec, applyColorInfo) }
+    if (full.isSuccess) return RelabelOutcome(full.getOrThrow(), RelabelAttempt.FULL)
+    val fullFailure = full.exceptionOrNull()!!
+    warn(
+        "DV relabel full construction failed " +
+            "(${fullFailure.javaClass.simpleName}: ${fullFailure.message}), " +
+            "retrying minimal relabel",
+        fullFailure
+    )
+    val minimalAttempt = runCatching { minimal(format, rewriteCodec) }
+    if (minimalAttempt.isSuccess) {
+        return RelabelOutcome(minimalAttempt.getOrThrow(), RelabelAttempt.MINIMAL)
+    }
+    val minimalFailure = minimalAttempt.exceptionOrNull()!!
+    warn(
+        "DV relabel minimal construction failed " +
+            "(${minimalFailure.javaClass.simpleName}: ${minimalFailure.message}) — " +
+            "playing the stream unchanged instead of failing the load",
+        minimalFailure
+    )
+    return null
 }

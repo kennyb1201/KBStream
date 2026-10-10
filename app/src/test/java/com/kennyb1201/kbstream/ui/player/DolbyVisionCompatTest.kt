@@ -1,9 +1,12 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.view.Display
+import androidx.media3.common.Format
+import androidx.media3.common.MimeTypes
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -351,6 +354,129 @@ class DolbyVisionCompatTest {
         // and the HDR10+ SEI are gone.
         val expected = vps + sps + pps + vcl
         assertArrayEquals("parameter sets and VCL must be byte-identical", expected, buf.copyOf(newLen))
+    }
+
+    /**
+     * The relabel-only path calls `stripAnnexB(stripDv = false, stripHdr10Plus =
+     * true)`: only the HDR10+ SEI goes and the DV RPU is KEPT, because the
+     * decoder configured from the untouched DV VPS stalls waiting for RPUs that
+     * never arrive. Pinning keep-RPU here is what keeps a future edit from
+     * routing this path through the full strip.
+     */
+    @Test
+    fun `stripAnnexB with the RPU kept drops only the HDR10 plus SEI`() {
+        val vps = nal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
+        val sps = nal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
+        val pps = nal(34, byteArrayOf(0x0D, 0x0E, 0x0F))
+        val rpu = nal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val sei = nal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66, 0x77, 0x88.toByte()))
+
+        val au = vps + sps + pps + rpu + sei + vcl
+        val buf = au.copyOf()
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = false, stripHdr10Plus = true
+        )
+
+        assertTrue("the HDR10+ SEI must have been removed", newLen >= 0)
+        // The DV RPU stays (dropping it stalls the decoder) and the parameter
+        // sets are never rewritten; only the HDR10+ SEI is gone.
+        val expected = vps + sps + pps + rpu + vcl
+        assertArrayEquals(
+            "RPU and parameter sets must be byte-identical",
+            expected,
+            buf.copyOf(newLen)
+        )
+    }
+
+    // ── relabel construction hardening (the 2026-10-10 fallback) ──────────
+    //
+    // The relabel that re-advertises P4/P8 as plain HEVC is built in two steps:
+    // the full relabel (declared codec on the label + HDR10 color info) first,
+    // then a minimal codecs+mime-only relabel if that construction throws. The
+    // field capture that motivated it had the full construction throw and fall
+    // back to native DV, which black-screened with per-frame "Resolution change"
+    // spam; the minimal attempt both recovers the working path and names the
+    // failed step.
+
+    private fun dvFormat(codecs: String) = Format.Builder()
+        .setSampleMimeType(MimeTypes.VIDEO_DOLBY_VISION)
+        .setCodecs(codecs)
+        .build()
+
+    @Test
+    fun `the full relabel builds for the P8 codecs and lands on video hevc`() {
+        for (codecs in listOf("dvhe.08.06", "dvhe.08.10")) {
+            val relabeled = relabelDvFormat(dvFormat(codecs), "hvc1.2.4.L153.B0")
+            assertNotNull("the relabel must not throw for $codecs", relabeled)
+            val r = relabeled!!
+            assertEquals(RelabelAttempt.FULL, r.attempt)
+            assertEquals(
+                "the relabeled track must play as plain HEVC",
+                MimeTypes.VIDEO_H265,
+                r.format.sampleMimeType
+            )
+        }
+    }
+
+    @Test
+    fun `the full relabel keeps the declared codec label and the HDR10 color info`() {
+        val full = relabelDvFull(dvFormat("dvhe.08.06"), "hvc1.2.4.L153.B0")
+        assertEquals("the declared DV codec stays on the label", "dvhe.08.06", full.label)
+        assertEquals(
+            "MTK needs the color info to emit a frame",
+            DV_HDR10_COLOR_INFO,
+            full.colorInfo
+        )
+
+        val minimal = relabelDvMinimal(dvFormat("dvhe.08.06"), "hvc1.2.4.L153.B0")
+        assertNull("the minimal fallback ships without the badging label", minimal.label)
+        assertNull("and without the color info", minimal.colorInfo)
+        assertEquals(MimeTypes.VIDEO_H265, minimal.sampleMimeType)
+    }
+
+    @Test
+    fun `a throwing color-info step falls back to the minimal relabel`() {
+        val warnings = mutableListOf<String>()
+        val relabeled = relabelDvFormat(
+            dvFormat("dvhe.08.10"),
+            "hvc1.2.4.L153.B0",
+            applyColorInfo = { throw IllegalStateException("builder exploded") },
+            warn = { message, _ -> warnings += message }
+        )
+        assertNotNull("the minimal fallback must still produce a format", relabeled)
+        val r = relabeled!!
+        assertEquals(RelabelAttempt.MINIMAL, r.attempt)
+        assertEquals(MimeTypes.VIDEO_H265, r.format.sampleMimeType)
+        assertTrue(
+            "the failure log must name the step, the class AND the message",
+            warnings.any {
+                it.contains("full construction failed") &&
+                    it.contains("IllegalStateException") &&
+                    it.contains("builder exploded")
+            }
+        )
+    }
+
+    @Test
+    fun `when both attempts throw the stream is played unchanged`() {
+        val warnings = mutableListOf<String>()
+        val relabeled = relabelDvFormat(
+            dvFormat("dvhe.08.10"),
+            "hvc1.2.4.L153.B0",
+            applyColorInfo = { throw IllegalStateException("full exploded") },
+            minimal = { _, _ -> throw IllegalStateException("minimal exploded") },
+            warn = { message, _ -> warnings += message }
+        )
+        assertNull("nothing to ship when both relabels throw", relabeled)
+        assertTrue(
+            "the give-up log must carry the cause — a null message is not diagnosable",
+            warnings.any {
+                it.contains("minimal construction failed") &&
+                    it.contains("playing the stream unchanged") &&
+                    it.contains("minimal exploded")
+            }
+        )
     }
 
     /** A single Annex-B NAL unit: 4-byte start code, 2-byte HEVC header, payload. */

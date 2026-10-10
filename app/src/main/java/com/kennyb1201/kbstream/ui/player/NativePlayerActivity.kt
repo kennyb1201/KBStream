@@ -12109,20 +12109,36 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
         val probe = SourcePlaybackProbe(sessionDeadAddons, httpClient)
         lifecycleScope.launch {
+            val (candidates, addons) = probeOrder()
             val pick = runCatching {
-                probe.pickLiveSource(sources, sourceAddons) { stream -> stream.requestHeaders }
+                probe.pickLiveSource(candidates, addons) { stream -> stream.requestHeaders }
             }.getOrNull()
             if (isFinishing || isDestroyed) return@launch
             // Only a source the probe actually proved live moves the session;
             // a null pick (a probe infrastructure failure) builds the player on
-            // the head of the list exactly as before.
+            // the head of the list exactly as before. The chosen initial source
+            // is pinned to the head of [probeOrder], so the pick staying on it
+            // means the viewer's explicit choice was seen live; the override
+            // below now only fires when that pick itself was dead.
             if (pick != null && !pick.url.isNullOrBlank() && pick.url != currentUrl) {
                 Log.w(TAG, "probe picked a different head source: ${pick.displayLabel()}")
                 adoptInitialSource(pick)
+            } else if (pick != null && pick.url == currentUrl) {
+                Log.i(TAG, "probe: initial source live, keeping: ${pick.displayLabel()}")
             }
             createPlayer()
         }
     }
+
+    /**
+     * The order this launch's probe tests sources in: the session's initial
+     * source first, then the rest in rank order (see [probeCandidates]). A
+     * "Play manually" tap or a played-link cache hit hands the player an
+     * explicit [currentUrl] plus the full ranked list; without the pin the
+     * probe could override the choice with a higher-ranked source.
+     */
+    private fun probeOrder(): Pair<List<Stream>, List<String?>> =
+        probeCandidates(sources, sourceAddons, currentUrl, currentAudioUrl, streamHeaders)
 
     /**
      * Makes [stream] the source this session is about to open, before any

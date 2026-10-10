@@ -198,3 +198,47 @@ internal class SourcePlaybackProbe(
         }.getOrDefault(false)
     }
 }
+
+/**
+ * The order the pre-playback probe should test sources in, for one launch.
+ *
+ * [currentUrl] is the source this session is about to open - the explicitly
+ * chosen one, whether it came from a "Play manually" tap or a played-link cache
+ * hit. The probe walks its list from the head and takes the first live
+ * candidate, so leaving the initial source wherever the ranker put it let the
+ * probe override an explicit choice with a higher-ranked (but different) source
+ * ("probe picked a different head source"). Pinning [currentUrl] to the head
+ * makes the probe test the choice first: when it is live the probe returns it
+ * and no override happens, and when it is dead the probe falls through to rank
+ * order exactly as before - now genuinely because the pick was dead.
+ *
+ * The returned addons are index-aligned with the returned sources. When
+ * [currentUrl] is not in [sources] at all (a cached URL absent from a fresh
+ * resolve) a candidate is synthesized carrying the launch headers, with a null
+ * addon so nothing is demoted off a stale name.
+ */
+internal fun probeCandidates(
+    sources: List<Stream>,
+    sourceAddons: List<String?>,
+    currentUrl: String,
+    currentAudioUrl: String?,
+    streamHeaders: Map<String, String>
+): Pair<List<Stream>, List<String?>> {
+    if (currentUrl.isBlank()) return sources to sourceAddons
+    val idx = sources.indexOfFirst { it.url == currentUrl }
+    if (idx >= 0) {
+        val candidates = sources.toMutableList()
+        val addons = sourceAddons.toMutableList()
+        val source = candidates.removeAt(idx)
+        val addon = if (idx < addons.size) addons.removeAt(idx) else null
+        return (listOf(source) + candidates) to (listOf(addon) + addons)
+    }
+    // Initial URL not in the list: synthesize a candidate carrying the launch
+    // headers. Addon unknown -> null, so nothing is demoted off a stale name.
+    val current = Stream(
+        url = currentUrl,
+        audioUrl = currentAudioUrl,
+        headers = streamHeaders
+    )
+    return (listOf(current) + sources) to (listOf(null) + sourceAddons)
+}

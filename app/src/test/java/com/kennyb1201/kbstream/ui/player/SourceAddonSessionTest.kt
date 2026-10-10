@@ -238,4 +238,46 @@ class SourceAddonSessionTest {
 
         assertEquals(listOf(mapOf("Referer" to "u0")), seen)
     }
+
+    // ── pinning the explicitly chosen initial source ─────────────────
+    //
+    // The reported bug: "Play manually" tapped a source, but the player opened
+    // a different one. The probe walked the full ranked list with no knowledge
+    // of the explicit choice, so the first live candidate whose URL differed
+    // from the session's current URL replaced it. The fix feeds the probe the
+    // initial source first (probeCandidates); these two cases are the whole
+    // point - a live choice is kept, a dead one still falls through.
+
+    @Test
+    fun `a live pinned initial source is returned first and nothing is demoted`() {
+        // Tap order: A live, B live, current = B. probeCandidates pins B to the
+        // head, so the probe answers with B and never leaves that pick.
+        val sources = listOf(stream("A"), stream("B"))
+        val addons = listOf("A", "B")
+        val (candidates, ordered) = probeCandidates(sources, addons, "B", null, emptyMap())
+        assertEquals("the pinned source is probed first", listOf("B", "A"), candidates.map { it.url })
+        val dead = mutableSetOf<String>()
+        val probe = SourcePlaybackProbe(dead) { _, _ -> true }
+
+        val pick = runBlocking { probe.pickLiveSource(candidates, ordered) { emptyMap() } }
+
+        assertEquals("the tapped source is pinned", "B", pick.url)
+        assertTrue("a live pick demotes nothing", dead.isEmpty())
+    }
+
+    @Test
+    fun `a dead pinned initial source falls through to rank order and is marked dead`() {
+        // Current = B, but B is dead: the probe must fall through to A in rank
+        // order and mark B's addon dead for the session.
+        val sources = listOf(stream("A"), stream("B"))
+        val addons = listOf("A", "B")
+        val (candidates, ordered) = probeCandidates(sources, addons, "B", null, emptyMap())
+        val dead = mutableSetOf<String>()
+        val probe = SourcePlaybackProbe(dead) { url, _ -> url == "A" }
+
+        val pick = runBlocking { probe.pickLiveSource(candidates, ordered) { emptyMap() } }
+
+        assertEquals("the pick was dead, so rank order wins", "A", pick.url)
+        assertEquals("its addon is dead for the session", setOf("b"), dead)
+    }
 }
