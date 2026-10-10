@@ -102,7 +102,10 @@ internal object KidsNewRailRules {
                 certificationLte = CERTIFICATION_CEILING,
                 voteCountGte = MIN_VOTE_COUNT,
                 releaseDateGte = windowStartIso(today),
-                releaseDateLte = today.toString()
+                releaseDateLte = today.toString(),
+                // English-original only, server-side (with_original_language):
+                // a foreign title with an English dub must not enter the row.
+                withOriginalLanguage = "en"
             )
         ),
         KidsRailQuery(
@@ -118,7 +121,10 @@ internal object KidsNewRailRules {
                 // discoverKB maps these onto first_air_date for TV, so the same
                 // two fields serve both rails.
                 releaseDateGte = windowStartIso(today),
-                releaseDateLte = today.toString()
+                releaseDateLte = today.toString(),
+                // English-original only, server-side (with_original_language):
+                // a foreign title with an English dub must not enter the row.
+                withOriginalLanguage = "en"
             )
         )
     )

@@ -7607,7 +7607,9 @@ private suspend fun calculateEpisodesRemaining(
 
     /**
      * Reads [fetchPage] until [target] items have SURVIVED [filter], the feed
-     * runs out, or [PINNED_RAIL_MAX_PAGE] pages have been read.
+     * runs out, or [maxPage] pages have been read (default [PINNED_RAIL_MAX_PAGE],
+     * the kids rails pass [KIDS_RAIL_MAX_PAGE] because their English-original
+     * filter shrinks the raw pool).
      *
      * The filters are what make the loop necessary rather than greedy: a TMDB
      * page is twenty raw rows, and the digital-release and kids-ceiling passes
@@ -7632,10 +7634,13 @@ private suspend fun calculateEpisodesRemaining(
         // Suspending because the ceiling pass ([kidsFilterMetas]) and the
         // digital-availability pass are both suspending lookups.
         filter: suspend (List<MetaPreview>) -> List<MetaPreview>,
+        // The raw-row budget. Only the six kids rails raise it; every other
+        // caller keeps the shared default.
+        maxPage: Int = PINNED_RAIL_MAX_PAGE,
     ): List<MetaPreview> {
         val kept = LinkedHashMap<String, MetaPreview>()
         var page = 1
-        while (page <= PINNED_RAIL_MAX_PAGE && kept.size < target) {
+        while (page <= maxPage && kept.size < target) {
             val items = runCatchingCancellable { fetchPage(page) }.getOrNull().orEmpty()
             if (items.isEmpty()) break
             filter(items.map(toMeta)).forEach { meta -> kept.putIfAbsent(meta.id, meta) }
@@ -7684,7 +7689,12 @@ private suspend fun calculateEpisodesRemaining(
                     // widening the genre set cannot leak one in.)
                     withGenres = "16|10751",
                     voteCountGte = 20,
-                    releaseDateGte = "1970-01-01"
+                    releaseDateGte = "1970-01-01",
+                    // English-original only, server-side (with_original_language):
+                    // a French animated film with an English dub is still a
+                    // foreign title in this row, and filtering at the discover
+                    // level means it never enters the pipeline at all.
+                    withOriginalLanguage = "en"
                 )
             ),
             KidsRailQuery(
@@ -7697,7 +7707,9 @@ private suspend fun calculateEpisodesRemaining(
                     // pipe, for the reason spelled out there.
                     withGenres = "10762|16",
                     voteCountGte = 20,
-                    releaseDateGte = "1970-01-01"
+                    releaseDateGte = "1970-01-01",
+                    // English-original only - see the movie query above.
+                    withOriginalLanguage = "en"
                 )
             )
         ) + KidsNewRailRules.queries(LocalDate.now()) +
@@ -7714,6 +7726,11 @@ private suspend fun calculateEpisodesRemaining(
                         // "New Kids Shows" came back empty).
                         val filtered = deepenPinnedRail(
                             target = PINNED_RAIL_TARGET_ITEMS,
+                            // Six kids rails only: the English-original filter
+                            // shrinks the raw pool, so 8 pages no longer fill
+                            // the 120-item target after the digital and ceiling
+                            // passes. The loop still stops early when full.
+                            maxPage = KIDS_RAIL_MAX_PAGE,
                             fetchPage = { page ->
                                 tmdbRepository.discoverKB(
                                     mediaType = query.mediaType,
@@ -8778,6 +8795,18 @@ private suspend fun calculateEpisodesRemaining(
          */
         private const val PINNED_RAIL_MAX_PAGE =
             8
+
+        /**
+         * The kids rails' own raw-row budget: 12 pages = 240 raw rows.
+         *
+         * The six kids queries add `with_original_language=en`, a smaller pool
+         * than the unfiltered one, so the shared eight-page default no longer
+         * fills the 120-item target once the digital-release and ceiling passes
+         * have run. The extra pages are read only while the target is unmet - a
+         * rail that fills quickly stops at the same page it always did.
+         */
+        private const val KIDS_RAIL_MAX_PAGE =
+            12
 
         // Hard ceiling on how many items one rail / grid accumulates. Real
         // addons page far below this; it exists only so a misbehaving addon
