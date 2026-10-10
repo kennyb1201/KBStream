@@ -65,7 +65,7 @@ class SportsLiveStatsContractTest {
         )
         assertTrue(
             "and it says what the parser built, not a re-spelling of it",
-            situation.contains("text = situation ?: RESERVED_ROW_TEXT,")
+            situation.contains("text = situation.orEmpty(),")
         )
         assertTrue(
             "in the card's secondary text style, under the score",
@@ -73,12 +73,11 @@ class SportsLiveStatsContractTest {
                 situation.contains("color = KBTextLo,")
         )
         assertTrue(
-            "and the only thing ever drawn in place of the feed's own line is the reserved " +
-                "blank - never a stand-in a viewer could read, and never an empty string that " +
-                "would lay out no line at all",
-            situation.contains("RESERVED_ROW_TEXT") &&
-                !situation.contains("?: \"\"") &&
-                !situation.contains("N/A")
+            "with no stand-in text drawn in place of the feed's line when there is none: the " +
+                "reserved height holds the slot instead (see SportsLiveCardStabilityContractTest)",
+            !situation.contains("RESERVED_ROW_TEXT") &&
+                !situation.contains("\"N/A\"") &&
+                !situation.contains("?: \" \"")
         )
     }
 

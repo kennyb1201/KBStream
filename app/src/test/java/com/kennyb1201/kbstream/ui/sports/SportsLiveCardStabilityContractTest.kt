@@ -40,6 +40,9 @@ class SportsLiveCardStabilityContractTest {
     /** The situation line, plus the slot-height helper it reserves with. */
     private val situation: String by lazy { slice("private fun SituationLine(", "private fun ScoreText(") }
 
+    /** The score text itself, for the style/weight the slot has to match. */
+    private val scoreText: String by lazy { slice("private fun ScoreText(", "private fun TeamMark(") }
+
     // ── The reserved rows ───────────────────────────────────────────────
 
     @Test
@@ -56,23 +59,68 @@ class SportsLiveCardStabilityContractTest {
     }
 
     @Test
-    fun `a reserved row is the size of the row that will fill it`() {
+    fun `a reserved row holds the height its own text will occupy`() {
+        // v3: the slot is a fixed height instead of a placeholder character.
+        // The height is MEASURED from the style the row draws its value in, not
+        // written down as a dp: the theme sets no lineHeight for the headline
+        // styles (which is why the placeholder had to exist at all), so the
+        // score row's height is Oswald's own metrics at the viewer's font scale.
+        // Only the platform can produce that number, and a constant would be
+        // wrong at the next font scale - shorter than the score landing in it,
+        // which is the bobbing this whole mechanism exists to stop.
+        val slot = slice("private fun rememberRowSlotHeight(", "private fun ScoreRow(")
         assertTrue(
-            "the reservation is the row's own text drawn blank: the same style, so the same " +
-                "measured height at any font scale",
-            scoreRow.contains("score = away ?: if (reserveSlot) RESERVED_ROW_TEXT else null") &&
-                scoreRow.contains("score = home ?: if (reserveSlot) RESERVED_ROW_TEXT else null") &&
-                situation.contains("text = situation ?: RESERVED_ROW_TEXT,")
+            "the slot is measured by the platform's own text layout",
+            slot.contains("val measurer = rememberTextMeasurer()") &&
+                slot.contains("measurer.measure(") &&
+                slot.contains("with(density) { measured.size.height.toDp() }")
         )
         assertTrue(
-            "and the blank is a space, never a stand-in value a viewer could read",
-            hub.contains("private const val RESERVED_ROW_TEXT = \" \"")
+            "the score slot is measured in the score's own style, weight and pair of glyphs",
+            scoreRow.contains("style = MaterialTheme.typography.headlineLarge,") &&
+                scoreRow.contains("sample = RESERVED_SCORE_SAMPLE,") &&
+                scoreRow.contains("fontWeight = if (live) FontWeight.Bold else FontWeight.SemiBold")
+        )
+        assertTrue(
+            "and that is the pair ScoreText itself draws with, so the slot cannot drift from it",
+            scoreText.contains("fontWeight = if (live) FontWeight.Bold else FontWeight.SemiBold")
+        )
+        assertTrue(
+            "the situation slot is measured in the line's own style",
+            situation.contains("style = MaterialTheme.typography.bodySmall,") &&
+                situation.contains("sample = RESERVED_SITUATION_SAMPLE")
+        )
+        assertTrue(
+            "and both rows spend it on the reserved state only",
+            scoreRow.contains(
+                ".then(if (reserveSlot) Modifier.heightIn(min = slotHeight) else Modifier),"
+            ) &&
+                situation.contains(
+                    ".then(if (reserveSlot) Modifier.heightIn(min = slotHeight) else Modifier)"
+                )
         )
         assertFalse(
-            "the height must not be DEDUCED from the style's line height: the theme sets none for " +
-                "the headline styles, so a deduction would be null and the score row - the one that " +
-                "needed reserving most - would go on appearing and disappearing",
-            hub.contains("singleLineHeight") || scoreRow.contains("Modifier.height(")
+            "no written-down dp anywhere: it would be right at one font scale and wrong at the next",
+            hub.contains("ScoreRowHeight = ") || hub.contains("SituationLineHeight = ") ||
+                scoreRow.contains("Modifier.height(") || situation.contains("Modifier.height(")
+        )
+    }
+
+    @Test
+    fun `an empty reserved slot draws no stand-in text`() {
+        assertTrue(
+            "the empty state is empty text - the measured height is the whole reservation",
+            situation.contains("text = situation.orEmpty(),") &&
+                scoreRow.contains("score = away,") &&
+                scoreRow.contains("score = home,")
+        )
+        assertFalse(
+            "and the placeholder character is gone from the file",
+            hub.contains("RESERVED_ROW_TEXT")
+        )
+        assertTrue(
+            "the score text still draws whatever it is handed, blank included",
+            scoreText.contains("text = score.orEmpty(),")
         )
     }
 

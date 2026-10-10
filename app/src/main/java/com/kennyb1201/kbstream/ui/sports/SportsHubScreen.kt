@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -69,10 +70,14 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -154,22 +159,6 @@ private const val SEARCH_FIELD_WIDTH_DP = 360
  * the card it came from should still be findable under it.
  */
 private const val SHEET_SCRIM_ALPHA = 0.6f
-
-/**
- * What a reserved card row draws where the feed has nothing yet: a space.
- *
- * Deliberately a character and not a dp height. The promise a reserved row makes
- * is that the row the score arrives into is the row that was already there, and
- * the only way to be certain of that is to measure the same thing twice - the
- * blank is laid out by the very style the value will be, so "reserved" and
- * "filled" are one height by construction, at any font scale.
- *
- * A fixed height would have to be deduced from the style's line height, and the
- * theme's display/headline/title/label styles set none (only the body styles
- * do), so the deduction does not even exist for the score row - the row that
- * needed reserving most, since a score appears the moment a game starts.
- */
-private const val RESERVED_ROW_TEXT = " "
 
 /**
  * The sports hub: every league the profile turned on, its games, and the
@@ -1374,6 +1363,53 @@ private fun PossessionBall(modifier: Modifier = Modifier) {
 }
 
 /**
+ * The content each reserved row is measured against.
+ *
+ * Sized as the widest thing the row can be asked to hold - a two-digit score, a
+ * one-line situation - though only the line count reaches the measurement: a
+ * line's height is a property of the style and the font, not of the glyphs in
+ * it, which is what makes these two rows pinnable at all.
+ */
+private const val RESERVED_SCORE_SAMPLE = "00"
+private const val RESERVED_SITUATION_SAMPLE = "3rd & 7"
+
+/**
+ * The height of one reserved row's slot, measured in the very style the row will
+ * draw its value in - so an empty slot and a filled one are the same height by
+ * construction, on any device, at any font scale.
+ *
+ * Measured rather than written down as a dp constant, deliberately. The theme
+ * defines every type slot and only the body styles set a lineHeight (see
+ * KBStreamTypography), so the score row's height is whatever Oswald's own font
+ * metrics give 28sp at the viewer's font scale - there IS no constant to write.
+ * A number written down would be right at one font scale and wrong at the next,
+ * and wrong in the way that matters here: shorter than the score that lands in
+ * it, which is the bobbing this exists to stop. Nothing needs re-verifying when
+ * the style changes either - the slot follows it.
+ *
+ * Memoized per style/sample/weight/density, and the measurer keeps its own small
+ * layout cache, so a card pays for one measure of one short line.
+ */
+@Composable
+private fun rememberRowSlotHeight(
+    style: TextStyle,
+    sample: String,
+    fontWeight: FontWeight? = null
+): Dp {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    return remember(measurer, density, style, sample, fontWeight) {
+        val measured = measurer.measure(
+            text = AnnotatedString(sample),
+            style = if (fontWeight != null) style.copy(fontWeight = fontWeight) else style,
+            softWrap = false,
+            maxLines = 1
+        )
+        with(density) { measured.size.height.toDp() }
+    }
+}
+
+/**
  * The two scores, each under its own side and larger than anything else on the
  * card - the score is what the card is for.
  *
@@ -1383,9 +1419,9 @@ private fun PossessionBall(modifier: Modifier = Modifier) {
  * across the room.
  *
  * [reserveSlot] is the live card's answer to a feed that has not attached a
- * score yet: the row is drawn with a blank in the score's own style, so the
+ * score yet: the row keeps the height the score itself will occupy, so the
  * score arriving on the next poll fills a row that is already there instead of
- * creating one (see the slots note in [GameCard] and [RESERVED_ROW_TEXT]).
+ * creating one (see the slots note in [GameCard] and [rememberRowSlotHeight]).
  */
 @Composable
 private fun ScoreRow(game: SportsGame, reserveSlot: Boolean = false) {
@@ -1393,21 +1429,30 @@ private fun ScoreRow(game: SportsGame, reserveSlot: Boolean = false) {
     val home = game.home.score?.takeIf { it.isNotBlank() }
     if (away == null && home == null && !reserveSlot) return
     val live = game.state == GameState.LIVE
+    // The slot, at the height the score will occupy when it lands. Measured in
+    // the SAME style and weight [ScoreText] draws with below, because Oswald's
+    // Bold and SemiBold do not share metrics and the live score is the bold one.
+    val slotHeight = rememberRowSlotHeight(
+        style = MaterialTheme.typography.headlineLarge,
+        sample = RESERVED_SCORE_SAMPLE,
+        fontWeight = if (live) FontWeight.Bold else FontWeight.SemiBold
+    )
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(top = 10.dp),
+            .padding(top = 10.dp)
+            .then(if (reserveSlot) Modifier.heightIn(min = slotHeight) else Modifier),
         verticalAlignment = Alignment.CenterVertically
     ) {
         ScoreText(
-            score = away ?: if (reserveSlot) RESERVED_ROW_TEXT else null,
+            score = away,
             live = live,
             color = scoreColor(game, game.away),
             modifier = Modifier.weight(1f)
         )
         Spacer(modifier = Modifier.width(10.dp))
         ScoreText(
-            score = home ?: if (reserveSlot) RESERVED_ROW_TEXT else null,
+            score = home,
             live = live,
             color = scoreColor(game, game.home),
             alignEnd = true,
@@ -1423,17 +1468,23 @@ private fun ScoreRow(game: SportsGame, reserveSlot: Boolean = false) {
  * Without [reserveSlot] a game with no situation draws no row at all - not a
  * blank one - which is what every upcoming and final card wants and what this
  * line did before the reserved slots existed. With it (a live card) the row is
- * always drawn, blank when the feed has not named a down yet, because this line
- * is one of the three slots live data churn moves; the card must not change size
- * when the line arrives, and a row already laid out in the line's own style is
- * the only way to promise that (see [RESERVED_ROW_TEXT]).
+ * always drawn, at the height the line will occupy once the feed names a down,
+ * because this line is one of the slots live data churn moves; the card must not
+ * change size when the line arrives (see [rememberRowSlotHeight]). The empty
+ * state draws no stand-in text at all - not a placeholder a viewer could read,
+ * and not a guess at what the line will say - the fixed height is the whole
+ * reservation.
  */
 @Composable
 private fun SituationLine(game: SportsGame, reserveSlot: Boolean = false) {
     val situation = game.situation?.takeIf { it.isNotBlank() }
     if (situation == null && !reserveSlot) return
+    val slotHeight = rememberRowSlotHeight(
+        style = MaterialTheme.typography.bodySmall,
+        sample = RESERVED_SITUATION_SAMPLE
+    )
     Text(
-        text = situation ?: RESERVED_ROW_TEXT,
+        text = situation.orEmpty(),
         style = MaterialTheme.typography.bodySmall,
         color = KBTextLo,
         maxLines = 1,
@@ -1441,6 +1492,7 @@ private fun SituationLine(game: SportsGame, reserveSlot: Boolean = false) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 5.dp)
+            .then(if (reserveSlot) Modifier.heightIn(min = slotHeight) else Modifier)
     )
 }
 
