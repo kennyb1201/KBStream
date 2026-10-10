@@ -51,6 +51,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -943,6 +944,47 @@ private fun LeagueBody(
     val final = section.games
         .filter { it.state == GameState.FINAL }
         .sortedByDescending { it.dateMs }
+
+    // Scroll to the live games when they first arrive. The section is drawn
+    // before the ESPN poll returns, so its top is UPCOMING; when the live
+    // games land a moment later they insert ABOVE what the viewer is looking
+    // at, the list holds the position it had, and the LIVE NOW block sits off
+    // the top of the screen - the hub reads as having no live games at all
+    // ("the upcoming games show than i have to scroll up to see the live
+    // games", 2026-10-10).
+    //
+    // Only the arrival is answered, and only while the viewer has not moved:
+    // yanking the scroll out from under someone already browsing upcoming is
+    // worse than missing the live block.
+    //
+    // "Has not moved" cannot be asked of the list once the games have landed.
+    // LazyColumn anchors its scroll position to the first visible item's KEY,
+    // so the rows that insert above push firstVisibleItemIndex up (0 -> n)
+    // with no input from the viewer, and this effect - launched with the
+    // arrival - already sees that anchored index. A guard of
+    // `firstVisibleItemIndex == 0` would therefore fail on the very insert it
+    // exists to answer. So the top is sampled BEFORE the arrival instead:
+    // while the section has no live games this remembers whether the list is
+    // still sitting at the top, and the sampler is gone - its answer latched -
+    // by the time the rows arrive, so their insertion cannot rewrite it. A
+    // viewer's own scroll does rewrite it, which is the one thing the guard is
+    // for. Starting false ("nothing has said the list is at the top") also
+    // keeps a restored scroll position safe: a body composed with live games
+    // already in hand is never scrolled.
+    var atTopBeforeLive by remember { mutableStateOf(false) }
+    if (live.isEmpty()) {
+        LaunchedEffect(listState) {
+            snapshotFlow {
+                listState.firstVisibleItemIndex == 0 &&
+                    listState.firstVisibleItemScrollOffset == 0
+            }.collect { atTopBeforeLive = it }
+        }
+    }
+    LaunchedEffect(live.isNotEmpty()) {
+        if (live.isNotEmpty() && atTopBeforeLive) {
+            listState.scrollToItem(0)
+        }
+    }
 
     // Two cards to a row unless the display cannot hold them side by side.
     val gameColumns = if (
