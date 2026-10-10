@@ -53,6 +53,7 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusNone
 import com.kennyb1201.kbstream.ui.theme.KBFocusRow
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -876,6 +877,21 @@ fun PosterContextMenu(
                         }
                     )
                 }
+
+                // Room below the last row for that row's own focus ring.
+                //
+                // The ring is drawn OUTSIDE the focused row's layout box -
+                // KBFocusRow's 1.02x scale plus the 2dp accent border grow it
+                // past its bounds - and the scroll container clips at its own
+                // edge, so the 22dp panel padding was not enough: on the field
+                // report the bottom of the focused "Hide" row's ring was cut
+                // off flush with the menu's rounded bottom edge.
+                //
+                // A trailing spacer rather than more padding, following the
+                // sports hub's list (SportsHubScreen): the scrolling area keeps
+                // its visual inset and gains the overflow room, and only the
+                // last row's focus ever expands into it.
+                Spacer(modifier = Modifier.height(KBFocusRowInset))
             }
         }
     }
