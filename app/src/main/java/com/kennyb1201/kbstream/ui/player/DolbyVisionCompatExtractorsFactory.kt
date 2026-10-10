@@ -92,9 +92,11 @@ internal enum class Hdr10BaseHandling { PASSTHROUGH, RELABEL_ONLY, STRIP }
  *    in Auto (or any mode that is not the explicit "Strip All") — the platform
  *    DV pipeline shows the real thing.
  *  - [Hdr10BaseHandling.RELABEL_ONLY]: a DV-capable box on a NON-DV display in
- *    Auto. The platform pipeline black-screens the sink, and mutating the
- *    bitstream is what stalls MTK-class decoders, so the base layer is
- *    re-advertised as plain HEVC with every sample bit-exact.
+ *    Auto. The platform pipeline black-screens the sink, and rewriting the
+ *    VPS/SPS is what stalls MTK-class decoders, so the base layer is
+ *    re-advertised as plain HEVC and only the in-band metadata NALs (DV
+ *    RPU/EL + HDR10+ SEI) are removed in place — the parameter sets are never
+ *    touched (see `Mode.STRIP_NALS_ONLY`).
  *  - [Hdr10BaseHandling.STRIP]: no DV decoder on the box, or the explicit
  *    "Strip All" override — strip the RPU/EL/HDR10+ NALs to HDR10 as before.
  */
@@ -271,7 +273,7 @@ private class VideoCompatTrackOutput(
         .setChromaBitdepth(10)
         .build()
 
-    private enum class Mode { NORMAL, SNIFFING, STRIPPING }
+    private enum class Mode { NORMAL, SNIFFING, STRIPPING, STRIP_NALS_ONLY }
 
     private var mode = Mode.NORMAL
     private var sniffRemaining = 0
@@ -435,17 +437,21 @@ private class VideoCompatTrackOutput(
             }
             if (handling == Hdr10BaseHandling.RELABEL_ONLY) {
                 // DV-decoder box, non-DV display (Auto): re-advertise the HDR10
-                // base layer as plain HEVC but leave every sample bit-exact. No
-                // VPS rewrite, no RPU/EL/HDR10+ NAL removal — mutating the
-                // stream is what stalls MTK-class decoders (field: Strip All =
-                // configure OK, zero frames), and native DV passthrough
-                // black-screens the non-DV TV. The base layer is standard HDR10;
-                // a compliant HEVC decoder ignores the in-band RPU NALs.
+                // base layer as plain HEVC and strip only the metadata NALs
+                // (DV RPU/EL + HDR10+ SEI) in place — never rewrite the
+                // VPS/SPS/PPS, neither the init data nor in-sample. Mutating the
+                // parameter sets is what stalls MTK-class decoders (field: Strip
+                // All = configure OK, zero frames); leaving the in-band DV RPU /
+                // HDR10+ SEI in the stream is what makes the decoder re-emit its
+                // output format on every frame and the compositor drop the
+                // frames (black screen with audio). The base layer is standard
+                // HDR10; Mode.STRIP_NALS_ONLY isolates this experiment from
+                // transformAnnexB, which rewrites the VPS in-sample.
                 Log.i(
                     "PLAYER_DV",
                     "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
-                        "display: re-advertising as hvc1, samples untouched " +
-                        "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
+                        "display: re-advertising as hvc1, samples: metadata NALs stripped, " +
+                        "VPS/SPS untouched (nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
                 )
                 val relabeled = runCatching {
                     var builder = format.buildUpon().setCodecs(rewriteCodec)
@@ -467,7 +473,9 @@ private class VideoCompatTrackOutput(
                 val relabeledFormat = relabeled.getOrNull()
                 if (relabeledFormat != null) {
                     delegate.format(relabeledFormat)
-                    mode = Mode.NORMAL // samples pass through bit-exact; no NAL stripping
+                    // Bit-exact relabel plus in-place metadata NAL removal:
+                    // VPS/SPS/PPS are never rewritten (see Mode.STRIP_NALS_ONLY).
+                    mode = Mode.STRIP_NALS_ONLY
                 } else {
                     Log.w(
                         "PLAYER_DV",
@@ -768,6 +776,38 @@ private class VideoCompatTrackOutput(
                 pendingLen = carrySize
                 return
             }
+        }
+
+        if (mode == Mode.STRIP_NALS_ONLY) {
+            val inventory =
+                if (!stripReported) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
+            // Pure removal — stripAnnexB/stripLengthDelimited never rewrite
+            // parameter sets. HDR10+ goes unconditionally: the stream is
+            // presented as static HDR10, and this file carries both DV RPU
+            // and HDR10+ SEI.
+            val stripped = when (framing) {
+                NalFraming.ANNEX_B ->
+                    DolbyVisionCompat.stripAnnexB(
+                        pendingBuf, sampleEnd, stripDv = true, stripHdr10Plus = true
+                    )
+                NalFraming.LENGTH_DELIMITED ->
+                    DolbyVisionCompat.stripLengthDelimited(
+                        pendingBuf, sampleEnd, nalLengthFieldLength,
+                        stripDv = true, stripHdr10Plus = true
+                    )
+            }
+            if (!stripReported) {
+                stripReported = true
+                Log.i(
+                    "PLAYER_DV",
+                    "Relabel NALS-strip: first sample metadata dropped " +
+                        "(codecs=${currentCodecs ?: "?"}) nals=$inventory"
+                )
+            }
+            emit(if (stripped >= 0) stripped else sampleEnd)
+            if (carrySize > 0) System.arraycopy(pendingBuf, sampleEnd, pendingBuf, 0, carrySize)
+            pendingLen = carrySize
+            return
         }
 
         val stats = DolbyVisionCompat.StripStats()

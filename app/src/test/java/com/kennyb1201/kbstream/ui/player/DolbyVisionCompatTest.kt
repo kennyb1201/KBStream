@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.view.Display
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -320,4 +321,39 @@ class DolbyVisionCompatTest {
             }
         }
     }
+
+    // ── Pure metadata-NAL removal (the relabel-only experiment) ───────────
+    //
+    // The relabel-only path (DV-decoder box, non-DV display, Auto) re-advertises
+    // the HDR10 base layer as plain HEVC and must remove ONLY the DV RPU/EL and
+    // HDR10+ SEI NALs, leaving the VPS/SPS/PPS bytes identical — rewriting the
+    // parameter sets is what stalls MTK-class decoders (field: Strip All =
+    // configure OK, zero frames). This pins that property on a synthetic
+    // Annex-B access unit.
+
+    @Test
+    fun `stripAnnexB drops the RPU and HDR10 plus SEI but keeps the parameter sets`() {
+        val vps = nal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
+        val sps = nal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
+        val pps = nal(34, byteArrayOf(0x0D, 0x0E, 0x0F))
+        val rpu = nal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val sei = nal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66, 0x77, 0x88.toByte()))
+
+        val au = vps + sps + pps + rpu + sei + vcl
+        val buf = au.copyOf()
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = true, stripHdr10Plus = true
+        )
+
+        assertTrue("the RPU and SEI must have been removed", newLen >= 0)
+        // The VPS/SPS/PPS/VCL bytes are carried through untouched; only the RPU
+        // and the HDR10+ SEI are gone.
+        val expected = vps + sps + pps + vcl
+        assertArrayEquals("parameter sets and VCL must be byte-identical", expected, buf.copyOf(newLen))
+    }
+
+    /** A single Annex-B NAL unit: 4-byte start code, 2-byte HEVC header, payload. */
+    private fun nal(type: Int, payload: ByteArray): ByteArray = byteArrayOf(0, 0, 0, 1) +
+        byteArrayOf(((type shl 1) and 0x7E).toByte(), 0x01) + payload
 }
