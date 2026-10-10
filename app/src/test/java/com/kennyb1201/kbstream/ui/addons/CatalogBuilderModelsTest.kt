@@ -620,4 +620,52 @@ class CatalogBuilderModelsTest {
             catalogOptionsWithCustom(options, listOf(9999, 9999)).size
         )
     }
+
+    // ---------------------------------------- hand-typed minimum votes --
+
+    @Test
+    fun `a typed vote count is read however it is punctuated`() {
+        assertEquals(2500, parseVoteCountInput("2500"))
+        assertEquals(2500, parseVoteCountInput("2,500"))
+        assertEquals(2500, parseVoteCountInput(" 2500 "))
+        // Not a positive count: there is no floor to write, so nothing is.
+        assertNull(parseVoteCountInput(""))
+        assertNull(parseVoteCountInput("votes"))
+        assertNull(parseVoteCountInput("0"))
+    }
+
+    @Test
+    fun `a custom minimum is drawn as its own chip and leaves known ones alone`() {
+        assertEquals(
+            "a count the chips already carry changes nothing",
+            CATALOG_MIN_VOTE_OPTIONS,
+            voteCountOptionsWithCustom(CATALOG_MIN_VOTE_OPTIONS, 500)
+        )
+        assertEquals(
+            "no rule is no extra chip",
+            CATALOG_MIN_VOTE_OPTIONS,
+            voteCountOptionsWithCustom(CATALOG_MIN_VOTE_OPTIONS, null)
+        )
+        assertEquals(
+            "a typed count shows up, in order, so it can be seen and taken back",
+            listOf(0, 50, 200, 300, 500, 1000),
+            voteCountOptionsWithCustom(CATALOG_MIN_VOTE_OPTIONS, 300)
+        )
+        assertEquals(
+            "and a high one lands at the end",
+            listOf(0, 50, 200, 500, 1000, 2500),
+            voteCountOptionsWithCustom(CATALOG_MIN_VOTE_OPTIONS, 2500)
+        )
+    }
+
+    @Test
+    fun `a typed minimum reaches the same filter the chips write`() {
+        // The point of typing a number is the rule, not the chip: it has to
+        // land on `voteCountGte` exactly as a tapped chip does, or the row
+        // shows a rule the loader never sends.
+        val typed = parseVoteCountInput("2500")
+        assertTrue(parseVoteCountInput("2,500") == typed)
+        val filters = KBFilters(voteCountGte = typed)
+        assertEquals(2500, filters.voteCountGte)
+    }
 }

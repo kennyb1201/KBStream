@@ -536,3 +536,39 @@ internal fun catalogOptionsWithCustom(
     return options + picked.filterNot { it in known }.distinct()
         .map { CatalogFilterOption(it, "#$it") }
 }
+
+// ---------------------------------------------------------------------------
+// Hand-typed numbers: the way past the shipped chip vocabulary for a count.
+// ---------------------------------------------------------------------------
+
+/**
+ * The vote count in what the viewer typed, or null when it is not usable.
+ *
+ * Forgiving about how a number is written by hand - "2,500" and " 2500 " both
+ * mean 2500 - and strict about the rest: a value that is not a positive count
+ * is not a floor TMDB can read, so it is dropped rather than written as a rule
+ * that matches nothing.
+ */
+internal fun parseVoteCountInput(text: String): Int? =
+    text.filter { it.isDigit() }
+        .takeIf { it.isNotEmpty() }
+        ?.toIntOrNull()
+        ?.takeIf { it > 0 }
+
+/**
+ * The minimum-vote chips, plus one for [value] when it is a count the shipped
+ * chips do not carry.
+ *
+ * A hand-typed minimum is a rule the viewer can set and then never see or take
+ * back unless the row draws it: the chips render exactly this list, so the
+ * custom count is drawn as its own selected chip, and tapping it again clears
+ * the rule the same way "Any" does. A value the shipped list already names is
+ * left alone, so a known chip keeps its place.
+ */
+internal fun voteCountOptionsWithCustom(
+    options: List<Int>,
+    value: Int?
+): List<Int> {
+    if (value == null || value <= 0 || value in options) return options
+    return (options + value).sorted()
+}

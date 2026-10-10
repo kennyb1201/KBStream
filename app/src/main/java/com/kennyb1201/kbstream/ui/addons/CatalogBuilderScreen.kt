@@ -532,6 +532,8 @@ private fun CatalogEditor(
     // Which row's "enter your own id" dialog is open, if any. Held here rather
     // than per row so there is exactly one dialog in the tree.
     var customField by remember(catalog.id) { mutableStateOf<CatalogIdField?>(null) }
+    // The minimum-vote row's own hand-typed entry, open or not.
+    var customVotes by remember(catalog.id) { mutableStateOf(false) }
     val isTv = catalog.mediaType == CATALOG_MEDIA_TV
 
     Column(
@@ -932,10 +934,15 @@ private fun CatalogEditor(
 
         EditorSection(title = "Minimum votes") {
             NumberChipRow(
-                options = CATALOG_MIN_VOTE_OPTIONS,
+                options = voteCountOptionsWithCustom(
+                    CATALOG_MIN_VOTE_OPTIONS,
+                    filters.voteCountGte
+                ),
                 selected = filters.voteCountGte ?: 0,
                 labelOf = { if (it == 0) "Any" else "$it+" },
-                onSelect = onMinVotes
+                onSelect = onMinVotes,
+                customLabel = "+ CUSTOM",
+                onCustom = { customVotes = true }
             )
         }
 
@@ -950,6 +957,17 @@ private fun CatalogEditor(
                     customField = null
                 },
                 onDismiss = { customField = null }
+            )
+        }
+
+        if (customVotes) {
+            CustomVoteCountDialog(
+                initial = filters.voteCountGte,
+                onSet = { value ->
+                    onMinVotes(value)
+                    customVotes = false
+                },
+                onDismiss = { customVotes = false }
             )
         }
     }
@@ -1091,13 +1109,22 @@ private fun ChoiceRow(
     }
 }
 
-/** A horizontally scrolling row of single-select numeric chips. */
+/**
+ * A horizontally scrolling row of single-select numeric chips.
+ *
+ * A row that passes [customLabel] ends with one more chip that opens
+ * [onCustom], which is the only way to reach a number the shipped chips do not
+ * carry - the chip lists are a fixed vocabulary, the counts a viewer wants are
+ * not.
+ */
 @Composable
 private fun NumberChipRow(
     options: List<Int>,
     selected: Int,
     labelOf: (Int) -> String,
-    onSelect: (Int) -> Unit
+    onSelect: (Int) -> Unit,
+    customLabel: String? = null,
+    onCustom: (() -> Unit)? = null
 ) {
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1120,6 +1147,13 @@ private fun NumberChipRow(
                 selected = value == selected,
                 onClick = { onSelect(value) }
             )
+        }
+        val label = customLabel
+        val open = onCustom
+        if (label != null && open != null) {
+            item(key = "custom-number") {
+                BuilderChip(label = label, selected = false, onClick = open)
+            }
         }
     }
 }
@@ -1520,6 +1554,86 @@ private fun CustomIdDialog(
                     label = "ADD",
                     enabled = ids.isNotEmpty(),
                     onClick = { onAdd(ids) }
+                )
+                ActionButton(label = "CANCEL", onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/**
+ * The way past the minimum-vote row's chip vocabulary: type the count you want.
+ *
+ * The chips are a short list (50, 200, 500, 1000) and the floor a viewer
+ * actually wants is often a round number that is not on it - "2000+ votes"
+ * drops the same obscure titles a high rating chip cannot. The typed value
+ * lands on the SAME `voteCountGte` the chips write, so it is a rule like any
+ * other: drawn as its own chip, and cleared by tapping "Any".
+ */
+@Composable
+private fun CustomVoteCountDialog(
+    initial: Int?,
+    onSet: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    BackHandler(onBack = onDismiss)
+    var text by remember {
+        mutableStateOf(initial?.takeIf { it > 0 }?.toString().orEmpty())
+    }
+    val value = parseVoteCountInput(text)
+    val focusRequester = remember { FocusRequester() }
+
+    // The field is the whole dialog, so it takes focus as the dialog opens:
+    // there is no scrolling to do and the IME is the point.
+    LaunchedEffect(Unit) {
+        runCatching { focusRequester.requestFocus() }
+    }
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(640.dp)
+                .background(KBSurface, KBShapeCard)
+                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapeCard)
+                .padding(20.dp)
+        ) {
+            Text(
+                text = "MINIMUM VOTES \u2014 YOUR OWN",
+                color = KBAccent,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "TMDB's vote count for a title. A high floor hides " +
+                    "obscure titles with a handful of votes, which is what makes " +
+                    "a rating filter trustworthy. Any positive number works.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            KBTextField(
+                value = text,
+                onValueChange = { text = it },
+                placeholder = "e.g. 2500",
+                modifier = Modifier.fillMaxWidth(),
+                focusRequester = focusRequester,
+                keyboardType = androidx.compose.ui.text.input.KeyboardType.Number,
+                onDone = { value?.let(onSet) }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = value?.let { "Titles with at least $it votes." }
+                    ?: "Type a positive number of votes.",
+                color = if (value == null) KBTextLo else KBAccent,
+                style = MaterialTheme.typography.labelSmall
+            )
+            Spacer(modifier = Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ActionButton(
+                    label = "SET",
+                    enabled = value != null,
+                    onClick = { value?.let(onSet) }
                 )
                 ActionButton(label = "CANCEL", onClick = onDismiss)
             }
