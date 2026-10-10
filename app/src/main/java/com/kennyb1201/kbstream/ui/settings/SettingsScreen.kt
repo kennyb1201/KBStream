@@ -1586,7 +1586,7 @@ fun SettingsScreen(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(
-                        AppPreferences.DV_COMPAT_AUTO to "P7 \u2192 8.1",
+                        AppPreferences.DV_COMPAT_AUTO to "Auto",
                         AppPreferences.DV_COMPAT_OFF to "None",
                         AppPreferences.DV_COMPAT_ALL to "Strip All"
                     ).forEach { (value, label) ->
@@ -1601,7 +1601,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = when (dvCompatMode) {
-                        AppPreferences.DV_COMPAT_AUTO -> "Rewrites Blu-ray Profile 7 remuxes to Profile 8.1 (RPU kept, enhancement layer dropped). P4/P8 play as Dolby Vision; P5 follows its toggle below"
+                        AppPreferences.DV_COMPAT_AUTO -> "Chooses by your display: Dolby Vision passthrough on DV TVs (P7 \u2192 8.1 for compatibility); HDR10 with HDR10+ removed on non-DV TVs. P5 follows its toggle below"
                         AppPreferences.DV_COMPAT_OFF -> "Play files exactly as provided (device must handle DV)"
                         AppPreferences.DV_COMPAT_ALL -> "Strips every DV profile (P4/P5/P7/P8) \u2192 HDR10/HEVC for non-DV TVs. P5 colors are corrected on the GPU automatically"
                         else -> ""
