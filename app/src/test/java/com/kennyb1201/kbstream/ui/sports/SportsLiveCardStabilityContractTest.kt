@@ -247,6 +247,41 @@ class SportsLiveCardStabilityContractTest {
         )
     }
 
+    // ── The focus scale (v4) ────────────────────────────────────────────
+
+    @Test
+    fun `a live card takes no focus scale, because a poll restarts it`() {
+        // v4, and the last of the movement. v1-v3 made the CONTENT stable, so
+        // what was left was the focus animation itself: KBCard scales the
+        // focused card, and a recomposition from the 30s poll restarts that
+        // animation - 1.0 -> 1.02 and settle, on every update, only ever on the
+        // one card the viewer is sitting on, which is why the unfocused cards
+        // around it never moved and why it looked intermittent. A live card
+        // therefore asks for no scale at all, and ONLY a live card does: an
+        // upcoming or final card's data never changes, so its animation cannot
+        // be restarted and it keeps the step every other row in the hub has.
+        assertTrue(
+            "the card's focus scale is the game's own state, not a constant",
+            card.contains("focusedScale = if (game.state == GameState.LIVE) 1f else KBFocusRow,")
+        )
+        assertTrue(
+            "and the same state decides the reserved rows, so a game cannot be live for one and " +
+                "still scaling for the other",
+            card.contains("val liveSlots = game.state == GameState.LIVE") &&
+                1 == Regex("focusedScale = if \\(game\\.state == GameState\\.LIVE\\) 1f else KBFocusRow,")
+                    .findAll(card).count()
+        )
+        assertTrue(
+            "the 2% step itself is untouched for every other card",
+            File(findSourceRoot(), THEME).readText().replace(Regex("\\s+"), " ")
+                .contains("const val KBFocusRow = 1.02f")
+        )
+        assertTrue(
+            "the border and glow that now carry live focus alone are still the card's shape, unchanged",
+            card.contains("shape = KBShapeCard,")
+        )
+    }
+
     // ── Source access ───────────────────────────────────────────────────
 
     private fun slice(startMarker: String, endMarker: String): String {

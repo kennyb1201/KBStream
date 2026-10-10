@@ -1281,7 +1281,18 @@ private fun GameCard(
         onLongClick = onEditFavorites,
         // The guide's own row step, not a poster tile's: a game card is a row of
         // information that happens to be two columns wide.
-        focusedScale = KBFocusRow,
+        //
+        // ...except on a LIVE card, which takes no focus scale at all. The
+        // card's content is now stable across a poll (see the reserved rows
+        // above), so what was left of the bob was this: the scale animation
+        // runs on the focused card, and a recomposition from the 30s poll
+        // restarts it - 1.0 -> 1.02, then settle, on every update, while the
+        // unfocused cards beside it sat still at 1.0 and never moved. Only live
+        // cards get that recomposition (an upcoming or final card's data does
+        // not change), so only live cards pay for it. The 2% is imperceptible
+        // next to the accent border and glow that already mark focus, and those
+        // are unchanged.
+        focusedScale = if (game.state == GameState.LIVE) 1f else KBFocusRow,
         shape = KBShapeCard,
         modifier = modifier.fillMaxWidth()
     ) {
