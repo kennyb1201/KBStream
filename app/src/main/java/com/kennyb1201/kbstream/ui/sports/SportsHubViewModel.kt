@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
@@ -1257,18 +1258,68 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     "SPORTS DIAG tournament=${event.id} name=\"${event.name}\" " +
                         "terms=${terms} hits=${rows.size}"
                 )
+                // The window this event is judged against, so a capture can tell
+                // "the guide has nothing in this event's slot" from "the guide
+                // has rows the matcher refused". The tournament tier matches a
+                // single-broadcast window around the event's scheduled start
+                // (see [SportsChannelMatcher.EPG_WINDOW_MS]) - which is exactly
+                // what a multi-day tournament's later rounds stress, and the
+                // number a fix would have to widen.
+                Log.w(
+                    TAG,
+                    "SPORTS DIAG tournament=${event.id} " +
+                        "eventStart=${event.dateMs - SportsChannelMatcher.EPG_WINDOW_MS} " +
+                        "eventEnd=${event.dateMs + SportsChannelMatcher.EPG_WINDOW_MS} " +
+                        "windowHours=${SportsChannelMatcher.EPG_WINDOW_MS * 2 / 3_600_000.0}"
+                )
+                // Per-row detail, one line each, so the reject= token names the
+                // single filter that dropped every one of `hits` (see
+                // [SportsChannelMatcher.tournamentRejectReason], which reads the
+                // matcher's own rules so this can never disagree with it). Capped
+                // so one tournament cannot flood a capture, and gated to a debug
+                // build so the release APK never carries it; the two summary
+                // lines above stay in both.
+                var diagLines = 0
                 rows.forEach { row ->
-                    val channel = guideIndex[row.channelId] ?: return@forEach
-                    out.putIfAbsent(
-                        "${channel.id}|${row.startUtcMillis}|${row.title}",
+                    val channel = guideIndex[row.channelId]
+                    val key =
+                        "${channel?.id ?: row.channelId}|${row.startUtcMillis}|${row.title}"
+                    // The PLAYLIST channel id, not `row.channelId`: the guide
+                    // index is keyed by the guide's own channel key, while the
+                    // matcher resolves a program back to a playlist channel
+                    // with `channelById[it.channelId]` (see
+                    // SportsChannelMatcher.epgNameHits). A row whose channel is
+                    // not in the playlist still builds a program for the
+                    // diagnostic, but it is never emitted.
+                    val program =
                         MatcherProgram(
-                            channelId = channel.id,
+                            channelId = channel?.id ?: row.channelId,
                             title = row.title,
                             startMs = row.startUtcMillis,
                             endMs = row.endUtcMillis,
                             description = row.description,
                         )
-                    )
+                    if (verboseDiagEnabled() && diagLines < MAX_TOURNAMENT_DIAG_LINES) {
+                        val channelName =
+                            channel?.let { c -> c.displayName.ifBlank { c.name } }.orEmpty()
+                        val reason =
+                            SportsChannelMatcher.tournamentRejectReason(
+                                program = program,
+                                event = event,
+                                channelInPlaylist = channel != null,
+                                alreadyMatched = out.containsKey(key),
+                            )
+                        Log.w(
+                            TAG,
+                            "SPORTS DIAG tournament=${event.id} prog=\"${row.title}\" " +
+                                "chId=${row.channelId} chName=\"$channelName\" " +
+                                "start=${row.startUtcMillis} end=${row.endUtcMillis} " +
+                                "inPlaylist=${channel != null} reject=$reason"
+                        )
+                        diagLines++
+                    }
+                    if (channel == null) return@forEach
+                    out.putIfAbsent(key, program)
                 }
             }
         return out.values.toList()
@@ -1416,5 +1467,27 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
          * both of them in the row.
          */
         const val MIN_ABBREV_SEARCH_TERM_LENGTH = 2
+
+        /**
+         * How many per-row `SPORTS DIAG` lines one tournament may emit.
+         *
+         * The diagnostic is per PROGRAM, and a guide can carry a whole
+         * tournament's worth of them; the cap keeps one event from crowding a
+         * logcat capture out of everything else. Forty is well past the ~31
+         * rows the golf case needed to be read, and the summary line above always
+         * carries the untruncated `hits=` count, so the cap never hides how many
+         * there were.
+         */
+        const val MAX_TOURNAMENT_DIAG_LINES = 40
     }
+
+    /**
+     * Whether the per-row `SPORTS DIAG` detail is emitted. A DEBUG build only,
+     * which is the spec's own invariant: the two summary lines are safe to ship
+     * (they are one line per event and already a test contract), but the per-row
+     * dump is a debugging aid that a release build must not carry. Kept as a
+     * named function rather than an inline `BuildConfig.DEBUG` check so there is
+     * exactly one place to flip it while a capture is being taken.
+     */
+    private fun verboseDiagEnabled(): Boolean = BuildConfig.DEBUG
 }

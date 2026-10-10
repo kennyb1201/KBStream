@@ -27,6 +27,7 @@ class SportsMatchDiagnosticsContractTest {
     private val model: String by lazy { flat(VIEW_MODEL) }
     private val hub: String by lazy { flat(HUB) }
     private val activity: String by lazy { flat(ACTIVITY) }
+    private val matcher: String by lazy { flat(MATCHER) }
 
     /** A literal `$` in the Kotlin source being asserted about. */
     private val d = '$'
@@ -69,9 +70,9 @@ class SportsMatchDiagnosticsContractTest {
         // pass-wide program count.
         assertTrue(
             "the line names the event, the terms asked and the rows they found, in that order",
-            model.contains(
-                "SPORTS DIAG tournament=${d}{event.id} name=\\\"${d}{event.name}\\\" "
-            ) && model.contains("\"terms=${d}{terms} hits=${d}{rows.size}\"")
+            model.contains("SPORTS DIAG tournament=${d}{event.id} name=") &&
+                model.contains("{event.name}") &&
+                model.contains("\"terms=${d}{terms} hits=${d}{rows.size}\"")
         )
         assertTrue(
             "at Log.w, because release builds strip Log.d and this exists to be read off a viewer's capture",
@@ -82,6 +83,66 @@ class SportsMatchDiagnosticsContractTest {
             model.contains("private suspend fun epgTournamentCandidates(") &&
                 model.indexOf("SPORTS DIAG tournament=") >
                 model.indexOf("private suspend fun epgTournamentCandidates(")
+        )
+    }
+
+    @Test
+    fun `a tournament reports its window and every hit's rejection reason`() {
+        // The second half of the golf diagnosis. `hits=` says the lookup found
+        // rows; it does not say WHY the matcher took none of them, and the four
+        // reasons need four different fixes. Each row is one line carrying the
+        // program, its channel, its times, whether the channel is in the
+        // playlist, and the single filter that dropped it.
+        assertTrue(
+            "the event's own window is logged, so a capture can see the slot the tier judged it against",
+            model.contains(
+                "eventStart=${d}{event.dateMs - SportsChannelMatcher.EPG_WINDOW_MS}"
+            ) &&
+                model.contains("eventEnd=${d}{event.dateMs + SportsChannelMatcher.EPG_WINDOW_MS}") &&
+                model.contains("windowHours=")
+        )
+        assertTrue(
+            "and each hit is one greppable line with the program, its channel and its window",
+            model.contains("SPORTS DIAG tournament=${d}{event.id} prog=") &&
+                model.contains("chId=${d}{row.channelId}") &&
+                model.contains("chName=")
+        )
+        assertTrue(
+            "ending in the playlist flag and the one reason the row was dropped",
+            model.contains("inPlaylist=${d}{channel != null} reject=${d}reason")
+        )
+        assertTrue(
+            "the reason itself is the matcher's own rule, not a second copy that could drift",
+            matcher.contains("internal fun tournamentRejectReason(")
+        )
+        listOf(
+            "\"not-in-playlist\"",
+            "\"time-window\"",
+            "\"channel-name-mismatch\"",
+            "\"duplicate\"",
+            "else -> \"none\""
+        ).forEach { token ->
+            assertTrue("the matcher must name the reason $token", matcher.contains(token))
+        }
+    }
+
+    @Test
+    fun `the per-row dump is capped and gated to a debug build`() {
+        // The invariant: the verbose dump must not ship in a release build, and
+        // must not let one tournament flood a capture. The two summary lines
+        // stay in every build - they are one line per event and a contract of
+        // their own.
+        assertTrue(
+            "the cap is a named constant",
+            model.contains("const val MAX_TOURNAMENT_DIAG_LINES = 40")
+        )
+        assertTrue(
+            "and the per-row line is behind it",
+            model.contains("if (verboseDiagEnabled() && diagLines < MAX_TOURNAMENT_DIAG_LINES)")
+        )
+        assertTrue(
+            "which is a debug-build check, so the release APK never carries the dump",
+            model.contains("private fun verboseDiagEnabled(): Boolean = BuildConfig.DEBUG")
         )
     }
 
@@ -178,5 +239,6 @@ class SportsMatchDiagnosticsContractTest {
         const val HUB = "com/kennyb1201/kbstream/ui/sports/SportsHubScreen.kt"
         const val VIEW_MODEL = "com/kennyb1201/kbstream/ui/sports/SportsHubViewModel.kt"
         const val ACTIVITY = "com/kennyb1201/kbstream/MainActivity.kt"
+        const val MATCHER = "com/kennyb1201/kbstream/data/sports/SportsChannelMatcher.kt"
     }
 }

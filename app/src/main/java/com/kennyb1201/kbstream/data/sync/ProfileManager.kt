@@ -66,6 +66,8 @@ object ProfileManager {
         val createdAt: Long = System.currentTimeMillis()
     )
 
+    private const val TAG = "ProfileManager"
+
     private const val PREFS = "kbstream_profiles"
     private const val KEY_PROFILES = "profiles_json"
     private const val KEY_ACTIVE = "active_profile_id"
@@ -172,6 +174,20 @@ object ProfileManager {
         SupabaseSync.runOneTimePoisonSweep(context)
     }
 
+    /**
+     * Switches the active profile. The three steps are ORDERED and load-bearing:
+     *
+     *  1. persist the new id to [KEY_ACTIVE],
+     *  2. bind it in memory ([_activeProfile]),
+     *  3. THEN drop the per-profile caches ([onActiveProfileChanged]).
+     *
+     * Step 3 reads the active profile back through
+     * [ProfileStorage.activeProfileId] -> [resolveActiveId], which prefers the
+     * in-memory [activeProfile]. Reloading an addon list before steps 1-2 would
+     * therefore resolve the profile we are LEAVING, reload its own list as a
+     * no-op, and leave the old list (and the old kids ceiling) in place - which
+     * is how a kids profile was showing the main profile's addons.
+     */
     fun setActive(context: Context, profile: Profile) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putString(KEY_ACTIVE, profile.id).apply()
@@ -196,7 +212,19 @@ object ProfileManager {
                 .closeScopedInstanceForSwitch()
         }
         runCatching { com.kennyb1201.kbstream.data.watched.WatchedStatusRepository.invalidateAllCaches() }
-        runCatching { com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(appContextForSwitch()).refreshAddons() }
+        // NOT wrapped in runCatching: a switch that cannot reload the addon list
+        // leaves the profile we just left's addons (and kids ceiling) live, so a
+        // failure here is a bug to be seen, not an expected condition to swallow
+        // in silence - it was silent-stale, not loud-broken, the last time this
+        // leak was reported. Logged at warning (Log.w, not Log.d) so it survives
+        // a release build's R8 pass (see proguard-rules.pro).
+        try {
+            com.kennyb1201.kbstream.data.addon.AddonManager
+                .getInstance(appContextForSwitch())
+                .refreshAddons()
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "addon reload failed on profile switch", e)
+        }
         runCatching { com.kennyb1201.kbstream.data.simkl.SimklRepository.clearTransientCaches() }
         // MDBList's key is per-profile too: its process-wide watched
         // snapshot and paused-session (Continue Watching) caches otherwise

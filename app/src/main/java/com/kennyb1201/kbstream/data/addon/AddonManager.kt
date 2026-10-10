@@ -106,8 +106,25 @@ class AddonManager(
         private val _catalogOrderVersion = MutableStateFlow(0)
 val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 
-    val installedAddons: StateFlow<List<InstalledAddon>> =
+    /**
+     * The in-memory list as a flow, for consumers that subscribe rather than
+     * pull. Self-checks the profile on access exactly as [getInstalledAddons]
+     * does, so a switch whose reload was missed or mistimed is corrected by the
+     * first collector after it as well (see [syncProfileIfStale]).
+     *
+     * The flow it hands out is a single stable instance (a Compose
+     * `collectAsStateWithLifecycle` restarts its collection when the flow it
+     * was keyed on changes identity at recomposition), so the guard rides on
+     * the ACCESSOR instead of being folded into the flow itself.
+     */
+    private val installedAddonsFlow: StateFlow<List<InstalledAddon>> =
         _installedAddons.asStateFlow()
+
+    val installedAddons: StateFlow<List<InstalledAddon>>
+        get() {
+            syncProfileIfStale()
+            return installedAddonsFlow
+        }
 
     /**
      * The name to show for the addon whose manifest is served from [host], or
@@ -234,6 +251,11 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         id: String
     ): StateFlow<Boolean> {
 
+        // Self-check on access: if the active profile changed while this
+        // singleton lived, the list behind this flow is the profile we LEFT.
+        // Reload before handing the flow out, so its first emission is right.
+        syncProfileIfStale()
+
         return _installedAddons
             .map { list ->
                 list.any {
@@ -279,6 +301,21 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         val activeId = activeStoreProfileId()
         if (activeId == loadedProfileId) return
         loadForLocked(activeId)
+    }
+
+    /**
+     * The [ensureProfileSyncedLocked] self-check as a call a flow-returning or
+     * non-list accessor can make before it hands anything out. The switch-time
+     * reload ([refreshAddons]) is the first line of defence; this is the second,
+     * so a switch whose reload was missed or mistimed is still corrected by the
+     * first access after it.
+     *
+     * Cheap when nothing changed: one id comparison, taken under [stateLock] so
+     * it cannot race a concurrent mutation. A no-op inside a mutation (the
+     * outermost [mutate] already pinned one profile for its whole duration).
+     */
+    private fun syncProfileIfStale() {
+        synchronized(stateLock) { ensureProfileSyncedLocked() }
     }
 
     /** Loads [profileId]'s addon list into the singleton. Caller holds [stateLock]. */
