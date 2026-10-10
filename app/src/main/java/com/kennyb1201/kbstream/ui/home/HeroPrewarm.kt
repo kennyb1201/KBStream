@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.home
 
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 
 /*
  * What the Home hero pre-warms, in one place: the trailer key its inline player
@@ -74,11 +75,18 @@ internal data class HeroArtWarmTarget(
  * backdrop, then an alternate poster) are different images, and warming a blank
  * string would ask Coil for nothing. An artwork object with neither is simply
  * empty, which is the common case for a title TMDB has no art for.
+ *
+ * The backdrop is warmed at the size the hero DRAWS, not at the size the
+ * artwork was resolved at: the hero pulls its art at full resolution (see
+ * HomeScreen), and this warm exists for the disk entry, which is keyed by URL -
+ * so warming the resolved w1280 would download bytes the hero never asks for
+ * and it would still pay for its own the moment the title is focused.
  */
 internal fun heroArtWarmTargets(artwork: HeroArtwork?): List<HeroArtWarmTarget> =
     listOfNotNull(
         artwork?.backdropUrl
             ?.takeIf { it.isNotBlank() }
+            ?.let { TmdbRepository.fullResBackdropUrl(it) }
             ?.let {
                 HeroArtWarmTarget(
                     url = it,

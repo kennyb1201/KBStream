@@ -1659,9 +1659,14 @@ fun DetailScreen(
             // Add-on art first (fanart etc. from the meta provider), TMDB
             // backdrop as fallback. When no meta add-on answered, the fallback
             // meta was built from TMDB itself, so this still lands on TMDB art.
+            // The hero is the whole screen, so its TMDB still is pulled at
+            // full resolution - and so is the copy handed on to the player's
+            // loading splash (below). The add-on rungs under it are left as
+            // they are: their art is not TMDB's, and the poster rungs are not
+            // backdrops at all.
             val backdropUrl = remember(tmdbDetail, m) {
                 tmdbDetail?.backdropPath?.let {
-                    TmdbRepository.BACKDROP_BASE + it
+                    TmdbRepository.fullResBackdropUrl(TmdbRepository.BACKDROP_BASE + it)
                 }
                     ?: m.background
                     ?: m.poster

@@ -66,7 +66,11 @@ fun AutoPlayLoadSplash(
     title: String,
     subtitle: String? = null
 ) {
-    val resolvedBackdrop = absoluteTmdbArt(backdropUrl, TmdbRepository.BACKDROP_BASE)
+    // Full resolution, and not one of absoluteTmdbArt's sized bases: this is
+    // the one backdrop slot that is the entire screen, so w1280 - the size a
+    // card wants - is a visible upscale on a 4K panel. The logo keeps its
+    // sized base (see LOGO_BASE for why "original" is wrong for wordmarks).
+    val resolvedBackdrop = TmdbRepository.fullResBackdropUrl(backdropUrl)
     val resolvedLogo = absoluteTmdbArt(clearLogoUrl, TmdbRepository.LOGO_BASE)
 
     Box(

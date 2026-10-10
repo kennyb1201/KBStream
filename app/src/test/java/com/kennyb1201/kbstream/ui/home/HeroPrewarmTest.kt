@@ -117,7 +117,11 @@ class HeroPrewarmTest {
             )
 
         assertEquals(2, targets.size)
-        assertEquals("https://image.tmdb.org/t/p/w1280/back.jpg", targets[0].url)
+        // The backdrop at the size the HERO draws it - the artwork was resolved
+        // at w1280, and the warm is the whole frame's full-resolution URL so the
+        // disk entry it fills is the one the hero asks for. The clearlogo keeps
+        // its resolved size, which is the size the hero draws it at.
+        assertEquals("https://image.tmdb.org/t/p/original/back.jpg", targets[0].url)
         assertEquals("https://image.tmdb.org/t/p/w780/logo.png", targets[1].url)
 
         // Thumbnails, not the hero's own sizes: the warm exists for the disk
@@ -138,7 +142,7 @@ class HeroPrewarmTest {
                 )
             )
 
-        assertEquals(listOf("https://image.tmdb.org/t/p/w1280/back.jpg"), targets.map { it.url })
+        assertEquals(listOf("https://image.tmdb.org/t/p/original/back.jpg"), targets.map { it.url })
     }
 
     @Test

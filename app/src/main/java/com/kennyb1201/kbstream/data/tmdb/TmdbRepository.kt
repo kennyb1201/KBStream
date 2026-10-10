@@ -3277,6 +3277,18 @@ class TmdbRepository private constructor(context: Context) :
         const val PROFILE_BASE = "https://image.tmdb.org/t/p/w185"
         const val BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
         const val POSTER_BASE = "https://image.tmdb.org/t/p/w500"
+        /**
+         * TMDB's master size for one still, for the few surfaces that draw a
+         * backdrop across the whole frame - the player's loading splash, the
+         * Detail hero, the Home hero. See [fullResBackdropUrl], which is how
+         * they get here.
+         *
+         * Deliberately NOT the default: a rail card, the BYW strip and the
+         * catalog grids draw at card size, where w1280 ([BACKDROP_BASE]) is
+         * already more pixels than the slot shows - "original" there would be
+         * several times the bytes for detail nothing draws.
+         */
+        const val BACKDROP_BASE_FULL = "https://image.tmdb.org/t/p/original"
         // w780, not original: company/network logo PNGs at "original" are
         // routinely 1500-2500px wide (hundreds of KB to a few MB). They
         // are drawn into a 360dp header slot and force-decoded in software
@@ -3284,6 +3296,36 @@ class TmdbRepository private constructor(context: Context) :
         // only made headers look logo-less for as long as the download
         // took.
         const val LOGO_BASE = "https://image.tmdb.org/t/p/w780"
+
+        /**
+         * [url] at full resolution, for a backdrop slot that fills the screen.
+         *
+         * Takes whatever a launch happens to carry, which is not one shape: a
+         * bare TMDB path from an add-on meta or a history row, or an absolute
+         * URL this app already resolved at some size - w1280 from a card's
+         * backdrop, w780 from a still, w500 from a poster standing in for a
+         * backdrop. Only the size segment changes, never the file, so the
+         * caller does not have to know which of those it was handed.
+         *
+         * Anything that is not TMDB's own image host is returned untouched: a
+         * fanart.tv or add-on CDN URL is not ours to resize, and rewriting its
+         * host would turn working art into a 404. A blank or absent URL stays
+         * null, the same as everywhere else an image URL is absent.
+         */
+        fun fullResBackdropUrl(url: String?): String? {
+            val raw = url?.takeIf { it.isNotBlank() } ?: return null
+            // A bare path: resolve it against the full-size base.
+            if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
+                return BACKDROP_BASE_FULL + if (raw.startsWith("/")) raw else "/$raw"
+            }
+            // Already absolute, and ours: swap the size segment. Any other size
+            // qualifies, not just w1280 - "original" on a URL that is already
+            // original rewrites to itself.
+            return TMDB_IMAGE_SIZE.replaceFirst(raw, "$BACKDROP_BASE_FULL/")
+        }
+
+        /** TMDB's image host plus its size segment - the part "original" replaces. */
+        private val TMDB_IMAGE_SIZE = Regex("^https?://image\\.tmdb\\.org/t/p/[^/]+/")
 
         /**
          * The stub threshold, on both axes. TMDB carries a handful of

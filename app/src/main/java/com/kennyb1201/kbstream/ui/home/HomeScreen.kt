@@ -107,6 +107,7 @@ import com.kennyb1201.kbstream.data.addon.Meta
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
@@ -1024,9 +1025,19 @@ private fun HomeHero(
     val context = LocalContext.current
     val title = meta?.name ?: preview.name
 
-    val backdrop = heroBackdropUrl
-        ?: meta?.background
-        ?: preview.background
+    // The hero fills the screen, so its backdrop art is pulled at TMDB's full
+    // resolution - HERE, at the display site, and not where the URL is
+    // resolved: the same resolved w1280 URL is a landscape rail card's
+    // backdrop too (see TmdbRepository.BACKDROP_BASE_FULL), and upgrading it in
+    // HomeViewModel would rewrite that card's Coil cache key as well.
+    //
+    // Only the backdrop rungs are upgraded. The two poster rungs under them are
+    // not backdrops: "original" on a poster would hand a portrait still to a
+    // 16:9 slot at several times the bytes.
+    val backdropArt = TmdbRepository.fullResBackdropUrl(
+        heroBackdropUrl ?: meta?.background ?: preview.background
+    )
+    val backdrop = backdropArt
         ?: meta?.poster
         ?: preview.poster
 
