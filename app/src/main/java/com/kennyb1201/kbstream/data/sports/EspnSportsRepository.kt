@@ -365,6 +365,15 @@ private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? 
     val statusDetail = status?.optString("shortDetail", "")
         ?.takeIf { it.isNotBlank() }
         ?: status?.optString("detail", "").orEmpty()
+    // The situation block is read ONCE: the card's line and the sheet's
+    // possession marker are the two halves of the same answer, so neither can
+    // be derived from a different read of the feed than the other.
+    val situation = espnSituation(
+        state = state,
+        sport = espnSport(leaguePath),
+        competition = competition,
+        statusDetail = statusDetail,
+    )
     return SportsGame(
         id = id,
         league = leaguePath,
@@ -375,12 +384,11 @@ private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? 
         // Free: football's down/distance and baseball's inning/outs are on the
         // competition the card was already parsed from. Null for every other
         // league, and for a game that is not in play.
-        situation = espnSituation(
-            state = state,
-            sport = espnSport(leaguePath),
-            competition = competition,
-            statusDetail = statusDetail,
-        ),
+        situation = situation?.line,
+        // And the same read answers "who has the ball" for the sheet, which the
+        // line itself cannot: it names the side the ball is ON, not the side
+        // holding it. Null wherever the situation is, for the same reason.
+        possessionTeamId = situation?.possessionTeamId,
         away = awayTeam,
         home = homeTeam,
         broadcastNames = espnBroadcasts(event, competition),
@@ -815,16 +823,41 @@ internal fun espnSituation(
     sport: EspnSport,
     competition: JSONObject?,
     statusDetail: String,
-): String? {
+): EspnSituation? {
     if (state != GameState.LIVE) return null
     return when (sport) {
         EspnSport.FOOTBALL -> espnFootballSituation(competition)
+        // Baseball's half-inning and count say nothing about a ball being held,
+        // so its situation is a line and no possession.
         EspnSport.BASEBALL -> espnBaseballSituation(competition, statusDetail)
+            ?.let { EspnSituation(line = it) }
         else -> null
     }
 }
 
-private fun espnFootballSituation(competition: JSONObject?): String? {
+/**
+ * A live situation, in the two parts the UI actually asks two different
+ * questions about: the sentence a card prints and the side the feed says has
+ * the ball.
+ *
+ * Two parts rather than one string because the possession is not a sentence -
+ * the sheet marks the possessing team's column with it - and because the id
+ * has to survive the wording of [line]: the line names the side the ball is ON
+ * (the defender's half), which is precisely not the side that has it.
+ */
+internal data class EspnSituation(
+    /** "3rd & 7 · Ball on NE 32", or the bare "3rd & 7" when the side cannot be named. */
+    val line: String,
+    /**
+     * ESPN's id of the side in possession, or null when the feed names none -
+     * or names an id that is not a competitor of this game. Resolved by the
+     * same lookup that words [line], so the marker and the sentence can never
+     * name different sides.
+     */
+    val possessionTeamId: String? = null,
+)
+
+private fun espnFootballSituation(competition: JSONObject?): EspnSituation? {
     val situation = competition?.optJSONObject("situation") ?: return null
     val down = situation.optInt("down", 0)
     val distance = situation.optInt("distance", 0)
@@ -842,8 +875,17 @@ private fun espnFootballSituation(competition: JSONObject?): String? {
         sides.firstOrNull { (id, _) -> id.isNotEmpty() && id != possession }?.second
     }
     val downAndDistance = "${espnOrdinal(down)} & $distance"
-    return if (defender == null) downAndDistance
-    else "$downAndDistance · Ball on $defender $yardLine"
+    return if (defender == null) {
+        EspnSituation(line = downAndDistance)
+    } else {
+        EspnSituation(
+            line = "$downAndDistance · Ball on $defender $yardLine",
+            // The abbreviation words the line; the id is what the sheet marks.
+            // Both come from this one resolution, so a card and its sheet can
+            // never disagree about who has the ball.
+            possessionTeamId = possessedBy?.first,
+        )
+    }
 }
 
 private fun espnBaseballSituation(competition: JSONObject?, statusDetail: String): String? {

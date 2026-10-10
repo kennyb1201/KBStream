@@ -228,6 +228,109 @@ class SportsGameDetailSheetContractTest {
         )
     }
 
+    // ── Who has the ball (the sheet's ball marker) ───────────────────
+
+    @Test
+    fun `the possessing side wears the ball, and neither does when the feed is silent`() {
+        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        assertTrue(
+            "each header column asks the shared rule about its own side",
+            sheet.contains("possession = SportsDetailRules.possesses(game, game.away),") &&
+                sheet.contains("possession = SportsDetailRules.possesses(game, game.home),")
+        )
+        val column = slice("private fun TeamColumn(", "private fun ScoreRow(")
+        assertTrue(
+            "a column the rule says nothing about draws no marker at all, so the absence of the " +
+                "ball means the feed did not say rather than \"this side does not have it\"",
+            column.contains("if (possession) {") && column.contains("PossessionBall()")
+        )
+        val ball = slice("private fun PossessionBall(", "private fun ScoreRow(")
+        assertTrue(
+            "the marker is one drawn accent shape, not a glyph the platform colours",
+            ball.contains("KBAccent") && !ball.contains("Text(")
+        )
+        assertFalse(
+            "and the card never asks for it: the marker belongs to the sheet alone",
+            slice("private fun GameCard(", "private fun TeamColumn(").contains("possession =")
+        )
+    }
+
+    // ── The D-pad chain ─────────────────────────────────────────────
+
+    @Test
+    fun `the D-pad walks WATCH and the backup pills by an explicit chain`() {
+        // Reported: with the sheet open, Down from WATCH never reached the
+        // BACKUP CHANNELS pills. Directional search across a scroll container is
+        // a guess, and the fix is to stop guessing: each stop names the next.
+        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        assertTrue(
+            "one requester per backup pill, remade if the list grows while the sheet is open",
+            sheet.contains("val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }")
+        )
+        assertTrue(
+            "WATCH hands Down to the first pill itself",
+            sheet.contains(".focusRequester(watchButton) .focusDownTo(backupButtons.firstOrNull())")
+        )
+        assertTrue(
+            "and each pill hands Down to the one under it, in the order they are drawn",
+            sheet.contains("backups.forEachIndexed { index, backup ->") &&
+                sheet.contains(
+                    ".focusRequester(backupButtons[index]) " +
+                        ".focusDownTo(backupButtons.getOrNull(index + 1))"
+                )
+        )
+        val chain = slice("private fun Modifier.focusDownTo(", "private fun ColumnScope.DetailSheetBody(")
+        assertTrue(
+            "the chain overrides Down and only Down - every other direction keeps the search that worked",
+            chain.contains("focusProperties { down = next }") && !chain.contains("up =")
+        )
+        assertTrue(
+            "and a stop with nowhere to go is left exactly as it was",
+            chain.contains("if (next == null) this else")
+        )
+        assertTrue(
+            "nothing about the scroll-follow changed: the body still lands the focused pill clear of the edge",
+            hub.contains("Spacer(modifier = Modifier.height(KBFocusRowInset))") &&
+                hub.contains("SportsCardBringIntoViewSpec(")
+        )
+        assertTrue(
+            "and focus-on-open still lands on WATCH",
+            sheet.contains("LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }")
+        )
+    }
+
+    // ── The scrim, and the paused beat behind it ─────────────────────
+
+    @Test
+    fun `the hub is veiled and its beat held while the sheet is open`() {
+        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        assertTrue(
+            "the plate keeps its inset through its own padding, so the veil covers the whole window " +
+                "instead of stopping short of it",
+            sheet.contains(".padding(horizontal = 24.dp, vertical = 24.dp) .fillMaxWidth(0.72f)")
+        )
+        assertTrue(
+            "black at 60%, drawn as one shape",
+            sheet.contains(".background(Color.Black.copy(alpha = SHEET_SCRIM_ALPHA))")
+        )
+        assertTrue(
+            "and the scrim is a drawing, not a control: it has no click handling of its own, so " +
+                "tap-out dismissing is still the dialog's",
+            hub.contains(
+                "Box( modifier = Modifier .fillMaxSize() " +
+                    ".background(Color.Black.copy(alpha = SHEET_SCRIM_ALPHA)) )"
+            ) && sheet.contains("onDismissRequest = onClose")
+        )
+        assertTrue(
+            "the screen knows a sheet is up",
+            hub.contains("val sheetOpen = detailGame != null || detailTournament != null")
+        )
+        assertTrue(
+            "and every section body is told, so the search results and favourites tabs hold too",
+            3 == Regex("pulseEnabled = !sheetOpen").findAll(hub).count()
+        )
+    }
+
     private fun slice(startMarker: String, endMarker: String): String {
         val start = hub.indexOf(startMarker)
         assertTrue("$startMarker is missing", start >= 0)

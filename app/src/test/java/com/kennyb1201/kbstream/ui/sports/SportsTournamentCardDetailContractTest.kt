@@ -164,6 +164,42 @@ class SportsTournamentCardDetailContractTest {
         )
     }
 
+    // ── the veil and the D-pad chain (the game sheet's, on the twin) ──────
+
+    @Test
+    fun `the tournament sheet is veiled and its pills are chained too`() {
+        // A tournament sheet has the same dock, the same live hub behind it and
+        // the same BACKUP CHANNELS rows, so both remedies belong on both: a game
+        // sheet fixed and a tournament sheet left bobbing behind a bright scrim
+        // would be the same bug wearing the other card.
+        assertTrue(
+            "the same scrim, the same 60%",
+            sheet.contains(".background(Color.Black.copy(alpha = SHEET_SCRIM_ALPHA))")
+        )
+        assertTrue(
+            "and the plate keeps its inset through its own padding, as the game sheet's does",
+            sheet.contains(".padding(horizontal = 24.dp, vertical = 24.dp) .fillMaxWidth(0.72f)")
+        )
+        assertTrue(
+            "one requester per backup pill",
+            sheet.contains("val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }")
+        )
+        assertTrue(
+            "WATCH hands Down to the first pill",
+            sheet.contains(".focusRequester(watchButton) .focusDownTo(backupButtons.firstOrNull())")
+        )
+        assertTrue(
+            "and each pill to the next",
+            sheet.contains("backups.forEachIndexed { index, backup ->") &&
+                sheet.contains(".focusDownTo(backupButtons.getOrNull(index + 1))")
+        )
+        assertTrue(
+            "with the manual pick and the play unchanged",
+            sheet.contains("onManualPick(backup)") &&
+                sheet.contains("onPlay(listOf(backup) + channels.filter { it.id != backup.id })")
+        )
+    }
+
     // ── raising and dismissing it ─────────────────────────────────────────
 
     @Test

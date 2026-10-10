@@ -33,6 +33,9 @@ class SportsLiveStatsContractTest {
     /** The detail sheet, from its declaration to the first row helper after it. */
     private val sheet: String by lazy { slice(hub, "private fun GameDetailSheet(", "private fun DetailRow(") }
 
+    /** The card's situation line, from its declaration to the score text after it. */
+    private val situation: String by lazy { slice(hub, "private fun SituationLine(", "private fun ScoreText(") }
+
     /** Opening and closing the sheet: the only two places a summary is asked for. */
     private val openDetail: String by lazy { slice(model, "fun openDetail(game: SportsGame) {", "fun closeDetail()") }
 
@@ -46,26 +49,36 @@ class SportsLiveStatsContractTest {
 
     @Test
     fun `the card draws the situation line only when the feed carried one`() {
+        // The line moved into its own composable when the live card's rows
+        // became reserved slots (see SportsLiveCardStabilityContractTest), so
+        // the assertions split with it: the card fixes the ORDER and decides
+        // whether the row is reserved, and the line itself decides its words.
+        assertTrue(
+            "the card draws the score row and the situation line in that order",
+            card.indexOf("ScoreRow(game = game, reserveSlot = liveSlots)") >= 0 &&
+                card.indexOf("ScoreRow(game = game, reserveSlot = liveSlots)") <
+                card.indexOf("SituationLine(game = game, reserveSlot = liveSlots)")
+        )
         assertTrue(
             "the line is the parsed situation, drawn when it exists",
-            card.contains("game.situation?.takeIf { it.isNotBlank() }?.let { situation ->")
+            situation.contains("val situation = game.situation?.takeIf { it.isNotBlank() }")
         )
         assertTrue(
             "and it says what the parser built, not a re-spelling of it",
-            card.contains("text = situation,")
+            situation.contains("text = situation ?: RESERVED_ROW_TEXT,")
         )
         assertTrue(
             "in the card's secondary text style, under the score",
-            card.contains("style = MaterialTheme.typography.bodySmall,") &&
-                card.contains("color = KBTextLo,")
+            situation.contains("style = MaterialTheme.typography.bodySmall,") &&
+                situation.contains("color = KBTextLo,")
         )
         assertTrue(
-            "below the score line rather than above the sides",
-            card.indexOf("ScoreRow(game = game)") < card.indexOf("game.situation?")
-        )
-        assertFalse(
-            "no placeholder: a game without a situation draws nothing at all",
-            card.contains("?: \"\"") || card.contains("situation ?: ")
+            "and the only thing ever drawn in place of the feed's own line is the reserved " +
+                "blank - never a stand-in a viewer could read, and never an empty string that " +
+                "would lay out no line at all",
+            situation.contains("RESERVED_ROW_TEXT") &&
+                !situation.contains("?: \"\"") &&
+                !situation.contains("N/A")
         )
     }
 

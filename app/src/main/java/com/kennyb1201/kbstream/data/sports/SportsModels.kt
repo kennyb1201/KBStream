@@ -100,6 +100,15 @@ data class SportsGame(
      * `espnSituation`.
      */
     val situation: String? = null,
+    /**
+     * ESPN's own id of the side with the ball, for a live football game whose
+     * feed names a possession that resolves to one of THIS game's competitors.
+     * Null everywhere else, and null rather than guessed when the feed names
+     * none or names an id the competition does not carry - the same "don't
+     * guess" rule [situation] follows, and from the same parse, so the sheet's
+     * marker and the card's sentence can never point at different sides.
+     */
+    val possessionTeamId: String? = null,
     val away: SportsTeam,
     val home: SportsTeam,
     /** Networks airing it, e.g. ["ESPN"] - the bridge to the playlist. */

@@ -4,6 +4,7 @@ import com.kennyb1201.kbstream.data.format.DateFormats
 import com.kennyb1201.kbstream.data.sports.EspnGameSummary
 import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.SportsGame
+import com.kennyb1201.kbstream.data.sports.SportsTeam
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 
 /** One labelled line of the game-detail sheet. */
@@ -145,6 +146,21 @@ internal object SportsDetailRules {
      */
     fun statsHeading(game: SportsGame): String =
         if (game.state == GameState.FINAL) "FINAL STATS" else "LIVE STATS"
+
+    /**
+     * Whether [team] is the side the feed says has the ball.
+     *
+     * The sheet asks once per side to decide which column wears the ball
+     * marker, and the card never asks at all. Keyed on ESPN's team id, which is
+     * the only stable name a side has, and false whenever the game carries no
+     * resolved possession - so the absence of the marker means "the feed did
+     * not say", never "this side does not have it". A side the feed gives no id
+     * for cannot be marked, because the id is the whole of what the feed said.
+     */
+    fun possesses(game: SportsGame, team: SportsTeam): Boolean {
+        val possessing = game.possessionTeamId?.takeIf { it.isNotBlank() } ?: return false
+        return possessing == team.id
+    }
 
     /**
      * The Watch button's label: enabled, or the honest reason it is not.

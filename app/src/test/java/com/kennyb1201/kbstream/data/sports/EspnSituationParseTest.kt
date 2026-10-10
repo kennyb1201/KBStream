@@ -93,6 +93,54 @@ class EspnSituationParseTest {
     }
 
     @Test
+    fun `a live football game carries the side the feed says has the ball`() {
+        val game = parseScoreboard(nflLive, "football/nfl").single()
+
+        // BUF's ESPN id is 2, and the feed's `possession` is that id: the one
+        // fact the card's sentence cannot state, because the sentence names the
+        // OTHER side (the half the ball is on).
+        assertEquals("2", game.possessionTeamId)
+        assertEquals(GameState.LIVE, game.state)
+    }
+
+    @Test
+    fun `a possession the feed cannot resolve leaves the marker unset`() {
+        // An id the competition does not carry is not a side of this game, and
+        // a marker on the wrong column is worse than none - the same rule the
+        // line's own "Ball on …" half follows.
+        val anonymous = nflLive.replace("\"possession\": \"2\"", "\"possession\": \"999\"")
+        assertNull(parseScoreboard(anonymous, "football/nfl").single().possessionTeamId)
+
+        val missing = nflLive.replace("\"possession\": \"2\",", "")
+        assertNull(parseScoreboard(missing, "football/nfl").single().possessionTeamId)
+    }
+
+    @Test
+    fun `only a live football game carries a possession`() {
+        // Baseball's half-inning says nothing about who is holding a ball, and
+        // a game that is over or has not started has no live situation at all -
+        // so neither can mark a side in the sheet.
+        assertNull(parseScoreboard(mlbLive, "baseball/mlb").single().possessionTeamId)
+
+        val final = nflLive.replace("\"state\": \"in\"", "\"state\": \"post\"")
+        val upcoming = nflLive.replace("\"state\": \"in\"", "\"state\": \"pre\"")
+        assertNull(parseScoreboard(final, "football/nfl").single().possessionTeamId)
+        assertNull(parseScoreboard(upcoming, "football/nfl").single().possessionTeamId)
+    }
+
+    @Test
+    fun `the marker and the sentence come from one resolution`() {
+        // The line names the side the ball is ON (NE, the non-possessor) and the
+        // id names the side holding it (BUF), from the same lookup: a feed that
+        // names BUF can never produce "Ball on BUF" with BUF marked as well.
+        val game = parseScoreboard(nflLive, "football/nfl").single()
+
+        assertEquals("3rd & 7 · Ball on NE 32", game.situation)
+        assertEquals("2", game.possessionTeamId)
+        assertEquals("BUF", game.away.abbreviation)
+    }
+
+    @Test
     fun `an MLB live game reads its half-inning and outs`() {
         val game = parseScoreboard(mlbLive, "baseball/mlb").single()
 

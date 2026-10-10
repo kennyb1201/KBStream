@@ -27,8 +27,9 @@ class SportsDetailRulesTest {
         name: String = abbreviation,
         score: String? = null,
         record: String? = null,
+        id: String? = null,
     ) = SportsTeam(
-        id = null,
+        id = id,
         abbreviation = abbreviation,
         displayName = name,
         logoUrl = null,
@@ -49,6 +50,7 @@ class SportsDetailRulesTest {
         note: String? = null,
         broadcastNames: List<String> = emptyList(),
         leaders: List<GameLeader> = emptyList(),
+        possessionTeamId: String? = null,
     ) = SportsGame(
         id = "1",
         league = "baseball/mlb",
@@ -63,6 +65,7 @@ class SportsDetailRulesTest {
         note = note,
         week = week,
         leaders = leaders,
+        possessionTeamId = possessionTeamId,
     )
 
     @Test
@@ -180,6 +183,46 @@ class SportsDetailRulesTest {
             "WATCH",
             SportsDetailRules.watchLabel(true, lineupMissing = true)
         )
+    }
+
+    // ── Possession (the sheet's ball marker) ─────────────────────────
+
+    @Test
+    fun `the ball belongs to the side the feed named, and only that side`() {
+        val bills = team("BUF", id = "2")
+        val patriots = team("NE", id = "17")
+        val live = game(
+            state = GameState.LIVE,
+            away = bills,
+            home = patriots,
+            possessionTeamId = "2",
+        )
+
+        assertTrue("BUF has the ball", SportsDetailRules.possesses(live, bills))
+        assertFalse("and NE does not", SportsDetailRules.possesses(live, patriots))
+    }
+
+    @Test
+    fun `a feed that names no possession marks nobody`() {
+        // The absence of the marker has to mean "the feed did not say", so
+        // neither side is marked when there is nothing to mark them from.
+        val live = game(state = GameState.LIVE)
+        assertFalse(SportsDetailRules.possesses(live, live.away))
+        assertFalse(SportsDetailRules.possesses(live, live.home))
+        // A blank id is the same as none - ESPN sends "" for a situation block
+        // it has emptied out.
+        val blank = game(state = GameState.LIVE, possessionTeamId = "  ")
+        assertFalse(SportsDetailRules.possesses(blank, blank.home))
+    }
+
+    @Test
+    fun `a side with no id of its own is never marked`() {
+        // The id is the whole of what the feed said, so a side it has no id for
+        // cannot be matched against it - the marker can never land on the wrong
+        // column just because both sides look similar.
+        val anonymous = team("BUF")
+        val live = game(state = GameState.LIVE, away = anonymous, possessionTeamId = "2")
+        assertFalse(SportsDetailRules.possesses(live, anonymous))
     }
 
     // ── The stats section (the game detail sheet) ────────────────────

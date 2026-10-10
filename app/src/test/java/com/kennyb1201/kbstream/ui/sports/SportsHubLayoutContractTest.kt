@@ -134,9 +134,11 @@ class SportsHubLayoutContractTest {
             scoreText.contains("fontWeight = if (live) FontWeight.Bold else FontWeight.SemiBold")
         )
         assertTrue(
-            "a game that has not started draws no score row at all",
+            "a game that has not started draws no score row at all - the one exception being a " +
+                "LIVE card, which reserves the row so the score cannot resize the card when it " +
+                "arrives (see SportsLiveCardStabilityContractTest)",
             flat.contains("val away = game.away.score?.takeIf { it.isNotBlank() }") &&
-                flat.contains("if (away == null && home == null) return")
+                flat.contains("if (away == null && home == null && !reserveSlot) return")
         )
     }
 
@@ -178,12 +180,12 @@ class SportsHubLayoutContractTest {
             Regex("rememberInfiniteTransition\\(").findAll(flat).count()
         )
         assertTrue(
-            "the section computes it once and hands it down",
-            flat.contains("val livePulse = rememberLivePulse()")
+            "the section computes it once and hands it down, told whether the beat is running",
+            flat.contains("val livePulse = rememberLivePulse(pulseEnabled = pulseEnabled)")
         )
         assertTrue(
-            "every card takes that same value",
-            flat.contains("livePulse = livePulse") && flat.contains("livePulse: Float")
+            "every card takes that same clock, as a State",
+            flat.contains("livePulse = livePulse") && flat.contains("livePulse: State<Float>")
         )
         val dot = slice("private fun LiveDot(", "private fun BroadcastChip(")
         assertFalse(
@@ -191,8 +193,9 @@ class SportsHubLayoutContractTest {
             dot.contains("animateFloat")
         )
         assertTrue(
-            "the dot only draws the alpha it was given",
-            dot.contains("LiveDot(alpha: Float")
+            "and the dot is where the State is READ: a frame invalidates the 9dp circle, not the " +
+                "card that passed the clock through untouched",
+            dot.contains("LiveDot(pulse: State<Float>") && dot.contains("val alpha = pulse.value")
         )
     }
 

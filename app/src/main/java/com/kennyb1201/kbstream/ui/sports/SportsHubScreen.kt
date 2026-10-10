@@ -42,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -65,6 +67,8 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -141,6 +145,31 @@ private const val TWO_COLUMN_MIN_WIDTH_DP = 900
  * banner rather than as something to type into.
  */
 private const val SEARCH_FIELD_WIDTH_DP = 360
+
+/**
+ * How far the sheet's scrim dims the hub behind it.
+ *
+ * Black at 60%: enough that the plate is the only thing being read, and not so
+ * much that the slate behind it disappears - the sheet is the card opened, and
+ * the card it came from should still be findable under it.
+ */
+private const val SHEET_SCRIM_ALPHA = 0.6f
+
+/**
+ * What a reserved card row draws where the feed has nothing yet: a space.
+ *
+ * Deliberately a character and not a dp height. The promise a reserved row makes
+ * is that the row the score arrives into is the row that was already there, and
+ * the only way to be certain of that is to measure the same thing twice - the
+ * blank is laid out by the very style the value will be, so "reserved" and
+ * "filled" are one height by construction, at any font scale.
+ *
+ * A fixed height would have to be deduced from the style's line height, and the
+ * theme's display/headline/title/label styles set none (only the body styles
+ * do), so the deduction does not even exist for the score row - the row that
+ * needed reserving most, since a score appears the moment a game starts.
+ */
+private const val RESERVED_ROW_TEXT = " "
 
 /**
  * The sports hub: every league the profile turned on, its games, and the
@@ -273,6 +302,14 @@ fun SportsHubScreen(
     // to play, and the sheet is where the reason is stated. A MATCHED card still
     // plays, exactly as it did.
     var detailTournament by remember { mutableStateOf<TournamentEvent?>(null) }
+
+    // Any sheet over the hub pauses the section's LIVE beat (see
+    // [rememberLivePulse]): the dots are behind that sheet, and a beat nobody
+    // can see is exactly the per-frame work the shared clock exists to avoid.
+    // Only the animation stops - the data keeps polling underneath, so the
+    // scores are as fresh the moment the sheet closes as they were when it
+    // opened.
+    val sheetOpen = detailGame != null || detailTournament != null
 
     // The sheet's fetch policy, in one place: opening a game asks the hub for its
     // summary - lazily, and only for a live one - and closing clears it, so the
@@ -448,6 +485,7 @@ fun SportsHubScreen(
                     )
                     Spacer(modifier = Modifier.height(10.dp))
                     LeagueBody(
+                        pulseEnabled = !sheetOpen,
                         section = results,
                         matches = matches,
                         favoriteKeys = favoriteKeys,
@@ -506,6 +544,7 @@ fun SportsHubScreen(
 
                 favoritesTab -> when {
                     section.games.isNotEmpty() -> LeagueBody(
+                        pulseEnabled = !sheetOpen,
                         section = section,
                         matches = matches,
                         favoriteKeys = favoriteKeys,
@@ -546,6 +585,7 @@ fun SportsHubScreen(
                 )
 
                 else -> LeagueBody(
+                    pulseEnabled = !sheetOpen,
                     section = section,
                     matches = matches,
                     favoriteKeys = favoriteKeys,
@@ -891,6 +931,11 @@ private class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringInt
 @Composable
 private fun LeagueBody(
     section: LeagueSection,
+    /**
+     * Whether the section's LIVE beat is running. False while a sheet is over
+     * the hub; the data is untouched either way (see [rememberLivePulse]).
+     */
+    pulseEnabled: Boolean = true,
     matches: Map<String, List<IptvChannel>>,
     favoriteKeys: Set<String>,
     listState: LazyListState,
@@ -917,7 +962,7 @@ private fun LeagueBody(
     // ONE pulse for the whole league, shared by every live dot it draws. Each
     // live card used to run its own infinite transition - the same beat, but N
     // animation clocks, each recomposing its own card on its own frame.
-    val livePulse = rememberLivePulse()
+    val livePulse = rememberLivePulse(pulseEnabled = pulseEnabled)
 
     HubList(
         listState = listState,
@@ -1022,7 +1067,7 @@ private fun LazyListScope.gameRows(
     games: List<SportsGame>,
     columns: Int,
     matches: Map<String, List<IptvChannel>>,
-    livePulse: Float,
+    livePulse: State<Float>,
     favoriteKeys: Set<String>,
     lineupMissing: Boolean,
     matchingDone: Boolean,
@@ -1149,7 +1194,7 @@ private fun LineupMissingNotice(onRetry: () -> Unit) {
 private fun GameCard(
     game: SportsGame,
     channel: IptvChannel?,
-    livePulse: Float,
+    livePulse: State<Float>,
     favoriteKeys: Set<String>,
     lineupMissing: Boolean,
     matchingDone: Boolean,
@@ -1182,23 +1227,17 @@ private fun GameCard(
                 )
             }
 
-            ScoreRow(game = game)
-
-            // The live situation line, when the feed carries one: "3rd & 7 ·
-            // Ball on NE 32", "Top 5th · 1 out". Absent - not blank - for every
-            // game without one, so a card's layout is untouched.
-            game.situation?.takeIf { it.isNotBlank() }?.let { situation ->
-                Text(
-                    text = situation,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = KBTextLo,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 5.dp)
-                )
-            }
+            // A LIVE card reserves both of these rows, filled or not. That is
+            // the whole bobbing fix: the score lands the moment a game starts
+            // and the situation line comes and goes with the down, and a row
+            // that appears mid-poll remeasures the card, moves every row below
+            // it, and shoves the cards under it in the section - which is why
+            // only live cards moved, only some of them, and only sometimes.
+            // Upcoming and final games keep the conditional rows: their data
+            // never changes, so a reserved empty row would be dead space.
+            val liveSlots = game.state == GameState.LIVE
+            ScoreRow(game = game, reserveSlot = liveSlots)
+            SituationLine(game = game, reserveSlot = liveSlots)
 
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -1256,6 +1295,11 @@ private fun TeamColumn(
     team: SportsTeam,
     favorite: Boolean,
     alignEnd: Boolean = false,
+    /**
+     * Whether the feed says this side has the ball. Only the sheet asks, so a
+     * card's column is the column it always was - see [PossessionBall].
+     */
+    possession: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     // The mark over the name, not beside it: with two cards sharing a row the
@@ -1268,24 +1312,65 @@ private fun TeamColumn(
     ) {
         TeamMark(team = team)
         Spacer(modifier = Modifier.height(6.dp))
-        // "TB · 4-1": the code and the season record on one line, which is how
-        // a scoreboard says it. The record is simply absent where the feed
-        // carries none (tennis, MMA) and the line is the code alone.
-        Text(
-            // The star is the whole "this is one of yours" signal, so it sits on
-            // the code the way a broadcast mark sits on a channel: no second
-            // row, no badge to decode.
-            text = listOfNotNull(
-                team.abbreviation.ifBlank { team.displayName },
-                team.record?.trim()?.takeIf { it.isNotBlank() }
-            ).joinToString(" · ").let { if (favorite) "★ $it" else it },
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-            color = if (favorite) KBAccent else KBTextHi,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
+        // The code line, with the ball in front of it on the side that has it.
+        // A Row only so the marker can sit beside the code rather than under
+        // it; with no possession it holds one Text and lays it out exactly as
+        // the bare Text did, at either end.
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = if (alignEnd) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (possession) {
+                PossessionBall()
+                Spacer(modifier = Modifier.width(6.dp))
+            }
+            // "TB · 4-1": the code and the season record on one line, which is how
+            // a scoreboard says it. The record is simply absent where the feed
+            // carries none (tennis, MMA) and the line is the code alone.
+            Text(
+                // The star is the whole "this is one of yours" signal, so it sits on
+                // the code the way a broadcast mark sits on a channel: no second
+                // row, no badge to decode.
+                text = listOfNotNull(
+                    team.abbreviation.ifBlank { team.displayName },
+                    team.record?.trim()?.takeIf { it.isNotBlank() }
+                ).joinToString(" · ").let { if (favorite) "★ $it" else it },
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = if (favorite) KBAccent else KBTextHi,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
+}
+
+/**
+ * The ball, beside the code of the side that has it.
+ *
+ * A drawn accent oval rather than a glyph, for the reason the sheet's other
+ * marks are drawn: an emoji's weight, colour and font belong to the platform, so
+ * the one mark on this plate the app could not control would be the one saying
+ * something as load-bearing as who has the ball. Sized between the LIVE dot and
+ * the type beside it, so it reads as a marker on the code rather than as a
+ * bullet in front of it.
+ *
+ * Drawn ONLY where the feed named a possession that resolved to one of this
+ * game's sides (see [SportsDetailRules.possesses]) - the absence of the ball is
+ * meaningful, so it is never guessed at.
+ */
+@Composable
+private fun PossessionBall(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .size(width = 11.dp, height = 8.dp)
+            .clip(KBShapePill)
+            .background(KBAccent)
+            // The ball is information, and it is drawn outside the text it
+            // belongs to: a TalkBack pass over the header has to hear it.
+            .semantics { contentDescription = "In possession" }
+    )
 }
 
 /**
@@ -1296,12 +1381,17 @@ private fun TeamColumn(
  * columns: "no score yet" and "0-0" must not look alike. A live score is set
  * heavier than a final's, so the one that is moving right now reads first from
  * across the room.
+ *
+ * [reserveSlot] is the live card's answer to a feed that has not attached a
+ * score yet: the row is drawn with a blank in the score's own style, so the
+ * score arriving on the next poll fills a row that is already there instead of
+ * creating one (see the slots note in [GameCard] and [RESERVED_ROW_TEXT]).
  */
 @Composable
-private fun ScoreRow(game: SportsGame) {
+private fun ScoreRow(game: SportsGame, reserveSlot: Boolean = false) {
     val away = game.away.score?.takeIf { it.isNotBlank() }
     val home = game.home.score?.takeIf { it.isNotBlank() }
-    if (away == null && home == null) return
+    if (away == null && home == null && !reserveSlot) return
     val live = game.state == GameState.LIVE
     Row(
         modifier = Modifier
@@ -1310,20 +1400,48 @@ private fun ScoreRow(game: SportsGame) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         ScoreText(
-            score = away,
+            score = away ?: if (reserveSlot) RESERVED_ROW_TEXT else null,
             live = live,
             color = scoreColor(game, game.away),
             modifier = Modifier.weight(1f)
         )
         Spacer(modifier = Modifier.width(10.dp))
         ScoreText(
-            score = home,
+            score = home ?: if (reserveSlot) RESERVED_ROW_TEXT else null,
             live = live,
             color = scoreColor(game, game.home),
             alignEnd = true,
             modifier = Modifier.weight(1f)
         )
     }
+}
+
+/**
+ * The live situation line, when the feed carries one: "3rd & 7 · Ball on NE 32",
+ * "Top 5th · 1 out".
+ *
+ * Without [reserveSlot] a game with no situation draws no row at all - not a
+ * blank one - which is what every upcoming and final card wants and what this
+ * line did before the reserved slots existed. With it (a live card) the row is
+ * always drawn, blank when the feed has not named a down yet, because this line
+ * is one of the three slots live data churn moves; the card must not change size
+ * when the line arrives, and a row already laid out in the line's own style is
+ * the only way to promise that (see [RESERVED_ROW_TEXT]).
+ */
+@Composable
+private fun SituationLine(game: SportsGame, reserveSlot: Boolean = false) {
+    val situation = game.situation?.takeIf { it.isNotBlank() }
+    if (situation == null && !reserveSlot) return
+    Text(
+        text = situation ?: RESERVED_ROW_TEXT,
+        style = MaterialTheme.typography.bodySmall,
+        color = KBTextLo,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 5.dp)
+    )
 }
 
 @Composable
@@ -1449,14 +1567,14 @@ private fun scoreColor(game: SportsGame, team: SportsTeam): Color {
 }
 
 @Composable
-private fun GameStatusLine(game: SportsGame, livePulse: Float) {
+private fun GameStatusLine(game: SportsGame, livePulse: State<Float>) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         when (game.state) {
             GameState.LIVE -> {
-                LiveDot(alpha = livePulse)
+                LiveDot(pulse = livePulse)
                 Text(
                     text = game.statusDetail.ifBlank { "LIVE" },
                     style = MaterialTheme.typography.labelLarge,
@@ -1493,26 +1611,45 @@ private fun GameStatusLine(game: SportsGame, livePulse: Float) {
  * Honours reduced motion (the app's own preference) by holding the dot at full
  * strength instead of animating it - read here, so a reduced-motion viewer has
  * no animation running at all rather than a per-card one that ignores it.
+ *
+ * Returned as a State rather than today's value, and [pulseEnabled] holds the
+ * beat while a sheet is over the hub: a value handed down as a plain Float is
+ * read by every card the parameter reaches, so a slate of live games recomposed
+ * every one of those cards on every animation frame. As a State the read happens
+ * in the dot (see [LiveDot]) and nowhere else, so a frame invalidates the dots
+ * and leaves the cards - their text, their marks, their layout - untouched.
  */
 @Composable
-private fun rememberLivePulse(): Float {
+private fun rememberLivePulse(pulseEnabled: Boolean = true): State<Float> {
+    // The state a reduced-motion viewer sees, reused as the paused state: the
+    // dot holds at full strength and, because nothing is animating, nothing
+    // reads a changing value either. Composed before the early return so the
+    // paused and running pulses occupy the same slot.
+    val held = remember { mutableStateOf(1f) }
     val reducedMotion = rememberReducedMotion()
+    if (reducedMotion || !pulseEnabled) return held
     val transition = rememberInfiniteTransition(label = "sportsLive")
-    val animated by transition.animateFloat(
+    return transition.animateFloat(
         initialValue = 0.35f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(1000), RepeatMode.Reverse),
         label = "sportsLivePulse"
     )
-    return if (reducedMotion) 1f else animated
 }
 
 /**
- * The pulsing red live dot. [alpha] is the section's shared pulse, so the dots
+ * The pulsing red live dot. [pulse] is the section's shared clock, so the dots
  * on a slate of live games breathe together instead of drifting apart.
+ *
+ * The value is read HERE, in the dot's own recompose scope, and not by the card
+ * that hands it down: reading it a level up is what made every live card
+ * recompose 60 times a second to redraw a 9dp circle. The card now passes the
+ * [State] through untouched and is skipped by the frame it used to be rebuilt
+ * on.
  */
 @Composable
-private fun LiveDot(alpha: Float, modifier: Modifier = Modifier) {
+private fun LiveDot(pulse: State<Float>, modifier: Modifier = Modifier) {
+    val alpha = pulse.value
     Box(
         modifier = modifier
             .size(9.dp)
@@ -1607,7 +1744,14 @@ private fun ChannelLine(
                 else -> "Not in your playlist"
             },
             style = MaterialTheme.typography.labelSmall,
-            color = KBTextLo.copy(alpha = 0.8f)
+            color = KBTextLo.copy(alpha = 0.8f),
+            // One line, always. This is the third slot live data churn moves:
+            // "Finding channel…" becomes "Not in your playlist" on the poll
+            // that finishes the match, and a two-line sentence where a one-line
+            // ellipsis was would remeasure the whole card - the same bob the
+            // reserved rows above it exist to stop.
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         return
     }
@@ -1630,7 +1774,7 @@ private fun ChannelLine(
 private fun TournamentCard(
     event: TournamentEvent,
     channels: List<IptvChannel>,
-    livePulse: Float,
+    livePulse: State<Float>,
     lineupMissing: Boolean,
     matchingDone: Boolean,
     onPlayChannels: (List<IptvChannel>) -> Unit,
@@ -1661,7 +1805,7 @@ private fun TournamentCard(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    if (event.state == GameState.LIVE) LiveDot(alpha = livePulse)
+                    if (event.state == GameState.LIVE) LiveDot(pulse = livePulse)
                     Text(
                         text = when {
                             event.state == GameState.LIVE ->
@@ -2236,23 +2380,34 @@ private fun TournamentDetailSheet(
     val watchButton = remember { FocusRequester() }
     val channel = channels.firstOrNull()
     val backups = channels.drop(1)
+    // The game sheet's own explicit D-pad walk, for the same reason: the pills
+    // live in a scroll container where directional search is a guess.
+    val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        // The game sheet's dock, scrim and all: the plate keeps its 24dp inset
+        // through its own padding so the veil covers the whole window, and the
+        // hub behind a tournament sheet is no more readable behind it than it is
+        // behind a game's.
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 24.dp),
+            modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.BottomCenter
         ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = SHEET_SCRIM_ALPHA))
+            )
             // Bounded against the window, the game sheet's own remedy for the
             // same class of bug: a plate that wrapped its content grew taller
             // than the screen and then SCROLLED, cropping the heading off the
             // top edge.
             Column(
                 modifier = Modifier
+                    .padding(horizontal = 24.dp, vertical = 24.dp)
                     .fillMaxWidth(0.72f)
                     .fillMaxHeight(0.92f)
                     .focusGroup()
@@ -2346,6 +2501,7 @@ private fun TournamentDetailSheet(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .focusRequester(watchButton)
+                                .focusDownTo(backupButtons.firstOrNull())
                         ) {
                             WatchButtonLabel(
                                 label = SportsDetailRules.watchLabel(true),
@@ -2385,7 +2541,7 @@ private fun TournamentDetailSheet(
                             color = KBTextLo,
                             modifier = Modifier.padding(top = 4.dp)
                         )
-                        backups.forEach { backup ->
+                        backups.forEachIndexed { index, backup ->
                             KBCard(
                                 onClick = {
                                     onManualPick(backup)
@@ -2393,7 +2549,10 @@ private fun TournamentDetailSheet(
                                 },
                                 focusedScale = KBFocusRow,
                                 shape = KBShapePill,
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(backupButtons[index])
+                                    .focusDownTo(backupButtons.getOrNull(index + 1))
                             ) {
                                 BackupChannelLabel(channel = backup)
                             }
@@ -2414,6 +2573,13 @@ private fun TournamentDetailSheet(
  * [SportsGame]), so there is never a spinner in it, and its one action is
  * Watch, which hands the matched channel to the same launch a card tap used to
  * take. With no matched channel the button is disabled and says so.
+ *
+ * A scrim now sits between it and the hub. The hub behind is a live screen -
+ * pulsing dots, polling scores, cards whose rows appear with the next down - and
+ * reading stats through all of it was reading two screens at once. The scrim
+ * dims what is behind (the pulse is separately held, see [rememberLivePulse])
+ * and the hub keeps polling underneath it, so the slate is as current when the
+ * sheet closes as it was when it opened.
  */
 @Composable
 private fun GameDetailSheet(
@@ -2436,18 +2602,31 @@ private fun GameDetailSheet(
         onDismissRequest = onClose,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        // The dock fills the window and the plate keeps its 24dp inset through
+        // its own padding, so the scrim below covers the whole window instead of
+        // stopping 24dp short of it - a dimmed plate with a brighter frame
+        // around it would read as a mistake rather than as a veil. The plate's
+        // size and position are unchanged: it is still 72% by 92% of the window
+        // less its inset, on the bottom edge.
         Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 24.dp),
+            modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.BottomCenter
         ) {
+            // The veil itself. Drawn - not clickable: dismissing on a tap
+            // outside the plate is the dialog window's own behaviour and stays
+            // exactly as it was (see onDismissRequest above).
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = SHEET_SCRIM_ALPHA))
+            )
             // Bounded against the window (the leagues panel's own remedy for
             // the same class of bug): a plate that wrapped its content grew
             // taller than the screen and then SCROLLED, and the scroll cropped
             // the crests off the top edge.
             Column(
                 modifier = Modifier
+                    .padding(horizontal = 24.dp, vertical = 24.dp)
                     .fillMaxWidth(0.72f)
                     .fillMaxHeight(0.92f)
                     .focusGroup()
@@ -2472,9 +2651,16 @@ private fun GameDetailSheet(
                 )
 
                 // Header: away mark + code + record | @ | home mark + code +
-                // record, the card's own sides in a wider plate.
+                // record, the card's own sides in a wider plate - and the ball
+                // on the side the feed says has it. The card never marks one,
+                // so the sheet is the only place possession is drawn.
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    TeamColumn(team = game.away, favorite = false, modifier = Modifier.weight(1f))
+                    TeamColumn(
+                        team = game.away,
+                        favorite = false,
+                        possession = SportsDetailRules.possesses(game, game.away),
+                        modifier = Modifier.weight(1f)
+                    )
                     Text(
                         text = "@",
                         style = MaterialTheme.typography.titleSmall,
@@ -2484,6 +2670,7 @@ private fun GameDetailSheet(
                     TeamColumn(
                         team = game.home,
                         favorite = false,
+                        possession = SportsDetailRules.possesses(game, game.home),
                         alignEnd = true,
                         modifier = Modifier.weight(1f)
                     )
@@ -2580,6 +2767,29 @@ private fun ColumnScope.SheetScrollBody(
 }
 
 /**
+ * Hand this stop's D-pad Down to [next], explicitly.
+ *
+ * The sheet's action list - WATCH, then a pill per backup feed - is drawn inside
+ * a scroll container, and directional search across one is a guess: from WATCH
+ * the nearest focusable below is whichever pill the layout happens to put there,
+ * which is not necessarily the first one, and on the field report it was none of
+ * them - Down from WATCH did nothing at all, so every backup feed below it was
+ * unreachable. Chaining each stop to the next makes the order the rows are drawn
+ * in the order the D-pad walks in, and leaves every OTHER direction to the
+ * search that already worked.
+ *
+ * A null [next] changes nothing: the last pill keeps the platform's own
+ * behaviour below it rather than being wired to itself, and a sheet with no
+ * backups is exactly the sheet it was.
+ *
+ * This is a focus CHAIN, not a scroll fix: a focused pill that is still off the
+ * bottom of the body is [SheetScrollBody]'s landing margin failing to do its
+ * job, which is a different fault with a different remedy.
+ */
+private fun Modifier.focusDownTo(next: FocusRequester?): Modifier =
+    if (next == null) this else focusProperties { down = next }
+
+/**
  * The scrolling part of the game sheet: the venue rows, the leaders, the WATCH
  * button and the backup feeds.
  *
@@ -2599,6 +2809,11 @@ private fun ColumnScope.DetailSheetBody(
     val watchButton = remember { FocusRequester() }
     val channel = channels.firstOrNull()
     val backups = channels.drop(1)
+    // One requester per backup pill, so each row can name the row under it. The
+    // list can grow while the sheet is open - the matcher's pass can land after
+    // the sheet was raised - hence the size in the key rather than a remember
+    // with no keys.
+    val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }
     SheetScrollBody {
         // Every row is already filtered to the non-blanks, so a game with no
         // venue and no leaders simply draws fewer rows.
@@ -2636,9 +2851,14 @@ private fun ColumnScope.DetailSheetBody(
                 onClick = { onPlay(channels) },
                 focusedScale = KBFocusRow,
                 shape = KBShapePill,
+                // WATCH hands Down to the first backup pill explicitly (see
+                // [focusDownTo]): the pills are inside a scroll container, and
+                // leaving the first step of the walk to directional search is
+                // what left them unreachable from here.
                 modifier = Modifier
                     .fillMaxWidth()
                     .focusRequester(watchButton)
+                    .focusDownTo(backupButtons.firstOrNull())
             ) {
                 WatchButtonLabel(
                     label = SportsDetailRules.watchLabel(true),
@@ -2674,7 +2894,7 @@ private fun ColumnScope.DetailSheetBody(
                 color = KBTextLo,
                 modifier = Modifier.padding(top = 4.dp)
             )
-            backups.forEach { backup ->
+            backups.forEachIndexed { index, backup ->
                 KBCard(
                     // The chosen feed goes first and the rest follow in their
                     // own order, so picking a backup is a switch rather than a
@@ -2685,7 +2905,12 @@ private fun ColumnScope.DetailSheetBody(
                     },
                     focusedScale = KBFocusRow,
                     shape = KBShapePill,
-                    modifier = Modifier.fillMaxWidth()
+                    // Pill to pill, in the order they are drawn; the last one
+                    // keeps the platform's own search below it.
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(backupButtons[index])
+                        .focusDownTo(backupButtons.getOrNull(index + 1))
                 ) {
                     BackupChannelLabel(channel = backup)
                 }
