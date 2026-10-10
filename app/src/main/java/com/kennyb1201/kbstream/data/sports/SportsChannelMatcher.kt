@@ -243,10 +243,23 @@ internal object SportsChannelMatcher {
             home = strongVariants(game.home),
         ),
         /**
+         * The pass's channel index, built once and handed to EVERY card the pass
+         * matches (see [ChannelIndex]): the names it normalizes are the playlist's
+         * and do not change under a pass. Defaults to building one here, which is
+         * what a one-off call wants - and it is why this parameter sits ABOVE the
+         * trailing one, so a pass's trailing `onTier` lambda still lands on it.
+         */
+        channelIndex: ChannelIndex = ChannelIndex.of(channels),
+        /**
          * TEMP: an optional per-tier timer for the hub's match-loop diagnosis
          * (remove with the SPORTS PERF game= logs). Invoked with a tier name and
          * its nanoseconds only when that tier actually ran; a recalled pick
          * returns before any tier and fires nothing.
+         *
+         * Both tiers it names are LOCAL: "epg" is the program scan, "broadcast"
+         * is the playlist-name scan in [ChannelIndex], and neither touches the
+         * network. A slow "broadcast" reading is therefore this tier's own cost
+         * over the channel list - never a request.
          */
         onTier: ((String, Long) -> Unit)? = null,
     ): List<IptvChannel> {
@@ -254,7 +267,7 @@ internal object SportsChannelMatcher {
         // The viewer's own past pick beats every heuristic: if they once chose a
         // channel for a game involving either team, play that again. A hit skips
         // all three tiers; a pick that is gone from the playlist falls through.
-        val present = channels.mapTo(HashSet()) { it.id }
+        val present = channelIndex.ids
         val recalled = listOfNotNull(
             remembered(game.home.favoriteKey),
             remembered(game.away.favoriteKey),
@@ -268,7 +281,7 @@ internal object SportsChannelMatcher {
         // broadcast. Within a family, the best-named channel comes first.
         val netStartedAt = System.nanoTime()
         val networks = game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)
-        val networkHits = cap(networks.flatMap { networkChannels(it, channels) })
+        val networkHits = cap(networks.flatMap { channelIndex.channelsFor(it) })
         onTier?.invoke("broadcast", System.nanoTime() - netStartedAt)
         return networkHits
     }
@@ -296,18 +309,20 @@ internal object SportsChannelMatcher {
         programs: List<MatcherProgram>,
         remembered: (String) -> IptvChannel? = { null },
         channelById: Map<String, IptvChannel> = channels.associateBy { it.id },
+        /** The pass's channel index, as on the game path; see there. */
+        channelIndex: ChannelIndex = ChannelIndex.of(channels),
         /** TEMP: the same per-tier timer as the game path; see there. */
         onTier: ((String, Long) -> Unit)? = null,
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
-        val present = channels.mapTo(HashSet()) { it.id }
+        val present = channelIndex.ids
         remembered(event.favoriteKey)?.takeIf { it.id in present }?.let { return cap(listOf(it)) }
         val epgStartedAt = System.nanoTime()
         val epg = epgNameHits(event, programs, channelById)
         onTier?.invoke("epg", System.nanoTime() - epgStartedAt)
         if (epg.isNotEmpty()) return cap(epg)
         val netStartedAt = System.nanoTime()
-        val networkHits = cap(event.broadcastNames.flatMap { networkChannels(it, channels) })
+        val networkHits = cap(event.broadcastNames.flatMap { channelIndex.channelsFor(it) })
         onTier?.invoke("broadcast", System.nanoTime() - netStartedAt)
         return networkHits
     }
@@ -591,53 +606,146 @@ internal object SportsChannelMatcher {
         TEAM_RSN[team.abbreviation.trim().uppercase()].orEmpty()
 
     /**
-     * Every playlist channel naming [network], best first: by descending
-     * strength (exact equals, then a prefix at a word boundary, then anywhere
-     * inside) and, among equals, the shortest name - "ESPN" over "ESPN
-     * International".
+     * The pass's playlist, indexed ONCE so no card has to walk it again.
      *
-     * The head is the single channel this used to pick, so a backup can never
-     * displace the primary; the rest are the same family (ESPN2 and ESPNews for
-     * "ESPN", a provider's own "- Alt" feed for a regional network), which is
-     * exactly where a game turns up when its main feed goes dark.
+     * This is the fix for the slow match loop, and what it removes is worth
+     * stating exactly, because the field the cost was logged under pointed the
+     * wrong way. The broadcast tier below is NOT I/O: it reads the in-memory
+     * channel list and compares names. What made it cost 1-3 SECONDS PER CARD on
+     * a real provider playlist - the `net=` of every `SPORTS PERF game=` line,
+     * and the whole of the 70-second pass - is that each card re-normalized
+     * every channel's name from scratch, twice, before comparing anything: five
+     * figures of channels through [canonicalNetwork] and [words] for a name that
+     * had not changed since the previous card, allocating a lowercased string
+     * and a fresh word list each time and throwing both away. Sixty cards over
+     * forty thousand channels is millions of rebuilds of the same strings.
+     *
+     * So the playlist is normalized HERE, once per pass, into [Fact]s - the same
+     * `displayName.ifBlank { name }`, the same [canonicalNetwork], the same first
+     * word and the same compact length the tier used to compute per call - and
+     * the tier becomes a comparison against precomputed strings. The answers are
+     * unchanged; the tier's own tests pin them, and they run through this class
+     * now, because every path to a match comes through it.
+     *
+     * One of these belongs to a matching PASS, not to the app: it is built from
+     * the pass's channel list, handed to every card that pass matches (see
+     * [matches]) and dropped with it. [byNetwork] is why a pass then pays for a
+     * network at most once however many cards name it - "ESPN" is on a dozen
+     * games and its family is scanned for once - and that is safe because
+     * [channelsFor] is a pure function of the network name and the list this was
+     * built from, and a pass matches one card at a time.
      */
-    private fun networkChannels(network: String, channels: List<IptvChannel>): List<IptvChannel> {
-        val target = canonicalNetwork(network)
-        if (target.isEmpty()) return emptyList()
-        // A streaming exclusive has no cable equivalent, so there is no tier-2
-        // answer to give. Returning nothing here is the point, not a miss: the
-        // caller falls through to the EPG and RSN tiers, which find whatever is
-        // actually airing the game rather than the cable channel with a similar
-        // name.
-        if (target in STREAMING_EXCLUSIVES) return emptyList()
-        data class Ranked(val strength: Int, val length: Int, val channel: IptvChannel)
-        return channels
-            .mapNotNull { channel ->
-                val name = channel.displayName.ifBlank { channel.name }
-                val strength = networkStrength(name, target)
-                if (strength == 0) null else Ranked(strength, compact(name).length, channel)
-            }
-            .sortedWith(compareByDescending<Ranked> { it.strength }.thenBy { it.length })
-            .map { it.channel }
-    }
+    internal class ChannelIndex private constructor(private val facts: List<Fact>) {
 
-    private fun networkStrength(channelName: String, target: String): Int {
-        // The channel's name goes through the SAME alias table as the
-        // broadcast's, so "FOX Sports 1" and a broadcast listed as "FS1" meet
-        // in the middle. Without this the alias table only worked one way
-        // round, and the spelling a provider actually uses (the long one, or
-        // the short one) decided the match.
-        val normalized = canonicalNetwork(channelName)
-        if (normalized.isEmpty()) return 0
-        if (normalized == target) return 3
-        // A prefix only counts at a word boundary in the ORIGINAL name, so
-        // "ESPN2" is a weaker match for "ESPN" than "ESPN News" is - and a
-        // plain "ESPN" still wins outright above both.
-        val firstWord = words(channelName).firstOrNull().orEmpty()
-        if (firstWord == target) return 2
-        if (normalized.startsWith(target)) return 2
-        if (normalized.contains(target)) return 1
-        return 0
+        /**
+         * The ids in the pass's playlist.
+         *
+         * The same set the tier used to rebuild per card, which is what makes a
+         * recalled pick that is gone from the playlist fail through instead of
+         * being played. Hoisted for the same reason as the names: the playlist
+         * does not change under a pass, and a card should not hash it again.
+         */
+        val ids: Set<String> = facts.mapTo(HashSet(facts.size)) { it.channel.id }
+
+        /**
+         * One channel's name, in the forms the tier compares against.
+         *
+         * Computed from the name the tier reads ([IptvChannel.displayName], or
+         * the name when that is blank) exactly as it used to be per comparison.
+         */
+        private class Fact(
+            /** The channel's name through the alias table and the RSN fold. */
+            val canonical: String,
+            /**
+             * The raw name's first word, which is where a broadcast name lands
+             * - a prefix only counts at a word boundary in the ORIGINAL name, so
+             * "ESPN2" is a weaker match for "ESPN" than "ESPN News" is.
+             */
+            val firstWord: String,
+            /** [compact] length of the raw name: the tie-break between equals. */
+            val length: Int,
+            val channel: IptvChannel,
+        ) {
+            /**
+             * The old `networkStrength`: 3 for the same normalized name, 2 for a
+             * first word or a prefix, 1 for appearing anywhere inside, 0 for no
+             * match. Read off the precomputed strings, so a comparison across the
+             * whole playlist allocates nothing.
+             */
+            fun strength(target: String): Int {
+                if (canonical.isEmpty()) return 0
+                if (canonical == target) return 3
+                if (firstWord == target) return 2
+                if (canonical.startsWith(target)) return 2
+                if (canonical.contains(target)) return 1
+                return 0
+            }
+        }
+
+        /** Network families resolved so far, by the RAW name they were asked for. */
+        private val byNetwork = HashMap<String, List<IptvChannel>>()
+
+        /**
+         * Every channel naming [network], best first: by descending strength
+         * (exact equals, then a prefix at a word boundary, then anywhere inside)
+         * and, among equals, the shortest name - "ESPN" over "ESPN
+         * International".
+         *
+         * The head is the single channel this used to pick, so a backup can never
+         * displace the primary; the rest are the same family (ESPN2 and ESPNews
+         * for "ESPN", a provider's own "- Alt" feed for a regional network),
+         * which is exactly where a game turns up when its main feed goes dark.
+         * The same name is answered from [byNetwork] after the first time.
+         */
+        fun channelsFor(network: String): List<IptvChannel> =
+            byNetwork.getOrPut(network) { networkChannels(network) }
+
+        private fun networkChannels(network: String): List<IptvChannel> {
+            val target = canonicalNetwork(network)
+            if (target.isEmpty()) return emptyList()
+            // A streaming exclusive has no cable equivalent, so there is no tier-2
+            // answer to give. Returning nothing here is the point, not a miss: the
+            // caller falls through to the EPG and RSN tiers, which find whatever is
+            // actually airing the game rather than the cable channel with a similar
+            // name.
+            if (target in STREAMING_EXCLUSIVES) return emptyList()
+            data class Ranked(val strength: Int, val length: Int, val channel: IptvChannel)
+            return facts
+                .mapNotNull { fact ->
+                    val strength = fact.strength(target)
+                    if (strength == 0) null else Ranked(strength, fact.length, fact.channel)
+                }
+                .sortedWith(compareByDescending<Ranked> { it.strength }.thenBy { it.length })
+                .map { it.channel }
+        }
+
+        companion object {
+            /** The index of an empty lineup: no network has a channel in it. */
+            val EMPTY = ChannelIndex(emptyList())
+
+            /**
+             * Normalizes [channels] once for the pass that is about to use it.
+             * See [TeamVariants] and the caller's own `channelById` for the same
+             * hoist one tier over; an empty list short-circuits, since no tier
+             * can answer against it anyway.
+             */
+            fun of(channels: List<IptvChannel>): ChannelIndex =
+                if (channels.isEmpty()) {
+                    EMPTY
+                } else {
+                    ChannelIndex(
+                        channels.map { channel ->
+                            val name = channel.displayName.ifBlank { channel.name }
+                            Fact(
+                                canonical = canonicalNetwork(name),
+                                firstWord = words(name).firstOrNull().orEmpty(),
+                                length = compact(name).length,
+                                channel = channel,
+                            )
+                        }
+                    )
+                }
+        }
     }
 
     /**

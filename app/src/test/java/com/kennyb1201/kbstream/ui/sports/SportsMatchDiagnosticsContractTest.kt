@@ -58,6 +58,34 @@ class SportsMatchDiagnosticsContractTest {
     }
 
     @Test
+    fun `a tournament's own lookup reports its terms and what came back`() {
+        // The golf half of the same diagnosis. A tournament card reading "not in
+        // your playlist" has two very different causes, and they need opposite
+        // fixes: a lookup that found NOTHING means the terms are wrong (ESPN's
+        // name for the event is not the guide's title), while a lookup that found
+        // rows the matcher then refused means the whole-name rule is too strict.
+        // One line tells them apart, which is why it carries the terms asked for
+        // and the row count THIS event's own lookup returned rather than the
+        // pass-wide program count.
+        assertTrue(
+            "the line names the event, the terms asked and the rows they found, in that order",
+            model.contains(
+                "SPORTS DIAG tournament=${d}{event.id} name=\\\"${d}{event.name}\\\" "
+            ) && model.contains("\"terms=${d}{terms} hits=${d}{rows.size}\"")
+        )
+        assertTrue(
+            "at Log.w, because release builds strip Log.d and this exists to be read off a viewer's capture",
+            model.contains("Log.w( TAG, \"SPORTS DIAG tournament=")
+        )
+        assertTrue(
+            "and it is inside the tournament lookup, where the event's own terms are known",
+            model.contains("private suspend fun epgTournamentCandidates(") &&
+                model.indexOf("SPORTS DIAG tournament=") >
+                model.indexOf("private suspend fun epgTournamentCandidates(")
+        )
+    }
+
+    @Test
     fun `the line says which stage is empty, so the log needs no interpreter`() {
         assertTrue(
             "a lineup with no guide index is called out",

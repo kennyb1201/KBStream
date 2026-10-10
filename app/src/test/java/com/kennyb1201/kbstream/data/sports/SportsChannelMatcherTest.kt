@@ -4,6 +4,7 @@ import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 /**
@@ -1004,5 +1005,82 @@ class SportsChannelMatcherTest {
         )
 
         assertEquals(espn, hit)
+    }
+
+    // ── The pass's channel index ────────────────────────────────
+    //
+    // The broadcast tier is a LOCAL scan of the playlist - a matching pass makes
+    // no request at all - and on a real provider it was the whole of a 70-second
+    // pass: every card re-normalized every channel's name before it compared
+    // anything, so sixty cards over forty thousand channels rebuilt millions of
+    // identical strings. [SportsChannelMatcher.ChannelIndex] normalizes them once
+    // for a pass instead.
+    //
+    // What is pinned here is that the hoist is invisible from the outside. "Same
+    // matches, paid for once" is the entire contract, and a card that finds a
+    // different channel is the one failure this file exists to prevent.
+
+    @Test
+    fun `a shared index answers a card exactly as one built for it would`() {
+        // The hub hands ONE index to every card in a pass; the matcher's own
+        // default builds a fresh one per call. Both must answer identically, or
+        // the pass's speed was bought with its matches.
+        val channels = listOf(
+            channel("espn", "ESPN"),
+            channel("espn2", "ESPN2"),
+            channel("espnhd", "ESPN HD"),
+            channel("fox", "FOX Sports 1"),
+            channel("yes", "YES Network"),
+            channel("nesn", "NESN"),
+            channel("poker", "Poker Central"),
+        )
+        val shared = SportsChannelMatcher.ChannelIndex.of(channels)
+
+        listOf(
+            game(yankees, redSox, broadcasts = listOf("ESPN")),
+            game(yankees, redSox, broadcasts = listOf("FS1")),
+            game(yankees, redSox, broadcasts = listOf("Nobody Carries This")),
+            game(yankees, redSox),
+        ).forEach { card ->
+            assertEquals(
+                "a card must match the same feeds however its index was built",
+                SportsChannelMatcher.matches(card, channels, emptyList()),
+                SportsChannelMatcher.matches(card, channels, emptyList(), channelIndex = shared),
+            )
+        }
+    }
+
+    @Test
+    fun `a network family is resolved once for the pass, not once per card`() {
+        val espn = channel("espn", "ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+        val fox = channel("fox", "FOX Sports 1")
+        val index = SportsChannelMatcher.ChannelIndex.of(listOf(espn, espn2, fox))
+
+        assertSame(
+            "ESPN is on a dozen cards and its family is scanned for once",
+            index.channelsFor("ESPN"),
+            index.channelsFor("ESPN"),
+        )
+        assertEquals(
+            "the family behind the head, strongest first: the exact name, then its siblings",
+            listOf(espn, espn2),
+            index.channelsFor("ESPN"),
+        )
+        assertEquals(
+            "and a broadcast named by its alias still meets a channel named by its long form",
+            listOf(fox),
+            index.channelsFor("FS1"),
+        )
+    }
+
+    @Test
+    fun `the index carries the pass's ids, which is what fails a stale correction through`() {
+        val index = SportsChannelMatcher.ChannelIndex.of(
+            listOf(channel("espn", "ESPN"), channel("poker", "Poker Central"))
+        )
+
+        assertEquals(setOf("espn", "poker"), index.ids)
+        assertEquals(emptySet<String>(), SportsChannelMatcher.ChannelIndex.EMPTY.ids)
     }
 }

@@ -837,6 +837,16 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             // do not change between programs. Rebuilding both per program is what
             // made this loop take 82s on a full slate (see [TeamVariants]).
             val channelById = channels.associateBy { it.id }
+            // And the playlist's own NAMES, normalized once for the same reason
+            // (see [SportsChannelMatcher.ChannelIndex]). This is the one the
+            // field log was measuring: the `net=` stage of every per-card line is
+            // the broadcast/RSN tier, which is a scan of the in-memory channel
+            // list and not a request - and it took 1-3s a card because every card
+            // re-normalized all five figures of channel names before comparing
+            // any of them. Hoisted, the tier only compares the strings it is
+            // handed, and a network is scanned for once a pass however many cards
+            // name it.
+            val channelIndex = SportsChannelMatcher.ChannelIndex.of(channels)
             val gameVariants: Map<String, TeamVariants> = games.associate { game ->
                 game.id to TeamVariants(
                     away = SportsChannelMatcher.strongVariants(game.away),
@@ -858,7 +868,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 var netNanos = 0L
                 val recallBefore = recallNanos
                 val matchStartedAt = System.nanoTime()
-                val matchedFeeds = SportsChannelMatcher.matches(game, channels, programs, remembered, channelById, gameVariants.getValue(game.id)) { tier, nanos ->
+                val matchedFeeds = SportsChannelMatcher.matches(game, channels, programs, remembered, channelById, gameVariants.getValue(game.id), channelIndex) { tier, nanos ->
                     when (tier) {
                         "epg" -> epgNanos += nanos
                         "broadcast" -> netNanos += nanos
@@ -867,8 +877,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 // TEMP per-game split of the match loop (remove once the slow
                 // stage is found): recall is the per-team SharedPreferences
                 // decode inside SportsChannelMemory.recall, epg is the program
-                // scan, and net is the broadcast/RSN tier. Log.w, because
-                // release builds strip Log.d (see proguard-rules.pro).
+                // scan, and net is the broadcast/RSN tier - a scan of the
+                // IN-MEMORY channel list, with no I/O anywhere in [matches]; it
+                // read as the whole bottleneck once, and it was, but as name
+                // normalization rather than as a request. Log.w, because release
+                // builds strip Log.d (see proguard-rules.pro).
                 Log.w(
                     TAG,
                     "SPORTS PERF game=${game.id} took=${(System.nanoTime() - matchStartedAt) / 1_000_000}ms " +
@@ -906,7 +919,7 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 var netNanos = 0L
                 val recallBefore = recallNanos
                 val matchStartedAt = System.nanoTime()
-                val matchedFeeds = SportsChannelMatcher.matches(event, channels, programs, remembered, channelById) { tier, nanos ->
+                val matchedFeeds = SportsChannelMatcher.matches(event, channels, programs, remembered, channelById, channelIndex) { tier, nanos ->
                     when (tier) {
                         "epg" -> epgNanos += nanos
                         "broadcast" -> netNanos += nanos
@@ -1229,6 +1242,21 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 val rows = runCatchingCancellable {
                     iptv.searchProgramsByTitleTerms(terms, EPG_SEARCH_LIMIT)
                 }.getOrDefault(emptyList())
+                // SPORTS DIAG: the tournament's own terms and what the guide
+                // answered with, on one greppable line. `hits` counts the rows
+                // THIS event's lookup returned, which is the question - a
+                // tournament whose card says "not in your playlist" is either a
+                // lookup that found nothing (terms wrong: ESPN's name for the
+                // event is not the guide's title) or one that found rows the
+                // matcher then refused (its whole name must appear in the row),
+                // and the two need opposite fixes. Log.w, not Log.d, because
+                // release builds strip Log.d (see proguard-rules.pro) and this
+                // line exists to be read off a viewer's own capture.
+                Log.w(
+                    TAG,
+                    "SPORTS DIAG tournament=${event.id} name=\"${event.name}\" " +
+                        "terms=${terms} hits=${rows.size}"
+                )
                 rows.forEach { row ->
                     val channel = guideIndex[row.channelId] ?: return@forEach
                     out.putIfAbsent(

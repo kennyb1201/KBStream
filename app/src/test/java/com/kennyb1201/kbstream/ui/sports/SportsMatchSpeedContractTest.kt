@@ -134,6 +134,62 @@ class SportsMatchSpeedContractTest {
     }
 
     @Test
+    fun `the tier that cost a second a card normalizes the playlist once a pass`() {
+        // The measured bug this pins: the per-card `net=` stage of the SPORTS PERF
+        // line was read as a network call, and it is not one - it is the
+        // broadcast/RSN tier, a local scan of the channel list, and it cost 1-3
+        // SECONDS a card because every card re-normalized every channel's name
+        // before comparing anything. On the 40k-channel playlist the benchmark
+        // runs over, sixty cards went from ~11s to ~10ms of tier time once the
+        // names were hoisted out of the loop (plus ~120ms once for the index).
+        assertTrue(
+            "the pass's channel names are normalized once, beside the id map it already builds once",
+            resolve.contains("val channelIndex = SportsChannelMatcher.ChannelIndex.of(channels)")
+        )
+        val beforeLoops = resolve.substringBefore("games.forEach")
+        assertTrue(
+            "and it is built before the first card is matched",
+            beforeLoops.contains("val channelIndex = SportsChannelMatcher.ChannelIndex.of(channels)")
+        )
+        assertTrue(
+            "both card shapes hand that one index to the matcher rather than letting each call build its own",
+            resolve.contains(
+                "matches(game, channels, programs, remembered, channelById, " +
+                    "gameVariants.getValue(game.id), channelIndex)"
+            ) &&
+                resolve.contains(
+                    "matches(event, channels, programs, remembered, channelById, channelIndex)"
+                )
+        )
+        assertTrue(
+            "and the broadcast tier reads the index it was handed",
+            matcher.contains("game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)") &&
+                matcher.contains("networks.flatMap { channelIndex.channelsFor(it) }") &&
+                matcher.contains("event.broadcastNames.flatMap { channelIndex.channelsFor(it) }")
+        )
+        val index = slice(matcher, "internal class ChannelIndex", "private val RSN_BRANDS")
+        assertTrue(
+            "the names are normalized in the index's own build, from the same fields the tier used",
+            index.contains("canonicalNetwork(name)") &&
+                index.contains("words(name).firstOrNull()") &&
+                index.contains("compact(name).length")
+        )
+        val scan = slice(index, "private fun networkChannels(network: String)", "companion object {")
+        assertTrue(
+            "while the per-channel scan compares precomputed strings",
+            scan.contains("fact.strength(target)") && scan.contains("fact.length")
+        )
+        assertFalse(
+            "and never re-derives a name it was already handed: that loop is the whole cost",
+            scan.contains("compact(") || scan.contains("words(") || scan.contains("ifBlank")
+        )
+        assertTrue(
+            "a network family is answered once a pass, not once per card that names it",
+            index.contains("byNetwork.getOrPut(network) { networkChannels(network) }")
+        )
+    }
+
+    @Test
     fun `the diagnostics report carries the sports line`() {
         assertTrue(
             "the line is built from the same label family",
