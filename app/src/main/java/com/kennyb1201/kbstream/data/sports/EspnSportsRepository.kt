@@ -116,10 +116,13 @@ class EspnSportsRepository(
     /**
      * One game's summary: team stats, win probability and the last play.
      *
-     * Fetched LAZILY - only for a LIVE game, only while its detail sheet is
-     * open (see the hub's `openDetail`) - and cached for [LIVE_TTL_MS] keyed by
-     * [eventId], so reopening the sheet inside the minute, and the next 30s
-     * tick, cost nothing until the TTL lapses.
+     * Fetched LAZILY - only for a game whose stats exist (live, or finished - see
+     * [EspnSummaryRules.shouldFetch]), only while its detail sheet is open (see
+     * the hub's `openDetail`) - and cached for [LIVE_TTL_MS] keyed by [eventId],
+     * so reopening the sheet inside the minute, and the next 30s tick, cost
+     * nothing until the TTL lapses. A finished game's stats never change, but it
+     * shares the live TTL on purpose: the tick only runs while some OTHER game in
+     * the tab is in play, and the sheet is closed the rest of the time.
      *
      * Null when there is nothing to show: a failure (timeout, HTTP error, an
      * unparseable body) with no cached copy, or a blank event id. The sheet
@@ -263,16 +266,46 @@ class EspnSportsRepository(
 // in a unit test without a network or an Android context.
 
 /**
+ * How stale ESPN's own state word may be before the clock overrules it.
+ *
+ * Six hours past the feed's own end time, a "live" event is read as finished.
+ * The buffer has to absorb a broadcast that runs long (golf routinely does), a
+ * timezone edge on the event's end, and ESPN's own slow status flip - but not
+ * the days-stale "in" that a golf tournament can carry (see [espnGameState]) or
+ * the 47-hour stale state the hub was showing as LIVE.
+ */
+private const val STALE_STATE_BUFFER_MS = 6L * 60L * 60_000L
+
+/**
  * ESPN's `status.type.state` -> the hub's own three states.
  *
  * `in` is live, `pre` has not started, `post` is over. Anything unrecognised is
  * read as UPCOMING rather than dropped: a game on the schedule the app does not
  * understand is still a game worth listing.
+ *
+ * [eventEndMs] is the feed's own end time for the event (ESPN's `endDate`,
+ * 0 when it carries none). It is a SANITY CHECK, not a second opinion: ESPN's
+ * status does not always flip - a golf tournament's `state` can stay "in" for
+ * days after the last round is over, which showed the Baycurrent Classic as
+ * LIVE 47 hours after it finished - so anything more than
+ * [STALE_STATE_BUFFER_MS] past its own end time is read as FINAL whatever the
+ * word says. 0 (no end time, the case for most US league games) leaves the
+ * state word as the only signal, exactly as before, and [nowMs] exists so a
+ * test can pin the clock rather than wait for it.
  */
-internal fun espnGameState(state: String?): GameState = when (state?.trim()?.lowercase()) {
-    "in" -> GameState.LIVE
-    "post" -> GameState.FINAL
-    else -> GameState.UPCOMING
+internal fun espnGameState(
+    state: String?,
+    eventEndMs: Long = 0L,
+    nowMs: Long = System.currentTimeMillis(),
+): GameState {
+    if (eventEndMs > 0L && nowMs > eventEndMs + STALE_STATE_BUFFER_MS) {
+        return GameState.FINAL
+    }
+    return when (state?.trim()?.lowercase()) {
+        "in" -> GameState.LIVE
+        "post" -> GameState.FINAL
+        else -> GameState.UPCOMING
+    }
 }
 
 /** `2024-01-01T00:30Z` -> epoch millis; 0 when unparseable. */
@@ -281,6 +314,20 @@ internal fun espnDateMs(raw: String?): Long =
     // Instant's ISO format demands seconds, so every kick-off time in the feed
     // parsed to zero - and a card whose date is 0 has no clock to show.
     runCatching { OffsetDateTime.parse(raw).toInstant().toEpochMilli() }.getOrDefault(0L)
+
+/**
+ * The event's own end time, in epoch millis; 0 when the feed carries none.
+ *
+ * ESPN puts it at the top of the event for the sports that publish one - golf,
+ * tennis and racing all date a multi-day tournament with `date`..`endDate` -
+ * and on the competition for a few others, so both are read. The league games
+ * (NBA, NFL, MLB, NHL) carry neither, and 0 is the honest answer there: with no
+ * end time there is nothing for [espnGameState]'s sanity check to compare
+ * against, so it leaves the state word alone rather than inventing an end.
+ */
+private fun espnEventEndMs(event: JSONObject, competition: JSONObject?): Long =
+    espnDateMs(event.optString("endDate", "")).takeIf { it > 0L }
+        ?: espnDateMs(competition?.optString("endDate", ""))
 
 internal fun parseScoreboard(json: String, leaguePath: String): List<SportsGame> {
     val events = runCatching { JSONObject(json).optJSONArray("events") }.getOrNull()
@@ -309,8 +356,12 @@ private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? 
 
     val status = event.optJSONObject("status")?.optJSONObject("type")
     // Both read once, because the situation line is built from the same two
-    // facts the state and the clock are (see espnSituation).
-    val state = espnGameState(status?.optString("state"))
+    // facts the state and the clock are (see espnSituation). The feed's end
+    // time rides along so a stale "in" cannot show a finished game as LIVE.
+    val state = espnGameState(
+        state = status?.optString("state"),
+        eventEndMs = espnEventEndMs(event, competition),
+    )
     val statusDetail = status?.optString("shortDetail", "")
         ?.takeIf { it.isNotBlank() }
         ?: status?.optString("detail", "").orEmpty()
@@ -643,7 +694,12 @@ internal fun parseTournamentEvents(json: String, leaguePath: String): List<Tourn
             league = leaguePath,
             name = event.optString("name", "").ifBlank { event.optString("shortName", "") },
             dateMs = espnDateMs(event.optString("date", "")),
-            state = espnGameState(status?.optString("state")),
+            // A tournament's end time is what stops ESPN's days-stale "in" from
+            // showing a finished tournament as LIVE (see espnGameState).
+            state = espnGameState(
+                state = status?.optString("state"),
+                eventEndMs = espnEventEndMs(event, competition),
+            ),
             statusDetail = status?.optString("shortDetail", "")
                 ?.takeIf { it.isNotBlank() }
                 ?: status?.optString("detail", "").orEmpty(),
@@ -839,22 +895,29 @@ internal data class EspnStatPick(
  * When a summary may be fetched, and which of a league's stats the sheet shows.
  *
  * Pure and internal so both halves are unit tested without a network or a clock.
- * The "live games only" gate is the one the spec is most emphatic about - an
- * upcoming or final game must never cost a request - and the stat sets are per
- * league because ESPN's box score is: the NFL has no rebound stat and the NHL
- * has no passing yards, and asking for one would print a dash or nothing.
+ * The fetch gate is the one that has to be stated exactly - a game in play costs
+ * a request, a game that has ENDED costs one too, and an upcoming fixture never
+ * does - and the stat sets are per league because ESPN's box score is: the NFL
+ * has no rebound stat and the NHL has no passing yards, and asking for one would
+ * print a dash or nothing.
  */
 internal object EspnSummaryRules {
 
     /**
      * Whether opening a game in [state] may cost a summary request.
      *
-     * Only live. An upcoming game has no plays and no team stats yet, and a
-     * final one's full stats are deliberately out of scope; the hub's
-     * `openDetail` consults this rather than spelling the rule out itself, so
-     * there is one place to change and one place to test.
+     * A game in play, and a game that has FINISHED: the hub keeps yesterday's
+     * slate on the board, so a viewer who just watched a game end has to be able
+     * to open it and read the box score - a finished game's stats do not change,
+     * which is the cheapest request the app makes, and the summary is cached
+     * like any other (see `gameSummary`). UPCOMING is the one state that must
+     * never cost a request: there are no plays and no team stats before a game
+     * starts, so the sheet would pay a round trip to draw nothing.
+     *
+     * The hub's `openDetail` consults this rather than spelling the rule out
+     * itself, so there is one place to change and one place to test.
      */
-    fun shouldFetch(state: GameState): Boolean = state == GameState.LIVE
+    fun shouldFetch(state: GameState): Boolean = state != GameState.UPCOMING
 
     /**
      * The comparison rows a league's summary is read into, in draw order.

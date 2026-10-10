@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.sports
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -89,12 +90,14 @@ class SportsMatchDiagnosticsContractTest {
     @Test
     fun `a tournament reports its window and every hit's rejection reason`() {
         // The second half of the golf diagnosis. `hits=` says the lookup found
-        // rows; it does not say WHY the matcher took none of them, and the four
-        // reasons need four different fixes. Each row is one line carrying the
-        // program, its channel, its times, whether the channel is in the
-        // playlist, and the single filter that dropped it.
+        // rows; it does not say WHY the matcher took none of them, and each
+        // reason needs its own fix. Each row is one line carrying the program,
+        // its channel, its times, whether the channel is in the playlist, and
+        // the single filter that dropped it. There is no time-window reason any
+        // more: the tournament tier matches by name alone, so a row outside
+        // ESPN's own slot is taken rather than dropped.
         assertTrue(
-            "the event's own window is logged, so a capture can see the slot the tier judged it against",
+            "ESPN's own slot is still logged, so a capture can put the guide's rows beside it",
             model.contains(
                 "eventStart=${d}{event.dateMs - SportsChannelMatcher.EPG_WINDOW_MS}"
             ) &&
@@ -117,13 +120,16 @@ class SportsMatchDiagnosticsContractTest {
         )
         listOf(
             "\"not-in-playlist\"",
-            "\"time-window\"",
             "\"channel-name-mismatch\"",
             "\"duplicate\"",
             "else -> \"none\""
         ).forEach { token ->
             assertTrue("the matcher must name the reason $token", matcher.contains(token))
         }
+        assertFalse(
+            "and no reason may name a time filter the tournament tier no longer applies",
+            matcher.contains("\"time-window\"")
+        )
     }
 
     @Test

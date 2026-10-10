@@ -17,8 +17,10 @@ import org.junit.Test
  * `EspnGameSummaryTest`): the card's line appears only when the feed carried a
  * situation, the stats section sits between the score header and the channels,
  * the sheet still fetches nothing itself, and the summary is fetched lazily on
- * sheet-open for a LIVE game only, refreshed by the hub's existing 30s tick
- * rather than by a timer of its own.
+ * sheet-open for a game whose stats exist - in play or finished, never upcoming
+ * - refreshed by the hub's existing 30s tick rather than by a timer of its own.
+ * The heading is the rule's own ([SportsDetailRules.statsHeading]), because the
+ * same block now heads a finished game's box score FINAL STATS.
  */
 class SportsLiveStatsContractTest {
 
@@ -70,7 +72,7 @@ class SportsLiveStatsContractTest {
     @Test
     fun `the stats section sits between the score header and the channels`() {
         val scoreLine = sheet.indexOf("SportsDetailRules.scoreLine(game)")
-        val stats = sheet.indexOf("LiveStatsSection(game = game, summary = stats)")
+        val stats = sheet.indexOf("StatsSection(game = game, summary = stats)")
         val detailRows = sheet.indexOf("SportsDetailRules.detailRows(game).forEach")
         val backups = sheet.indexOf("text = \"BACKUP CHANNELS\"")
 
@@ -82,10 +84,29 @@ class SportsLiveStatsContractTest {
     }
 
     @Test
+    fun `the stats block is pinned above the body's scroll, not inside it`() {
+        // Reported: "I'm not seeing the live stats anywhere in sports." The
+        // section existed, but it lived INSIDE the sheet's scrolling body - and
+        // the sheet focuses WATCH on open, which scrolls that body and carried
+        // the whole block off the top before the viewer ever saw it. Pinned
+        // under the score, no forced scroll can hide it.
+        val stats = sheet.indexOf("StatsSection(game = game, summary = stats)")
+        val scroll = sheet.indexOf(".verticalScroll(rememberScrollState())")
+        assertTrue(
+            "the stats block and the body's scroll are both in the sheet",
+            stats >= 0 && scroll >= 0
+        )
+        assertTrue(
+            "the stats must sit ABOVE the scroll, in the pinned header",
+            stats < scroll
+        )
+    }
+
+    @Test
     fun `the sheet draws the stats section only when there is something in it`() {
         assertTrue(
             "one gate for the whole section: an empty summary is the sheet as it was",
-            sheet.contains("summary?.takeIf { SportsDetailRules.hasLiveStats(it) }?.let { stats ->")
+            sheet.contains("summary?.takeIf { SportsDetailRules.hasStats(it) }?.let { stats ->")
         )
         assertTrue(
             "the three parts are drawn in reading order: probability, stats, last play",
@@ -101,6 +122,22 @@ class SportsLiveStatsContractTest {
         assertTrue(
             "and the rows read away | label | home, the score header's own order",
             sheet.contains("private fun StatCompareRow(away: String, label: String, home: String)")
+        )
+    }
+
+    @Test
+    fun `the stats heading says which game it belongs to`() {
+        // A finished game the hub is still showing is opened exactly to read its
+        // box score, so the section must not head those numbers "LIVE STATS".
+        // The heading is the rule's, not a literal in the composable.
+        assertTrue(
+            "the section's heading comes from the pure rule",
+            sheet.contains("text = SportsDetailRules.statsHeading(game),")
+        )
+        assertFalse(
+            "and neither literal is spelled in the composable, where a finished" +
+                " game's box score would be stuck reading LIVE STATS",
+            sheet.contains("text = \"LIVE STATS\"") || sheet.contains("text = \"FINAL STATS\"")
         )
     }
 
@@ -121,7 +158,7 @@ class SportsLiveStatsContractTest {
     }
 
     @Test
-    fun `opening a live game is what asks for a summary, and only a live one`() {
+    fun `opening a game with stats is what asks for a summary, and never an upcoming one`() {
         assertTrue(
             "the policy lives in the repository's rules, not at this call site",
             openDetail.contains("if (!EspnSummaryRules.shouldFetch(game.state)) return")

@@ -211,11 +211,20 @@ fun LibraryScreen(
 
             item(key = "sort_rule") { ChipDivider() }
 
-            // Sort chips: Added / Title / Date / Rating.
+            // Sort chips: Added / Title / Date / Rating. Each is a TWO-state
+            // control - first tap sorts ascending, the next flips it - so the
+            // selected chip carries the direction (▲ / ▼) and the others stay
+            // bare. Without the glyph the second tap would look like a no-op on
+            // a chip that is already selected.
             items(LibrarySort.entries, key = { "sort_${it.name}" }) { sort ->
+                val selected = state.sort == sort
                 LibraryFilterChip(
-                    label = sort.label,
-                    selected = state.sort == sort,
+                    label = if (selected) {
+                        "${sort.label} ${if (state.sortAscending) "▲" else "▼"}"
+                    } else {
+                        sort.label
+                    },
+                    selected = selected,
                     onClick = { viewModel.setSort(sort) }
                 )
             }

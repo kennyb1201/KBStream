@@ -16,6 +16,12 @@ import org.junit.Test
  *    bottom (year null sorts as 0).
  *  - RATING sorts highest first, keyed by the same dedupe rule the merge
  *    pipeline uses; unrated titles sink below every rated one.
+ *
+ * Every one of those is the DESCENDING reading, which is [ascending]'s
+ * default and the resting order a Library view opens in. The ascending half of
+ * each pair is pinned separately: that is the FIRST tap on a sort chip (see
+ * [LibraryViewModel.setSort]), and in that direction an unknown key — no year,
+ * no resolved rating — must still sink to the bottom rather than float up.
  */
 class LibrarySortTest {
 
@@ -39,22 +45,44 @@ class LibrarySortTest {
         assertEquals(items, sortLibraryItems(items, LibrarySort.ADDED, emptyMap()))
     }
 
+    @Test
+    fun `ADDED ascending reverses the store order`() {
+        // The store is newest-first, so "oldest first" is its reverse. This is
+        // the first tap on the ADDED chip.
+        val items = listOf(item("C"), item("A"), item("B"))
+        assertEquals(
+            listOf("B", "A", "C"),
+            sortLibraryItems(items, LibrarySort.ADDED, emptyMap(), ascending = true).map { it.title }
+        )
+    }
+
     // ── TITLE ────────────────────────────────────────────────────────
 
     @Test
-    fun `TITLE sorts case-insensitively`() {
+    fun `TITLE ascending is case-insensitively A-first`() {
+        // The first tap on the TITLE chip (ascending).
         val sorted = sortLibraryItems(
             listOf(item("banana"), item("Apple"), item("cherry")),
-            LibrarySort.TITLE, emptyMap()
+            LibrarySort.TITLE, emptyMap(), ascending = true
         )
         assertEquals(listOf("Apple", "banana", "cherry"), sorted.map { it.title })
+    }
+
+    @Test
+    fun `TITLE descending is case-insensitively Z-first`() {
+        // ...and the second tap reverses exactly that pair.
+        val sorted = sortLibraryItems(
+            listOf(item("banana"), item("Apple"), item("cherry")),
+            LibrarySort.TITLE, emptyMap(), ascending = false
+        )
+        assertEquals(listOf("cherry", "banana", "Apple"), sorted.map { it.title })
     }
 
     @Test
     fun `TITLE sort is stable for equal names`() {
         val a = item("Same", imdb = "tt1")
         val b = item("Same", imdb = "tt2")
-        val sorted = sortLibraryItems(listOf(b, a), LibrarySort.TITLE, emptyMap())
+        val sorted = sortLibraryItems(listOf(b, a), LibrarySort.TITLE, emptyMap(), ascending = true)
         // Equal keys keep their input relative order (sortedBy is stable).
         assertEquals(listOf(b, a), sorted)
     }
@@ -79,6 +107,17 @@ class LibrarySortTest {
         assertEquals(listOf("Dated", "NoYear"), sorted.map { it.title })
     }
 
+    @Test
+    fun `RELEASE_DATE ascending is oldest first, and still sinks missing years`() {
+        // The first tap on the DATE chip. A row with no year is UNKNOWN, not a
+        // year of zero: it must stay at the bottom rather than lead the list.
+        val sorted = sortLibraryItems(
+            listOf(item("Old", year = 1999), item("NoYear"), item("New", year = 2024)),
+            LibrarySort.RELEASE_DATE, emptyMap(), ascending = true
+        )
+        assertEquals(listOf("Old", "New", "NoYear"), sorted.map { it.title })
+    }
+
     // ── RATING ───────────────────────────────────────────────────────
 
     @Test
@@ -94,6 +133,23 @@ class LibrarySortTest {
             listOf(unrated, low, high), LibrarySort.RATING, ratings
         )
         assertEquals(listOf("High", "Low", "Unrated"), sorted.map { it.title })
+    }
+
+    @Test
+    fun `RATING ascending is lowest first, and still sinks unrated`() {
+        // The first tap on the RATING chip - and the case a bare
+        // `rating ?: 0.0` got wrong: an unrated row would have led the list.
+        val low = item("Low", imdb = "tt1")
+        val high = item("High", imdb = "tt2")
+        val unrated = item("Unrated", imdb = "tt3")
+        val ratings = mapOf(
+            "movie:tt1:-" to 6.5,
+            "movie:tt2:-" to 9.1
+        )
+        val sorted = sortLibraryItems(
+            listOf(unrated, low, high), LibrarySort.RATING, ratings, ascending = true
+        )
+        assertEquals(listOf("Low", "High", "Unrated"), sorted.map { it.title })
     }
 
     @Test

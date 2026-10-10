@@ -182,33 +182,48 @@ class SportsDetailRulesTest {
         )
     }
 
-    // ── The live-stats section (the game detail sheet) ─────────────────
+    // ── The stats section (the game detail sheet) ────────────────────
 
     @Test
     fun `no summary at all draws no stats section`() {
-        assertFalse(SportsDetailRules.hasLiveStats(null))
+        assertFalse(SportsDetailRules.hasStats(null))
         assertFalse(
             "an empty summary is the same thing as none: no heading, no gap",
-            SportsDetailRules.hasLiveStats(EspnGameSummary())
+            SportsDetailRules.hasStats(EspnGameSummary())
         )
     }
 
     @Test
     fun `any one part of a summary is enough to draw the section`() {
         assertTrue(
-            SportsDetailRules.hasLiveStats(EspnGameSummary(homeWinProbability = 68))
+            SportsDetailRules.hasStats(EspnGameSummary(homeWinProbability = 68))
         )
         assertTrue(
-            SportsDetailRules.hasLiveStats(
+            SportsDetailRules.hasStats(
                 EspnGameSummary(teamStats = listOf(Triple("Hits", "7", "5")))
             )
         )
         assertTrue(
-            SportsDetailRules.hasLiveStats(EspnGameSummary(lastPlay = "Corner taken short"))
+            SportsDetailRules.hasStats(EspnGameSummary(lastPlay = "Corner taken short"))
         )
         assertFalse(
             "a blank play text is not content",
-            SportsDetailRules.hasLiveStats(EspnGameSummary(lastPlay = "  "))
+            SportsDetailRules.hasStats(EspnGameSummary(lastPlay = "  "))
+        )
+    }
+
+    @Test
+    fun `the stats heading follows the game, so a box score is never labelled live`() {
+        // The same section serves a game in play and one that has just ended:
+        // a finished game the hub is still showing must not head its numbers
+        // "LIVE STATS".
+        assertEquals(
+            "LIVE STATS",
+            SportsDetailRules.statsHeading(game(state = GameState.LIVE))
+        )
+        assertEquals(
+            "FINAL STATS",
+            SportsDetailRules.statsHeading(game(state = GameState.FINAL))
         )
     }
 

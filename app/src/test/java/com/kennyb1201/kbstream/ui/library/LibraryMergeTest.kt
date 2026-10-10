@@ -148,7 +148,9 @@ class LibraryMergeTest {
         val watched = setOf("movie::tt2")
 
         val out = applyUnwatched(
-            sortLibraryItems(listOf(a, b, c), LibrarySort.TITLE, ratings),
+            // ascending = true: the first tap on the TITLE chip (see
+            // LibraryViewModel.setSort), which is the A→Z order this pins.
+            sortLibraryItems(listOf(a, b, c), LibrarySort.TITLE, ratings, ascending = true),
             watchedKeys = watched,
             hide = true
         )

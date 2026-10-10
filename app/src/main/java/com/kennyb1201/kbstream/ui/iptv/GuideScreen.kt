@@ -2168,11 +2168,13 @@ private fun GuideHeader(
         Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             // The sports hub row: accent-labelled because it is the one action
             // here that leaves Live TV for a different screen, and it sits
-            // ahead of SEARCH/SETUP so the D-pad reaches it first.
+            // ahead of SEARCH/SETUP so the D-pad reaches it first. The label
+            // names the destination ("SPORTS HUB"), not the topic, so it is
+            // clear this leaves Live TV rather than filtering it.
             if (onSportsClick != null) {
                 KBCard(onClick = onSportsClick) {
                     Text(
-                        text = "SPORTS",
+                        text = "SPORTS HUB",
                         color = KBAccent,
                         style = MaterialTheme.typography.titleSmall,
                         modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)

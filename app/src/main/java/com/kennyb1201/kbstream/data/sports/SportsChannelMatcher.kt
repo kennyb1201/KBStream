@@ -490,6 +490,25 @@ internal object SportsChannelMatcher {
             .mapNotNull { channelById[it.channelId] }
     }
 
+    /**
+     * The channels whose guide row titles a tournament by name.
+     *
+     * NO TIME FILTER, deliberately - unlike a game, whose EPG tier only reads
+     * rows inside [EPG_WINDOW_MS] of its kick-off. ESPN's own date for a golf,
+     * tennis or racing event is ONE broadcast slot (the Baycurrent Classic is
+     * dated 2026-10-08T04:00Z, a 1.5-hour window two days before its card was
+     * read), while the tournament itself spans four days across several channels
+     * and a tail of replays and highlights. Filtering by that slot therefore
+     * killed every row the guide had for the event - 29 hits, all replays, all
+     * outside the single-slot window - and the card read "not in your playlist"
+     * over a playlist that was carrying it.
+     *
+     * So a tournament matches on its NAME alone, and the whole name at that (see
+     * [words] and the sequence rule below): a replay or a highlight airing now
+     * is a valid place to watch the tournament, and [TournamentEvent.dateMs]
+     * stays only as the ordering key - the row whose start sits closest to
+     * ESPN's slot comes first, exactly as before.
+     */
     private fun epgNameHits(
         event: TournamentEvent,
         programs: List<MatcherProgram>,
@@ -498,8 +517,7 @@ internal object SportsChannelMatcher {
         val eventWords = words(event.name)
         if (eventWords.isEmpty()) return emptyList()
         val hits = programs.filter { program ->
-            overlapsWindow(program, event.dateMs) &&
-                words(program.title).containsSequence(eventWords)
+            words(program.title).containsSequence(eventWords)
         }
         if (hits.isEmpty()) return emptyList()
         return hits
@@ -515,16 +533,18 @@ internal object SportsChannelMatcher {
      * DIAGNOSTIC ONLY - it changes no matching. It reads the SAME filters
      * [epgNameHits] applies, in the same order, so the token the log prints can
      * never disagree with what the matcher actually did: the channel has to be
-     * in the playlist at all, the program has to overlap the event's own window,
-     * its TITLE has to carry the event's whole name, and anything already
-     * claimed for this event is a duplicate.
+     * in the playlist at all, its TITLE has to carry the event's whole name, and
+     * anything already claimed for this event is a duplicate. There is
+     * deliberately NO time-window token: a tournament's EPG tier stopped
+     * filtering on time (see [epgNameHits]), so a reason naming that filter
+     * would name a rule the matcher no longer applies.
      *
      * The reason it exists rather than the hub re-deriving the filters inline is
-     * exactly that they are private here: a second copy of `overlapsWindow` or
-     * the whole-name rule in the ViewModel could drift from the tier's and
-     * report a reason the matcher never applied. `none` means the row passed
-     * every filter - so a pass that still comes back with 0 matches has its bug
-     * AFTER filtering (in result assembly), not in these rules.
+     * exactly that they are private here: a second copy of the whole-name rule
+     * in the ViewModel could drift from the tier's and report a reason the
+     * matcher never applied. `none` means the row passed every filter - so a
+     * pass that still comes back with 0 matches has its bug AFTER filtering (in
+     * result assembly), not in these rules.
      */
     internal fun tournamentRejectReason(
         program: MatcherProgram,
@@ -535,7 +555,6 @@ internal object SportsChannelMatcher {
         alreadyMatched: Boolean,
     ): String = when {
         !channelInPlaylist -> "not-in-playlist"
-        !overlapsWindow(program, event.dateMs) -> "time-window"
         !words(program.title).containsSequence(words(event.name)) ->
             "channel-name-mismatch"
         alreadyMatched -> "duplicate"

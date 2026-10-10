@@ -23,8 +23,9 @@ import org.junit.Test
  *
  *  - the PARSE is per league and disappears quietly where ESPN sends nothing
  *    (that is what keeps a thinly covered league looking like today's sheet);
- *  - the FETCH policy is the spec's hard one - live games only, lazily, never
- *    from a card - so an upcoming or final game costs no request;
+ *  - the FETCH policy is the spec's hard one - a game in play or one that has
+ *    ended, lazily, never from a card - so an upcoming game costs no request and
+ *    a finished one's box score is one tap away;
  *  - the CACHE is what makes reopening the sheet, and riding the hub's 30s live
  *    tick, free inside the minute.
  *
@@ -37,15 +38,17 @@ class EspnGameSummaryTest {
     // ── The policy ──────────────────────────────────────────────────
 
     @Test
-    fun `only a live game may cost a summary request`() {
+    fun `a game in play or a finished one may cost a summary request, an upcoming one may not`() {
         assertTrue(EspnSummaryRules.shouldFetch(GameState.LIVE))
-        assertFalse(
-            "an upcoming game has no plays and no team stats yet",
-            EspnSummaryRules.shouldFetch(GameState.UPCOMING)
+        assertTrue(
+            "the hub keeps a just-ended slate on the board, and the box score is" +
+                " exactly what the viewer goes back into it for",
+            EspnSummaryRules.shouldFetch(GameState.FINAL)
         )
         assertFalse(
-            "a final game's full stat sheet is out of scope, not a request",
-            EspnSummaryRules.shouldFetch(GameState.FINAL)
+            "an upcoming game has no plays and no team stats yet, so a request" +
+                " would buy a round trip and nothing to draw",
+            EspnSummaryRules.shouldFetch(GameState.UPCOMING)
         )
     }
 

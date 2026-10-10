@@ -36,8 +36,12 @@ enum class LibraryFilter(val label: String) {
 }
 
 /**
- * Sort order for every Library view. "Added" keeps natural order (newest
- * first); the others sort by the fields each row carries.
+ * Which field the Library's sort chips order by. "Added" is the store's own
+ * order (newest first); the others sort by the field each row carries.
+ *
+ * The enum says WHICH key only - the direction is a separate piece of state
+ * ([LibraryUiState.sortAscending]), because the same chip sorts either way and
+ * which way is the viewer's, not the field's (see [LibraryViewModel.setSort]).
  */
 enum class LibrarySort(val label: String) {
     ADDED("ADDED"),
@@ -53,6 +57,15 @@ enum class LibrarySort(val label: String) {
 data class LibraryUiState(
     val filter: LibraryFilter = LibraryFilter.ALL,
     val sort: LibrarySort = LibrarySort.ADDED,
+    /**
+     * Which way [sort] runs. FALSE (descending) is the resting state every
+     * Library view opened in and still does: "Added" reads newest-first, DATE
+     * newest-year-first, RATING highest-first. The FIRST tap on any sort chip
+     * turns it ascending and the next tap on that same chip flips it back (see
+     * [LibraryViewModel.setSort]), so the direction is always the viewer's last
+     * choice rather than something the chip's label decides for them.
+     */
+    val sortAscending: Boolean = false,
     val loading: Boolean = true,
 
     // MY LIST: local, profile-scoped, works with no account connected.
@@ -200,10 +213,26 @@ class LibraryViewModel(
         }
     }
 
+    /**
+     * A sort chip was tapped: select it, or flip its direction if it already is
+     * the selected one.
+     *
+     * The first tap on a chip sorts ASCENDING and the second DESCENDING - the
+     * chip is a two-state control rather than a one-shot selector, which is why
+     * tapping the already-selected chip must not be a no-op the way it used to
+     * be. Switching to a DIFFERENT chip also starts ascending, so the first tap
+     * on any of DATE / TITLE / RATING / ADDED is predictable (A→Z, oldest/newest
+     * year, lowest/highest rating, oldest/newest added) and the second reverses
+     * it. The screen draws the direction on the selected chip (see the sort
+     * strip in LibraryScreen), so the state is never invisible.
+     */
     fun setSort(sort: LibrarySort) {
         val state = _uiState.value
-        if (state.sort == sort) return
-        _uiState.value = state.copy(sort = sort)
+        _uiState.value = if (state.sort == sort) {
+            state.copy(sortAscending = !state.sortAscending)
+        } else {
+            state.copy(sort = sort, sortAscending = true)
+        }
         pushDisplay()
     }
 
@@ -701,6 +730,7 @@ class LibraryViewModel(
     private fun pushDisplay() {
         val state = _uiState.value
         val sort = state.sort
+        val ascending = state.sortAscending
         val ratings = state.ratings
         val watched = state.watchedKeys
         val hide = state.hideWatched
@@ -711,7 +741,7 @@ class LibraryViewModel(
         _uiState.value = state.copy(
             allItems = applyUnwatched(
                 applyPosters(
-                    sortItems(applyYears(canonicalAll, years), sort, ratings),
+                    sortItems(applyYears(canonicalAll, years), sort, ratings, ascending),
                     posters
                 ),
                 watched,
@@ -719,7 +749,7 @@ class LibraryViewModel(
             ),
             localItems = applyUnwatched(
                 applyPosters(
-                    sortItems(applyYears(canonicalLocal, years), sort, ratings),
+                    sortItems(applyYears(canonicalLocal, years), sort, ratings, ascending),
                     posters
                 ),
                 watched,
@@ -727,7 +757,7 @@ class LibraryViewModel(
             ),
             watchlistItems = applyUnwatched(
                 applyPosters(
-                    sortItems(applyYears(canonicalWatchlist, years), sort, ratings),
+                    sortItems(applyYears(canonicalWatchlist, years), sort, ratings, ascending),
                     posters
                 ),
                 watched,
@@ -735,7 +765,7 @@ class LibraryViewModel(
             ),
             selectedListItems = applyUnwatched(
                 applyPosters(
-                    sortItems(applyYears(canonicalListItems, years), sort, ratings),
+                    sortItems(applyYears(canonicalListItems, years), sort, ratings, ascending),
                     posters
                 ),
                 watched,
@@ -798,8 +828,9 @@ class LibraryViewModel(
     private fun sortItems(
         items: List<LibraryItem>,
         sort: LibrarySort,
-        ratings: Map<String, Double>
-    ): List<LibraryItem> = sortLibraryItems(items, sort, ratings)
+        ratings: Map<String, Double>,
+        ascending: Boolean
+    ): List<LibraryItem> = sortLibraryItems(items, sort, ratings, ascending)
 
     companion object {
         private const val TAG = "LIBRARY"
@@ -818,20 +849,52 @@ class LibraryViewModel(
  * ViewModel so the JVM test suite can pin the contracts (stable ADDED
  * order, case-insensitive titles, missing years/ratings sinking to the
  * bottom) without an Android dependency.
+ *
+ * [ascending] is the chip's current direction. It DEFAULTS TO DESCENDING,
+ * which is the resting order every Library view opened in and every caller
+ * before the direction existed used verbatim - so a caller that does not care
+ * about direction keeps the old reading (added newest-first, title Z-first,
+ * year newest-first, rating highest-first), and the first tap on a chip is
+ * what turns it round (see [LibraryViewModel.setSort]).
+ *
+ * A row whose sort key is UNKNOWN (no year, no resolved rating) sinks to the
+ * bottom EITHER WAY. Unknown is not a small number: flipping a chip must
+ * reorder the titles that have the field, not float the blanks to the top, and
+ * that is what a plain `year ?: 0` did in ascending order.
  */
 internal fun sortLibraryItems(
     items: List<LibraryItem>,
     sort: LibrarySort,
-    ratings: Map<String, Double>
+    ratings: Map<String, Double>,
+    ascending: Boolean = false
 ): List<LibraryItem> = when (sort) {
-    LibrarySort.ADDED -> items
-    LibrarySort.TITLE -> items.sortedBy { it.title.lowercase() }
-    LibrarySort.RELEASE_DATE -> items.sortedWith(
-        compareByDescending { it.year ?: 0 }
-    )
-    LibrarySort.RATING -> items.sortedWith(
-        compareByDescending { ratings[LocalLibraryStore.dedupeKey(it)] ?: 0.0 }
-    )
+    // The store's own order is newest-first (inserts go to index 0), so
+    // ascending is the reverse of it.
+    LibrarySort.ADDED -> if (ascending) items.reversed() else items
+    LibrarySort.TITLE -> if (ascending) {
+        items.sortedBy { it.title.lowercase() }
+    } else {
+        items.sortedByDescending { it.title.lowercase() }
+    }
+    LibrarySort.RELEASE_DATE -> {
+        val (dated, undated) = items.partition { it.year != null }
+        val ordered = if (ascending) {
+            dated.sortedBy { it.year }
+        } else {
+            dated.sortedByDescending { it.year }
+        }
+        ordered + undated
+    }
+    LibrarySort.RATING -> {
+        val keyOf = { item: LibraryItem -> ratings[LocalLibraryStore.dedupeKey(item)] }
+        val (rated, unrated) = items.partition { keyOf(it) != null }
+        val ordered = if (ascending) {
+            rated.sortedBy { keyOf(it) }
+        } else {
+            rated.sortedByDescending { keyOf(it) }
+        }
+        ordered + unrated
+    }
 }
 
 /**

@@ -36,7 +36,7 @@ import org.junit.Test
  */
 class KidsNewRailsContractTest {
 
-    /** A fixed "today" so the ninety-day window is asserted, not computed twice. */
+    /** A fixed "today" so the half-year window is asserted, not computed twice. */
     private val today = LocalDate.of(2026, 10, 8)
 
     private val queries = KidsNewRailRules.queries(today)
@@ -46,7 +46,7 @@ class KidsNewRailsContractTest {
     // ------------------------------------------------------------- the query --
 
     @Test
-    fun `the movie rail discovers animation or family, PG or milder, from the last ninety days`() {
+    fun `the movie rail discovers animation or family, PG or milder, from the last half-year`() {
         assertEquals("movie", movie.mediaType)
         assertEquals("movie", movie.type)
         assertEquals("new_kids_movies", movie.catalogId)
@@ -55,7 +55,7 @@ class KidsNewRailsContractTest {
 
         // Animation (16) OR Family (10751), spelled the way TMDB's OR is: a
         // PIPE. A comma is an AND on TMDB's side, which narrows the rail
-        // instead of widening it - and over the ninety-day window below an AND
+        // instead of widening it - and over the half-year window below an AND
         // is a query with zero results, so the row disappears from Home
         // entirely (verified against the live API; see KidsNewRailRules).
         assertEquals("16|10751", movie.filters.withGenres)
@@ -75,10 +75,13 @@ class KidsNewRailsContractTest {
         // starves this one to empty.
         assertEquals(5, movie.filters.voteCountGte)
 
-        assertEquals("2026-07-10", movie.filters.releaseDateGte)
+        assertEquals("2026-04-11", movie.filters.releaseDateGte)
         assertEquals("2026-10-08", movie.filters.releaseDateLte)
-        assertEquals(KidsNewRailRules.WINDOW_DAYS, 90L)
-        assertEquals(today.minusDays(90).toString(), KidsNewRailRules.windowStartIso(today))
+        // 180, not the 90 this shipped at: a live-API measurement found a
+        // ninety-day window of English-original kids SERIES holds six titles
+        // in total, which no page budget can turn into a row.
+        assertEquals(KidsNewRailRules.WINDOW_DAYS, 180L)
+        assertEquals(today.minusDays(180).toString(), KidsNewRailRules.windowStartIso(today))
     }
 
     @Test
@@ -96,7 +99,10 @@ class KidsNewRailsContractTest {
         assertEquals("US", show.filters.certificationCountry)
         assertEquals("PG", show.filters.certificationLte)
         assertNull(show.filters.certification)
-        assertEquals(5, show.filters.voteCountGte)
+        // The SERIES floor, one vote: measured, the same window holds 34 series
+        // against 124 films, and the film floor of five would leave this row a
+        // couple of cards long.
+        assertEquals(KidsNewRailRules.MIN_VOTE_COUNT_TV, show.filters.voteCountGte)
         assertEquals(movie.filters.releaseDateGte, show.filters.releaseDateGte)
         assertEquals(today.toString(), show.filters.releaseDateLte)
     }

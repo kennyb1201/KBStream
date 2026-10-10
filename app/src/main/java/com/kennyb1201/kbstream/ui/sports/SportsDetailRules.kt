@@ -113,21 +113,38 @@ internal object SportsDetailRules {
     }
 
     /**
-     * Whether the sheet's LIVE STATS section is drawn at all.
+     * Whether the sheet's stats section is drawn at all.
      *
      * The section is skipped WHOLE when the summary has nothing in it - every
-     * field null or empty - so a live game ESPN carries no stats for (or one
-     * whose summary never arrived) looks exactly like today's sheet: no empty
-     * heading, no placeholder rows, no "no stats" line. The three parts are
-     * independent, so a soccer summary with stats and no win probability draws
-     * its table and no bar.
+     * field null or empty - so a game ESPN carries no stats for (or one whose
+     * summary never arrived) looks exactly like today's sheet: no empty heading,
+     * no placeholder rows, no "no stats" line. The three parts are independent,
+     * so a soccer summary with stats and no win probability draws its table and
+     * no bar.
+     *
+     * Named for STATS rather than live stats because the same section serves a
+     * game in play and one that has ended - the hub keeps a finished slate on the
+     * board, and "I just watched that, let me read the box score" is the same
+     * question as the live one.
      */
-    fun hasLiveStats(summary: EspnGameSummary?): Boolean {
+    fun hasStats(summary: EspnGameSummary?): Boolean {
         if (summary == null) return false
         return summary.homeWinProbability != null ||
             summary.teamStats.isNotEmpty() ||
             !summary.lastPlay.isNullOrBlank()
     }
+
+    /**
+     * The stats section's own heading: "FINAL STATS" over a game that has
+     * ended, "LIVE STATS" over one in play.
+     *
+     * Says the same fact the status line above it does, in the heading's own
+     * words, so a box score under a finished game is never labelled live. An
+     * upcoming game never reaches this - there is no summary to head (see
+     * [hasStats] and `EspnSummaryRules.shouldFetch`).
+     */
+    fun statsHeading(game: SportsGame): String =
+        if (game.state == GameState.FINAL) "FINAL STATS" else "LIVE STATS"
 
     /**
      * The Watch button's label: enabled, or the honest reason it is not.

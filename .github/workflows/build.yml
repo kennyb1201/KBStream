@@ -588,6 +588,12 @@ jobs:
       # action. It used to be a fixed sentence naming the commit, which carried
       # nothing a user could act on - so a published build now lists the commits
       # it contains, taken from the same published gitSha the guard above reads.
+      #
+      # A commit SUBJECT in this repo is a paragraph (the reasoning lives in it),
+      # so pasting subjects whole produced a changelog nobody read. Each entry is
+      # trimmed to its headline here - the change a viewer cares about, not the
+      # why - and the list is kept to a handful of entries. Full detail stays in
+      # git; this file is what an update dialog shows.
       - name: Compose release notes
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
@@ -597,14 +603,30 @@ jobs:
           # The guard step already downloaded this; absent means no release has
           # ever been published, in which case there is no "since" to list.
           PREVIOUS_SHA="$(jq -r '.gitSha // ""' /tmp/published/metadata.json 2>/dev/null || true)"
-          # A cap, because this is rendered in a Settings row: a publish after a
-          # long gap would otherwise paste the whole repository into it.
-          LIMIT=20
+          # A short cap, because this is rendered in a Settings row: a publish
+          # after a long gap would otherwise paste the whole repository into it.
+          # The important changes only - the rest is `git log`'s job.
+          LIMIT=6
           CHANGES=""
           if [[ -n "$PREVIOUS_SHA" && "$PREVIOUS_SHA" != "$HEAD_SHA" ]] &&
              git merge-base --is-ancestor "$PREVIOUS_SHA" "$HEAD_SHA" 2>/dev/null; then
             TOTAL="$(git rev-list --count --no-merges "$PREVIOUS_SHA..$HEAD_SHA")"
-            CHANGES="$(git log --no-merges --pretty=format:'- %s' "$PREVIOUS_SHA..$HEAD_SHA" | head -n "$LIMIT")"
+            # awk, not a raw `%s`: the headline of a subject is the text before
+            # its first ": " (the colon introduces the detail), and a subject
+            # with no such break is clamped at a readable width on a word
+            # boundary. The colon-only break keeps "1:1" and URLs intact.
+            CHANGES="$(git log --no-merges --pretty=format:'%s' "$PREVIOUS_SHA..$HEAD_SHA" \
+              | head -n "$LIMIT" \
+              | awk '
+                  {
+                    sub(/: .*/, "")
+                    if (length($0) > 120) {
+                      $0 = substr($0, 1, 120)
+                      sub(/[^ ]*$/, "", $0)
+                      $0 = $0 "…"
+                    }
+                    print "- " $0
+                  }')"
             if (( TOTAL > LIMIT )); then
               CHANGES="${CHANGES}"$'\n'"...and $(( TOTAL - LIMIT )) more."
             fi

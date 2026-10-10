@@ -16,6 +16,7 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -666,7 +667,7 @@ private fun SportsHeader(
         verticalAlignment = Alignment.Top
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            KBPageTitle(text = "SPORTS")
+            KBPageTitle(text = "SPORTS HUB")
             Text(
                 text = "Live scores • tap to watch • long-press a game to follow its teams",
                 style = MaterialTheme.typography.bodyMedium,
@@ -2299,12 +2300,10 @@ private fun TournamentDetailSheet(
                     )
                 }
 
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
+                // The same scrolling body the game sheet uses, so the last
+                // backup feed's focus ring is landed clear of the bottom edge
+                // here too.
+                SheetScrollBody {
                     // Every row is already filtered to the non-blanks, so a stop
                     // with no venue and no note simply draws fewer rows.
                     SportsDetailRules.detailRows(event).forEach { row ->
@@ -2425,18 +2424,14 @@ private fun GameDetailSheet(
     /**
      * The hub's summary for this game, or null when it has none. The sheet draws
      * the stats section from it and nothing else: no fetch, no spinner, no error
-     * state - a live game ESPN gives no stats for is simply the sheet as it was
-     * before the section existed (see `SportsDetailRules.hasLiveStats`).
+     * state - a game ESPN gives no stats for (live or finished) is simply the
+     * sheet as it was before the section existed (see `SportsDetailRules.hasStats`).
      */
     summary: EspnGameSummary? = null,
     onManualPick: (IptvChannel) -> Unit = {},
     onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit,
 ) {
-    val watchButton = remember { FocusRequester() }
-    val channel = channels.firstOrNull()
-    val backups = channels.drop(1)
-
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
@@ -2511,121 +2506,188 @@ private fun GameDetailSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // The crests, the matchup and the score are PINNED - only the
-                // body below them scrolls. That split is the actual fix: the
-                // sheet focuses WATCH the moment it opens, Compose brings the
-                // focused button into view by scrolling, and scrolling the whole
-                // column carried the crest row out through the plate's top edge,
-                // which is the cropped logos. A pinned header cannot be scrolled
-                // away.
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                // The stats block is PINNED with the header, not left in the
+                // scroll below it. It belongs right under the score - the
+                // matchup's own numbers first, then the venue and the channels -
+                // but the sheet focuses WATCH the moment it opens, Compose brings
+                // that button into view by scrolling the body, and that scroll
+                // carried the whole block off the top before the viewer ever saw
+                // it: a live game's sheet looked like it had no stats at all.
+                // Pinned under the score, no forced scroll can hide it. Drawn
+                // only when there is something in it, so a game with no summary
+                // reads exactly as it did before this section existed - and drawn
+                // for a FINISHED game too, since the hub keeps a just-ended slate
+                // on the board and the box score is exactly what a viewer goes
+                // back into it for.
+                summary?.takeIf { SportsDetailRules.hasStats(it) }?.let { stats ->
+                    StatsSection(game = game, summary = stats)
+                }
+
+                // The crests, the matchup, the score and the live stats are
+                // PINNED - only the body below them scrolls. That split is the
+                // actual fix for the cropped crests: the sheet focuses WATCH on
+                // open, Compose brings the focused button into view by scrolling,
+                // and scrolling the whole column carried the crest row out
+                // through the plate's top edge. A pinned header cannot be
+                // scrolled away.
+                DetailSheetBody(
+                    game = game,
+                    channels = channels,
+                    lineupMissing = lineupMissing,
+                    matchingDone = matchingDone,
+                    onManualPick = onManualPick,
+                    onPlay = onPlay
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One sheet's scrolling body: the rows that cannot be pinned, in a Column that
+ * keeps the same focus landing the hub's card lists use.
+ *
+ * Every sheet that lists focusable cards needs this. A scroll container clips to
+ * its own bounds, and Compose's default landing leaves the focused card's LAYOUT
+ * rectangle flush with the edge - inside the 2dp accent border and 12dp glow it
+ * draws outside that rectangle - so the LAST backup feed's focus ring was
+ * sheared off flat along the bottom of the scroll.
+ *
+ * The trailing spacer is not decoration: the list cannot scroll a row up to the
+ * landing margin unless there is slack past it, so without it the last row is
+ * stuck flush with the bottom whatever the landing asks for.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ColumnScope.SheetScrollBody(
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val density = LocalDensity.current
+    val bringIntoViewSpec = remember(density) {
+        SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
+    }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            content()
+            Spacer(modifier = Modifier.height(KBFocusRowInset))
+        }
+    }
+}
+
+/**
+ * The scrolling part of the game sheet: the venue rows, the leaders, the WATCH
+ * button and the backup feeds.
+ *
+ * Split out of [GameDetailSheet] so the pinned block above it stays readable,
+ * and drawn through [SheetScrollBody] so its last row gets the focus landing
+ * the hub's card lists have.
+ */
+@Composable
+private fun ColumnScope.DetailSheetBody(
+    game: SportsGame,
+    channels: List<IptvChannel>,
+    lineupMissing: Boolean,
+    matchingDone: Boolean,
+    onManualPick: (IptvChannel) -> Unit,
+    onPlay: (List<IptvChannel>) -> Unit,
+) {
+    val watchButton = remember { FocusRequester() }
+    val channel = channels.firstOrNull()
+    val backups = channels.drop(1)
+    SheetScrollBody {
+        // Every row is already filtered to the non-blanks, so a game with no
+        // venue and no leaders simply draws fewer rows.
+        SportsDetailRules.detailRows(game).forEach { row ->
+            DetailRow(label = row.label, value = row.value)
+        }
+
+        val leaderLines = SportsDetailRules.leaderLines(game)
+        if (leaderLines.isNotEmpty()) {
+            Text(
+                text = "LEADERS",
+                style = MaterialTheme.typography.labelSmall,
+                color = KBTextLo,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            leaderLines.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = KBTextHi,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        if (channel != null) {
+            KBCard(
+                // The whole ordered list, head first: the one-press path is the
+                // feed the matcher chose, and the rest ride along behind it so
+                // the player's own ladder has somewhere to fall when that feed
+                // will not open.
+                onClick = { onPlay(channels) },
+                focusedScale = KBFocusRow,
+                shape = KBShapePill,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(watchButton)
+            ) {
+                WatchButtonLabel(
+                    label = SportsDetailRules.watchLabel(true),
+                    enabled = true
+                )
+            }
+            LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
+        } else {
+            // Not focusable: a disabled action must not be a D-pad stop.
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = KBShapePill,
+                colors = SurfaceDefaults.colors(
+                    containerColor = KBSurfaceRaised,
+                    contentColor = KBTextLo
+                )
+            ) {
+                WatchButtonLabel(
+                    label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
+                    enabled = false
+                )
+            }
+        }
+
+        // The other feeds the playlist holds for this game - the second channel
+        // the guide is airing it on, the network's alternates, the team's own
+        // regional network. Drawn only when there is one: a "backups" heading
+        // over an empty list would promise a choice that does not exist.
+        if (backups.isNotEmpty()) {
+            Text(
+                text = "BACKUP CHANNELS",
+                style = MaterialTheme.typography.labelSmall,
+                color = KBTextLo,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            backups.forEach { backup ->
+                KBCard(
+                    // The chosen feed goes first and the rest follow in their
+                    // own order, so picking a backup is a switch rather than a
+                    // decision to lose the other feeds.
+                    onClick = {
+                        onManualPick(backup)
+                        onPlay(listOf(backup) + channels.filter { it.id != backup.id })
+                    },
+                    focusedScale = KBFocusRow,
+                    shape = KBShapePill,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    // LIVE STATS sits between the score header and everything
-                    // else - the matchup's own numbers first, then the venue and
-                    // the channels. Drawn only when there is something in it, so
-                    // a game with no summary reads exactly as it did before this
-                    // section existed.
-                    summary?.takeIf { SportsDetailRules.hasLiveStats(it) }?.let { stats ->
-                        LiveStatsSection(game = game, summary = stats)
-                    }
-
-                    // Every row is already filtered to the non-blanks, so a game
-                    // with no venue and no leaders simply draws fewer rows.
-                    SportsDetailRules.detailRows(game).forEach { row ->
-                        DetailRow(label = row.label, value = row.value)
-                    }
-
-                    val leaderLines = SportsDetailRules.leaderLines(game)
-                    if (leaderLines.isNotEmpty()) {
-                        Text(
-                            text = "LEADERS",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = KBTextLo,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                        leaderLines.forEach { line ->
-                            Text(
-                                text = line,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = KBTextHi,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(4.dp))
-
-                    if (channel != null) {
-                        KBCard(
-                            // The whole ordered list, head first: the one-press
-                            // path is the feed the matcher chose, and the rest
-                            // ride along behind it so the player's own ladder
-                            // has somewhere to fall when that feed will not open.
-                            onClick = { onPlay(channels) },
-                            focusedScale = KBFocusRow,
-                            shape = KBShapePill,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(watchButton)
-                        ) {
-                            WatchButtonLabel(
-                                label = SportsDetailRules.watchLabel(true),
-                                enabled = true
-                            )
-                        }
-                        LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
-                    } else {
-                        // Not focusable: a disabled action must not be a D-pad stop.
-                        Surface(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = KBShapePill,
-                            colors = SurfaceDefaults.colors(
-                                containerColor = KBSurfaceRaised,
-                                contentColor = KBTextLo
-                            )
-                        ) {
-                            WatchButtonLabel(
-                                label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
-                                enabled = false
-                            )
-                        }
-                    }
-
-                    // The other feeds the playlist holds for this game - the
-                    // second channel the guide is airing it on, the network's
-                    // alternates, the team's own regional network. Drawn only
-                    // when there is one: a "backups" heading over an empty list
-                    // would promise a choice that does not exist.
-                    if (backups.isNotEmpty()) {
-                        Text(
-                            text = "BACKUP CHANNELS",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = KBTextLo,
-                            modifier = Modifier.padding(top = 4.dp)
-                        )
-                        backups.forEach { backup ->
-                            KBCard(
-                                // The chosen feed goes first and the rest follow
-                                // in their own order, so picking a backup is a
-                                // switch rather than a decision to lose the
-                                // other feeds.
-                                onClick = {
-                                    onManualPick(backup)
-                                    onPlay(listOf(backup) + channels.filter { it.id != backup.id })
-                                },
-                                focusedScale = KBFocusRow,
-                                shape = KBShapePill,
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                BackupChannelLabel(channel = backup)
-                            }
-                        }
-                    }
+                    BackupChannelLabel(channel = backup)
                 }
             }
         }
@@ -2633,23 +2695,27 @@ private fun GameDetailSheet(
 }
 
 /**
- * The sheet's LIVE STATS block: win probability, the team comparison, then the
- * last play - in that order, because that is the order a viewer reads a live
- * game in (who is winning, how, and what just happened).
+ * The sheet's stats block: win probability, the team comparison, then the last
+ * play - in that order, because that is the order a viewer reads a game in (who
+ * is winning, how, and what just happened).
+ *
+ * Serves a game in play AND one that has just ended, which is why the heading
+ * comes from [SportsDetailRules.statsHeading] rather than being a literal: the
+ * same numbers under a finished game say FINAL STATS.
  *
  * Every part is optional and is skipped on its own: a soccer summary has stats
  * and no win probability, a football one may have all three, and a league ESPN
  * covers thinly has none - in which case the caller has already decided not to
- * call this at all (see `SportsDetailRules.hasLiveStats`).
+ * call this at all (see `SportsDetailRules.hasStats`).
  */
 @Composable
-private fun LiveStatsSection(game: SportsGame, summary: EspnGameSummary) {
+private fun StatsSection(game: SportsGame, summary: EspnGameSummary) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(
-            text = "LIVE STATS",
+            text = SportsDetailRules.statsHeading(game),
             style = MaterialTheme.typography.labelSmall,
             color = KBTextLo,
             modifier = Modifier.padding(top = 4.dp)

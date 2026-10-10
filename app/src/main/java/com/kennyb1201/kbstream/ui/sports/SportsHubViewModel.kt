@@ -208,11 +208,11 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * The open detail sheet's game summary - team stats, win probability, the
      * last play - or null when there is none to draw.
      *
-     * Null is the ordinary state, not a failure: an upcoming or final game
-     * never fetches one, a league ESPN does not summarise has nothing to parse,
-     * and a request that fails leaves the sheet exactly as it is today. The
-     * sheet therefore needs no error state and no spinner - it draws the stats
-     * section when this is non-empty and skips it otherwise.
+     * Null is the ordinary state, not a failure: an UPCOMING game never fetches
+     * one, a league ESPN does not summarise has nothing to parse, and a request
+     * that fails leaves the sheet exactly as it is today. The sheet therefore
+     * needs no error state and no spinner - it draws the stats section when this
+     * is non-empty and skips it otherwise.
      */
     private val _detailSummary = MutableStateFlow<EspnGameSummary?>(null)
     val detailSummary: StateFlow<EspnGameSummary?> = _detailSummary.asStateFlow()
@@ -231,8 +231,12 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     private var detailJob: Job? = null
 
     /**
-     * The detail sheet opened on [game]: the summary is fetched LAZILY, here and
-     * nowhere else, and only for a live game (see [EspnSummaryRules.shouldFetch]).
+     * The detail sheet opened on [game]: the summary is fetched LAZILY, here
+     * and nowhere else, and only for a game whose stats exist - in play or
+     * finished, never upcoming (see [EspnSummaryRules.shouldFetch]). A finished
+     * game is the common case the hub has to answer: the board keeps a slate
+     * that has just ended, and "let me look at that game's numbers" is the
+     * reason a viewer opens one at all.
      *
      * Cards never call this - a card tap raises the sheet, and the sheet is what
      * asks - so scrolling a board of twenty games costs no summary requests at
@@ -1258,13 +1262,15 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                     "SPORTS DIAG tournament=${event.id} name=\"${event.name}\" " +
                         "terms=${terms} hits=${rows.size}"
                 )
-                // The window this event is judged against, so a capture can tell
-                // "the guide has nothing in this event's slot" from "the guide
-                // has rows the matcher refused". The tournament tier matches a
-                // single-broadcast window around the event's scheduled start
-                // (see [SportsChannelMatcher.EPG_WINDOW_MS]) - which is exactly
-                // what a multi-day tournament's later rounds stress, and the
-                // number a fix would have to widen.
+                // ESPN's own single-broadcast slot for the event, logged so a
+                // capture can put the rows the guide returned beside the time
+                // the FEED thinks the event occupies. The tier does NOT filter
+                // on it - a tournament matches by name alone, because ESPN dates
+                // a four-day event with one 1.5-hour slot (see
+                // [SportsChannelMatcher.epgNameHits]) - so the useful reading is
+                // the CONTRAST: rows well outside this slot that the tier now
+                // takes, which is the replay/highlight case this line used to
+                // explain away as `time-window`.
                 Log.w(
                     TAG,
                     "SPORTS DIAG tournament=${event.id} " +

@@ -528,6 +528,64 @@ class SportsChannelMatcherTest {
     }
 
     @Test
+    fun `a tournament matches a replay days after ESPN's own slot`() {
+        // The reported bug: ESPN dates the Baycurrent Classic with ONE 1.5-hour
+        // broadcast slot two days before the card was read, while the guide
+        // carries the tournament as 29 replays and highlights across the week.
+        // The old time filter dropped all 29 and the card read "not in your
+        // playlist" over a playlist that was carrying it; the tier now matches
+        // a tournament on its name alone.
+        val golf = channel("golf", "Golf Channel")
+        val slot = firstPitch - 2 * 24 * 60 * minute
+        val event = TournamentEvent(
+            id = "401850916",
+            league = "golf/pga",
+            name = "Baycurrent Classic",
+            dateMs = slot,
+            state = GameState.LIVE,
+            statusDetail = "Round 1 - Play Complete",
+            leaders = emptyList(),
+            // No broadcast name on purpose: the ONLY way to this channel is the
+            // guide row, so the test pins the EPG tier rather than falling
+            // through to the network tier and proving nothing.
+            broadcastNames = emptyList(),
+        )
+        // A replay well outside the old window: the slot has been over for two
+        // days and the program itself airs now.
+        val replay = program("golf", "Baycurrent Classic", firstPitch, firstPitch + 3 * 60 * minute)
+
+        assertEquals(
+            listOf(golf),
+            SportsChannelMatcher.matches(
+                event = event,
+                channels = listOf(golf),
+                programs = listOf(replay),
+            ),
+        )
+    }
+
+    @Test
+    fun `a game's EPG tier still insists on its window`() {
+        // The change is tournaments only: a game's guide row has to overlap its
+        // kick-off, or every re-run of last night's game would look like this
+        // afternoon's.
+        // No broadcast name either, for the same reason: the row is the only
+        // signal, and it is now too old to count.
+        val espn = channel("espn", "ESPN")
+        val game = game(yankees, redSox)
+        val lastNight = program(
+            "espn",
+            "Yankees vs. Red Sox",
+            firstPitch - 30 * 60 * minute,
+            firstPitch - 27 * 60 * minute,
+        )
+
+        assertNull(
+            SportsChannelMatcher.match(game = game, channels = listOf(espn), programs = listOf(lastNight)),
+        )
+    }
+
+    @Test
     fun `a tournament falls back to its broadcast network`() {
         val golf = channel("golf", "Golf Channel")
         val event = TournamentEvent(

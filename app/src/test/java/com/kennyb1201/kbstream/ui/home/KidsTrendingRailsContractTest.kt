@@ -67,10 +67,13 @@ class KidsTrendingRailsContractTest {
             movie.filters.certification
         )
         assertEquals(5, movie.filters.voteCountGte)
-        assertEquals("2026-04-11", movie.filters.releaseDateGte)
+        assertEquals("2025-10-08", movie.filters.releaseDateGte)
         assertEquals("2026-10-08", movie.filters.releaseDateLte)
-        assertEquals(KidsTrendingRailRules.WINDOW_DAYS, 180L)
-        assertEquals(today.minusDays(180).toString(), KidsTrendingRailRules.windowStartIso(today))
+        // A year, not the half-year this shipped at: a live-API measurement
+        // found 180 days of English-original kids SERIES holds 15 titles in
+        // total, so this row could only ever be a handful of cards.
+        assertEquals(KidsTrendingRailRules.WINDOW_DAYS, 365L)
+        assertEquals(today.minusDays(365).toString(), KidsTrendingRailRules.windowStartIso(today))
     }
 
     @Test
@@ -84,7 +87,8 @@ class KidsTrendingRailsContractTest {
         assertEquals("US", show.filters.certificationCountry)
         assertEquals("PG", show.filters.certificationLte)
         assertNull(show.filters.certification)
-        assertEquals(5, show.filters.voteCountGte)
+        // The SERIES floor, one vote - see KidsNewRailsContractTest.
+        assertEquals(KidsTrendingRailRules.MIN_VOTE_COUNT_TV, show.filters.voteCountGte)
         assertEquals(movie.filters.releaseDateGte, show.filters.releaseDateGte)
         assertEquals(today.toString(), show.filters.releaseDateLte)
     }

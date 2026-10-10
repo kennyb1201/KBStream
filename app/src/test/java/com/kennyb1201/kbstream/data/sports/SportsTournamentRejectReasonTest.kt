@@ -9,8 +9,12 @@ import org.junit.Test
  *
  * The token is what a logcat capture is read for: a tournament card showing
  * "not in your playlist" has to be attributable to ONE filter - not-in-playlist,
- * time-window, channel-name-mismatch, duplicate, or none - and `none` with an
- * empty result is its own answer (the bug is after filtering, not in it).
+ * channel-name-mismatch, duplicate, or none - and `none` with an empty result is
+ * its own answer (the bug is after filtering, not in it). There is no
+ * time-window token: the tournament tier matches by name alone (its EPG lookup
+ * reads no clock), so a row airing outside ESPN's own slot - a replay of a
+ * finished round, which is the common case for golf - is a row the tier takes,
+ * and the token has to agree.
  *
  * Because the reason is produced by the SAME code the tier uses (see
  * [SportsChannelMatcher.tournamentRejectReason]), the important thing these
@@ -89,13 +93,22 @@ class SportsTournamentRejectReasonTest {
     }
 
     @Test
-    fun `a row that does not overlap the event window is time-window`() {
-        val reason = reason(
-            // Half a day after the event starts: outside the tier's
-            // single-broadcast window around event.dateMs.
-            program = program(startMs = NOW + 12 * hour, endMs = NOW + 15 * hour),
+    fun `a row well outside the event's own slot is still none`() {
+        // The Baycurrent case: ESPN dates a tournament with ONE broadcast slot,
+        // yet the guide carries the event as replays and highlights across four
+        // days. Half a day after the slot used to read `time-window`; it is now
+        // a row the matcher takes, and the token has to say so.
+        val replay = program(startMs = NOW + 12 * hour, endMs = NOW + 15 * hour)
+        assertEquals("none", reason(program = replay))
+        assertEquals(
+            "and none is a row the matcher actually takes",
+            listOf(CHANNEL_ID),
+            SportsChannelMatcher.matches(
+                event = event(),
+                channels = listOf(channel()),
+                programs = listOf(replay),
+            ).map { it.id },
         )
-        assertEquals("time-window", reason)
     }
 
     @Test

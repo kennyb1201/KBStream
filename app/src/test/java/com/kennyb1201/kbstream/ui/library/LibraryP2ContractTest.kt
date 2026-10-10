@@ -14,6 +14,39 @@ import org.junit.Test
 class LibraryP2ContractTest {
 
     @Test
+    fun `a sort chip is a two-state control, first tap ascending then descending`() {
+        // Reported: each sort chip was a one-shot selector - tapping DATE,
+        // TITLE, RATING or ADDED picked the field and tapping it again did
+        // nothing. The chip now sorts ascending on the first tap and reverses
+        // on the next, which means the already-selected branch must FLIP rather
+        // than return early the way it used to.
+        val body = functionBody(LIBRARY_VM, "fun setSort(")
+        assertTrue(
+            "the selected chip must flip the direction, not bail out",
+            body.contains("state.copy(sortAscending = !state.sortAscending)")
+        )
+        assertTrue(
+            "and a different chip starts ascending, so the first tap is predictable",
+            body.contains("state.copy(sort = sort, sortAscending = true)")
+        )
+        assertFalse(
+            "the old short-circuit made the second tap a no-op",
+            body.contains("if (state.sort == sort) return")
+        )
+        assertTrue(
+            "the direction has to reach the ordering",
+            functionBody(LIBRARY_VM, "private fun pushDisplay(")
+                .contains("val ascending = state.sortAscending") &&
+                source(LIBRARY_VM)
+                    .contains("sortLibraryItems(items, sort, ratings, ascending)")
+        )
+        assertTrue(
+            "and it has to be visible, or the second tap looks like nothing",
+            source(LIBRARY_SCREEN).contains("if (state.sortAscending) \"▲\" else \"▼\"")
+        )
+    }
+
+    @Test
     fun `switching lists bumps the request version`() {
         val body = functionBody(LIBRARY_VM, "private fun loadListItems(")
         assertTrue(

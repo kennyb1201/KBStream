@@ -196,6 +196,23 @@ class SportsHubLayoutContractTest {
         )
     }
 
+    // ── The header ──────────────────────────────────────────────────
+
+    @Test
+    fun `the screen names itself the sports hub`() {
+        // The header used to read "SPORTS", which is the section word rather
+        // than the screen's name - and the tab, the deep link and every contract
+        // in this file already call it the hub.
+        assertTrue(
+            "the page title is the hub's own name",
+            flat.contains("KBPageTitle(text = \"SPORTS HUB\")")
+        )
+        assertFalse(
+            "and the bare section word is gone from the title",
+            flat.contains("KBPageTitle(text = \"SPORTS\")")
+        )
+    }
+
     // ── The focus-ring landing ──────────────────────────────────────
 
     @Test

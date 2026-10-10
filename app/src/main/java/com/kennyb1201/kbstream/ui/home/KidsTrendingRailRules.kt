@@ -16,8 +16,8 @@ import java.time.LocalDate
  * title", so the rows are a popularity sort over a rolling window of recent
  * releases instead of the raw weekly chart.
  *
- * The window is wider than [KidsNewRailRules]'s ninety days on purpose: these
- * rows mean "popular this half-year", not "released this week", so a title a
+ * The window is wider than [KidsNewRailRules]'s half-year on purpose: these
+ * rows mean "popular this year", not "released this week", so a title a
  * couple of months old that has taken off still qualifies. Everything else -
  * the genre sets, the age ceiling and the vote floor - is the new rows' own,
  * character for character, so both families draw from the same pool and share
@@ -25,8 +25,17 @@ import java.time.LocalDate
  */
 internal object KidsTrendingRailRules {
 
-    /** How far back the popularity window reaches, in days. */
-    const val WINDOW_DAYS = 180L
+    /**
+     * How far back the popularity window reaches, in days.
+     *
+     * A year, not the half-year this started at. Measured against the live
+     * API: 180 days of English-original kids/animation SERIES holds 15 titles
+     * in total, which is a row of eight cards after the ceiling and
+     * availability passes - and no page budget can widen a pool that small.
+     * A year holds 73. Still the widest of the kids windows (see
+     * [KidsNewRailRules.WINDOW_DAYS]).
+     */
+    const val WINDOW_DAYS = 365L
 
     /** The scale every value here is read against. */
     const val CERTIFICATION_COUNTRY = "US"
@@ -35,12 +44,18 @@ internal object KidsTrendingRailRules {
     const val CERTIFICATION_CEILING = "PG"
 
     /**
-     * The vote floor. Deliberately the recency rows' low 5 rather than the
-     * standing rows' 20: a title that grew popular this year may not have had
-     * the years of votes the evergreen rows demand, and a higher floor would
-     * starve this row to empty.
+     * The MOVIE floor - the new rows' own low 5, for the reason given there:
+     * a title that grew popular this year may not have had the years of votes
+     * the evergreen rows demand, and a higher floor starves this row.
      */
     const val MIN_VOTE_COUNT = 5
+
+    /**
+     * The SERIES floor, one vote rather than five - the same measurement as
+     * [KidsNewRailRules.MIN_VOTE_COUNT_TV]: the series pool is a fraction of
+     * the film pool, so the film floor starves this row.
+     */
+    const val MIN_VOTE_COUNT_TV = 1
 
     const val MOVIE_CATALOG_ID = "trending_kids_movies"
     const val SHOW_CATALOG_ID = "trending_kids_shows"
@@ -80,7 +95,8 @@ internal object KidsTrendingRailRules {
                 withGenres = "10762|16",
                 certificationCountry = CERTIFICATION_COUNTRY,
                 certificationLte = CERTIFICATION_CEILING,
-                voteCountGte = MIN_VOTE_COUNT,
+                // The series floor, not the film one - see [MIN_VOTE_COUNT_TV].
+                voteCountGte = MIN_VOTE_COUNT_TV,
                 // discoverKB maps these onto first_air_date for TV, so the same
                 // two fields serve both rails.
                 releaseDateGte = windowStartIso(today),

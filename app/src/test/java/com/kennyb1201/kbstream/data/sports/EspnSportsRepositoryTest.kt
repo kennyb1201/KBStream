@@ -35,6 +35,66 @@ class EspnSportsRepositoryTest {
     }
 
     @Test
+    fun `a stale live word is overruled once the event's own end is hours past`() {
+        // The reported bug: ESPN's golf feed stays "in" for days, so the hub
+        // showed the Baycurrent Classic as LIVE 47 hours after it finished. Past
+        // the buffer an "in" is read as FINAL whatever the feed says.
+        val end = NOW - 47 * hour
+        assertEquals(GameState.FINAL, espnGameState("in", eventEndMs = end, nowMs = NOW))
+        // And it applies to games, not just tournaments - a box score does not
+        // stay live either, and the same rule reads both.
+        assertEquals(GameState.FINAL, espnGameState("in", eventEndMs = NOW - 7 * hour, nowMs = NOW))
+    }
+
+    @Test
+    fun `a live word inside the buffer is left alone`() {
+        // A game that ran long, or an end time the feed wrote a fraction early:
+        // within the buffer the state word still rules, so the card keeps its
+        // live clock rather than flipping early.
+        assertEquals(GameState.LIVE, espnGameState("in", eventEndMs = NOW - 5 * hour, nowMs = NOW))
+        // And a tournament on right now - end time still ahead - is LIVE.
+        assertEquals(GameState.LIVE, espnGameState("in", eventEndMs = NOW + 30 * hour, nowMs = NOW))
+    }
+
+    @Test
+    fun `no end time leaves the state word as the only signal`() {
+        // Most US league events carry no endDate at all: the sanity check must
+        // stay out of the way rather than reading a live game as final because
+        // there is nothing to compare against.
+        assertEquals(GameState.LIVE, espnGameState("in", eventEndMs = 0L, nowMs = NOW))
+        assertEquals(GameState.FINAL, espnGameState("post", eventEndMs = 0L, nowMs = NOW))
+    }
+
+    @Test
+    fun `a tournament carries its end time into the state`() {
+        // ESPN dates a multi-day tournament with date..endDate; reading only the
+        // start left the sanity check with nothing to compare against, which is
+        // how a finished tournament kept its LIVE badge.
+        val golf = """
+            {
+              "events": [
+                {
+                  "id": "g3",
+                  "name": "Baycurrent Classic",
+                  "date": "2020-10-08T04:00Z",
+                  "endDate": "2020-10-11T04:00Z",
+                  "status": { "type": { "state": "in", "shortDetail": "Final Round" } },
+                  "competitions": [ { "competitors": [] } ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val event = parseTournamentEvents(golf, "golf/pga").single()
+
+        // 2020 is far past the six-hour buffer: the stale "in" reads FINAL.
+        assertEquals(GameState.FINAL, event.state)
+    }
+
+    private val hour = 60L * 60_000L
+    private val NOW = 1_760_000_000_000L
+
+    @Test
     fun `an ISO date parses to epoch millis and junk reads as zero`() {
         assertEquals(1_700_000_000_000L, espnDateMs("2023-11-14T22:13:20Z"))
         assertEquals(0L, espnDateMs("tonight"))

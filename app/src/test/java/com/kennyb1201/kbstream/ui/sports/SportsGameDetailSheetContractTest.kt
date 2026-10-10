@@ -206,6 +206,28 @@ class SportsGameDetailSheetContractTest {
         )
     }
 
+    @Test
+    fun `the body's scroll keeps a landing margin, so the last row is not sheared`() {
+        // Reported: "when u scroll down to the last backup game the bottom of
+        // the focus ring is clipped a little bit." A scroll container clips to
+        // its own bounds, and Compose's default landing leaves the focused
+        // card's LAYOUT rectangle flush with the bottom edge - inside the 2dp
+        // border and 12dp glow it draws outside that rectangle. The body's
+        // scroll therefore gets the same focus landing the hub's card lists
+        // use, plus slack past its last row for that landing to exist in.
+        val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
+        assertTrue(
+            "the scrolling body installs the hub's card focus landing",
+            sheet.contains(
+                "CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec)"
+            ) && sheet.contains("SportsCardBringIntoViewSpec(")
+        )
+        assertTrue(
+            "and ends with slack of that same margin, or the last row cannot reach it",
+            sheet.contains("Spacer(modifier = Modifier.height(KBFocusRowInset))")
+        )
+    }
+
     private fun slice(startMarker: String, endMarker: String): String {
         val start = hub.indexOf(startMarker)
         assertTrue("$startMarker is missing", start >= 0)

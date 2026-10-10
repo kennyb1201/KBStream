@@ -167,6 +167,30 @@ class SportsTournamentCardDetailContractTest {
     // ── raising and dismissing it ─────────────────────────────────────────
 
     @Test
+    fun `the sheet's scroll keeps a landing margin, so the last backup feed is not sheared`() {
+        // The game sheet's own reported fault, on the tournament twin: the body
+        // scrolled to its last BACKUP CHANNELS row clipped that row's focus ring
+        // flat along the bottom edge. Both sheets therefore scroll through the
+        // one shared body, which lands the focused card clear of the edge.
+        assertTrue(
+            "the sheet's rows scroll through the shared body",
+            sheet.contains("SheetScrollBody {")
+        )
+        val body = slice(
+            "private fun ColumnScope.SheetScrollBody(",
+            "private fun ColumnScope.DetailSheetBody("
+        )
+        assertTrue(
+            "which installs the hub's card focus landing",
+            body.contains("SportsCardBringIntoViewSpec(")
+        )
+        assertTrue(
+            "and leaves slack past its last row, or that landing cannot be reached",
+            body.contains("Spacer(modifier = Modifier.height(KBFocusRowInset))")
+        )
+    }
+
+    @Test
     fun `the press raises the sheet and dismissing it returns focus to the card`() {
         assertTrue(
             "the screen holds the tournament whose sheet is up",
