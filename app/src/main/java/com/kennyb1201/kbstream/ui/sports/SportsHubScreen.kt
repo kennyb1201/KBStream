@@ -10,6 +10,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusGroup
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.BringIntoViewSpec
 import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.gestures.animateScrollBy
@@ -2670,6 +2671,15 @@ private fun GameDetailSheet(
     // footer's WATCH hands Up to the LAST pill and so has to reach the same
     // requesters the scrolling body uses.
     val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }
+    // The top of the scrolling middle, as a D-pad stop. The stats, the detail
+    // rows and the leaders above the pills are plain Text, so nothing up there
+    // can take focus: without this anchor, Up from the first pill had no stop to
+    // move to, and the scroll stayed where it was - the field report was a
+    // viewer who had scrolled down to the backups and could not get back to the
+    // stats. The anchor draws nothing and answers no press; it exists only so
+    // that Up has somewhere to go, and focusing it brings its own 1dp into view
+    // at the top of the body (see [DetailSheetBody] and [SheetScrollBody]).
+    val topAnchor = remember { FocusRequester() }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
@@ -2777,6 +2787,7 @@ private fun GameDetailSheet(
                     summary = summary,
                     channels = channels,
                     backupButtons = backupButtons,
+                    topAnchor = topAnchor,
                     onManualPick = onManualPick,
                     onPlay = onPlay
                 )
@@ -2926,11 +2937,36 @@ private fun ColumnScope.DetailSheetBody(
     summary: EspnGameSummary?,
     channels: List<IptvChannel>,
     backupButtons: List<FocusRequester>,
+    /**
+     * The invisible stop at the top of this scroll (see [GameDetailSheet]).
+     * Passed in rather than remembered here because the first backup pill -
+     * drawn below, inside this same body - has to name it as its Up target (see
+     * [focusUpTo]), and the requester has to be the one the sheet declared.
+     */
+    topAnchor: FocusRequester,
     onManualPick: (IptvChannel) -> Unit,
     onPlay: (List<IptvChannel>) -> Unit,
 ) {
     val backups = channels.drop(1)
     SheetScrollBody {
+        // The anchor: 1dp, invisible and non-interactive, the first thing the
+        // body draws so that its own bounds put the scroll at the top when it is
+        // focused. It is not a control - nothing happens when it is pressed -
+        // and it is not a stop the user can SEE, because it draws nothing to
+        // focus. `focusable()` is what makes it a focus TARGET at all: a
+        // requester with nothing to request is exactly the dead Up this fixes,
+        // since focusDownTo/focusUpTo and the anchor's own requester all resolve
+        // against a focus node. Every direction but the two the pills and this
+        // anchor name is left to the platform's search.
+        Box(
+            modifier = Modifier
+                .size(1.dp)
+                .focusRequester(topAnchor)
+                .focusDownTo(backupButtons.firstOrNull())
+                .focusProperties { canFocus = true }
+                .focusable()
+        )
+
         // The stats are the TOP of the scroll now, not part of the pinned
         // header: WATCH is pinned BELOW this body (see [GameDetailSheet]), so
         // focusing it on open cannot scroll anything, and the block is on screen
@@ -2998,11 +3034,20 @@ private fun ColumnScope.DetailSheetBody(
                     focusedScale = KBFocusRow,
                     shape = KBShapePill,
                     // Pill to pill, in the order they are drawn; the last one
-                    // keeps the platform's own search below it.
+                    // keeps the platform's own search below it. The FIRST one
+                    // additionally names the body's top anchor as the stop above
+                    // it - the pills are the only focusable rows in this scroll,
+                    // and above them sit nothing but non-focusable Text, so
+                    // without that link Up from the first pill went nowhere and
+                    // the stats above it could not be scrolled back to.
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(backupButtons[index])
                         .focusDownTo(backupButtons.getOrNull(index + 1))
+                        .then(
+                            if (index == 0) Modifier.focusUpTo(topAnchor)
+                            else Modifier
+                        )
                 ) {
                     BackupChannelLabel(channel = backup)
                 }

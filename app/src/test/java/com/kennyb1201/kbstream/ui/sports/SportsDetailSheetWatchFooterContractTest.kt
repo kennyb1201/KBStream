@@ -170,6 +170,56 @@ class SportsDetailSheetWatchFooterContractTest {
         )
     }
 
+    @Test
+    fun `the top of the body is a D-pad stop, and only the first pill hands Up to it`() {
+        // Reported 2026-10-10, on top of the split above: "i cant scroll up all
+        // the way to see the stats it stops at the first backup channel." The
+        // stats, the venue rows and the leaders are Text and take no focus, so
+        // the pills were the topmost stop in this scroll and Up from the first
+        // one had no stop to move to - focus stayed put and the scroll with it.
+        // The anchor is that missing stop. It is 1dp, draws nothing and answers
+        // no press, so the focus the viewer sees never changes; all it does is
+        // put a focus node at the top of the body, which focusing it scrolls to.
+        assertTrue(
+            "the sheet declares the anchor beside the pill requesters - one sheet, one anchor",
+            sheetCall.contains("val topAnchor = remember { FocusRequester() }") &&
+                sheetCall.contains("topAnchor = topAnchor,")
+        )
+        assertTrue(
+            "the body draws it, and before everything else: only the FIRST row of the scroll " +
+                "puts the scroll at the top",
+            body.contains("focusRequester(topAnchor)") &&
+                body.indexOf("focusRequester(topAnchor)") <
+                body.indexOf("summary?.takeIf { SportsDetailRules.hasStats(it) }?.let { stats ->")
+        )
+        val anchor =
+            "Box( modifier = Modifier .size(1.dp) .focusRequester(topAnchor) " +
+                ".focusDownTo(backupButtons.firstOrNull()) .focusProperties { canFocus = true } " +
+                ".focusable() )"
+        assertTrue(
+            "the anchor is a real focus TARGET - an invisible 1dp box with a requester, no press " +
+                "handling, and its own Down back to the first pill",
+            body.contains(anchor)
+        )
+        assertTrue(
+            "it is not a control: nothing happens when it is pressed, so it must not be a clickable",
+            !anchor.contains("onClick") && !anchor.contains("clickable")
+        )
+        val firstPill = body.substring(body.indexOf("backups.forEachIndexed { index, backup ->"))
+        assertTrue(
+            "and exactly the first pill names it as the stop above - the rest keep the platform's " +
+                "own Up, which already walked the pills",
+            firstPill.contains("if (index == 0) Modifier.focusUpTo(topAnchor) else Modifier") &&
+                1 == Regex("focusUpTo\\(topAnchor\\)").findAll(body).count()
+        )
+        assertTrue(
+            "the anchor's own requester is the sheet's, so focusing it from the pill scrolls THIS " +
+                "body rather than a requester with nothing attached",
+            body.contains(".focusRequester(topAnchor)") &&
+                !body.contains(".focusRequester(remember")
+        )
+    }
+
     private fun slice(startMarker: String, endMarker: String): String {
         val start = hub.indexOf(startMarker)
         assertTrue("$startMarker is missing", start >= 0)
