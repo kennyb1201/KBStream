@@ -97,21 +97,31 @@ class SportsLiveStatsContractTest {
     }
 
     @Test
-    fun `the stats block is pinned above the body's scroll, not inside it`() {
-        // Reported: "I'm not seeing the live stats anywhere in sports." The
-        // section existed, but it lived INSIDE the sheet's scrolling body - and
-        // the sheet focuses WATCH on open, which scrolls that body and carried
-        // the whole block off the top before the viewer ever saw it. Pinned
-        // under the score, no forced scroll can hide it.
+    fun `the stats block heads the body's scroll, with WATCH pinned outside it`() {
+        // Reported in two rounds. First "I'm not seeing the live stats anywhere
+        // in sports": the section lived INSIDE the scrolling body, and the sheet
+        // focuses WATCH on open, which scrolled the block off the top before the
+        // viewer ever saw it. Pinning the stats under the score fixed that - and
+        // then the pinned header plus the pinned block consumed the sheet, so
+        // WATCH and the backup rows below them had no visible room at all (see
+        // SportsDetailSheetWatchFooterContractTest). The split this pins: the
+        // stats are the TOP of the scrolling body, and WATCH is the body's
+        // pinned footer - since focusing WATCH cannot scroll a body it is not
+        // inside, the block stays exactly where it is drawn.
         val stats = sheet.indexOf("StatsSection(game = game, summary = stats)")
         val scroll = sheet.indexOf(".verticalScroll(rememberScrollState())")
+        val watch = sheet.indexOf(".focusRequester(watchButton)")
         assertTrue(
-            "the stats block and the body's scroll are both in the sheet",
-            stats >= 0 && scroll >= 0
+            "the stats block, the body's scroll and the action are all in the sheet",
+            stats >= 0 && scroll >= 0 && watch >= 0
         )
         assertTrue(
-            "the stats must sit ABOVE the scroll, in the pinned header",
-            stats < scroll
+            "the stats are inside the body's scroll, at its top: the scroll declaration precedes them",
+            scroll < stats
+        )
+        assertTrue(
+            "and the action is drawn after the body, so it is outside that scroll entirely",
+            sheet.indexOf("DetailSheetBody(") < watch
         )
     }
 

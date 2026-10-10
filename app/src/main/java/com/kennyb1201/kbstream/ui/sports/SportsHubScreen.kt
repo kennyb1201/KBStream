@@ -2580,6 +2580,16 @@ private fun TournamentDetailSheet(
  * dims what is behind (the pulse is separately held, see [rememberLivePulse])
  * and the hub keeps polling underneath it, so the slate is as current when the
  * sheet closes as it was when it opened.
+ *
+ * Laid out as three parts, not one column. The header (crests, matchup, score)
+ * and the WATCH action are both pinned - the header first because a focused
+ * button used to scroll the crests out through the plate's top edge, and the
+ * action last because a full stats block under the header left the scroll body
+ * with no visible room, so WATCH and every backup feed below it were on screen
+ * only in the sense that they were laid out. Between them only the body scrolls:
+ * with the stats at the top of that body and the action outside it, opening the
+ * sheet focuses WATCH without scrolling anything, which is what keeps the stats
+ * where they are and the action reachable.
  */
 @Composable
 private fun GameDetailSheet(
@@ -2598,6 +2608,17 @@ private fun GameDetailSheet(
     onPlay: (List<IptvChannel>) -> Unit,
     onClose: () -> Unit,
 ) {
+    val watchButton = remember { FocusRequester() }
+    val channel = channels.firstOrNull()
+    val backups = channels.drop(1)
+    // One requester per backup pill, so each row can name the row under it. The
+    // list can grow while the sheet is open - the matcher's pass can land after
+    // the sheet was raised - hence the size in the key rather than a remember
+    // with no keys. Declared above the three-way split because the pinned
+    // footer's WATCH hands Up to the LAST pill and so has to reach the same
+    // requesters the scrolling body uses.
+    val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }
+
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
@@ -2693,38 +2714,72 @@ private fun GameDetailSheet(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // The stats block is PINNED with the header, not left in the
-                // scroll below it. It belongs right under the score - the
-                // matchup's own numbers first, then the venue and the channels -
-                // but the sheet focuses WATCH the moment it opens, Compose brings
-                // that button into view by scrolling the body, and that scroll
-                // carried the whole block off the top before the viewer ever saw
-                // it: a live game's sheet looked like it had no stats at all.
-                // Pinned under the score, no forced scroll can hide it. Drawn
-                // only when there is something in it, so a game with no summary
-                // reads exactly as it did before this section existed - and drawn
-                // for a FINISHED game too, since the hub keeps a just-ended slate
-                // on the board and the box score is exactly what a viewer goes
-                // back into it for.
-                summary?.takeIf { SportsDetailRules.hasStats(it) }?.let { stats ->
-                    StatsSection(game = game, summary = stats)
-                }
-
-                // The crests, the matchup, the score and the live stats are
-                // PINNED - only the body below them scrolls. That split is the
-                // actual fix for the cropped crests: the sheet focuses WATCH on
-                // open, Compose brings the focused button into view by scrolling,
-                // and scrolling the whole column carried the crest row out
-                // through the plate's top edge. A pinned header cannot be
-                // scrolled away.
+                // ---- SCROLLING MIDDLE (weight 1f, via [DetailSheetBody]) ----
+                // The sheet is a pinned header, this scrolling middle, and a
+                // pinned footer. The crests, the matchup and the score are the
+                // header and cannot be scrolled away; the stats, the venue rows,
+                // the leaders and the backup feeds all live here; the one action
+                // is pinned below (see the footer).
                 DetailSheetBody(
                     game = game,
+                    summary = summary,
                     channels = channels,
-                    lineupMissing = lineupMissing,
-                    matchingDone = matchingDone,
+                    backupButtons = backupButtons,
                     onManualPick = onManualPick,
                     onPlay = onPlay
                 )
+
+                // ---- PINNED FOOTER: the WATCH action, always visible ----
+                // It used to be the last row INSIDE the scroll body, under a full
+                // stats block and the pinned header, which left the body with no
+                // visible room: the field report was a sheet whose WATCH button
+                // and backup rows could not be seen or reached at all. Outside
+                // the scroll container it is always laid out, and focusing it on
+                // open cannot scroll the body - which is also why the stats at
+                // the top of the body stay exactly where they are.
+                if (channel != null) {
+                    KBCard(
+                        // The whole ordered list, head first: the one-press path is
+                        // the feed the matcher chose, and the rest ride along
+                        // behind it so the player's own ladder has somewhere to
+                        // fall when that feed will not open.
+                        onClick = { onPlay(channels) },
+                        focusedScale = KBFocusRow,
+                        shape = KBShapePill,
+                        // WATCH now sits BELOW the body, so it hands Up to the
+                        // LAST backup pill (see [focusUpTo]): the pills are inside
+                        // a scroll container, and leaving that step to directional
+                        // search is what left them unreachable.
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp)
+                            .focusRequester(watchButton)
+                            .focusUpTo(backupButtons.lastOrNull())
+                    ) {
+                        WatchButtonLabel(
+                            label = SportsDetailRules.watchLabel(true),
+                            enabled = true
+                        )
+                    }
+                    LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
+                } else {
+                    // Not focusable: a disabled action must not be a D-pad stop.
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp),
+                        shape = KBShapePill,
+                        colors = SurfaceDefaults.colors(
+                            containerColor = KBSurfaceRaised,
+                            contentColor = KBTextLo
+                        )
+                    ) {
+                        WatchButtonLabel(
+                            label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
+                            enabled = false
+                        )
+                    }
+                }
             }
         }
     }
@@ -2769,14 +2824,14 @@ private fun ColumnScope.SheetScrollBody(
 /**
  * Hand this stop's D-pad Down to [next], explicitly.
  *
- * The sheet's action list - WATCH, then a pill per backup feed - is drawn inside
- * a scroll container, and directional search across one is a guess: from WATCH
- * the nearest focusable below is whichever pill the layout happens to put there,
- * which is not necessarily the first one, and on the field report it was none of
- * them - Down from WATCH did nothing at all, so every backup feed below it was
- * unreachable. Chaining each stop to the next makes the order the rows are drawn
- * in the order the D-pad walks in, and leaves every OTHER direction to the
- * search that already worked.
+ * The backup feeds are drawn inside a scroll container, and directional search
+ * across one is a guess: from one pill the nearest focusable below is whichever
+ * the layout happens to put there, which is not necessarily the next one, and on
+ * the field report it was none of them - Down did nothing at all, so every feed
+ * below the top of the list was unreachable. Chaining each stop to the next
+ * makes the order the rows are drawn in the order the D-pad walks in, and leaves
+ * every OTHER direction to the search that already worked. The tournament sheet
+ * uses it to lead its own WATCH into the first pill, which is the same list.
  *
  * A null [next] changes nothing: the last pill keeps the platform's own
  * behaviour below it rather than being wired to itself, and a sheet with no
@@ -2790,31 +2845,52 @@ private fun Modifier.focusDownTo(next: FocusRequester?): Modifier =
     if (next == null) this else focusProperties { down = next }
 
 /**
- * The scrolling part of the game sheet: the venue rows, the leaders, the WATCH
- * button and the backup feeds.
+ * Hand this stop's D-pad Up to [previous], explicitly - the mirror of
+ * [focusDownTo], for the stop that now sits BELOW the list it belongs to.
  *
- * Split out of [GameDetailSheet] so the pinned block above it stays readable,
- * and drawn through [SheetScrollBody] so its last row gets the focus landing
- * the hub's card lists have.
+ * Since the WATCH action moved to the sheet's pinned footer (see
+ * [GameDetailSheet]) it is drawn after the scrolling body, so Up from it has to
+ * reach the LAST backup pill - the one nearest it - rather than whichever
+ * focusable directional search happens to find, which for the same reason as
+ * Down from a pill is a guess. Everything else keeps the search that already
+ * worked: a null [previous] changes nothing, and the other directions are
+ * untouched.
+ */
+private fun Modifier.focusUpTo(previous: FocusRequester?): Modifier =
+    if (previous == null) this else focusProperties { up = previous }
+
+/**
+ * The scrolling MIDDLE of the game sheet: the live stats, the venue rows, the
+ * leaders and the backup feeds.
+ *
+ * Split out of [GameDetailSheet] so the pinned footer below it stays readable -
+ * see there for why the WATCH action is not part of this list any more - and
+ * drawn through [SheetScrollBody] so its last row gets the focus landing the
+ * hub's card lists have.
  */
 @Composable
 private fun ColumnScope.DetailSheetBody(
     game: SportsGame,
+    summary: EspnGameSummary?,
     channels: List<IptvChannel>,
-    lineupMissing: Boolean,
-    matchingDone: Boolean,
+    backupButtons: List<FocusRequester>,
     onManualPick: (IptvChannel) -> Unit,
     onPlay: (List<IptvChannel>) -> Unit,
 ) {
-    val watchButton = remember { FocusRequester() }
-    val channel = channels.firstOrNull()
     val backups = channels.drop(1)
-    // One requester per backup pill, so each row can name the row under it. The
-    // list can grow while the sheet is open - the matcher's pass can land after
-    // the sheet was raised - hence the size in the key rather than a remember
-    // with no keys.
-    val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }
     SheetScrollBody {
+        // The stats are the TOP of the scroll now, not part of the pinned
+        // header: WATCH is pinned BELOW this body (see [GameDetailSheet]), so
+        // focusing it on open cannot scroll anything, and the block is on screen
+        // from the first frame. Drawn only when there is something in it, so a
+        // game with no summary reads exactly as it did before this section
+        // existed - and drawn for a FINISHED game too, since the hub keeps a
+        // just-ended slate on the board and the box score is exactly what a
+        // viewer reopens it for.
+        summary?.takeIf { SportsDetailRules.hasStats(it) }?.let { stats ->
+            StatsSection(game = game, summary = stats)
+        }
+
         // Every row is already filtered to the non-blanks, so a game with no
         // venue and no leaders simply draws fewer rows.
         SportsDetailRules.detailRows(game).forEach { row ->
@@ -2840,48 +2916,12 @@ private fun ColumnScope.DetailSheetBody(
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
-
-        if (channel != null) {
-            KBCard(
-                // The whole ordered list, head first: the one-press path is the
-                // feed the matcher chose, and the rest ride along behind it so
-                // the player's own ladder has somewhere to fall when that feed
-                // will not open.
-                onClick = { onPlay(channels) },
-                focusedScale = KBFocusRow,
-                shape = KBShapePill,
-                // WATCH hands Down to the first backup pill explicitly (see
-                // [focusDownTo]): the pills are inside a scroll container, and
-                // leaving the first step of the walk to directional search is
-                // what left them unreachable from here.
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .focusRequester(watchButton)
-                    .focusDownTo(backupButtons.firstOrNull())
-            ) {
-                WatchButtonLabel(
-                    label = SportsDetailRules.watchLabel(true),
-                    enabled = true
-                )
-            }
-            LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
-        } else {
-            // Not focusable: a disabled action must not be a D-pad stop.
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = KBShapePill,
-                colors = SurfaceDefaults.colors(
-                    containerColor = KBSurfaceRaised,
-                    contentColor = KBTextLo
-                )
-            ) {
-                WatchButtonLabel(
-                    label = SportsDetailRules.watchLabel(false, lineupMissing, matchingDone),
-                    enabled = false
-                )
-            }
-        }
+        // WATCH is no longer a row here: it is the sheet's pinned footer, drawn
+        // outside this scroll (see [GameDetailSheet]). With a full stats block
+        // above it and the header above that, the body was left with no visible
+        // room and the action could neither be seen nor reached; pinned below,
+        // it cannot be pushed off the sheet by anything the body draws. What
+        // remains here is the secondary reads.
 
         // The other feeds the playlist holds for this game - the second channel
         // the guide is airing it on, the network's alternates, the team's own

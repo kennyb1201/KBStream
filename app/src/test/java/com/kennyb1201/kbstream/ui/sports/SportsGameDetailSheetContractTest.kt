@@ -258,18 +258,22 @@ class SportsGameDetailSheetContractTest {
     // ── The D-pad chain ─────────────────────────────────────────────
 
     @Test
-    fun `the D-pad walks WATCH and the backup pills by an explicit chain`() {
+    fun `the D-pad walks the backup pills by an explicit chain, and the WATCH footer hands Up to the last one`() {
         // Reported: with the sheet open, Down from WATCH never reached the
         // BACKUP CHANNELS pills. Directional search across a scroll container is
         // a guess, and the fix is to stop guessing: each stop names the next.
+        // WATCH itself has since moved out of the body into the sheet's pinned
+        // footer (see SportsDetailSheetWatchFooterContractTest), so what remains
+        // inside the scroll is the pill-to-pill chain, and the footer's WATCH
+        // names the LAST pill as the stop above it.
         val sheet = slice("private fun GameDetailSheet(", "private fun DetailRow(")
         assertTrue(
             "one requester per backup pill, remade if the list grows while the sheet is open",
             sheet.contains("val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }")
         )
         assertTrue(
-            "WATCH hands Down to the first pill itself",
-            sheet.contains(".focusRequester(watchButton) .focusDownTo(backupButtons.firstOrNull())")
+            "WATCH sits below the list now, so it hands Up to the last pill itself",
+            sheet.contains(".focusRequester(watchButton) .focusUpTo(backupButtons.lastOrNull())")
         )
         assertTrue(
             "and each pill hands Down to the one under it, in the order they are drawn",
@@ -279,14 +283,20 @@ class SportsGameDetailSheetContractTest {
                         ".focusDownTo(backupButtons.getOrNull(index + 1))"
                 )
         )
-        val chain = slice("private fun Modifier.focusDownTo(", "private fun ColumnScope.DetailSheetBody(")
+        val down = slice("private fun Modifier.focusDownTo(", "private fun Modifier.focusUpTo(")
         assertTrue(
             "the chain overrides Down and only Down - every other direction keeps the search that worked",
-            chain.contains("focusProperties { down = next }") && !chain.contains("up =")
+            down.contains("focusProperties { down = next }") && !down.contains("up =")
+        )
+        val up = slice("private fun Modifier.focusUpTo(", "private fun ColumnScope.DetailSheetBody(")
+        assertTrue(
+            "and the mirror overrides Up and only Up, for the stop that now sits below the list",
+            up.contains("focusProperties { up = previous }") && !up.contains("down =")
         )
         assertTrue(
-            "and a stop with nowhere to go is left exactly as it was",
-            chain.contains("if (next == null) this else")
+            "a stop with nowhere to go is left exactly as it was",
+            down.contains("if (next == null) this else") &&
+                up.contains("if (previous == null) this else")
         )
         assertTrue(
             "nothing about the scroll-follow changed: the body still lands the focused pill clear of the edge",
