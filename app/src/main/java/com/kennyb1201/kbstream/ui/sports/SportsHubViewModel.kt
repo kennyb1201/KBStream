@@ -7,7 +7,6 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.iptv.GuideMatchQuery
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
@@ -769,11 +768,6 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         PerfTrace.record("sports.match.channels", channelsMs)
         Log.d(TAG, "SPORTS PERF channels=${channels.size} took=${channelsMs}ms")
         if (channels.isEmpty()) {
-            // The same line shape as the one below, so a logcat grep for
-            // `SPORTS DIAG` answers "is the lineup even loaded?" first: a zero
-            // here means the hub matched against nothing at all, and every
-            // card's "not in your playlist" is about the cache, not the game.
-            Log.w(TAG, "SPORTS DIAG channels=0 guideIndex=0 programs=0")
             _lineupStatus.value = LineupStatus.MISSING
             _matches.value = emptyMap()
             _matchingDone.value = true
@@ -811,16 +805,6 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             val epgMs = SystemClock.elapsedRealtime() - epgStarted
             PerfTrace.record("sports.match.epg_query", epgMs)
             Log.d(TAG, "SPORTS PERF programs=${programs.size} took=${epgMs}ms")
-            // One greppable line, and the three counts say which stage came back
-            // empty without a debugger: channels=N guideIndex=0 is a lineup with
-            // no EPG URLs, channels=N guideIndex=M programs=0 is a guide with
-            // nothing to say about today's games (which leaves tiers 2 and 3 to
-            // carry them), and channels=0 is the lineup the line above reports.
-            Log.d(
-                TAG,
-                "SPORTS DIAG channels=${channels.size} guideIndex=${guideIndex.size} " +
-                    "programs=${programs.size}"
-            )
             val matchStarted = SystemClock.elapsedRealtime()
             // The viewer's own corrections, resolved once for the whole pass:
             // the memory is keyed by team, so every game's two teams are read
@@ -865,10 +849,6 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 // it - dies here rather than running out its whole 82 seconds in
                 // the background.
 
-                // Verbose, with the feed's own broadcast names beside the id:
-                // a card that matched nothing can then be read against the very
-                // strings tiers 2 and 3 match on.
-                Log.v(TAG, "SPORTS DIAG game=${game.id} broadcasts=${game.broadcastNames}")
                 var epgNanos = 0L
                 var netNanos = 0L
                 val recallBefore = recallNanos
@@ -915,7 +895,6 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             }
             events.forEach { event ->
                 ensureActive()
-                Log.v(TAG, "SPORTS DIAG event=${event.id} broadcasts=${event.broadcastNames}")
                 // The tournament path takes the SAME correction memory, keyed by
                 // the event's own stable name (see [TournamentEvent.favoriteKey]):
                 // a viewer who moved a golf tournament to Golf Channel gets that
@@ -1247,85 +1226,24 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 val rows = runCatchingCancellable {
                     iptv.searchProgramsByTitleTerms(terms, EPG_SEARCH_LIMIT)
                 }.getOrDefault(emptyList())
-                // SPORTS DIAG: the tournament's own terms and what the guide
-                // answered with, on one greppable line. `hits` counts the rows
-                // THIS event's lookup returned, which is the question - a
-                // tournament whose card says "not in your playlist" is either a
-                // lookup that found nothing (terms wrong: ESPN's name for the
-                // event is not the guide's title) or one that found rows the
-                // matcher then refused (its whole name must appear in the row),
-                // and the two need opposite fixes. Log.w, not Log.d, because
-                // release builds strip Log.d (see proguard-rules.pro) and this
-                // line exists to be read off a viewer's own capture.
-                Log.w(
-                    TAG,
-                    "SPORTS DIAG tournament=${event.id} name=\"${event.name}\" " +
-                        "terms=${terms} hits=${rows.size}"
-                )
-                // ESPN's own single-broadcast slot for the event, logged so a
-                // capture can put the rows the guide returned beside the time
-                // the FEED thinks the event occupies. The tier does NOT filter
-                // on it - a tournament matches by name alone, because ESPN dates
-                // a four-day event with one 1.5-hour slot (see
-                // [SportsChannelMatcher.epgNameHits]) - so the useful reading is
-                // the CONTRAST: rows well outside this slot that the tier now
-                // takes, which is the replay/highlight case this line used to
-                // explain away as `time-window`.
-                Log.w(
-                    TAG,
-                    "SPORTS DIAG tournament=${event.id} " +
-                        "eventStart=${event.dateMs - SportsChannelMatcher.EPG_WINDOW_MS} " +
-                        "eventEnd=${event.dateMs + SportsChannelMatcher.EPG_WINDOW_MS} " +
-                        "windowHours=${SportsChannelMatcher.EPG_WINDOW_MS * 2 / 3_600_000.0}"
-                )
-                // Per-row detail, one line each, so the reject= token names the
-                // single filter that dropped every one of `hits` (see
-                // [SportsChannelMatcher.tournamentRejectReason], which reads the
-                // matcher's own rules so this can never disagree with it). Capped
-                // so one tournament cannot flood a capture, and gated to a debug
-                // build so the release APK never carries it; the two summary
-                // lines above stay in both.
-                var diagLines = 0
                 rows.forEach { row ->
-                    val channel = guideIndex[row.channelId]
-                    val key =
-                        "${channel?.id ?: row.channelId}|${row.startUtcMillis}|${row.title}"
                     // The PLAYLIST channel id, not `row.channelId`: the guide
                     // index is keyed by the guide's own channel key, while the
                     // matcher resolves a program back to a playlist channel
                     // with `channelById[it.channelId]` (see
                     // SportsChannelMatcher.epgNameHits). A row whose channel is
-                    // not in the playlist still builds a program for the
-                    // diagnostic, but it is never emitted.
-                    val program =
+                    // not in the playlist is never emitted.
+                    val channel = guideIndex[row.channelId] ?: return@forEach
+                    out.putIfAbsent(
+                        "${channel.id}|${row.startUtcMillis}|${row.title}",
                         MatcherProgram(
-                            channelId = channel?.id ?: row.channelId,
+                            channelId = channel.id,
                             title = row.title,
                             startMs = row.startUtcMillis,
                             endMs = row.endUtcMillis,
                             description = row.description,
                         )
-                    if (verboseDiagEnabled() && diagLines < MAX_TOURNAMENT_DIAG_LINES) {
-                        val channelName =
-                            channel?.let { c -> c.displayName.ifBlank { c.name } }.orEmpty()
-                        val reason =
-                            SportsChannelMatcher.tournamentRejectReason(
-                                program = program,
-                                event = event,
-                                channelInPlaylist = channel != null,
-                                alreadyMatched = out.containsKey(key),
-                            )
-                        Log.w(
-                            TAG,
-                            "SPORTS DIAG tournament=${event.id} prog=\"${row.title}\" " +
-                                "chId=${row.channelId} chName=\"$channelName\" " +
-                                "start=${row.startUtcMillis} end=${row.endUtcMillis} " +
-                                "inPlaylist=${channel != null} reject=$reason"
-                        )
-                        diagLines++
-                    }
-                    if (channel == null) return@forEach
-                    out.putIfAbsent(key, program)
+                    )
                 }
             }
         return out.values.toList()
@@ -1473,27 +1391,5 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
          * both of them in the row.
          */
         const val MIN_ABBREV_SEARCH_TERM_LENGTH = 2
-
-        /**
-         * How many per-row `SPORTS DIAG` lines one tournament may emit.
-         *
-         * The diagnostic is per PROGRAM, and a guide can carry a whole
-         * tournament's worth of them; the cap keeps one event from crowding a
-         * logcat capture out of everything else. Forty is well past the ~31
-         * rows the golf case needed to be read, and the summary line above always
-         * carries the untruncated `hits=` count, so the cap never hides how many
-         * there were.
-         */
-        const val MAX_TOURNAMENT_DIAG_LINES = 40
     }
-
-    /**
-     * Whether the per-row `SPORTS DIAG` detail is emitted. A DEBUG build only,
-     * which is the spec's own invariant: the two summary lines are safe to ship
-     * (they are one line per event and already a test contract), but the per-row
-     * dump is a debugging aid that a release build must not carry. Kept as a
-     * named function rather than an inline `BuildConfig.DEBUG` check so there is
-     * exactly one place to flip it while a capture is being taken.
-     */
-    private fun verboseDiagEnabled(): Boolean = BuildConfig.DEBUG
 }

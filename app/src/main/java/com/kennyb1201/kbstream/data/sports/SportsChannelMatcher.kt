@@ -525,42 +525,6 @@ internal object SportsChannelMatcher {
             .mapNotNull { channelById[it.channelId] }
     }
 
-    /**
-     * Why a tournament's EPG row was NOT taken, as one short token, for the
-     * `SPORTS DIAG` diagnostic the hub emits per row (see
-     * `SportsHubViewModel.epgTournamentCandidates`).
-     *
-     * DIAGNOSTIC ONLY - it changes no matching. It reads the SAME filters
-     * [epgNameHits] applies, in the same order, so the token the log prints can
-     * never disagree with what the matcher actually did: the channel has to be
-     * in the playlist at all, its TITLE has to carry the event's whole name, and
-     * anything already claimed for this event is a duplicate. There is
-     * deliberately NO time-window token: a tournament's EPG tier stopped
-     * filtering on time (see [epgNameHits]), so a reason naming that filter
-     * would name a rule the matcher no longer applies.
-     *
-     * The reason it exists rather than the hub re-deriving the filters inline is
-     * exactly that they are private here: a second copy of the whole-name rule
-     * in the ViewModel could drift from the tier's and report a reason the
-     * matcher never applied. `none` means the row passed every filter - so a
-     * pass that still comes back with 0 matches has its bug AFTER filtering (in
-     * result assembly), not in these rules.
-     */
-    internal fun tournamentRejectReason(
-        program: MatcherProgram,
-        event: TournamentEvent,
-        /** Whether the program's channel is in the pass's playlist. */
-        channelInPlaylist: Boolean,
-        /** Whether this exact row was already claimed for an earlier event. */
-        alreadyMatched: Boolean,
-    ): String = when {
-        !channelInPlaylist -> "not-in-playlist"
-        !words(program.title).containsSequence(words(event.name)) ->
-            "channel-name-mismatch"
-        alreadyMatched -> "duplicate"
-        else -> "none"
-    }
-
     private fun overlapsWindow(program: MatcherProgram, startMs: Long): Boolean =
         program.startMs <= startMs + EPG_WINDOW_MS && program.endMs >= startMs - EPG_WINDOW_MS
 

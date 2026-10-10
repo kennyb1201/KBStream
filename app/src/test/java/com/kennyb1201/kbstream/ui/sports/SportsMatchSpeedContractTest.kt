@@ -58,8 +58,7 @@ class SportsMatchSpeedContractTest {
         )
         assertTrue(
             "the live view stays, because it is how the next slowdown is diagnosed",
-            resolve.contains("SPORTS MATCHES cards=${d}{games.size + events.size} matched=${d}{found.size}") &&
-                resolve.contains("SPORTS DIAG channels=${d}{channels.size} guideIndex=${d}{guideIndex.size}")
+            resolve.contains("SPORTS MATCHES cards=${d}{games.size + events.size} matched=${d}{found.size}")
         )
     }
 

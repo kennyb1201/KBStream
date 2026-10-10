@@ -6,19 +6,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The diagnosis switch: the `SPORTS DIAG` log lines, pinned as formats.
+ * The sports match pass, now that its temporary instrumentation is gone.
  *
  * The hub's whole failure mode is invisible from the outside - a hub that could
  * not read a playlist looks exactly like a hub whose playlist carries none of
- * today's games, because both draw "not in your playlist" on every card. The
- * three counts on one line are what tells the two apart from a logcat capture,
- * so the formats are a contract, not a debugging leftover: rename a field or
- * shuffle the order and the greps everyone was told to run stop working.
+ * today's games, because both draw "not in your playlist" on every card - which
+ * is why a run of `SPORTS DIAG` lines was added while the golf and lineup bugs
+ * were being chased. Those bugs are fixed (the tournament tier matches by name
+ * alone, the lineup status is a fact of its own), so the diagnostic is removed
+ * with them: these tests replace the formats they used to pin with the two
+ * things that had to survive the removal - that no `SPORTS DIAG` line, its
+ * per-row reject token, or the debug gate that carried it is left in the app,
+ * and that the pass still matches a LIST of feeds per card and still hands all
+ * of them to the one launch a card tap takes.
  *
  * These are source contracts because the numbers themselves need a playlist, a
- * guide and ESPN - there is no TV in CI. What is pinned is that each line exists,
- * carries the named fields in the documented order, and that the hub reads the
- * list of feeds rather than a single one.
+ * guide and ESPN - there is no TV in CI.
  */
 class SportsMatchDiagnosticsContractTest {
 
@@ -33,139 +36,43 @@ class SportsMatchDiagnosticsContractTest {
     /** A literal `$` in the Kotlin source being asserted about. */
     private val d = '$'
 
+    // ------------------------------------------------- the diagnostic is gone --
+
     @Test
-    fun `the three counts are logged as one greppable line`() {
-        assertTrue(
-            "the lineup, the guide index and the EPG rows, in that order",
-            model.contains(
-                "SPORTS DIAG channels=${d}{channels.size} guideIndex=${d}{guideIndex.size}"
+    fun `the SPORTS DIAG instrumentation is gone from the app`() {
+        // The same rule the FOCUS_DIAG removal followed: a Log.w left behind is
+        // a release-build log line on every card of every pass - and the golf
+        // one was per ROW - so the lines go, and everything that existed only to
+        // serve them goes with them rather than sitting dead in the source.
+        listOf(model, hub, matcher, activity).forEach { src ->
+            assertFalse(
+                "SPORTS DIAG must not survive in the app",
+                src.contains("SPORTS DIAG")
             )
-        )
-        assertTrue(
-            "with the program count on the same line",
-            model.contains("\"programs=${d}{programs.size}\"")
-        )
-        assertTrue(
-            "and the lineup-is-empty case logging the same shape, so one grep answers it first",
-            model.contains("\"SPORTS DIAG channels=0 guideIndex=0 programs=0\"")
-        )
-        assertTrue(
-            "the per-card line names the game and the strings tiers 2 and 3 match on",
-            model.contains("SPORTS DIAG game=${d}{game.id} broadcasts=${d}{game.broadcastNames}")
-        )
-        assertTrue(
-            "and a tournament event gets its own",
-            model.contains("SPORTS DIAG event=${d}{event.id} broadcasts=${d}{event.broadcastNames}")
-        )
-    }
-
-    @Test
-    fun `a tournament's own lookup reports its terms and what came back`() {
-        // The golf half of the same diagnosis. A tournament card reading "not in
-        // your playlist" has two very different causes, and they need opposite
-        // fixes: a lookup that found NOTHING means the terms are wrong (ESPN's
-        // name for the event is not the guide's title), while a lookup that found
-        // rows the matcher then refused means the whole-name rule is too strict.
-        // One line tells them apart, which is why it carries the terms asked for
-        // and the row count THIS event's own lookup returned rather than the
-        // pass-wide program count.
-        assertTrue(
-            "the line names the event, the terms asked and the rows they found, in that order",
-            model.contains("SPORTS DIAG tournament=${d}{event.id} name=") &&
-                model.contains("{event.name}") &&
-                model.contains("\"terms=${d}{terms} hits=${d}{rows.size}\"")
-        )
-        assertTrue(
-            "at Log.w, because release builds strip Log.d and this exists to be read off a viewer's capture",
-            model.contains("Log.w( TAG, \"SPORTS DIAG tournament=")
-        )
-        assertTrue(
-            "and it is inside the tournament lookup, where the event's own terms are known",
-            model.contains("private suspend fun epgTournamentCandidates(") &&
-                model.indexOf("SPORTS DIAG tournament=") >
-                model.indexOf("private suspend fun epgTournamentCandidates(")
-        )
-    }
-
-    @Test
-    fun `a tournament reports its window and every hit's rejection reason`() {
-        // The second half of the golf diagnosis. `hits=` says the lookup found
-        // rows; it does not say WHY the matcher took none of them, and each
-        // reason needs its own fix. Each row is one line carrying the program,
-        // its channel, its times, whether the channel is in the playlist, and
-        // the single filter that dropped it. There is no time-window reason any
-        // more: the tournament tier matches by name alone, so a row outside
-        // ESPN's own slot is taken rather than dropped.
-        assertTrue(
-            "ESPN's own slot is still logged, so a capture can put the guide's rows beside it",
-            model.contains(
-                "eventStart=${d}{event.dateMs - SportsChannelMatcher.EPG_WINDOW_MS}"
-            ) &&
-                model.contains("eventEnd=${d}{event.dateMs + SportsChannelMatcher.EPG_WINDOW_MS}") &&
-                model.contains("windowHours=")
-        )
-        assertTrue(
-            "and each hit is one greppable line with the program, its channel and its window",
-            model.contains("SPORTS DIAG tournament=${d}{event.id} prog=") &&
-                model.contains("chId=${d}{row.channelId}") &&
-                model.contains("chName=")
-        )
-        assertTrue(
-            "ending in the playlist flag and the one reason the row was dropped",
-            model.contains("inPlaylist=${d}{channel != null} reject=${d}reason")
-        )
-        assertTrue(
-            "the reason itself is the matcher's own rule, not a second copy that could drift",
-            matcher.contains("internal fun tournamentRejectReason(")
-        )
-        listOf(
-            "\"not-in-playlist\"",
-            "\"channel-name-mismatch\"",
-            "\"duplicate\"",
-            "else -> \"none\""
-        ).forEach { token ->
-            assertTrue("the matcher must name the reason $token", matcher.contains(token))
         }
         assertFalse(
-            "and no reason may name a time filter the tournament tier no longer applies",
-            matcher.contains("\"time-window\"")
+            "the debug gate that carried the per-row dump goes with it",
+            model.contains("verboseDiagEnabled")
         )
+        assertFalse(
+            "and so does the cap that existed only to size that dump",
+            model.contains("MAX_TOURNAMENT_DIAG_LINES")
+        )
+        assertFalse(
+            "the reject token was the dump's whole vocabulary: the helper that produced it goes too",
+            matcher.contains("tournamentRejectReason")
+        )
+        listOf("\"not-in-playlist\"", "\"channel-name-mismatch\"", "\"duplicate\"")
+            .forEach { token ->
+                assertFalse("no reason token may survive either: $token", matcher.contains(token))
+            }
     }
 
     @Test
-    fun `the per-row dump is capped and gated to a debug build`() {
-        // The invariant: the verbose dump must not ship in a release build, and
-        // must not let one tournament flood a capture. The two summary lines
-        // stay in every build - they are one line per event and a contract of
-        // their own.
-        assertTrue(
-            "the cap is a named constant",
-            model.contains("const val MAX_TOURNAMENT_DIAG_LINES = 40")
-        )
-        assertTrue(
-            "and the per-row line is behind it",
-            model.contains("if (verboseDiagEnabled() && diagLines < MAX_TOURNAMENT_DIAG_LINES)")
-        )
-        assertTrue(
-            "which is a debug-build check, so the release APK never carries the dump",
-            model.contains("private fun verboseDiagEnabled(): Boolean = BuildConfig.DEBUG")
-        )
-    }
-
-    @Test
-    fun `the line says which stage is empty, so the log needs no interpreter`() {
-        assertTrue(
-            "a lineup with no guide index is called out",
-            model.contains("channels=N guideIndex=0")
-        )
-        assertTrue(
-            "and a guide with nothing to say about these games is distinguished from it",
-            model.contains("channels=N guideIndex=M programs=0")
-        )
-    }
-
-    @Test
-    fun `the summary line counts feeds as well as cards`() {
+    fun `the one line the pass still writes is the match summary`() {
+        // Not a diagnostic and not removed with them: the summary is the pass's
+        // own accounting, and the feed count on it is what a capture is read for
+        // once the per-card lines are gone.
         assertTrue(
             "the card count and the matched count are unchanged",
             model.contains(
@@ -177,6 +84,8 @@ class SportsMatchDiagnosticsContractTest {
             model.contains("feeds=${d}{found.values.sumOf { it.size }}")
         )
     }
+
+    // -------------------------------------------------- what it protected --
 
     @Test
     fun `the hub matches lists of feeds, not a single one`() {

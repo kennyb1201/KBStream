@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.tmdb
 
 import android.content.Context
+import android.util.Log
 import com.kennyb1201.kbstream.data.BackgroundWork
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
@@ -1171,6 +1172,7 @@ class TmdbRepository private constructor(context: Context) :
         if (apiKey.isBlank()) return null
         val isTv = mediaType.lowercase() == "tv"
         val yearRange = filters?.yearRange()
+        Log.w(TAG, "CATALOG_DIAG discover isTv=$isTv page=$page sortBy=$sortBy year=$yearRange")
         // Explicit date bounds (e.g. the rolling RECENT window) — only used
         // when no year range is set, so decade/decade-style year filters win.
         val dateGte = yearRange?.first ?: filters?.releaseDateGte
@@ -3226,6 +3228,14 @@ class TmdbRepository private constructor(context: Context) :
         normalizeMediaType(type)
 
     companion object {
+
+        /**
+         * TEMPORARY DIAGNOSTIC tag (remove with the CATALOG_DIAG line in
+         * [discoverKB] before release): the Catalog Builder's preview is coming
+         * back empty, and this prints the exact query parameters that asked for
+         * it, next to the builder's own two lines.
+         */
+        private const val TAG = "TMDB_REPOSITORY"
 
         /**
          * The media type every TMDB call - and every key derived from one - is

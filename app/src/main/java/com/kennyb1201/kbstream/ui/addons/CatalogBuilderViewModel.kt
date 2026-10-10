@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.addons
 
 import android.app.Application
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.addon.MetaPreview
@@ -28,6 +29,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+/**
+ * TEMPORARY DIAGNOSTIC tag (remove with the CATALOG_DIAG lines before release).
+ *
+ * The builder's preview comes back empty for every rule set, and an empty list
+ * from TMDB has four possible causes that look identical on the couch: a blank
+ * media type, a sort key TMDB does not know, a filter combination that matches
+ * nothing, or a failed request the swallowing `getOrNull()` turned into [].
+ * These lines print what was actually sent and what actually came back, so the
+ * answer is read out of logcat instead of guessed at.
+ */
+private const val TAG = "CATALOG_BUILDER"
 
 /** Items the builder's preview row draws. One discover page, like the rail. */
 private const val PREVIEW_LIMIT = 20
@@ -288,6 +301,12 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
         previewJob?.cancel()
         _preview.value = PreviewState(loading = true)
         previewJob = viewModelScope.launch {
+            Log.w(
+                TAG,
+                "CATALOG_DIAG preview mediaType=${catalog.mediaType} " +
+                    "sortBy=${catalog.tmdbSortKey()} " +
+                    "filters=${catalog.effectiveFilters()}"
+            )
             val items = runCatchingCancellable {
                 tmdbRepository.discoverKB(
                     mediaType = catalog.mediaType,
@@ -296,6 +315,12 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
                     filters = catalog.effectiveFilters()
                 )
             }.getOrNull()
+
+            Log.w(
+                TAG,
+                "CATALOG_DIAG preview result count=${items?.size} " +
+                    "null=${items == null}"
+            )
 
             // Home runs ONE more pass over a built catalog before it draws the
             // rail: the app-wide English-only browse filter. A preview that
