@@ -821,8 +821,16 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             // the memory is keyed by team, so every game's two teams are read
             // against the same channel list. A remembered channel beats all
             // three tiers; see [SportsChannelMemory].
+            //
+            // TEMP (remove with the SPORTS PERF game= logs): the accumulating
+            // recall total lets each card's log report its own recall cost,
+            // which is the difference the tiers-vs-IO question turns on.
+            var recallNanos = 0L
             val remembered: (String) -> IptvChannel? = { key ->
-                SportsChannelMemory.recall(getApplication(), key, channels)
+                val recallStartedAt = System.nanoTime()
+                val channel = SportsChannelMemory.recall(getApplication(), key, channels)
+                recallNanos += System.nanoTime() - recallStartedAt
+                channel
             }
             // Built ONCE for the whole pass, not once per game or per program:
             // the channel list is fixed under the pass, and a team's name forms
@@ -846,8 +854,28 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 // a card that matched nothing can then be read against the very
                 // strings tiers 2 and 3 match on.
                 Log.v(TAG, "SPORTS DIAG game=${game.id} broadcasts=${game.broadcastNames}")
-                SportsChannelMatcher.matches(game, channels, programs, remembered, channelById, gameVariants.getValue(game.id))
-                    .takeIf { it.isNotEmpty() }
+                var epgNanos = 0L
+                var netNanos = 0L
+                val recallBefore = recallNanos
+                val matchStartedAt = System.nanoTime()
+                val matchedFeeds = SportsChannelMatcher.matches(game, channels, programs, remembered, channelById, gameVariants.getValue(game.id)) { tier, nanos ->
+                    when (tier) {
+                        "epg" -> epgNanos += nanos
+                        "broadcast" -> netNanos += nanos
+                    }
+                }
+                // TEMP per-game split of the match loop (remove once the slow
+                // stage is found): recall is the per-team SharedPreferences
+                // decode inside SportsChannelMemory.recall, epg is the program
+                // scan, and net is the broadcast/RSN tier. Log.w, because
+                // release builds strip Log.d (see proguard-rules.pro).
+                Log.w(
+                    TAG,
+                    "SPORTS PERF game=${game.id} took=${(System.nanoTime() - matchStartedAt) / 1_000_000}ms " +
+                        "recall=${(recallNanos - recallBefore) / 1_000_000}ms " +
+                        "epg=${epgNanos / 1_000_000}ms net=${netNanos / 1_000_000}ms"
+                )
+                matchedFeeds.takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[game.id] = feeds
                         // Progressive publish: the card flips from "Finding
@@ -874,8 +902,23 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 // the event's own stable name (see [TournamentEvent.favoriteKey]):
                 // a viewer who moved a golf tournament to Golf Channel gets that
                 // back on the next pass instead of the matcher's guess.
-                SportsChannelMatcher.matches(event, channels, programs, remembered, channelById)
-                    .takeIf { it.isNotEmpty() }
+                var epgNanos = 0L
+                var netNanos = 0L
+                val recallBefore = recallNanos
+                val matchStartedAt = System.nanoTime()
+                val matchedFeeds = SportsChannelMatcher.matches(event, channels, programs, remembered, channelById) { tier, nanos ->
+                    when (tier) {
+                        "epg" -> epgNanos += nanos
+                        "broadcast" -> netNanos += nanos
+                    }
+                }
+                Log.w(
+                    TAG,
+                    "SPORTS PERF event=${event.id} took=${(System.nanoTime() - matchStartedAt) / 1_000_000}ms " +
+                        "recall=${(recallNanos - recallBefore) / 1_000_000}ms " +
+                        "epg=${epgNanos / 1_000_000}ms net=${netNanos / 1_000_000}ms"
+                )
+                matchedFeeds.takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[event.id] = feeds
                         _matches.update { it + (event.id to feeds) }

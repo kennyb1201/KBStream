@@ -242,6 +242,13 @@ internal object SportsChannelMatcher {
             away = strongVariants(game.away),
             home = strongVariants(game.home),
         ),
+        /**
+         * TEMP: an optional per-tier timer for the hub's match-loop diagnosis
+         * (remove with the SPORTS PERF game= logs). Invoked with a tier name and
+         * its nanoseconds only when that tier actually ran; a recalled pick
+         * returns before any tier and fires nothing.
+         */
+        onTier: ((String, Long) -> Unit)? = null,
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
         // The viewer's own past pick beats every heuristic: if they once chose a
@@ -253,11 +260,17 @@ internal object SportsChannelMatcher {
             remembered(game.away.favoriteKey),
         ).filter { it.id in present }
         if (recalled.isNotEmpty()) return cap(recalled)
-        epgHits(game, programs, channelById, variants).let { if (it.isNotEmpty()) return cap(it) }
+        val epgStartedAt = System.nanoTime()
+        val epg = epgHits(game, programs, channelById, variants)
+        onTier?.invoke("epg", System.nanoTime() - epgStartedAt)
+        if (epg.isNotEmpty()) return cap(epg)
         // Home before away: a regional playlist is likelier to carry the home
         // broadcast. Within a family, the best-named channel comes first.
+        val netStartedAt = System.nanoTime()
         val networks = game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)
-        return cap(networks.flatMap { networkChannels(it, channels) })
+        val networkHits = cap(networks.flatMap { networkChannels(it, channels) })
+        onTier?.invoke("broadcast", System.nanoTime() - netStartedAt)
+        return networkHits
     }
 
     /** The channel carrying a tournament event, or null. */
@@ -283,12 +296,20 @@ internal object SportsChannelMatcher {
         programs: List<MatcherProgram>,
         remembered: (String) -> IptvChannel? = { null },
         channelById: Map<String, IptvChannel> = channels.associateBy { it.id },
+        /** TEMP: the same per-tier timer as the game path; see there. */
+        onTier: ((String, Long) -> Unit)? = null,
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
         val present = channels.mapTo(HashSet()) { it.id }
         remembered(event.favoriteKey)?.takeIf { it.id in present }?.let { return cap(listOf(it)) }
-        epgNameHits(event, programs, channelById).let { if (it.isNotEmpty()) return cap(it) }
-        return cap(event.broadcastNames.flatMap { networkChannels(it, channels) })
+        val epgStartedAt = System.nanoTime()
+        val epg = epgNameHits(event, programs, channelById)
+        onTier?.invoke("epg", System.nanoTime() - epgStartedAt)
+        if (epg.isNotEmpty()) return cap(epg)
+        val netStartedAt = System.nanoTime()
+        val networkHits = cap(event.broadcastNames.flatMap { networkChannels(it, channels) })
+        onTier?.invoke("broadcast", System.nanoTime() - netStartedAt)
+        return networkHits
     }
 
     // ── Search ───────────────────────────────────────────────────────
