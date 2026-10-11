@@ -325,6 +325,12 @@ sealed class Screen {
          */
         val randomEpisodes: Boolean = false,
         val fromActorReturn: Boolean = false,
+        /**
+         * True when this player was launched by tapping a source in the streams
+         * picker (manual pick), as opposed to auto-play. Back from such a
+         * playback returns to the picker so the user can try another source.
+         */
+        val pickedFromStreams: Boolean = false,
         val returnTo: Screen = Home,
         val sources: List<Stream> = emptyList(),
         /**
@@ -2273,6 +2279,13 @@ fun AppRoot(
                                 current.target.resumePositionMs,
                             startFromBeginning = current.target.startFromBeginning,
                             randomEpisodes = current.target.randomEpisodes,
+                            // A tap in this picker is a manual pick, whatever
+                            // the auto-select setting says: backing out of the
+                            // playback has to bring the picker back so another
+                            // source can be tried. Without the flag the
+                            // auto-select rule below claims the back and drops
+                            // the user on the screen behind the picker.
+                            pickedFromStreams = true,
                             returnTo = stableBackDestination(current.returnTo),
                             sources = allSources,
                             sourceAddons = sourceAddons,
@@ -2577,13 +2590,22 @@ fun AppRoot(
                         // drop a game's sheet on the way back; see
                         // liveChannelScreen's callers. Everything else keeps the
                         // auto-select rule below it.
+                        // Auto-select only claims the back for a playback this
+                        // app started on its own. A pick made by hand in the
+                        // streams picker (pickedFromStreams) keeps the picker in
+                        // the chain even with auto-select on, so the next source
+                        // is one tap away instead of a re-navigation from Home.
+                        // The picker's own onStreamSelected is the only launch
+                        // that sets the flag.
                         if (
                             current.parentType == "channel" ||
-                            AppPreferences.getAutoSelectStream(context)
+                            (AppPreferences.getAutoSelectStream(context) &&
+                                !current.pickedFromStreams)
                         ) {
                             screen = stableBackDestination(current.returnTo)
                         } else {
-                            // Auto-select is off: the user chose a source manually,
+                            // Auto-select is off, or the source was picked by
+                            // hand in the picker: the user is choosing sources,
                             // so return to the picker for that target.
                             screen = Screen.Streams(
                                 target = StreamsTarget(

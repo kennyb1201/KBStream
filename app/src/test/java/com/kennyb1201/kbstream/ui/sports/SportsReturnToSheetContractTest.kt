@@ -99,7 +99,13 @@ class SportsReturnToSheetContractTest {
         assertTrue(
             "a channel always exits to its launch's own destination, so a game's sheet comes with it",
             activity.contains(
-                "if ( current.parentType == \"channel\" || AppPreferences.getAutoSelectStream(context) ) " +
+                // The auto-select clause is qualified by the manual-pick flag
+                // now: a playback the streams picker launched keeps the picker
+                // in the chain even with auto-select on. The channel disjunct is
+                // still FIRST, which is the half that carries a game's sheet
+                // back with the hub whatever the picker did.
+                "if ( current.parentType == \"channel\" || (AppPreferences.getAutoSelectStream(context) " +
+                    "&& !current.pickedFromStreams) ) " +
                     "{ screen = stableBackDestination(current.returnTo) }"
             )
         )
