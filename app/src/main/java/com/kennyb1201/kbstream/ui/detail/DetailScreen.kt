@@ -3710,24 +3710,51 @@ fun DetailScreen(
                                                     } else {
                                                         when (keyEvent.key) {
                                                             Key.DirectionUp ->
-                                                                focusChipColumn(
-                                                                    PEOPLE_ROW_KEY,
-                                                                    networkIndex
-                                                                ) ||
-                                                                    // No cast and
-                                                                    // no writer at
-                                                                    // all: the rail
-                                                                    // above is not
-                                                                    // composed, so
-                                                                    // keep the old
-                                                                    // fallback -
-                                                                    // never the
-                                                                    // episodes row
-                                                                    // two rows up.
-                                                                    runCatching {
-                                                                        movieDetailsFocusRequester
-                                                                            .requestFocus()
-                                                                    }.isSuccess
+                                                                if (
+                                                                    focusChipColumn(
+                                                                        PEOPLE_ROW_KEY,
+                                                                        networkIndex
+                                                                    )
+                                                                ) {
+                                                                    true
+                                                                } else {
+                                                                    // No people row (no cast and no
+                                                                    // writer) or a column it has not
+                                                                    // reached: the rail above is not
+                                                                    // composed, and the header it sits
+                                                                    // under may have been disposed by
+                                                                    // the scroll too. A requestFocus
+                                                                    // here can only throw, which is what
+                                                                    // left the key trapped on this chip.
+                                                                    //
+                                                                    // Put the top of the page back into
+                                                                    // composition first, then hand the
+                                                                    // focus to the rail.
+                                                                    scope.launch {
+                                                                        detailListState
+                                                                            .scrollToItem(0)
+                                                                        // Give the LazyColumn
+                                                                        // a moment to re-compose
+                                                                        // the item before the
+                                                                        // request: a focus
+                                                                        // request issued in the
+                                                                        // same frame as the
+                                                                        // scroll lands on a node
+                                                                        // that is not there yet.
+                                                                        delay(100)
+                                                                        runCatching {
+                                                                            movieDetailsFocusRequester
+                                                                                .requestFocus()
+                                                                        }
+                                                                    }
+                                                                    // Consume the press either way:
+                                                                    // the launched block owns the move,
+                                                                    // and returning false here would let
+                                                                    // the default search - and the
+                                                                    // network rail's restorer - move the
+                                                                    // focus a second time.
+                                                                    true
+                                                                }
 
                                                             Key.DirectionDown ->
                                                                 focusChipColumn(
