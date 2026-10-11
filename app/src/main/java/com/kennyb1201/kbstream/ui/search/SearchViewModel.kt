@@ -90,6 +90,22 @@ data class AddonResultGroup(
     val catalogType: String? = null
 )
 
+/**
+ * Keep the add-on results [allowedMetas] permitted, or null when that leaves the
+ * rail empty — an empty "AIOMetadata" heading is worse than no rail at all.
+ *
+ * [allowedMetas] is [com.kennyb1201.kbstream.data.tmdb.TmdbRepository.kidsFilterMetas]'s
+ * verdict on this group's results (see the caller), so this stays pure: the
+ * ceiling policy lives there, the drop-the-empty-rail rule lives here.
+ */
+internal fun vetAddonGroup(
+    group: AddonResultGroup,
+    allowedMetas: Set<MetaPreview>
+): AddonResultGroup? {
+    val allowedResults = group.results.filter { it.meta in allowedMetas }
+    return if (allowedResults.isEmpty()) null else group.copy(results = allowedResults)
+}
+
 class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val repository = AddonRepository.getInstance()
@@ -530,7 +546,19 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 _actorResults.value = personResults.distinctBy { it.id }.take(MAX_PERSON_RESULTS)
                 _studioResults.value = studioResults.distinctBy { it.id }.take(MAX_STUDIO_RESULTS)
-                _collectionResults.value = collectionResults.distinctBy { it.id }.take(MAX_COLLECTION_RESULTS)
+                // Collections carry no rating of their own, so the ceiling is
+                // applied to their members: a kids profile sees a franchise
+                // only when at least one of its films is allowed. Actors and
+                // studios are left alone deliberately — a person or company
+                // name is not content and carries no certification signal.
+                _collectionResults.value =
+                    if (tmdbRepository.kidsMaxAge() == null) {
+                        collectionResults.distinctBy { it.id }.take(MAX_COLLECTION_RESULTS)
+                    } else {
+                        tmdbRepository.kidsFilterCollections(collectionResults)
+                            .distinctBy { it.id }
+                            .take(MAX_COLLECTION_RESULTS)
+                    }
 
                 // Resolve the visible TMDB ids -> IMDB in the background so
                 // badges/marks can key off the IMDB id.
@@ -566,13 +594,13 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     ) {
         invalidateAddonSearch()
         val generation = addonSearchGeneration
-        // Kids Mode suppresses add-on rails entirely: third-party catalogs
-        // (AIOMetadata, AIOStreams, ...) carry no certification data, so
-        // their rails cannot be vetted against the profile's ceiling.
-        if (tmdbRepository.kidsMaxAge() != null) {
-            _addonResultGroups.value = emptyList()
-            return
-        }
+        // Kids Mode no longer suppresses the add-on rails. They run on every
+        // profile and are vetted per result against the ceiling before
+        // publishing (see publishedGroups below) — the same treatment the TMDB
+        // title wave gets. A third-party catalog's own metadata carries no
+        // certification, so the check resolves each result's id through the
+        // shared detail cache; the known-unknown rule is the one
+        // kidsFilterMetas owns (fail closed under G/PG, open under PG-13).
         addonSearchJob = viewModelScope.launch {
             // The add-on probes start immediately now — they used to wait
             // for BOTH TMDB searches to finish before firing a single
@@ -629,14 +657,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     .filter { group -> group.results.isNotEmpty() }
 
             // A newer search already owns the rails: drop this wave rather
-            // than republish the superseded query's hits (LS-P2-2).
+            // than republish the superseded query's hits (LS-P2-2). Checked
+            // before the ceiling lookups below so a superseded wave never
+            // spends them.
             if (generation != addonSearchGeneration) return@launch
-            _addonResultGroups.value = visibleGroups
+
+            // Kids Mode vets the rails instead of hiding them. Off a kids
+            // profile this is the same list it always was.
+            val publishedGroups = withKidsCeiling(visibleGroups)
+            _addonResultGroups.value = publishedGroups
 
             // Add-on results already carry IMDB ids: preload their watched /
             // eye-badge state so those rails read like every other screen.
             preloadWatchedKeysFor(
-                visibleGroups
+                publishedGroups
                     .flatMap { it.results }
                     .mapNotNull { r ->
                         val type = normalizedType(r.type) ?: return@mapNotNull null
@@ -648,8 +682,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             )
 
             try {
-                val enriched = enrichAddonGroups(visibleGroups)
-                if (generation == addonSearchGeneration && enriched != visibleGroups) {
+                val enriched = enrichAddonGroups(publishedGroups)
+                if (generation == addonSearchGeneration && enriched != publishedGroups) {
                     _addonResultGroups.value = enriched
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -657,6 +691,33 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 Log.e("KBStream", "Add-on enrichment failed", e)
             }
+        }
+    }
+
+    /**
+     * Apply the active profile's kids ceiling to add-on rails before they are
+     * published: every result is checked against the ceiling and a rail left
+     * with nothing is dropped rather than rendered as a titleless
+     * "AIOMetadata" group. Off a kids profile [groups] is returned unchanged,
+     * so the adult path is byte-for-byte what it always was.
+     *
+     * A third-party catalog's own metadata carries no certification, so the
+     * check resolves each result's id through the shared detail cache
+     * (`kidsFilterMetas`) — the same call the TMDB title wave makes, so a
+     * repeat search is cheap. There are two publish paths (the eager
+     * per-add-on snapshot and the consolidated wave) and BOTH go through here:
+     * an intermediate snapshot that skipped the ceiling would put unvetted
+     * rails on a kids profile for as long as the slower add-ons take to answer.
+     */
+    private suspend fun withKidsCeiling(
+        groups: List<AddonResultGroup>
+    ): List<AddonResultGroup> {
+        if (groups.isEmpty() || tmdbRepository.kidsMaxAge() == null) return groups
+        return groups.mapNotNull { group ->
+            val allowedMetas = tmdbRepository.kidsFilterMetas(
+                group.results.map { it.meta }
+            ).toSet()
+            vetAddonGroup(group, allowedMetas)
         }
     }
 
@@ -748,7 +809,10 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                         .flatten()
                 ).take(MAX_ADDON_GROUPS)
                 if (snapshot.isNotEmpty() && generation == addonSearchGeneration) {
-                    _addonResultGroups.value = snapshot
+                    // Vetted too: this is a real publish, and on a kids profile
+                    // an unvetted intermediate snapshot would show adult hits
+                    // until the consolidated wave replaced them.
+                    _addonResultGroups.value = withKidsCeiling(snapshot)
                 }
             }
         }.joinAll()

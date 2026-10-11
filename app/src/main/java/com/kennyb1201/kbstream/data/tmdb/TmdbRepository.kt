@@ -439,7 +439,8 @@ class TmdbRepository private constructor(context: Context) :
      * The RAW detail is what is stored, not the finished result: [getCollection]
      * applies the active profile's kids ceiling and the digital-release filter
      * below it, so caching the filtered version would hand one profile's page to
-     * the next.
+     * the next. Everything that filters reads it back through
+     * [cachedCollectionRaw] and applies its own rules.
      */
     private val collectionCache =
         ConcurrentHashMap<Int, Pair<Long, TmdbCollectionDetail>>()
@@ -1113,12 +1114,23 @@ class TmdbRepository private constructor(context: Context) :
         cacheJson("genres:$key", genresJsonAdapter.toJson(genres), System.currentTimeMillis())
     }
 
-    suspend fun getCollection(collectionId: Int): TmdbCollectionDetail? {
+    /**
+     * The RAW (unfiltered) collection detail for [collectionId], read through
+     * the shared in-memory cache and filled from the API on a miss. Null when
+     * there is no key or the request failed.
+     *
+     * Split out of [getCollection] because the kids ceiling decides differently
+     * for a collection PAGE (which parts to show, see [getCollection]) and for
+     * a collection in search results (whether it may appear at all, see
+     * [kidsFilterCollections]) — but both must share one cache, and the cached
+     * copy must be the unfiltered one, since the filters are per-profile.
+     */
+    private suspend fun cachedCollectionRaw(collectionId: Int): TmdbCollectionDetail? {
         if (apiKey.isBlank()) return null
 
         val now = System.currentTimeMillis()
 
-        val detail = collectionCache[collectionId]
+        return collectionCache[collectionId]
             ?.takeIf { (storedAt, _) -> now - storedAt < collectionCacheTtlMs }
             ?.second
             ?: runCatchingCancellable { api.getCollection(collectionId, apiKey) }
@@ -1129,7 +1141,10 @@ class TmdbRepository private constructor(context: Context) :
                     }
                     collectionCache[collectionId] = now to fetched
                 }
-                ?: return null
+    }
+
+    suspend fun getCollection(collectionId: Int): TmdbCollectionDetail? {
+        val detail = cachedCollectionRaw(collectionId) ?: return null
 
         // Kids Mode first: a kids profile never sees franchise pages whose
         // parts are rated above its ceiling (and the whole page drops when
@@ -2088,6 +2103,50 @@ class TmdbRepository private constructor(context: Context) :
                         KidsMode.allowed(ceiling, detail.certification(isMovie = !isSeries))
                     }
                     if (allowed) meta else null
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * Kids ceiling for the search screen's Collections rail: keep a collection
+     * when at least one of its movies passes the active ceiling (the franchise
+     * detail page filters its own part list, see [getCollection], so this only
+     * decides whether the franchise appears in the results at all). Returns the
+     * list unchanged when kids mode is off, so a non-kids profile pays one
+     * null-check.
+     *
+     * Each collection's parts come from the shared collection-detail cache
+     * ([cachedCollectionRaw]) and each part's certification from the shared
+     * enriched-detail cache, so repeat searches over the same query issue no
+     * requests. A collection whose parts cannot be fetched is kept only on the
+     * loosest ceiling (PG-13) and dropped on the strict ones, the same
+     * known-unknown rule [kidsFilterMetas] applies to a title.
+     *
+     * The cap runs AFTER this filter (see the caller), so a strict profile
+     * still sees a full page of allowed franchises.
+     */
+    suspend fun kidsFilterCollections(
+        collections: List<TmdbSearchCollectionResult>
+    ): List<TmdbSearchCollectionResult> {
+        if (collections.isEmpty() || kidsMaxAge() == null) return collections
+        return coroutineScope {
+            collections.map { collection ->
+                async {
+                    val ceiling = kidsMaxAge()
+                    // Fetch the collection's movies; keep the collection if any
+                    // movie passes the ceiling.
+                    val parts = availabilitySemaphore.withPermit {
+                        runCatchingCancellable { cachedCollectionRaw(collection.id) }.getOrNull()
+                    }?.parts ?: emptyList()
+                    val allowed = if (parts.isEmpty()) {
+                        // Cannot vet: fail closed under strict ceilings (G/PG),
+                        // fail open under PG-13 (matches kidsFilterMetas).
+                        ceiling == KidsMode.CEIL_PG13
+                    } else {
+                        kidsFilterMetas(parts.map { it.toMetaPreview() }).isNotEmpty()
+                    }
+                    if (allowed) collection else null
                 }
             }.awaitAll().filterNotNull()
         }

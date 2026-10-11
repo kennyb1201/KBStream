@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.data.tmdb
 
+import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.format.DateFormats
 import com.squareup.moshi.Json
 import com.squareup.moshi.JsonClass
@@ -493,6 +494,19 @@ data class TmdbCollectionPart(
     // Collection parts are always movies; TMDB sends vote_average here too,
     // parsed so the collection rail can caption ratings.
     @Json(name = "vote_average") val voteAverage: Double? = null
+)
+
+/**
+ * A collection part as the identity the kids ceiling is checked under: the same
+ * `tmdb:<id>` / "movie" spelling the search paths use (see
+ * KidsSearchFilter.tmdbSearchMetas), so a rating lookup fetches THIS title.
+ * Parts are always movies, so the type is fixed rather than taken from the
+ * wire.
+ */
+internal fun TmdbCollectionPart.toMetaPreview(): MetaPreview = MetaPreview(
+    id = "tmdb:$id",
+    type = "movie",
+    name = (title ?: name).orEmpty().trim()
 )
 
 @JsonClass(generateAdapter = true)

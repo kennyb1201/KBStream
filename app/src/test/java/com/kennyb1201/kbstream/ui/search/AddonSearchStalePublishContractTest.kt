@@ -89,8 +89,10 @@ class AddonSearchStalePublishContractTest {
             source.contains("if (generation != addonSearchGeneration) return@launch")
         )
         assertTrue(
-            "and the enrichment republish",
-            source.contains("if (generation == addonSearchGeneration && enriched != visibleGroups)")
+            "and the enrichment republish — against the list that was actually " +
+                "published (visibleGroups still only has the digital-release filter; " +
+                "publishedGroups has the kids ceiling on top of it)",
+            source.contains("if (generation == addonSearchGeneration && enriched != publishedGroups)")
         )
         assertTrue(
             "the token is threaded into the collector that publishes snapshots",

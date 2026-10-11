@@ -63,6 +63,11 @@ class KidsCeilingSurfaceContractTest {
             Surface("Continue Watching / Upcoming", HOME, "kidsFilterUpNext(", 2),
             Surface("Home add-on rails", HOME, "kidsFilterMetas(", 2),
             Surface("search results", SEARCH, "kidsFilterMetas(", 1),
+            // The add-on rails used to be suppressed outright for kids
+            // profiles; now they are vetted, which is the second
+            // kidsFilterMetas call in SearchViewModel.
+            Surface("search add-on rails", SEARCH, "kidsFilterMetas(", 2),
+            Surface("search Collections rail", SEARCH, "kidsFilterCollections(", 1),
             Surface("Browse keyword and collection chips", SEARCH, "forMode(", 2),
             Surface("Live TV channels (lock, not a rating)", IPTV, "kidsFilterChannels(", 2)
         )
