@@ -42,10 +42,10 @@ class FrameRateProbeWiringContractTest {
     private fun squash(text: String): String = text.replace(Regex("\\s+"), " ")
 
     @Test
-    fun `the probe reads the container's declared rate, not timestamp samples`() {
+    fun `the probe reads the declared rate first and only then the timestamps`() {
         val probe = source(PROBE)
         assertTrue(
-            "the declared video rate is the whole point",
+            "the declared video rate is read off the head",
             probe.contains("MediaFormat.KEY_FRAME_RATE")
         )
         assertTrue(
@@ -55,6 +55,38 @@ class FrameRateProbeWiringContractTest {
         assertTrue(
             "the head is a ranged fetch",
             probe.contains("bytes=\$from-\$to")
+        )
+    }
+
+    @Test
+    fun `a head that declares no rate falls back to a bounded timestamp estimate`() {
+        // Field 2026-10-11: a Matroska WEB-DL declares no KEY_FRAME_RATE, so the
+        // declared path returned null on a stream the decoder measured at
+        // 23.976 while the cadence sat in the head's own sample timestamps. The
+        // fallback has to stay second (a declared rate is authoritative),
+        // bounded (a truncated head must not become an open-ended walk), and
+        // pure (the rule is unit-tested without an extractor).
+        val probe = source(PROBE)
+        val declared = probe.indexOf("readFrameRate(format)?.let")
+        val fallback = probe.indexOf("estimateFps(extractor, i, mime)")
+        assertTrue(
+            "the track's own declared rate must be consulted before any estimate",
+            declared >= 0 && fallback > declared
+        )
+        assertTrue(
+            "the estimate is a pure rule the JVM tests drive",
+            probe.contains(
+                "internal fun estimateFpsFromTimestamps(timestamps: List<Long>): Double?"
+            )
+        )
+        assertTrue(
+            "the walk is capped, so a slow or truncated head degrades to null inside the budget",
+            probe.contains("MAX_TIMESTAMP_SAMPLES = 48") &&
+                probe.contains("repeat(MAX_TIMESTAMP_SAMPLES)")
+        )
+        assertTrue(
+            "and the failure still logs as a null path rather than staying silent",
+            probe.contains("probe: timestamp cadence unusable")
         )
     }
 

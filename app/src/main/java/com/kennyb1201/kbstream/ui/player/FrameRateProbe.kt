@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.abs
 import okhttp3.Request
 
 /**
@@ -29,9 +30,13 @@ import okhttp3.Request
  *  - Only http(s) file URLs. A live/playlist URL is the caller's "don't bother"
  *    (a live TV playlist is 60 fps anyway, and its bytes never end). Obvious
  *    manifests are refused here as well.
- *  - The platform [MediaExtractor] reads `KEY_FRAME_RATE` off the head chunk;
- *    there is no timestamp sampling, because sampling a truncated head hangs
- *    and starves everything else.
+ *  - The platform [MediaExtractor] reads `KEY_FRAME_RATE` off the head chunk
+ *    first. Matroska WEB-DLs usually do not declare a rate there at all, and
+ *    the cadence is in the sample timestamps the head already carries, so the
+ *    declared path is followed by a bounded timestamp estimate
+ *    ([MAX_TIMESTAMP_SAMPLES] samples, inside the existing [budgetMs] timeout):
+ *    a truncated head that stalls while being walked degrades to null exactly
+ *    like every other failure, rather than hanging anything.
  *  - The whole probe gets [budgetMs]; any failure, timeout, or unparseable head
  *    returns null, which every caller treats as "the probe said nothing" — so
  *    today's code paths run byte for byte.
@@ -52,6 +57,13 @@ internal object FrameRateProbe {
      * served a slow start.
      */
     private const val HEAD_BYTES = 4_194_304L
+
+    /**
+     * How many sample timestamps the fallback estimate walks. A dozen samples
+     * are enough to see a cadence and 48 cost nothing on a head that is already
+     * in memory.
+     */
+    private const val MAX_TIMESTAMP_SAMPLES = 48
 
     /** Manifests and playlists are not files to parse. */
     private val NON_FILE_SUFFIXES = listOf(".m3u8", ".m3u", ".mpd", ".ism")
@@ -222,11 +234,15 @@ internal object FrameRateProbe {
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
                 if (!mime.startsWith("video/")) continue
                 readFrameRate(format)?.let { return@runCatching it }
-                // The video track is here and simply has no rate: a different
-                // failure from "no video track at all", and the one a
-                // mislabelled container produces.
-                Log.i(TAG, "probe: video track has no frame-rate key (mime=$mime)")
-                return@runCatching null
+                // The video track is here and simply has no declared rate - the
+                // case a Matroska WEB-DL produces. A different failure from "no
+                // video track at all", and no longer a dead end: the head's own
+                // sample timestamps carry the cadence.
+                Log.i(
+                    TAG,
+                    "probe: video track has no frame-rate key (mime=$mime); estimating from timestamps"
+                )
+                return@runCatching estimateFps(extractor, i, mime)
             }
             Log.i(TAG, "probe: head has no video track")
             null
@@ -234,6 +250,48 @@ internal object FrameRateProbe {
             runCatching { extractor.release() }
         }
     }.getOrNull()
+
+    /**
+     * The cadence of a track whose header declares no rate, from the timestamps
+     * of the head's own samples.
+     *
+     * Null when the count, the deltas, or their consistency say nothing usable -
+     * which is exactly what a build without this fallback returns for every such
+     * stream, so a stream it cannot read stays on the existing behavior rather
+     * than guessing.
+     */
+    private fun estimateFps(extractor: MediaExtractor, trackIndex: Int, mime: String): Double? {
+        val stamps = sampleVideoTimestamps(extractor, trackIndex)
+        val fps = estimateFpsFromTimestamps(stamps)
+        if (fps != null) {
+            Log.i(TAG, "probe: estimated $fps fps from ${stamps.size} sample timestamps (mime=$mime)")
+        } else {
+            Log.i(TAG, "probe: timestamp cadence unusable (${stamps.size} samples, mime=$mime)")
+        }
+        return fps
+    }
+
+    /**
+     * The first [MAX_TIMESTAMP_SAMPLES] presentation timestamps of [trackIndex],
+     * in decode order.
+     *
+     * Bounded on purpose: this walks the head the probe already downloaded, so
+     * the sample budget is what keeps a truncated or mis-timed file from turning
+     * a cheap read into an open-ended one. It stops at the first absent sample
+     * and at end-of-stream; a throw is caught by the [extractFps] wrapper, which
+     * is why nothing here needs its own guard.
+     */
+    private fun sampleVideoTimestamps(extractor: MediaExtractor, trackIndex: Int): List<Long> {
+        extractor.selectTrack(trackIndex)
+        val stamps = ArrayList<Long>(MAX_TIMESTAMP_SAMPLES)
+        repeat(MAX_TIMESTAMP_SAMPLES) {
+            val t = extractor.sampleTime
+            if (t < 0) return stamps
+            stamps.add(t)
+            if (!extractor.advance()) return stamps
+        }
+        return stamps
+    }
 
     /**
      * `KEY_FRAME_RATE` is documented as an integer, but some extractors hand it
@@ -247,4 +305,41 @@ internal object FrameRateProbe {
         return runCatching { format.getFloat(MediaFormat.KEY_FRAME_RATE).toDouble() }
             .getOrNull()
     }
+}
+
+/**
+ * The frame rate implied by a run of sample presentation timestamps, or null
+ * when that run cannot say.
+ *
+ * Why the timestamps: a Matroska WEB-DL typically declares no rate in its track
+ * headers at all, so `KEY_FRAME_RATE` is absent and the probe used to give up —
+ * while the container's own cadence sat in the sample times of the head it had
+ * already downloaded (field, 2026-10-11: the probe returned null on a stream
+ * the decoder later measured at 23.976).
+ *
+ * Why SORTED: [MediaExtractor] walks samples in decode order, so a B-frame file
+ * hands back timestamps far out of presentation order and consecutive deltas
+ * are jitter. Sorting recovers presentation order, and because only deltas are
+ * used, an edit list's offset (a first sample at a non-zero time) drops out.
+ *
+ * The two-thirds agreement gate is what keeps this from inventing a rate:
+ * variable-frame-rate content and corrupt timestamp runs disagree with their
+ * own median, and return null — the same answer every such stream gets today.
+ * Range and standard-rate snapping are not repeated here: the caller puts this
+ * through [FrameRateMatch.normalise] like any player-reported rate.
+ *
+ * Pure and internal so the rule is unit-tested (the extractor that feeds it is
+ * an Android native API a JVM test cannot drive).
+ */
+internal fun estimateFpsFromTimestamps(timestamps: List<Long>): Double? {
+    // A cadence needs a dozen samples to be worth a claim.
+    if (timestamps.size < 12) return null
+    val sorted = timestamps.sorted()
+    val deltas = sorted.zipWithNext { a, b -> b - a }.filter { it > 0 }
+    if (deltas.size < 11) return null
+    val median = deltas.sorted()[deltas.size / 2].toDouble()
+    // Variable-frame-rate or garbage: most deltas must agree with the median.
+    val consistent = deltas.count { abs(it - median) / median <= 0.05 }
+    if (consistent * 3 < deltas.size * 2) return null
+    return 1_000_000.0 / median
 }

@@ -170,4 +170,87 @@ class FrameRateProbeTest {
         assertFalse(FrameRateProbe.isProbeable("rtmp://host/live"))
         assertFalse(FrameRateProbe.isProbeable("file:///sdcard/movie.mkv"))
     }
+
+    // ── the timestamp fallback: a head that declares no rate ──────────────
+    //
+    // Field 2026-10-11: the probe ran, downloaded the head, found the video
+    // track — and returned null, because a Matroska WEB-DL declares no
+    // KEY_FRAME_RATE at all while its cadence sits in the sample timestamps the
+    // head already carries. These pin the pure half of that fallback; the walk
+    // that feeds it is the platform extractor, which a JVM test cannot drive.
+
+    /** A steady run of [count] samples at [deltaUs] apart, in presentation order. */
+    private fun cadence(count: Int, deltaUs: Long): List<Long> =
+        (0 until count).map { index -> index * deltaUs }
+
+    @Test
+    fun `a steady 23_976 cadence reads back as 23_976`() {
+        val fps = estimateFpsFromTimestamps(cadence(24, 41_708L))
+        assertEquals("41708us is the 23.976 cadence", 23.976, fps ?: 0.0, 0.01)
+    }
+
+    @Test
+    fun `a 29_97 cadence reads back as 29_97`() {
+        val fps = estimateFpsFromTimestamps(cadence(24, 33_367L))
+        assertEquals("33367us is the 29.97 cadence", 29.97, fps ?: 0.0, 0.01)
+    }
+
+    @Test
+    fun `decode-order B-frame jitter is sorted back to the real cadence`() {
+        // MediaExtractor walks samples in DECODE order, so an IBBP file hands
+        // back times that jump backwards: consecutive deltas are jitter, while
+        // the sorted run is the presentation cadence.
+        val presentation = cadence(24, 41_708L)
+        val decodeOrder = presentation.chunked(3).flatMap { it.reversed() }
+        assertTrue(
+            "the shuffled run must actually be out of order, or the test proves nothing",
+            decodeOrder != presentation
+        )
+
+        val fps = estimateFpsFromTimestamps(decodeOrder)
+        assertEquals("the sort recovers the presentation cadence", 23.976, fps ?: 0.0, 0.01)
+    }
+
+    @Test
+    fun `variable frame rate deltas are refused`() {
+        // Alternating 41ms / 83ms: exactly the mixed cadence the estimate must
+        // not average into a rate nobody is playing at.
+        val stamps = mutableListOf(0L)
+        repeat(23) { index ->
+            stamps.add(stamps.last() + if (index % 2 == 0) 41_708L else 83_417L)
+        }
+
+        assertNull(
+            "most deltas disagree with the median, so there is no cadence to report",
+            estimateFpsFromTimestamps(stamps)
+        )
+    }
+
+    @Test
+    fun `too few samples are refused`() {
+        assertNull("a dozen samples is the floor", estimateFpsFromTimestamps(cadence(11, 41_708L)))
+        assertNull("and nothing at all is not a cadence", estimateFpsFromTimestamps(emptyList()))
+    }
+
+    @Test
+    fun `timestamps that do not advance are refused`() {
+        // A head whose samples all share one timestamp (or repeat it enough
+        // times) has no deltas to read. The guess stays null — today's answer.
+        assertNull(
+            "zero deltas only",
+            estimateFpsFromTimestamps(List(24) { 1_234_567L })
+        )
+        // A full dozen samples that mostly sit on the same timestamp: the deltas
+        // that survive the zero filter are fewer than the floor needs.
+        assertNull(
+            "fewer advancing steps than the floor needs",
+            estimateFpsFromTimestamps(
+                listOf(
+                    0L, 0L, 0L, 0L,
+                    41_708L, 41_708L, 41_708L, 41_708L,
+                    83_416L, 83_416L, 83_416L, 83_416L
+                )
+            )
+        )
+    }
 }
