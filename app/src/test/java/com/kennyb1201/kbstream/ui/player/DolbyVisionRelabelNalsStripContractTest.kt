@@ -41,6 +41,18 @@ class DolbyVisionRelabelNalsStripContractTest {
         )
     }
 
+    /**
+     * The shared relabel construction: the call plus its two fixed arguments,
+     * whitespace-tolerant.
+     *
+     * The sites have grown a named color-info argument (the temporary bisect arm
+     * B), so the call is now written across lines — the pin is on the call and
+     * on the arguments that must be identical at both sites, not on one line's
+     * spelling. A site that stopped going through `relabelDvFormat` still fails,
+     * and both sites are still counted independently below.
+     */
+    private val relabelCall = Regex("relabelDvFormat\\(\\s*format,\\s*rewriteCodec\\b")
+
     /** The `RELABEL_ONLY` branch body, up to the strip path's log line. */
     private fun relabelBranch(): String {
         val start = source.indexOf("if (handling == Hdr10BaseHandling.RELABEL_ONLY) {")
@@ -153,7 +165,7 @@ class DolbyVisionRelabelNalsStripContractTest {
         val reroute = source.substring(start, end)
         assertTrue(
             "the reroute must use the shared relabel construction",
-            reroute.contains("relabelDvFormat(format, rewriteCodec)")
+            relabelCall.containsMatchIn(reroute)
         )
         assertTrue(
             "and engage Mode.STRIP_NALS_ONLY (stripDv=false, stripHdr10Plus=true)",
@@ -167,9 +179,7 @@ class DolbyVisionRelabelNalsStripContractTest {
 
     @Test
     fun `the relabel construction is shared by both call sites`() {
-        val calls = Regex("relabelDvFormat\\(format, rewriteCodec\\)")
-            .findAll(source)
-            .count()
+        val calls = relabelCall.findAll(source).count()
         assertEquals(
             "the RELABEL_ONLY branch and the DV-hardware reroute must share it",
             2,
@@ -188,7 +198,7 @@ class DolbyVisionRelabelNalsStripContractTest {
     @Test
     fun `the relabel success log is emitted only after the build`() {
         val branch = relabelBranch()
-        val build = branch.indexOf("relabelDvFormat(format, rewriteCodec)")
+        val build = relabelCall.find(branch)?.range?.first ?: -1
         val log = branch.indexOf("re-advertising as hvc1")
         assertTrue("the branch must build the relabel", build >= 0)
         assertTrue("the branch must log the relabel", log >= 0)

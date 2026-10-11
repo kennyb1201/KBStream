@@ -407,6 +407,10 @@ fun SettingsScreen(
     // color path) is then not a choice, it is the only correct picture.
     val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
+    // TEMPORARY: the two arms of the Dolby Vision stall bisect. Both default
+    // off; both go away with the rows below once the field verdict is in.
+    var dvDiagDropRpu by remember { mutableStateOf(AppPreferences.isDvDiagDropRpu(context)) }
+    var dvDiagNoColorInfo by remember { mutableStateOf(AppPreferences.isDvDiagNoColorInfo(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
@@ -1700,6 +1704,60 @@ fun SettingsScreen(
                     onToggle = {
                         stripHdr10Plus = it
                         AppPreferences.setStripHdr10Plus(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // ── TEMPORARY Dolby Vision stall bisect ───────────────────
+                // Two arms that exist only so one build can run the full 2x2
+                // matrix on the stalling TV: the relabel path keeps the RPU and
+                // attaches HDR10 color info, and either one can be turned off
+                // in turn. Both default off, which is byte-identical to the
+                // release. Removed once the field result names the cause.
+                Text(
+                    text = "Diagnostics (temporary)",
+                    color = KBTextHi,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 4.dp)
+                )
+                Text(
+                    text = "For bisecting a Dolby Vision stall on a DV-capable box driving a " +
+                        "non-DV TV. Each switch changes one thing the relabel does; both off is " +
+                        "the shipping behavior. These are removed in the next release after the " +
+                        "result is read.",
+                    color = KBTextLo,
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                ToggleRow(
+                    label = "Diagnostic: drop RPU NAL (type 62)",
+                    description = "Arm A. The relabel path normally KEEPS the Dolby Vision " +
+                        "RPU NAL and strips only the HDR10+ SEI. On: the RPU is removed from " +
+                        "every sample too, leaving the parameter sets and the enhancement " +
+                        "layer untouched. Use it to test whether an RPU under an hvc1 label " +
+                        "is what the decoder refuses",
+                    checked = dvDiagDropRpu,
+                    onToggle = {
+                        dvDiagDropRpu = it
+                        AppPreferences.setDvDiagDropRpu(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Diagnostic: skip HDR10 color info",
+                    description = "Arm B. The relabel normally attaches explicit HDR10 color " +
+                        "metadata (PQ / BT.2020 / limited range / 10-bit) to the relabeled " +
+                        "format. On: it is skipped, so the format keeps whatever color info " +
+                        "the extractor produced — or none. Use it to test whether the " +
+                        "attached color info is what the decoder refuses",
+                    checked = dvDiagNoColorInfo,
+                    onToggle = {
+                        dvDiagNoColorInfo = it
+                        AppPreferences.setDvDiagNoColorInfo(context, it)
                     }
                 )
 

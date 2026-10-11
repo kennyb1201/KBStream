@@ -70,6 +70,11 @@ object AppPreferences {
     private const val KEY_AUDIO_OUTPUT = "audio_output_mode"                 // 0=auto, 1=passthrough, 2=decode (see PlayerAudioTuning)
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
+    // TEMPORARY: the two diagnostic arms of the 2026-10-11 DV stall bisect
+    // (RPU NAL vs attached HDR10 color info). Removed once the field verdict is
+    // in - see the settings rows and DolbyVisionCompatExtractorsFactory.
+    private const val KEY_DV_DIAG_DROP_RPU = "dv_diag_drop_rpu"             // diagnostic arm A
+    private const val KEY_DV_DIAG_NO_COLOR_INFO = "dv_diag_no_color_info"   // diagnostic arm B
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
     private const val KEY_DV_PASSTHROUGH_FAILED_AT = "dv_passthrough_failed_at" // learned: box's DV decoder failed, 0 = none
@@ -985,6 +990,33 @@ object AppPreferences {
 
     fun setStripHdr10Plus(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_STRIP_HDR10_PLUS, enabled).apply()
+    }
+
+    // ── TEMPORARY Dolby Vision stall bisect (diagnostic only) ───────────
+    // Deliberately NOT synced: these describe what one device's decoder is
+    // doing right now, and a blob from another TV would silently arm a bisect
+    // nobody is running. Both default off, which is the release behavior.
+
+    /**
+     * Arm A: strip the DV RPU NAL (type 62) from the relabel path's samples,
+     * leaving the enhancement layer and the parameter sets alone.
+     */
+    fun isDvDiagDropRpu(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DV_DIAG_DROP_RPU, false)
+
+    fun setDvDiagDropRpu(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DV_DIAG_DROP_RPU, enabled).apply()
+    }
+
+    /**
+     * Arm B: skip the explicit HDR10 color info the DV relabel attaches, so the
+     * format carries whatever the extractor produced (or none).
+     */
+    fun isDvDiagNoColorInfo(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DV_DIAG_NO_COLOR_INFO, false)
+
+    fun setDvDiagNoColorInfo(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DV_DIAG_NO_COLOR_INFO, enabled).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────

@@ -389,6 +389,114 @@ class DolbyVisionCompatTest {
         )
     }
 
+    // ── TEMPORARY diagnostic arms: the DV stall bisect (2026-10-11) ───────
+    //
+    // The relabel path (DV-capable box, non-DV display) stalled with zero
+    // output frames. Two things about the relabeled stream are new relative to
+    // the build that produced a picture: the RPU is KEPT under an hvc1 label,
+    // and explicit HDR10 color info is attached. These pin the two switches
+    // that turn each one off in turn — and that they are OFF by default, so the
+    // bytes of a default build are unchanged.
+
+    @Test
+    fun `the diagnostic RPU arm drops type 62 and leaves the EL and parameter sets`() {
+        val vps = nal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
+        val sps = nal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
+        val pps = nal(34, byteArrayOf(0x0D, 0x0E, 0x0F))
+        val rpu = nal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val el = nal(63, byteArrayOf(0x0A, 0x0B, 0x0C))
+        val sei = nal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66, 0x77, 0x88.toByte()))
+
+        val au = vps + sps + pps + rpu + el + sei + vcl
+        val buf = au.copyOf()
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = false, stripHdr10Plus = true, dropRpuNal = true
+        )
+
+        assertTrue("the RPU and the HDR10+ SEI must have been removed", newLen >= 0)
+        // Only type 62 goes on top of the HDR10+ SEI: the EL (63) is untouched,
+        // as are the parameter sets and the VCL. Arm A is not "strip DV again".
+        val expected = vps + sps + pps + el + vcl
+        assertArrayEquals(
+            "arm A must drop the RPU and not the EL",
+            expected,
+            buf.copyOf(newLen)
+        )
+    }
+
+    @Test
+    fun `the diagnostic RPU arm is off by default, so the strip output is unchanged`() {
+        val rpu = nal(62, byteArrayOf(0x11, 0x22))
+        val sei = nal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = rpu + sei + vcl
+
+        val implicit = au.copyOf()
+        val implicitLen = DolbyVisionCompat.stripAnnexB(
+            implicit, au.size, stripDv = false, stripHdr10Plus = true
+        )
+        val explicit = au.copyOf()
+        val explicitLen = DolbyVisionCompat.stripAnnexB(
+            explicit, au.size, stripDv = false, stripHdr10Plus = true, dropRpuNal = false
+        )
+
+        assertEquals("omitting the arm must mean the same as false", implicitLen, explicitLen)
+        assertArrayEquals(
+            "the default must be byte-identical to the shipping strip",
+            implicit.copyOf(implicitLen),
+            explicit.copyOf(explicitLen)
+        )
+        // The RPU is what stays: only the HDR10+ SEI went.
+        assertEquals("the RPU must survive with the arm off", (rpu + vcl).size, implicitLen)
+    }
+
+    @Test
+    fun `the diagnostic RPU arm drops type 62 on length-delimited samples too`() {
+        val rpu = ldNal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val el = ldNal(63, byteArrayOf(0x0A, 0x0B))
+        val sei = ldNal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
+        val vcl = ldNal(19, byteArrayOf(0x55, 0x66))
+        val sample = rpu + el + sei + vcl
+        val buf = sample.copyOf()
+
+        val newLen = DolbyVisionCompat.stripLengthDelimited(
+            buf, sample.size, 4, stripDv = false, stripHdr10Plus = true, dropRpuNal = true
+        )
+
+        assertTrue("the RPU and the HDR10+ SEI must have been removed", newLen >= 0)
+        assertArrayEquals(
+            "the EL must survive the RPU arm in an MP4 sample as well",
+            el + vcl,
+            buf.copyOf(newLen)
+        )
+    }
+
+    @Test
+    fun `the identity color-info lambda leaves the format's own color info alone`() {
+        // Arm B: skipping the attached HDR10 color info must leave whatever the
+        // extractor produced - including NOTHING - and must not throw, so the
+        // full->minimal fallback this file already guards is untouched.
+        val source = Format.Builder()
+            .setSampleMimeType(MimeTypes.VIDEO_DOLBY_VISION)
+            .setCodecs("dvhe.08.06")
+            .build()
+        val outcome = relabelDvFormat(source, "hvc1.2.4.L153.B0", applyColorInfo = { it })
+
+        assertNotNull("the identity step must still produce a relabel", outcome)
+        val r = outcome!!
+        assertEquals(
+            "the identity step cannot fall back to the minimal relabel",
+            RelabelAttempt.FULL,
+            r.attempt
+        )
+        assertNull(
+            "arm B ships the relabeled format without the attached color info",
+            r.format.colorInfo
+        )
+        assertEquals(MimeTypes.VIDEO_H265, r.format.sampleMimeType)
+    }
+
     // ── HDR10+ detection is a PREFIX match ────────────────────────────────
     //
     // Field 2026-10-10 (MULTi dvhe.08.06): the relabel + HDR10+-only strip

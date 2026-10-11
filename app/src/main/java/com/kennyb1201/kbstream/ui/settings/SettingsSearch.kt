@@ -202,6 +202,22 @@ internal object SettingsSearchIndex {
             "Strip HDR10+",
             "hdr10+ hdr plus strip playback picture"
         ),
+        // TEMPORARY: the two Dolby Vision stall-bisect arms live in the same
+        // cluster. They are drawn as ToggleRows, so the index has to carry them
+        // or they would be visible but unfindable — and they come back out with
+        // the rows once the field verdict is in.
+        SettingSearchEntry(
+            "playback.diag-drop-rpu",
+            SettingsPane.PLAYBACK,
+            "Diagnostic: drop RPU NAL (type 62)",
+            "dolby vision diagnostic bisect rpu nal type 62 stall black screen arm"
+        ),
+        SettingSearchEntry(
+            "playback.diag-no-color-info",
+            SettingsPane.PLAYBACK,
+            "Diagnostic: skip HDR10 color info",
+            "dolby vision diagnostic bisect color info hdr10 stall black screen arm"
+        ),
         SettingSearchEntry(
             "playback.auto-select-stream",
             SettingsPane.PLAYBACK,

@@ -124,7 +124,20 @@ internal class DolbyVisionCompatExtractorsFactory(
      * MTK-class decoders, so P4/P8 take the relabel-only path instead (see
      * [selectHdr10BaseHandling]).
      */
-    private val nonDvDisplayOnDvDevice: Boolean = false
+    private val nonDvDisplayOnDvDevice: Boolean = false,
+    /**
+     * TEMPORARY diagnostic arm A of the 2026-10-11 DV stall bisect: drop the DV
+     * RPU NAL (type 62) from the relabel path's samples, so one build can say
+     * whether an RPU under an hvc1 label is what the decoder refuses. Default
+     * false — with it off, every byte this factory emits is unchanged.
+     */
+    private val diagDropRpu: Boolean = false,
+    /**
+     * TEMPORARY diagnostic arm B of the same bisect: skip the explicit HDR10
+     * color info the relabel attaches, keeping whatever color info the extractor
+     * produced (or none) — exactly the 14:04 build's format. Default false.
+     */
+    private val diagNoColorInfo: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -165,7 +178,8 @@ internal class DolbyVisionCompatExtractorsFactory(
         )
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
+            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
+            diagDropRpu, diagNoColorInfo
         )
     }
 }
@@ -183,7 +197,9 @@ private class VideoCompatExtractor(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean,
+    private val diagDropRpu: Boolean,
+    private val diagNoColorInfo: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -191,7 +207,8 @@ private class VideoCompatExtractor(
         delegate.init(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
+                diagDropRpu, diagNoColorInfo
             )
         )
     }
@@ -217,7 +234,9 @@ private class VideoCompatExtractorOutput(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean,
+    private val diagDropRpu: Boolean,
+    private val diagNoColorInfo: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -225,7 +244,8 @@ private class VideoCompatExtractorOutput(
         return if (type == C.TRACK_TYPE_VIDEO) {
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
+                diagDropRpu, diagNoColorInfo
             )
         } else {
             track
@@ -251,7 +271,9 @@ private class VideoCompatTrackOutput(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean,
+    private val diagDropRpu: Boolean,
+    private val diagNoColorInfo: Boolean
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
@@ -445,7 +467,15 @@ private class VideoCompatTrackOutput(
                 // identifies which step threw. The success log is emitted only
                 // AFTER the build, so it can never announce a relabel that did
                 // not happen.
-                val relabeled = relabelDvFormat(format, rewriteCodec)
+                val relabeled = relabelDvFormat(
+                    format, rewriteCodec,
+                    // Diagnostic arm B: the identity lambda hands the builder
+                    // back untouched, so the format keeps whatever color info the
+                    // extractor produced (or none) - the 14:04 build's shape, and
+                    // it cannot throw, so the full->minimal fallback is unchanged.
+                    applyColorInfo = if (diagNoColorInfo) ({ it })
+                    else ({ it.setColorInfo(DV_HDR10_COLOR_INFO) })
+                )
                 if (relabeled != null) {
                     Log.i(
                         "PLAYER_DV",
@@ -453,7 +483,8 @@ private class VideoCompatTrackOutput(
                             "display: re-advertising as hvc1 " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
                             "stripped, RPU kept, VPS/SPS untouched " +
-                            "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)"
+                            "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
+                            " diagDropRpu=$diagDropRpu diagNoColor=$diagNoColorInfo"
                     )
                     delegate.format(relabeled.format)
                     // Bit-exact relabel plus in-place metadata NAL removal:
@@ -475,7 +506,12 @@ private class VideoCompatTrackOutput(
                 // which forces Strip All for the session — lands on such a box.
                 // Boxes WITHOUT a DV decoder keep the mutating strip below: it
                 // is the tested working path there, so it is left alone.
-                val relabeled = relabelDvFormat(format, rewriteCodec)
+                val relabeled = relabelDvFormat(
+                    format, rewriteCodec,
+                    // Diagnostic arm B, exactly as at the non-DV-display site.
+                    applyColorInfo = if (diagNoColorInfo) ({ it })
+                    else ({ it.setColorInfo(DV_HDR10_COLOR_INFO) })
+                )
                 if (relabeled != null) {
                     Log.i(
                         "PLAYER_DV",
@@ -483,7 +519,8 @@ private class VideoCompatTrackOutput(
                             "hardware: re-advertising as hvc1 " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
                             "stripped, RPU kept, VPS/SPS untouched " +
-                            "(the mutating strip is field-dead here)"
+                            "(the mutating strip is field-dead here)" +
+                            " diagDropRpu=$diagDropRpu diagNoColor=$diagNoColorInfo"
                     )
                     delegate.format(relabeled.format)
                     mode = Mode.STRIP_NALS_ONLY
@@ -797,17 +834,23 @@ private class VideoCompatTrackOutput(
             // it left a DV-flagged track with no DV metadata, and the decoder
             // stalled. Only the HDR10+ SEI goes, on the theory that the
             // competing dynamic-metadata set is what black-screened a
-            // (intolerant) non-DV display.
+            // (intolerant) non-DV display. The temporary diagnostic arm A
+            // (diagDropRpu) removes the RPU alone on top of that; with the arm
+            // off this call is exactly the one this path has always made.
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
                         pendingBuf, sampleEnd, stripDv = false, stripHdr10Plus = true,
+                        // Diagnostic arm A: with the toggle off this is exactly
+                        // the call this path has always made.
+                        dropRpuNal = diagDropRpu,
                         accounting = accounting
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
                         stripDv = false, stripHdr10Plus = true,
+                        dropRpuNal = diagDropRpu,
                         accounting = accounting
                     )
             }

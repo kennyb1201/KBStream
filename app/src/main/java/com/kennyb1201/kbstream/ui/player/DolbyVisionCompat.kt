@@ -429,12 +429,19 @@ internal object DolbyVisionCompat {
      * SEI NAL it examined - which is the difference between a NAL dropped whole
      * and one surgically shrunk. It is diagnostic only: the bytes emitted are
      * identical with or without it.
+     *
+     * [dropRpuNal] is a TEMPORARY diagnostic arm (see the DV stall bisect): it
+     * removes the RPU (type 62) alone while leaving the rest of [stripDv]'s
+     * behavior off, so one build can separate "the RPU under an hvc1 label" from
+     * "the attached color info" as the cause of the 2026-10-11 zero-frame
+     * stall. Default false = every existing caller byte-for-byte unchanged.
      */
     fun stripAnnexB(
         buf: ByteArray,
         length: Int,
         stripDv: Boolean,
         stripHdr10Plus: Boolean,
+        dropRpuNal: Boolean = false,
         accounting: SeiStripAccounting? = null
     ): Int {
         if (length < 5) return -1
@@ -462,6 +469,14 @@ internal object DolbyVisionCompat {
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
+                }
+                // Diagnostic arm A, RPU (62) only: the EL (63) is untouched, so
+                // a P7 sample still behaves exactly as it does today.
+                if (keep && dropRpuNal && nalType == NAL_DV_RPU) {
+                    keep = false
+                    accounting?.record(
+                        nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
+                    )
                 }
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType)) {
                     // Diagnostic only, computed only when someone is listening:
@@ -527,6 +542,8 @@ internal object DolbyVisionCompat {
      *
      * [accounting] is [stripAnnexB]'s first-sample diagnostic, recorded in NAL
      * bytes excluding the length field.
+     *
+     * [dropRpuNal] is [stripAnnexB]'s TEMPORARY diagnostic arm A, identically.
      */
     fun stripLengthDelimited(
         buf: ByteArray,
@@ -534,6 +551,7 @@ internal object DolbyVisionCompat {
         nalLengthFieldLength: Int,
         stripDv: Boolean,
         stripHdr10Plus: Boolean,
+        dropRpuNal: Boolean = false,
         accounting: SeiStripAccounting? = null
     ): Int {
         val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
@@ -562,6 +580,11 @@ internal object DolbyVisionCompat {
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
+                }
+                // Diagnostic arm A, RPU (62) only (see [stripAnnexB]).
+                if (keep && dropRpuNal && nalType == NAL_DV_RPU) {
+                    keep = false
+                    accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
                 }
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) && nal >= 4) {
                     // Diagnostic only, computed only when someone is listening:

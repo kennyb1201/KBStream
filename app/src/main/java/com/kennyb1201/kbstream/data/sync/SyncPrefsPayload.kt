@@ -258,6 +258,11 @@ object PrefsPayloadBuilder {
         "audio_decoder",
         "dv_compat_mode",
         "strip_hdr10_plus",
+        // The temporary DV stall-bisect arms: what one decoder is doing right
+        // now, so a blob from another TV must never arm a bisect nobody there
+        // is running. They come out with the settings rows.
+        "dv_diag_drop_rpu",
+        "dv_diag_no_color_info",
         "dv_convert_p7_to_81",
         "dv_convert_p5_to_81",
         "dv_p5_gles_correction",
