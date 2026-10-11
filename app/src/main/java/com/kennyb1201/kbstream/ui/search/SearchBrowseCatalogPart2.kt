@@ -1151,6 +1151,21 @@ val KIDS_KEYWORD_NAMES = listOf(
     "cloud",
     "time machine",
     "big brother",
+    // ── Seasonal — the kid-safe holidays only, appended at the end for the
+    // same reason as the standard list (see BROWSE_KEYWORD_NAMES). No
+    // horror / slasher adjacency here; that side of the season stays on the
+    // adult list. "easter", "easter bunny", "santa claus" and "pumpkin"
+    // are already above, and the spec's "dia de los muertos" is TMDB's
+    // "day of the dead".
+    "halloween",
+    "christmas",
+    "thanksgiving",
+    "valentine's day",
+    "new year's eve",
+    "st. patrick's day",
+    "hanukkah",
+    "day of the dead",
+    "costume",
 )
 
 /** Decades are neutral; reuse the standard list. */

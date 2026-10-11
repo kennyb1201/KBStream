@@ -262,6 +262,77 @@ class SearchBrowseCatalogKidsTest {
         )
     }
 
+    // ── the 2026-10 seasonal wave ────────────────────────────────────────
+
+    @Test
+    fun `the seasonal keywords are the tail of both keyword lists`() {
+        // The wave is APPENDED on purpose: the curated popular-first order at
+        // the top of each list is what a profile sees first, and the holiday
+        // chips are meant to ride behind it, so the tail order is pinned.
+        val adultSeasonal = listOf(
+            "halloween",
+            "christmas",
+            "thanksgiving",
+            "easter",
+            "valentine's day",
+            "new year's eve",
+            "st. patrick's day",
+            "fourth of july",
+            "hanukkah",
+            "day of the dead",
+            "horror"
+        )
+        assertEquals(
+            "the seasonal block must end BROWSE_KEYWORD_NAMES",
+            adultSeasonal,
+            BROWSE_KEYWORD_NAMES.takeLast(adultSeasonal.size)
+        )
+
+        // Kids get the season minus its adult side, and minus the holiday
+        // chips the kids list already carried ("easter", "easter bunny",
+        // "santa claus", "pumpkin") — repeating one is a double chip and
+        // fails the hygiene test above.
+        val kidSeasonal = listOf(
+            "halloween",
+            "christmas",
+            "thanksgiving",
+            "valentine's day",
+            "new year's eve",
+            "st. patrick's day",
+            "hanukkah",
+            "day of the dead",
+            "costume"
+        )
+        assertEquals(
+            "the seasonal block must end KIDS_KEYWORD_NAMES",
+            kidSeasonal,
+            KIDS_KEYWORD_NAMES.takeLast(kidSeasonal.size)
+        )
+    }
+
+    @Test
+    fun `the kids side of the season carries no adult horror lane`() {
+        // Halloween is the one season with an adult twin, and the kid list
+        // gets the holiday rather than the horror lane: the union resolve is
+        // shared, so a kids-only entry here would be handed to a kids
+        // profile by the mode slice.
+        val adultOnly = listOf("horror", "slasher", "serial killer", "haunted house")
+        val leaked = adultOnly.filter { it in KIDS_KEYWORD_NAMES }
+        assertTrue(
+            "adult-only horror lanes in the kids keyword list: $leaked",
+            leaked.isEmpty()
+        )
+
+        // ...while the shared holiday chips are on the adult list too, which
+        // is what lets one resolve pass serve both modes.
+        val shared = listOf("halloween", "christmas", "thanksgiving", "day of the dead")
+        val missing = shared.filterNot { it in BROWSE_KEYWORD_NAMES }
+        assertTrue(
+            "shared seasonal tags missing from the adult list: $missing",
+            missing.isEmpty()
+        )
+    }
+
     @Test
     fun `kids chips that never resolved were repointed at TMDB's names`() {
         // TMDB's /search/keyword has no exact match for "treehouse", "fire
