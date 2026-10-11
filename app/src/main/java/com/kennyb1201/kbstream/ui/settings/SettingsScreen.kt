@@ -407,10 +407,11 @@ fun SettingsScreen(
     // color path) is then not a choice, it is the only correct picture.
     val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
-    // TEMPORARY: the two arms of the Dolby Vision stall bisect. Both default
-    // off; both go away with the rows below once the field verdict is in.
+    // TEMPORARY: the three arms of the Dolby Vision stall bisect. All default
+    // off; all go away with the rows below once the field verdict is in.
     var dvDiagDropRpu by remember { mutableStateOf(AppPreferences.isDvDiagDropRpu(context)) }
     var dvDiagNoColorInfo by remember { mutableStateOf(AppPreferences.isDvDiagNoColorInfo(context)) }
+    var dvDiagWholeNalSei by remember { mutableStateOf(AppPreferences.isDvDiagWholeNalSei(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
@@ -1710,11 +1711,13 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // ── TEMPORARY Dolby Vision stall bisect ───────────────────
-                // Two arms that exist only so one build can run the full 2x2
-                // matrix on the stalling TV: the relabel path keeps the RPU and
-                // attaches HDR10 color info, and either one can be turned off
-                // in turn. Both default off, which is byte-identical to the
-                // release. Removed once the field result names the cause.
+                // Three arms that exist only so one build can name the cause
+                // on the stalling TV: the relabel path keeps the RPU, attaches
+                // HDR10 color info, and (since the in-place surgery replaced the
+                // whole-NAL drop) shrinks the HDR10+ SEI rather than dropping
+                // it. Each arm changes one of those. All default off, which is
+                // byte-identical to the release. Removed once the field result
+                // names the cause.
                 Text(
                     text = "Diagnostics (temporary)",
                     color = KBTextHi,
@@ -1723,9 +1726,9 @@ fun SettingsScreen(
                 )
                 Text(
                     text = "For bisecting a Dolby Vision stall on a DV-capable box driving a " +
-                        "non-DV TV. Each switch changes one thing the relabel does; both off is " +
-                        "the shipping behavior. These are removed in the next release after the " +
-                        "result is read.",
+                        "non-DV TV. Each switch changes one thing the relabel does; all three " +
+                        "off is the shipping behavior. These are removed in the next release " +
+                        "after the result is read.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(bottom = 8.dp)
@@ -1758,6 +1761,22 @@ fun SettingsScreen(
                     onToggle = {
                         dvDiagNoColorInfo = it
                         AppPreferences.setDvDiagNoColorInfo(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                ToggleRow(
+                    label = "Drop HDR10+ SEI whole (no per-message surgery)",
+                    description = "Arm C, temporary diagnostic. The relabel normally removes " +
+                        "only the HDR10+ messages from an SEI NAL and keeps the rest of the " +
+                        "NAL in place (a surgical shrink). On: the SEI NAL is dropped whole, " +
+                        "as the last picture build did. Use it to test whether the in-place " +
+                        "surgery is what the decoder refuses",
+                    checked = dvDiagWholeNalSei,
+                    onToggle = {
+                        dvDiagWholeNalSei = it
+                        AppPreferences.setDvDiagWholeNalSei(context, it)
                     }
                 )
 

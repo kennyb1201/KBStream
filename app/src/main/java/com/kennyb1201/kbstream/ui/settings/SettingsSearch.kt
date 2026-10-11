@@ -202,7 +202,7 @@ internal object SettingsSearchIndex {
             "Strip HDR10+",
             "hdr10+ hdr plus strip playback picture"
         ),
-        // TEMPORARY: the two Dolby Vision stall-bisect arms live in the same
+        // TEMPORARY: the three Dolby Vision stall-bisect arms live in the same
         // cluster. They are drawn as ToggleRows, so the index has to carry them
         // or they would be visible but unfindable — and they come back out with
         // the rows once the field verdict is in.
@@ -217,6 +217,13 @@ internal object SettingsSearchIndex {
             SettingsPane.PLAYBACK,
             "Diagnostic: skip HDR10 color info",
             "dolby vision diagnostic bisect color info hdr10 stall black screen arm"
+        ),
+        SettingSearchEntry(
+            "playback.diag-whole-nal-sei",
+            SettingsPane.PLAYBACK,
+            "Drop HDR10+ SEI whole (no per-message surgery)",
+            "dolby vision diagnostic bisect hdr10+ sei whole nal surgery shrink " +
+                "stall black screen arm"
         ),
         SettingSearchEntry(
             "playback.auto-select-stream",

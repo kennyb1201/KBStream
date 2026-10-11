@@ -435,6 +435,20 @@ internal object DolbyVisionCompat {
      * behavior off, so one build can separate "the RPU under an hvc1 label" from
      * "the attached color info" as the cause of the 2026-10-11 zero-frame
      * stall. Default false = every existing caller byte-for-byte unchanged.
+     *
+     * [wholeNalSeiDrop] is TEMPORARY diagnostic arm C of the same bisect: an SEI
+     * NAL the HDR10+ detector fires on is dropped WHOLE, and
+     * [stripHdr10PlusMessagesInPlace] is never consulted — which is exactly the
+     * 14:04 picture build's transformation, and the one thing the surgical
+     * in-place rewrite replaced. The RPU, the parameter sets and every other
+     * NAL are unaffected; the arm is relabel-path only. Default false = the
+     * surgical path below runs exactly as it does in the shipping build.
+     *
+     * [onSeiShrunk] is diagnostic like [accounting], and fires at each site that
+     * records [SeiStripAccounting.Action.SHRUNK] so the surgery can be watched
+     * past the first sample. The sizes are the pair [accounting] records for
+     * that NAL: its original size and the size the decoder is then handed.
+     * Default null = the callback is never invoked and nothing is computed.
      */
     fun stripAnnexB(
         buf: ByteArray,
@@ -442,7 +456,9 @@ internal object DolbyVisionCompat {
         stripDv: Boolean,
         stripHdr10Plus: Boolean,
         dropRpuNal: Boolean = false,
-        accounting: SeiStripAccounting? = null
+        wholeNalSeiDrop: Boolean = false,
+        accounting: SeiStripAccounting? = null,
+        onSeiShrunk: ((nalType: Int, oldSize: Int, newSize: Int) -> Unit)? = null
     ): Int {
         if (length < 5) return -1
         var write = 0
@@ -494,6 +510,17 @@ internal object DolbyVisionCompat {
                             nalType, nalEnd - header, SeiStripAccounting.Action.KEPT,
                             legacyDrop = legacyDrop
                         )
+                    } else if (wholeNalSeiDrop) {
+                        // Diagnostic arm C: the 14:04 picture build's answer —
+                        // the whole NAL goes, every other message in it
+                        // included, and the surgery below never runs. This is
+                        // the arm that tells a corrupt surgically-shrunk SEI a
+                        // few access units in from the relabeled stream itself
+                        // (see the bisect spec).
+                        keep = false
+                        accounting?.record(
+                            nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
+                        )
                     } else {
                         // Surgical removal: only the HDR10+ messages go, the SEI
                         // NAL and every other message in it stay (see the field
@@ -518,6 +545,7 @@ internal object DolbyVisionCompat {
                                     nalType, nalEnd - header, SeiStripAccounting.Action.SHRUNK,
                                     newSize = codeLen + 2 + res
                                 )
+                                onSeiShrunk?.invoke(nalType, nalEnd - header, codeLen + 2 + res)
                             }
                         }
                     }
@@ -543,7 +571,11 @@ internal object DolbyVisionCompat {
      * [accounting] is [stripAnnexB]'s first-sample diagnostic, recorded in NAL
      * bytes excluding the length field.
      *
-     * [dropRpuNal] is [stripAnnexB]'s TEMPORARY diagnostic arm A, identically.
+     * [dropRpuNal] is [stripAnnexB]'s TEMPORARY diagnostic arm A, identically,
+     * and [wholeNalSeiDrop] its arm C: the SEI NAL goes whole rather than being
+     * surgically shrunk, in an MP4/fMP4 sample as in Annex-B.
+     *
+     * [onSeiShrunk] is [stripAnnexB]'s SHRUNK callback, identically.
      */
     fun stripLengthDelimited(
         buf: ByteArray,
@@ -552,7 +584,9 @@ internal object DolbyVisionCompat {
         stripDv: Boolean,
         stripHdr10Plus: Boolean,
         dropRpuNal: Boolean = false,
-        accounting: SeiStripAccounting? = null
+        wholeNalSeiDrop: Boolean = false,
+        accounting: SeiStripAccounting? = null,
+        onSeiShrunk: ((nalType: Int, oldSize: Int, newSize: Int) -> Unit)? = null
     ): Int {
         val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
         if (length <= fieldLen) return -1
@@ -597,6 +631,11 @@ internal object DolbyVisionCompat {
                             nalType, nal, SeiStripAccounting.Action.KEPT,
                             legacyDrop = legacyDrop
                         )
+                    } else if (wholeNalSeiDrop) {
+                        // Diagnostic arm C, exactly as in [stripAnnexB]: the
+                        // whole SEI NAL goes and the surgical path is skipped.
+                        keep = false
+                        accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
                     } else {
                         val dest = write + fieldLen + 2
                         if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
@@ -617,6 +656,7 @@ internal object DolbyVisionCompat {
                                     nalType, nal, SeiStripAccounting.Action.SHRUNK,
                                     newSize = 2 + res
                                 )
+                                onSeiShrunk?.invoke(nalType, nal, 2 + res)
                             }
                         }
                     }

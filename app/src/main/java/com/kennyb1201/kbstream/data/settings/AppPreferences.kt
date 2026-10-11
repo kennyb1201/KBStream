@@ -70,11 +70,13 @@ object AppPreferences {
     private const val KEY_AUDIO_OUTPUT = "audio_output_mode"                 // 0=auto, 1=passthrough, 2=decode (see PlayerAudioTuning)
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
-    // TEMPORARY: the two diagnostic arms of the 2026-10-11 DV stall bisect
-    // (RPU NAL vs attached HDR10 color info). Removed once the field verdict is
-    // in - see the settings rows and DolbyVisionCompatExtractorsFactory.
+    // TEMPORARY: the three diagnostic arms of the 2026-10-11 DV stall bisect
+    // (RPU NAL vs attached HDR10 color info vs whole-NAL HDR10+ SEI drop).
+    // Removed once the field verdict is in - see the settings rows and
+    // DolbyVisionCompatExtractorsFactory.
     private const val KEY_DV_DIAG_DROP_RPU = "dv_diag_drop_rpu"             // diagnostic arm A
     private const val KEY_DV_DIAG_NO_COLOR_INFO = "dv_diag_no_color_info"   // diagnostic arm B
+    private const val KEY_DV_DIAG_WHOLE_NAL_SEI = "dv_diag_whole_nal_sei"   // diagnostic arm C
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
     private const val KEY_DV_PASSTHROUGH_FAILED_AT = "dv_passthrough_failed_at" // learned: box's DV decoder failed, 0 = none
@@ -995,7 +997,7 @@ object AppPreferences {
     // ── TEMPORARY Dolby Vision stall bisect (diagnostic only) ───────────
     // Deliberately NOT synced: these describe what one device's decoder is
     // doing right now, and a blob from another TV would silently arm a bisect
-    // nobody is running. Both default off, which is the release behavior.
+    // nobody is running. All default off, which is the release behavior.
 
     /**
      * Arm A: strip the DV RPU NAL (type 62) from the relabel path's samples,
@@ -1017,6 +1019,18 @@ object AppPreferences {
 
     fun setDvDiagNoColorInfo(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_DV_DIAG_NO_COLOR_INFO, enabled).apply()
+    }
+
+    /**
+     * Arm C: drop an SEI NAL the HDR10+ detector fires on WHOLE — the 14:04
+     * picture build's transformation — instead of removing only the matching
+     * messages from it and keeping the rest of the NAL.
+     */
+    fun isDvDiagWholeNalSei(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DV_DIAG_WHOLE_NAL_SEI, false)
+
+    fun setDvDiagWholeNalSei(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DV_DIAG_WHOLE_NAL_SEI, enabled).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────

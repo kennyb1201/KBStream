@@ -54,22 +54,26 @@ class DolbyVisionDiagBisectContractTest {
     }
 
     @Test
-    fun `both arms default off at every layer`() {
+    fun `all three arms default off at every layer`() {
         val factory = source(FACTORY)
         assertTrue(
             "the factory's arms must default off, or every stream's bytes change",
             factory.contains("private val diagDropRpu: Boolean = false,") &&
-                factory.contains("private val diagNoColorInfo: Boolean = false")
+                factory.contains("private val diagNoColorInfo: Boolean = false,") &&
+                factory.contains("private val diagWholeNalSeiDrop: Boolean = false")
         )
+        val compat = source(COMPAT)
         assertTrue(
-            "the strip functions' arm must default off too",
-            source(COMPAT).contains("dropRpuNal: Boolean = false,")
+            "the strip functions' arms must default off too",
+            compat.contains("dropRpuNal: Boolean = false,") &&
+                compat.contains("wholeNalSeiDrop: Boolean = false,")
         )
         val prefs = source(PREFS)
         assertTrue(
             "the stored arms must default off",
             prefs.contains("getBoolean(KEY_DV_DIAG_DROP_RPU, false)") &&
-                prefs.contains("getBoolean(KEY_DV_DIAG_NO_COLOR_INFO, false)")
+                prefs.contains("getBoolean(KEY_DV_DIAG_NO_COLOR_INFO, false)") &&
+                prefs.contains("getBoolean(KEY_DV_DIAG_WHOLE_NAL_SEI, false)")
         )
     }
 
@@ -103,21 +107,77 @@ class DolbyVisionDiagBisectContractTest {
     }
 
     @Test
-    fun `the player reads both arms and names them in the DV settings line`() {
+    fun `arm C reaches both strip calls of the relabel path`() {
+        val factory = source(FACTORY)
+        assertEquals(
+            "each of the relabel path's two strip calls (Annex-B and length-delimited) " +
+                "must carry arm C, or the toggle answers nothing",
+            2,
+            count(factory, "wholeNalSeiDrop = diagWholeNalSeiDrop")
+        )
+        // The arm is a DROP, not a skip: the NAL goes whole and the surgery below
+        // it never runs. One branch per strip function, both inside the HDR10+
+        // detector's branch.
+        val compat = source(COMPAT)
+        assertEquals(
+            "both strip functions need the whole-NAL branch",
+            2,
+            count(compat, "} else if (wholeNalSeiDrop) {")
+        )
+        assertEquals(
+            "that branch has to sit inside the detector's own branch, both times",
+            2,
+            count(compat, "if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType)")
+        )
+    }
+
+    @Test
+    fun `the SHRUNK log reaches both strip calls and is empty by default`() {
+        val factory = source(FACTORY)
+        assertEquals(
+            "the surgery is invisible after sample #1, so both strip calls must report it",
+            2,
+            count(factory, "onSeiShrunk = seiShrinkLog")
+        )
+        assertTrue(
+            "and the throttle has to be able to name the sample it came from",
+            factory.contains("seiShrinkLog.sample()")
+        )
+        val compat = source(COMPAT)
+        assertEquals(
+            "both strip functions take the callback, defaulted off",
+            2,
+            count(
+                compat,
+                "onSeiShrunk: ((nalType: Int, oldSize: Int, newSize: Int) -> Unit)? = null"
+            )
+        )
+        assertEquals(
+            "and both invoke it at the site that records a SHRUNK",
+            2,
+            count(compat, "onSeiShrunk?.invoke(")
+        )
+    }
+
+    @Test
+    fun `the player reads all three arms and names them in the DV settings line`() {
         val native = source(NATIVE)
         assertTrue(
             "the arms have to be read from the settings store",
             native.contains("AppPreferences.isDvDiagDropRpu(this)") &&
-                native.contains("AppPreferences.isDvDiagNoColorInfo(this)")
+                native.contains("AppPreferences.isDvDiagNoColorInfo(this)") &&
+                native.contains("AppPreferences.isDvDiagWholeNalSei(this)")
         )
         assertTrue(
             "and handed to the factory",
             native.contains("diagDropRpu = dvDiagDropRpu,") &&
-                native.contains("diagNoColorInfo = dvDiagNoColorInfo")
+                native.contains("diagNoColorInfo = dvDiagNoColorInfo,") &&
+                native.contains("diagWholeNalSeiDrop = dvDiagWholeNalSei")
         )
         assertTrue(
             "every field capture has to say which arms it ran",
-            native.contains("\"diagDropRpu=\$dvDiagDropRpu diagNoColor=\$dvDiagNoColorInfo\"")
+            native.contains("\"diagDropRpu=\$dvDiagDropRpu diagNoColor=\$dvDiagNoColorInfo \"") &&
+                native.contains("\"diagWholeNalSei=\$dvDiagWholeNalSei\"")
         )
     }
 
@@ -125,15 +185,21 @@ class DolbyVisionDiagBisectContractTest {
     fun `the diagnostic rows are drawn and findable`() {
         val screen = source(SCREEN)
         assertTrue(
-            "both rows must be drawn in the Dolby Vision cluster",
+            "all three rows must be drawn in the Dolby Vision cluster",
             screen.contains("\"Diagnostic: drop RPU NAL (type 62)\"") &&
-                screen.contains("\"Diagnostic: skip HDR10 color info\"")
+                screen.contains("\"Diagnostic: skip HDR10 color info\"") &&
+                screen.contains("\"Drop HDR10+ SEI whole (no per-message surgery)\"")
+        )
+        assertTrue(
+            "arm C's row has to read as a temporary diagnostic like its sisters",
+            screen.contains("Arm C, temporary diagnostic")
         )
         val search = source(SEARCH)
         assertTrue(
             "a drawn toggle row that is not indexed is visible but unfindable",
             search.contains("\"Diagnostic: drop RPU NAL (type 62)\"") &&
-                search.contains("\"Diagnostic: skip HDR10 color info\"")
+                search.contains("\"Diagnostic: skip HDR10 color info\"") &&
+                search.contains("\"Drop HDR10+ SEI whole (no per-message surgery)\"")
         )
     }
 
