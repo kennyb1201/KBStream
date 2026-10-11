@@ -448,8 +448,12 @@ private class VideoCompatTrackOutput(
                 // one landed after it), and Nuvio's "Always Strip DV" plays
                 // this chipset RPU-dropped with a correct codec string. The
                 // relabel drops it too: RPU-dropped + correct codec string is
-                // the combination that has picture. The base layer is standard
-                // HDR10; Mode.STRIP_NALS_ONLY isolates this experiment from
+                // the combination that has picture — and as of the 2026-10-11
+                // capture the rewritten color info also carries the container's
+                // HDR10 static metadata (see [dvHdr10ColorInfoFor]): every other
+                // visible parameter already matched Nuvio's working config, and
+                // hdrStaticInfo was the remaining difference. The base layer is
+                // standard HDR10; Mode.STRIP_NALS_ONLY isolates this experiment from
                 // transformAnnexB, which rewrites the VPS in-sample.
                 // The construction is stepwise: the full relabel (declared codec
                 // on the label + HDR10 color info) first, then a minimal
@@ -463,6 +467,12 @@ private class VideoCompatTrackOutput(
                 // not happen.
                 val relabeled = relabelDvFormat(format, relabelCodec)
                 if (relabeled != null) {
+                    // Reported from the format that was actually built, not from
+                    // the source: the field test reads this to tell whether the
+                    // container even carried HDR10 static metadata.
+                    val hdrStatic =
+                        if (relabeled.format.colorInfo?.hdrStaticInfo != null) "preserved"
+                        else "absent"
                     Log.i(
                         "PLAYER_DV",
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
@@ -470,7 +480,7 @@ private class VideoCompatTrackOutput(
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
                             "stripped, RPU dropped, VPS/SPS untouched " +
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
-                            " codecSrc=$codecSrc"
+                            " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
                     delegate.format(relabeled.format)
                     // Bit-exact relabel plus in-place metadata NAL removal:
@@ -494,6 +504,9 @@ private class VideoCompatTrackOutput(
                 // is the tested working path there, so it is left alone.
                 val relabeled = relabelDvFormat(format, relabelCodec)
                 if (relabeled != null) {
+                    val hdrStatic =
+                        if (relabeled.format.colorInfo?.hdrStaticInfo != null) "preserved"
+                        else "absent"
                     Log.i(
                         "PLAYER_DV",
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV-decoder " +
@@ -501,7 +514,7 @@ private class VideoCompatTrackOutput(
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
                             "stripped, RPU dropped, VPS/SPS untouched " +
                             "(the mutating strip is field-dead here)" +
-                            " codecSrc=$codecSrc"
+                            " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
                     delegate.format(relabeled.format)
                     mode = Mode.STRIP_NALS_ONLY
@@ -975,6 +988,10 @@ private class VideoCompatTrackOutput(
  * the VPS-stall failure this file already guards against. Every rewrite branch
  * attaches it; the minimal relabel fallback knowingly ships without it, because
  * a degraded relabel still beats a native-DV black screen.
+ *
+ * The relabel path does NOT attach this value bare — it goes through
+ * [dvHdr10ColorInfoFor], which layers the container's own [ColorInfo.hdrStaticInfo]
+ * (ST 2086 mastering display colour volume / MaxCLL-MaxFALL) onto it.
  */
 internal val DV_HDR10_COLOR_INFO: ColorInfo = ColorInfo.Builder()
     .setColorTransfer(C.COLOR_TRANSFER_ST2084)
@@ -983,6 +1000,37 @@ internal val DV_HDR10_COLOR_INFO: ColorInfo = ColorInfo.Builder()
     .setLumaBitdepth(10)
     .setChromaBitdepth(10)
     .build()
+
+/**
+ * The relabel's color info: [DV_HDR10_COLOR_INFO] with the source format's
+ * HDR10 static metadata carried over when the container declared it, and the
+ * bare forced value when it did not.
+ *
+ * The transfer / space / range / bitdepth are ours to force — they are the
+ * values proven correct for a track re-advertised as plain HDR10 HEVC. The
+ * static metadata is not: it is the stream's own ST 2086 mastering display
+ * colour volume and content light level, and Nuvio's working config on this
+ * chipset preserves the container's full colorInfo including it. Since the
+ * 2026-10-11 field capture had every other visible parameter (RPU dropped,
+ * SPS-derived hvc1.2.4.H150.B0, HDR10+ SEI stripped) matching Nuvio and still
+ * stalled with zero decoder output, dropping the static metadata was the
+ * remaining difference — a decoder that wants it can accept input and emit no
+ * frame. `Format.buildUpon()` carries the field, but the relabel REPLACES the
+ * whole color info, so it has to be re-attached explicitly here.
+ */
+internal fun dvHdr10ColorInfoFor(format: Format): ColorInfo {
+    val static = format.colorInfo?.hdrStaticInfo
+    if (static == null) return DV_HDR10_COLOR_INFO
+    val base = DV_HDR10_COLOR_INFO
+    return ColorInfo.Builder()
+        .setColorTransfer(base.colorTransfer)
+        .setColorSpace(base.colorSpace)
+        .setColorRange(base.colorRange)
+        .setLumaBitdepth(base.lumaBitdepth)
+        .setChromaBitdepth(base.chromaBitdepth)
+        .setHdrStaticInfo(static)
+        .build()
+}
 
 /** Which relabel attempt produced the format a session will play. */
 internal enum class RelabelAttempt { FULL, MINIMAL }
@@ -1007,8 +1055,10 @@ internal fun relabelDvMinimal(format: Format, rewriteCodec: String): Format {
 /**
  * The full relabel: the same codecs/mime as [relabelDvMinimal], plus the
  * declared DV codec kept on the label (so the UI can still badge the source
- * profile) and [DV_HDR10_COLOR_INFO] attached. Init data / VPS-SPS-PPS are
- * never touched, so every sample stays bit-exact.
+ * profile) and the forced HDR10 color info attached — with the source format's
+ * hdrStaticInfo carried over when the container declared it (see
+ * [dvHdr10ColorInfoFor]). Init data / VPS-SPS-PPS are never touched, so every
+ * sample stays bit-exact.
  *
  * [applyColorInfo] is the color-info step, injectable so a unit test can drive
  * the throwing path this hardening exists for.
@@ -1016,7 +1066,9 @@ internal fun relabelDvMinimal(format: Format, rewriteCodec: String): Format {
 internal fun relabelDvFull(
     format: Format,
     rewriteCodec: String,
-    applyColorInfo: (Format.Builder) -> Format.Builder = { it.setColorInfo(DV_HDR10_COLOR_INFO) }
+    applyColorInfo: (Format.Builder) -> Format.Builder = {
+        it.setColorInfo(dvHdr10ColorInfoFor(format))
+    }
 ): Format {
     var builder = format.buildUpon().setCodecs(rewriteCodec)
     // Keep the declared DV codec on the label for badging.
@@ -1044,7 +1096,9 @@ internal fun relabelDvFull(
 internal fun relabelDvFormat(
     format: Format,
     rewriteCodec: String,
-    applyColorInfo: (Format.Builder) -> Format.Builder = { it.setColorInfo(DV_HDR10_COLOR_INFO) },
+    applyColorInfo: (Format.Builder) -> Format.Builder = {
+        it.setColorInfo(dvHdr10ColorInfoFor(format))
+    },
     minimal: (Format, String) -> Format = { f, codec -> relabelDvMinimal(f, codec) },
     warn: (String, Throwable) -> Unit = { message, cause -> Log.w("PLAYER_DV", message, cause) }
 ): RelabelOutcome? {

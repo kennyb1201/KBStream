@@ -220,6 +220,30 @@ class DolbyVisionRelabelNalsStripContractTest {
     }
 
     @Test
+    fun `both relabel logs report whether the container's hdrStaticInfo survived`() {
+        // The 2026-10-11 field run reads this field off the relabel log:
+        // "preserved" with picture closes the DV stall (the HDR10 static
+        // metadata was the missing piece), "absent" means this encode carries
+        // none and the hypothesis is untestable on it, and "preserved" with no
+        // picture means the difference is not in the format. Both call sites
+        // must report it, and the value is read off the format that was
+        // actually built rather than assumed from the source.
+        assertEquals(
+            "the RELABEL_ONLY branch and the DV-hardware reroute must both report it",
+            2,
+            count(source, " codecSrc=\$codecSrc hdrStaticInfo=\$hdrStatic")
+        )
+        assertTrue(
+            "the outcome must be read off the relabeled format, not assumed",
+            source.contains("relabeled.format.colorInfo?.hdrStaticInfo != null")
+        )
+        assertTrue(
+            "and it must distinguish exactly the two field outcomes",
+            source.contains("else \"absent\"")
+        )
+    }
+
+    @Test
     fun `every relabel failure log names the exception message, not just the class`() {
         assertTrue(
             "the full attempt must be logged as failed before the fallback",
@@ -258,6 +282,17 @@ class DolbyVisionRelabelNalsStripContractTest {
             "and still strips the RPU/EL",
             mutatingStrip.contains("mode = Mode.STRIPPING")
         )
+    }
+
+    private fun count(text: String, needle: String): Int {
+        var from = 0
+        var n = 0
+        while (true) {
+            val at = text.indexOf(needle, from)
+            if (at < 0) return n
+            n++
+            from = at + needle.length
+        }
     }
 
     private companion object {

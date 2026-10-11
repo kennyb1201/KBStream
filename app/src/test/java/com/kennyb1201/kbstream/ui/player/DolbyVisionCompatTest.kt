@@ -398,8 +398,10 @@ class DolbyVisionCompatTest {
     // (type 62) goes while the HDR10+ SEI stays — the config Nuvio's "Always
     // Strip DV" plays on MTK-class hardware. Default false, so every existing
     // caller's bytes are unchanged. The relabel's `applyColorInfo` hook defaults
-    // to the forced DV_HDR10_COLOR_INFO; the identity form is what a caller can
-    // use to ship whatever the container declared. These pin both.
+    // to the forced DV_HDR10_COLOR_INFO, with the container's own hdrStaticInfo
+    // carried onto it when the container declared one (see dvHdr10ColorInfoFor);
+    // the identity form is what a caller can use to ship whatever the container
+    // declared. These pin all three.
 
     @Test
     fun `dropRpuNal drops type 62 and forwards the HDR10+ SEI bit-exact`() {
@@ -532,9 +534,10 @@ class DolbyVisionCompatTest {
     @Test
     fun `the identity color hook ships the container color and the default forces HDR10`() {
         // The relabel's color hook, behaviorally. With the identity step a
-        // container that DID declare a color info reaches the decoder untouched
-        // — not replaced by the forced DV_HDR10_COLOR_INFO (which carries no
-        // hdrStaticInfo).
+        // container that DID declare a color info reaches the decoder untouched.
+        // The default replaces it with the forced HDR10 values — and, since the
+        // container below declares no hdrStaticInfo, with nothing else: the
+        // static-metadata case is its own test, right after this one.
         val containerColor = ColorInfo.Builder()
             .setColorTransfer(C.COLOR_TRANSFER_HLG)
             .setColorSpace(C.COLOR_SPACE_BT2020)
@@ -562,6 +565,61 @@ class DolbyVisionCompatTest {
             "in the default shape the forced HDR10 color info replaces the container's",
             DV_HDR10_COLOR_INFO,
             shipping!!.format.colorInfo
+        )
+    }
+
+    @Test
+    fun `the default relabel carries the container's hdrStaticInfo onto the forced HDR10 color info`() {
+        // The 2026-10-11 field case: RPU dropped, the SPS-derived
+        // hvc1.2.4.H150.B0 and the HDR10+ SEI stripped still stalled with zero
+        // decoder output, and the container's HDR10 static metadata (ST 2086
+        // mastering display colour volume / content light level) was the
+        // remaining difference against Nuvio's working config. The relabel
+        // REPLACES the whole color info, so the static metadata has to be
+        // re-attached explicitly — under the forced transfer/space/range/
+        // bitdepth, never the container's own.
+        val static = byteArrayOf(
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+            0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+            0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18
+        )
+        val containerColor = ColorInfo.Builder()
+            .setColorTransfer(C.COLOR_TRANSFER_HLG)
+            .setColorSpace(C.COLOR_SPACE_BT709)
+            .setColorRange(C.COLOR_RANGE_FULL)
+            .setHdrStaticInfo(static)
+            .build()
+        val container = Format.Builder()
+            .setSampleMimeType(MimeTypes.VIDEO_DOLBY_VISION)
+            .setCodecs("dvhe.08.06")
+            .setColorInfo(containerColor)
+            .build()
+
+        val relabeled = relabelDvFormat(container, "hvc1.2.4.H150.B0")
+        assertNotNull("the default relabel must still build", relabeled)
+        val color = relabeled!!.format.colorInfo
+        assertNotNull("MTK needs the color info to emit a frame", color)
+        assertArrayEquals(
+            "the container's HDR10 static metadata must reach the decoder",
+            static,
+            color!!.hdrStaticInfo
+        )
+        assertEquals(
+            "the transfer stays the forced ST.2084, not the container's HLG",
+            C.COLOR_TRANSFER_ST2084,
+            color.colorTransfer
+        )
+        assertEquals("the space stays the forced BT.2020", C.COLOR_SPACE_BT2020, color.colorSpace)
+        assertEquals("the range stays the forced limited range", C.COLOR_RANGE_LIMITED, color.colorRange)
+        assertEquals("and the bitdepths stay 10-bit", 10, color.lumaBitdepth)
+        assertEquals(10, color.chromaBitdepth)
+
+        // `relabelDvFull` — the other entry point — takes the same step.
+        val full = relabelDvFull(container, "hvc1.2.4.H150.B0")
+        assertArrayEquals(
+            "the full relabel must carry the static metadata too",
+            static,
+            full.colorInfo!!.hdrStaticInfo
         )
     }
 
