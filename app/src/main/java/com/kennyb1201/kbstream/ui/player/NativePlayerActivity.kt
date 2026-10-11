@@ -3091,6 +3091,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // tracks are skipped there (embedded subs still work).
             !currentAudioUrl.isNullOrBlank()
         }
+        // The bulk path attaches every track at once and used to fail
+        // completely silently: one dead host meant no subtitles at all and no
+        // explanation, which reads as "this title has none". Parity with the
+        // MPV engine's per-tap failure toast. Only the ALL-failed case speaks -
+        // a partial success is already visible in the SUBTITLES picker, which
+        // is where the viewer looks anyway, and a toast over a working title
+        // would be noise.
+        addonSubtitleController.onBulkResult = { succeeded, _ ->
+            if (succeeded == 0) {
+                Toast.makeText(this, "Subtitles unavailable", Toast.LENGTH_SHORT).show()
+            }
+        }
         // Fire TV workaround: the native window can be lost during activity
         // startup before ExoPlayer initializes, so the decoder configures its
         // output surface against a dead window and never produces a frame.

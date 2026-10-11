@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import com.kennyb1201.kbstream.data.cache.DiskSweep
 import android.util.AttributeSet
 import android.util.Log
@@ -15,6 +16,7 @@ import com.kennyb1201.kbstream.data.addon.AddonRepository
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
+import com.kennyb1201.kbstream.data.runCatchingCancellable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,10 +26,16 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
+import java.net.ConnectException
+import java.net.UnknownHostException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
 
 /**
  * PlayerView that wires KBStream's addon subtitle support (Stremio
@@ -99,13 +107,31 @@ class AddonSubtitleController(
 
     companion object {
         private const val TAG = "AddonSubs"
+
+        /**
+         * How many addon subtitle downloads run at once. Bounded, not
+         * unbounded: this is a shared connection pool, and a batch of twenty
+         * tracks against one host should not open twenty sockets. Four is
+         * enough that a dead host's refused connections (which fail fast at
+         * the kernel) overlap with the live ones rather than queueing in front
+         * of them, and few enough to leave the decoder its headroom.
+         */
+        private const val BULK_DOWNLOAD_PARALLELISM = 4
     }
 
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    /** Downloaded subtitle files: offer url -> cached file URI. */
-    private val downloadCache = mutableMapOf<String, Uri>()
+    /**
+     * Downloaded subtitle files: offer url -> cached file URI.
+     *
+     * Concurrent: [attachTracks] resolves the batch from up to
+     * [BULK_DOWNLOAD_PARALLELISM] coroutines at once, so a plain map here was
+     * a data race - and a corrupted one would hand a track the wrong file or
+     * lose a completed download, which is a silent wrong-subtitles bug rather
+     * than a crash.
+     */
+    private val downloadCache = ConcurrentHashMap<String, Uri>()
 
     private var fetchJob: Job? = null
     private var offers: List<SubtitleEntry> = emptyList()
@@ -121,6 +147,17 @@ class AddonSubtitleController(
      */
     @Volatile
     private var assOffersByKey: Map<String, String> = emptyMap()
+
+    /**
+     * Optional bulk-status hook: how many offers resolved and how many did not,
+     * called on the main thread once per attach attempt.
+     *
+     * A batch that fails completely has nothing to attach and used to be
+     * entirely silent - only a Log.w - so the viewer saw a title with no
+     * subtitles and no reason why. The caller decides what to say; a controller
+     * with no listener behaves exactly as it did before.
+     */
+    var onBulkResult: ((succeeded: Int, failed: Int) -> Unit)? = null
 
     /**
      * Starts discovery for the video being played and re-attaches tracks to
@@ -234,27 +271,61 @@ class AddonSubtitleController(
         }
 
         scope.launch(Dispatchers.IO) {
+            // The batch downloads CONCURRENTLY, under a bounded cap. Serially,
+            // one dead host held every working track hostage: in the field log
+            // six good tracks could not attach until all fourteen refused
+            // attempts had drained, one blocking OkHttp call at a time.
+            //
+            // supervisorScope plus a per-offer catch: one track's unexpected
+            // throw must not take its siblings down. The catch is load-bearing
+            // rather than belt-and-suspenders - with a plain `async`, a throw
+            // reaches awaitAll() and discards every other track's completed
+            // download. (download() already returns null for its own failures;
+            // runCatchingCancellable keeps a cancellation a cancellation.)
+            val resolved = supervisorScope {
+                val permits = Semaphore(BULK_DOWNLOAD_PARALLELISM)
+                offers.map { offer ->
+                    async {
+                        permits.withPermit {
+                            runCatchingCancellable {
+                                val uri = downloadCache[offer.url] ?: download(offer.url)
+                                uri?.let {
+                                    ResolvedSubtitle(
+                                        url = offer.url,
+                                        language = offer.lang,
+                                        label = addonSubtitleRowLabel(offer),
+                                        uri = it,
+                                        mime = resolveAddonSubtitleMime(offer.url, it)
+                                    )
+                                }
+                            }.getOrNull()
+                        }
+                    }
+                }.awaitAll().filterNotNull()
+            }
+
+            // The ASS bookkeeping below stays SEQUENTIAL and in offer order.
+            // awaitAll preserves that order, so the key map built here is the
+            // one the serial version built and the ambiguity rule still sees
+            // the same first-wins sequence.
             val assKeys = mutableMapOf<String, String>()
             val ambiguousAssKeys = mutableSetOf<String>()
-            val configs = offers.mapNotNull { offer ->
-                val uri = downloadCache[offer.url] ?: download(offer.url) ?: return@mapNotNull null
-                val label = addonSubtitleRowLabel(offer)
-                val mime = resolveAddonSubtitleMime(offer.url, uri)
-                val builder = MediaItem.SubtitleConfiguration.Builder(uri)
-                    .setMimeType(mime)
-                    .setLanguage(offer.lang)
-                    .setLabel(label)
+            val configs = resolved.map { track ->
+                val builder = MediaItem.SubtitleConfiguration.Builder(track.uri)
+                    .setMimeType(track.mime)
+                    .setLanguage(track.language)
+                    .setLabel(track.label)
                     .setSelectionFlags(0)
                 // Tag ASS offers so the player can route the selected track to
                 // the libass overlay instead of rendering them flattened; a
                 // non-ASS offer is left exactly as before.
-                AddonAssTracks.configIdFor(mime, offer.url)?.let { id ->
+                AddonAssTracks.configIdFor(track.mime, track.url)?.let { id ->
                     builder.setId(id)
-                    val key = AddonAssTracks.languageKey(offer.lang, label)
+                    val key = AddonAssTracks.languageKey(track.language, track.label)
                     val existing = assKeys[key]
                     if (existing == null) {
-                        assKeys[key] = offer.url
-                    } else if (existing != offer.url) {
+                        assKeys[key] = track.url
+                    } else if (existing != track.url) {
                         // Two ASS tracks share language+label: the fallback key
                         // cannot name one of them, and guessing would paint the
                         // OTHER track's typesetting over the one selected. Drop
@@ -264,6 +335,14 @@ class AddonSubtitleController(
                     }
                 }
                 builder.build()
+            }
+
+            // Report the batch BEFORE attaching, so the all-failed case - which
+            // has nothing to attach and used to be silent apart from a Log.w -
+            // still reaches the UI. On the main thread: the listener owns
+            // views.
+            withContext(Dispatchers.Main) {
+                onBulkResult?.invoke(configs.size, offers.size - configs.size)
             }
             if (configs.isEmpty()) return@launch
             ambiguousAssKeys.forEach { assKeys.remove(it) }
@@ -312,6 +391,23 @@ class AddonSubtitleController(
 }
 
 /**
+ * One offer whose download resolved, with the label and MIME decided at
+ * download time.
+ *
+ * This exists so the concurrent half of [AddonSubtitleController.attachTracks]
+ * can stay purely about downloading: the ASS key bookkeeping that follows is
+ * sequential and in offer order, and needs the label and mime without
+ * re-reading the offer or re-probing the file.
+ */
+private class ResolvedSubtitle(
+    val url: String,
+    val language: String?,
+    val label: String?,
+    val uri: Uri,
+    val mime: String
+)
+
+/**
  * Engine-agnostic half of addon subtitle support: the offers the installed
  * addons publish for one video id, and download of one offer into the shared
  * subtitle cache.
@@ -327,6 +423,20 @@ internal object AddonSubtitleSource {
     private const val FETCH_TIMEOUT_MS = 12_000L
     private const val MAX_TRACKS = 20
 
+    /**
+     * Hosts whose last connection attempt failed, and when (elapsedRealtime
+     * ms). A refused connection is usually a LAN/DNS problem that is not the
+     * app's to fix, and one dead host answering a batch of offers would
+     * otherwise be re-attempted once per track - twenty doomed connects, each
+     * paying its own timeout, for one unreachable host.
+     *
+     * The memo EXPIRES, deliberately: this object is process-wide, so a host
+     * that recovers (or a box that changes network) must get another chance
+     * rather than staying blackholed for the life of the process.
+     */
+    private val deadHosts = ConcurrentHashMap<String, Long>()
+    private const val DEAD_HOST_TTL_MS = 10 * 60 * 1000L
+
     private val repository = AddonRepository.getInstance()
 
     /**
@@ -339,6 +449,13 @@ internal object AddonSubtitleSource {
         BaseHttpClient.derived {
             connectTimeout(10, TimeUnit.SECONDS)
             readTimeout(20, TimeUnit.SECONDS)
+            // Backstop for the accept-then-stall hole: connect and read
+            // timeouts are both per-read, so a server that accepts the
+            // connection and then dribbles or wedges can hold a call (and now
+            // one of the bulk download permits) indefinitely. A refused
+            // connection already fails fast at TCP level - this bounds the
+            // other case, it does not change the refused one.
+            callTimeout(30, TimeUnit.SECONDS)
         }
     }
 
@@ -397,12 +514,31 @@ internal object AddonSubtitleSource {
             .lowercase()
             .let { if (it in DiskSweep.SUBTITLE_EXTENSIONS) it else "srt" }
 
+        // Held outside the try so the catch can name the host that just
+        // failed. Null only when the URL builder refuses the url, which the
+        // try reports the same way it always has.
+        var host: String? = null
+
         return try {
             DiskSweep.existingSubtitleFile(context.applicationContext, url, extension)?.let {
                 return Uri.fromFile(it)
             }
 
             val request = okhttp3.Request.Builder().url(url).build()
+            val requestHost = request.url.host
+            host = requestHost
+
+            // One refused host used to be re-attempted once per track in a
+            // batch. Skip it instead, until the memo expires.
+            deadHosts[requestHost]?.let { failedAt ->
+                if (SystemClock.elapsedRealtime() - failedAt < DEAD_HOST_TTL_MS) {
+                    Log.d(TAG, "Skipping recently-dead subtitle host: $requestHost")
+                    return null
+                }
+                // Expired: the host gets another chance.
+                deadHosts.remove(requestHost)
+            }
+
             downloadClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return null
                 val body = response.body ?: return null
@@ -413,10 +549,30 @@ internal object AddonSubtitleSource {
                 Uri.fromFile(file)
             }
         } catch (e: Exception) {
+            // Only a failure to ESTABLISH the connection blackholes the host.
+            // An HTTP 500 or a corrupt body is that track's problem, not the
+            // host's, and must not hide its other subtitles.
+            val failedHost = host
+            if (failedHost != null && isConnectionFailure(e)) {
+                deadHosts[failedHost] = SystemClock.elapsedRealtime()
+            }
             Log.w(TAG, "Subtitle download failed: $url", e)
             null
         }
     }
+
+    /**
+     * True when [e] is a failure to establish the connection, as opposed to
+     * one that arrived after it: refused, unresolvable, or a TLS handshake
+     * that never completed. Precisely the failures that say something about
+     * the HOST rather than about the file being fetched.
+     *
+     * `internal` rather than private so the classification itself is unit
+     * tested: the rule that an HTTP 500 must NOT blackhole a host is the whole
+     * reason this is a named predicate instead of an inline `is` chain.
+     */
+    internal fun isConnectionFailure(e: Exception): Boolean =
+        e is ConnectException || e is UnknownHostException || e is SSLException
 }
 
 /**
