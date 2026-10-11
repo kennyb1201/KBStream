@@ -407,9 +407,9 @@ fun SettingsScreen(
     // color path) is then not a choice, it is the only correct picture.
     val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
-    // TEMPORARY: the Dolby Vision stall bisect's arm E. Defaults off and goes
-    // away with the row below once the field verdict is in.
-    var dvDiagVimuConfig by remember { mutableStateOf(AppPreferences.isDvDiagVimuConfig(context)) }
+    // TEMPORARY: the Dolby Vision stall bisect's last arm. Defaults off and
+    // goes away with the row below once the field verdict is in.
+    var dvDiagNuvioConfig by remember { mutableStateOf(AppPreferences.isDvDiagNuvioConfig(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
@@ -1710,12 +1710,11 @@ fun SettingsScreen(
 
                 // ── TEMPORARY Dolby Vision stall bisect ───────────────────
                 // One arm that exists only so one build can name the cause on
-                // the stalling TV: the Vimu config, which drops the DV RPU
-                // while KEEPING the HDR10+ SEI — what Vimu and Kodi play on
-                // this chipset with Dolby Vision disabled, and the one
-                // combination the earlier arms never tested. Default off, which
-                // is byte-identical to the release. Removed once the field
-                // result names the cause.
+                // the stalling TV: the Nuvio config — the relabel drops the DV
+                // RPU while KEEPING the HDR10+ SEI and skips the forced HDR10
+                // color info, which is exactly what Nuvio's "Always Strip DV"
+                // plays on this chipset. Default off, which is byte-identical to
+                // the release. Removed once the field result names the cause.
                 Text(
                     text = "Diagnostics (temporary)",
                     color = KBTextHi,
@@ -1724,26 +1723,26 @@ fun SettingsScreen(
                 )
                 Text(
                     text = "For bisecting a Dolby Vision stall on a DV-capable box driving a " +
-                        "non-DV TV. The switch changes one thing the relabel does; off is the " +
-                        "shipping behavior. It is removed in the next release after the result " +
-                        "is read.",
+                        "non-DV TV. The switch changes what the relabel does to the DV RPU, the " +
+                        "HDR10+ SEI and the color info; off is the shipping behavior. It is " +
+                        "removed in the next release after the result is read.",
                     color = KBTextLo,
                     style = MaterialTheme.typography.labelSmall,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
                 ToggleRow(
-                    label = "Vimu config: drop DV RPU, keep HDR10+",
-                    description = "Arm E, temporary diagnostic. The relabel path normally " +
-                        "KEEPS the Dolby Vision RPU and strips the HDR10+ SEI. On: the two " +
-                        "swap \u2014 the RPU (type 62) is removed from every sample and the " +
-                        "HDR10+ SEI is forwarded, which is how Vimu and Kodi play these " +
-                        "files with Dolby Vision disabled. The parameter sets and the " +
-                        "HDR10 color info are untouched either way",
-                    checked = dvDiagVimuConfig,
+                    label = "Nuvio config (diag)",
+                    description = "Temporary diagnostic (the last arm of the Dolby Vision stall " +
+                        "bisect). On: the relabel drops the DV RPU (type 62), keeps the HDR10+ " +
+                        "SEI, and leaves the file's own color info alone \u2014 the Nuvio " +
+                        "\"Always Strip DV\" config, which plays these files on this chipset. " +
+                        "Off: the relabel keeps the RPU, strips the HDR10+ SEI and attaches the " +
+                        "HDR10 color info, which is the shipping behavior",
+                    checked = dvDiagNuvioConfig,
                     onToggle = {
-                        dvDiagVimuConfig = it
-                        AppPreferences.setDvDiagVimuConfig(context, it)
+                        dvDiagNuvioConfig = it
+                        AppPreferences.setDvDiagNuvioConfig(context, it)
                     }
                 )
 

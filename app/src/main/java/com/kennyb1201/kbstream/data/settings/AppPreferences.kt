@@ -70,10 +70,11 @@ object AppPreferences {
     private const val KEY_AUDIO_OUTPUT = "audio_output_mode"                 // 0=auto, 1=passthrough, 2=decode (see PlayerAudioTuning)
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
-    // TEMPORARY: the 2026-10-11 DV stall bisect's last arm - the Vimu config
-    // (RPU dropped, HDR10+ SEI kept). Removed once the field verdict is in -
-    // see the settings row and DolbyVisionCompatExtractorsFactory.
-    private const val KEY_DV_DIAG_VIMU_CONFIG = "dv_diag_vimu_config"       // diagnostic arm E
+    // TEMPORARY: the 2026-10-11 DV stall bisect's last arm - the Nuvio config
+    // (RPU dropped, HDR10+ SEI kept, the container's own color info left
+    // alone). Removed once the field verdict is in - see the settings row and
+    // DolbyVisionCompatExtractorsFactory.
+    private const val KEY_DV_DIAG_NUVIO_CONFIG = "dv_diag_nuvio_config"    // diagnostic arm
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
     private const val KEY_DV_PASSTHROUGH_FAILED_AT = "dv_passthrough_failed_at" // learned: box's DV decoder failed, 0 = none
@@ -997,17 +998,19 @@ object AppPreferences {
     // nobody is running. Default off, which is the release behavior.
 
     /**
-     * Arm E, the Vimu config: drop the DV RPU NAL (type 62) from the relabel
-     * path's samples while KEEPING the HDR10+ SEI. That is the combination Vimu
-     * and Kodi play on this chipset with Dolby Vision disabled, and the one cell
-     * of the bisect the three earlier arms never tested (they never dropped the
-     * RPU with HDR10+ still present).
+     * The Nuvio config: the relabel path drops the DV RPU NAL (type 62) while
+     * KEEPING the HDR10+ SEI, and leaves the relabeled format's color info as
+     * the container declared it instead of attaching the forced
+     * DV_HDR10_COLOR_INFO. That trio is what Nuvio's "Always Strip DV" does, and
+     * the one combination KBStream has never run: earlier arms either kept the
+     * RPU or dropped it with the HDR10+ SEI still stripped, and every arm
+     * attached the forced color info.
      */
-    fun isDvDiagVimuConfig(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_DV_DIAG_VIMU_CONFIG, false)
+    fun isDvDiagNuvioConfig(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DV_DIAG_NUVIO_CONFIG, false)
 
-    fun setDvDiagVimuConfig(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_DV_DIAG_VIMU_CONFIG, enabled).apply()
+    fun setDvDiagNuvioConfig(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DV_DIAG_NUVIO_CONFIG, enabled).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────

@@ -105,9 +105,9 @@ class DolbyVisionRelabelNalsStripContractTest {
         )
         assertTrue(
             "the handler must drop the HDR10+ SEI by default (the stream is presented " +
-                "as static HDR10) — arm E is the only thing that flips it, with " +
-                "stripHdr10Plus = !diagVimuConfig",
-            handler.contains("stripHdr10Plus = !diagVimuConfig")
+                "as static HDR10) — the Nuvio arm is the only thing that flips it, with " +
+                "stripHdr10Plus = !diagNuvioConfig",
+            handler.contains("stripHdr10Plus = !diagNuvioConfig")
         )
         assertFalse(
             "the handler must be pure removal, never the in-sample transform",

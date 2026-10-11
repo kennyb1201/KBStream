@@ -430,11 +430,11 @@ internal object DolbyVisionCompat {
      * and one surgically shrunk. It is diagnostic only: the bytes emitted are
      * identical with or without it.
      *
-     * [dropRpuNal] is a TEMPORARY diagnostic arm E, the Vimu config: it removes
+     * [dropRpuNal] is a TEMPORARY diagnostic arm, the Nuvio config: it removes
      * the RPU (type 62) while the caller keeps the HDR10+ SEI, which is what
-     * Vimu and Kodi play on this chipset with Dolby Vision disabled. It leaves
-     * the EL (63), the parameter sets and every other NAL alone. Default false =
-     * every existing caller byte-for-byte unchanged.
+     * Nuvio's "Always Strip DV" (and Kodi) play on this chipset with Dolby
+     * Vision disabled. It leaves the EL (63), the parameter sets and every other
+     * NAL alone. Default false = every existing caller byte-for-byte unchanged.
      */
     fun stripAnnexB(
         buf: ByteArray,
@@ -470,8 +470,8 @@ internal object DolbyVisionCompat {
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
-                // Diagnostic arm E, RPU (62) only: the EL (63) is untouched, so
-                // a P7 sample still behaves exactly as it does today.
+                // Diagnostic arm, RPU (62) only: the EL (63) is untouched, so a
+                // P7 sample still behaves exactly as it does today.
                 if (keep && dropRpuNal && nalType == NAL_DV_RPU) {
                     keep = false
                     accounting?.record(
@@ -543,8 +543,8 @@ internal object DolbyVisionCompat {
      * [accounting] is [stripAnnexB]'s first-sample diagnostic, recorded in NAL
      * bytes excluding the length field.
      *
-     * [dropRpuNal] is [stripAnnexB]'s TEMPORARY diagnostic arm E, identically —
-     * the Vimu config, RPU dropped with the HDR10+ SEI kept — in an MP4/fMP4
+     * [dropRpuNal] is [stripAnnexB]'s TEMPORARY diagnostic arm, identically —
+     * the Nuvio config, RPU dropped with the HDR10+ SEI kept — in an MP4/fMP4
      * sample as in Annex-B.
      */
     fun stripLengthDelimited(
@@ -583,7 +583,7 @@ internal object DolbyVisionCompat {
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
-                // Diagnostic arm E, RPU (62) only (see [stripAnnexB]).
+                // Diagnostic arm, RPU (62) only (see [stripAnnexB]).
                 if (keep && dropRpuNal && nalType == NAL_DV_RPU) {
                     keep = false
                     accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)

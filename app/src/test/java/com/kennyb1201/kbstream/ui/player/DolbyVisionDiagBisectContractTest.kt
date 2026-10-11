@@ -11,19 +11,22 @@ import org.junit.Test
  * device pass cannot see it.
  *
  * Arms A (RPU drop), B (no color attach) and C (whole-NAL SEI drop) all stalled
- * and are gone; the one that survives is arm E, the Vimu config — the relabel
- * path drops the DV RPU (type 62) and KEEPS the HDR10+ SEI, which is what Vimu
- * and Kodi play on this chipset with Dolby Vision disabled. It is the single
- * cell of the bisect the three earlier arms never tested, because the relabel
- * path hardcodes `stripHdr10Plus = true`.
+ * and are gone, as is the Vimu arm (RPU dropped, HDR10+ SEI kept, forced color —
+ * verdict'd with a stall on 2026-10-11). What survives is the Nuvio arm, and it
+ * is the relabel path's exact replica of Nuvio's "Always Strip DV", which plays
+ * these files on the same chipset: the RPU (type 62) is dropped, the HDR10+ SEI
+ * is KEPT, and the relabeled format keeps the extractor's container colorInfo
+ * instead of the forced `DV_HDR10_COLOR_INFO`. That last field is the whole
+ * point — every arm before it attached the forced color info, so the "no
+ * hdrStaticInfo" hypothesis has never been tested.
  *
  * A diagnostic toggle has two silent failure modes. It can be wired to nothing,
  * in which case the field trip spends a playback and the verdict is "nothing
  * changed" — indistinguishable from "the suspect is not the cause". Or it can
  * leak into the shipping path, in which case every stream's bytes change. Both
  * are read off the sources here: the arm defaults OFF at every layer, it is
- * actually handed to both strip calls it is meant to change, and the three
- * arms it replaced have left nothing behind.
+ * actually handed to both strip calls AND both color steps it is meant to
+ * change, and the arms it replaced (A/B/C and Vimu) have left nothing behind.
  *
  * These assertions come out with the arm itself; nothing else in this file
  * outlives the bisect.
@@ -62,12 +65,15 @@ class DolbyVisionDiagBisectContractTest {
         }
     }
 
+    /** All whitespace removed, so a pin survives a reindent or a line break. */
+    private fun squash(text: String): String = text.filterNot { it.isWhitespace() }
+
     @Test
-    fun `arm E defaults off at every layer`() {
+    fun `the Nuvio arm defaults off at every layer`() {
         val factory = source(FACTORY)
         assertTrue(
             "the factory's arm must default off, or every stream's bytes change",
-            factory.contains("private val diagVimuConfig: Boolean = false")
+            factory.contains("private val diagNuvioConfig: Boolean = false")
         )
         val compat = source(COMPAT)
         assertTrue(
@@ -75,35 +81,36 @@ class DolbyVisionDiagBisectContractTest {
             count(compat, "dropRpuNal: Boolean = false,") == 2
         )
         assertFalse(
-            "the arm E switch must be the only VP switch left in the strip functions",
+            "the Nuvio switch must be the only VP switch left in the strip functions",
             compat.contains("wholeNalSeiDrop")
         )
         val prefs = source(PREFS)
         assertTrue(
             "the stored arm must default off",
-            prefs.contains("getBoolean(KEY_DV_DIAG_VIMU_CONFIG, false)")
+            prefs.contains("getBoolean(KEY_DV_DIAG_NUVIO_CONFIG, false)")
         )
     }
 
     @Test
-    fun `arm E reaches both strip calls of the relabel path`() {
+    fun `the Nuvio arm reaches both strip calls of the relabel path`() {
         val factory = source(FACTORY)
-        // The arm is the pair itself: HDR10+ SEI kept (stripHdr10Plus = false)
-        // and the RPU dropped. Both strip calls (Annex-B and length-delimited)
-        // must carry both halves, or the toggle answers nothing.
+        // The arm's strip half is the pair itself: HDR10+ SEI kept
+        // (stripHdr10Plus = false) and the RPU dropped. Both strip calls
+        // (Annex-B and length-delimited) must carry both halves, or the toggle
+        // answers nothing.
         assertEquals(
             "both strip calls must keep the HDR10+ SEI under the arm",
             2,
-            count(factory, "stripHdr10Plus = !diagVimuConfig")
+            count(factory, "stripHdr10Plus = !diagNuvioConfig")
         )
         assertEquals(
             "and both must drop the RPU under the arm",
             2,
-            count(factory, "dropRpuNal = diagVimuConfig")
+            count(factory, "dropRpuNal = diagNuvioConfig")
         )
         val compat = source(COMPAT)
         assertEquals(
-            "arm E drops only the RPU in both strip functions; the EL and the " +
+            "the arm drops only the RPU in both strip functions; the EL and the " +
                 "parameter sets stay",
             2,
             count(compat, "if (keep && dropRpuNal && nalType == NAL_DV_RPU)")
@@ -111,37 +118,63 @@ class DolbyVisionDiagBisectContractTest {
     }
 
     @Test
-    fun `the relabel sites attach the HDR10 color info unconditionally again`() {
+    fun `the Nuvio arm's color step keeps the container color and the shipping step forces HDR10`() {
+        // The actual fix under test. Both relabel sites (~RELABEL_ONLY and the
+        // DV-decoder reroute) must make the color step conditional: under the
+        // arm the builder is handed back untouched — the identity, so whatever
+        // the container declared (hdrStaticInfo included, or nothing at all)
+        // ships — and every other configuration still attaches the forced
+        // DV_HDR10_COLOR_INFO, which is the shipping behavior.
         val factory = source(FACTORY)
+        val squashed = squash(factory)
         assertEquals(
-            "both relabel sites (non-DV display and DV-decoder hardware) must attach " +
-                "the color info with no arm-B branch left",
+            "both relabel sites must pass the container's own colorInfo through " +
+                "under the arm",
             2,
+            count(squashed, "applyColorInfo={if(diagNuvioConfig)it")
+        )
+        assertEquals(
+            "and both must attach the forced HDR10 color info with the arm off",
+            2,
+            count(squashed, "elseit.setColorInfo(DV_HDR10_COLOR_INFO)}")
+        )
+        assertEquals(
+            "the unconditional forced attach must be gone from the call sites, not " +
+                "merely defaulted off",
+            0,
             count(factory, "applyColorInfo = { it.setColorInfo(DV_HDR10_COLOR_INFO) }")
         )
-        assertFalse(
-            "arm B's identity branch is deleted, not merely defaulted off",
-            factory.contains("diagNoColorInfo")
+        assertEquals(
+            "both relabel success logs have to name which color source was used",
+            2,
+            count(factory, " diagNuvioConfig=\$diagNuvioConfig colorSrc=")
+        )
+        assertEquals(
+            "and the first-sample strip log has to report the container's colorInfo " +
+                "as parsed, so a container that declared none is visible",
+            1,
+            count(factory, "containerColor=")
         )
     }
 
     @Test
-    fun `the player reads arm E and names it in the DV settings line`() {
+    fun `the player reads the Nuvio arm and names it in the DV settings line`() {
         val native = source(NATIVE)
         assertTrue(
             "the arm has to be read from the settings store",
-            native.contains("AppPreferences.isDvDiagVimuConfig(this)")
+            native.contains("AppPreferences.isDvDiagNuvioConfig(this)")
         )
         assertTrue(
             "and handed to the factory",
-            native.contains("diagVimuConfig = dvDiagVimuConfig")
+            native.contains("diagNuvioConfig = dvDiagNuvioConfig")
         )
         assertTrue(
-            "every field capture has to say whether the arm ran",
-            native.contains("\"diagVimuConfig=\$dvDiagVimuConfig\"")
+            "every field capture has to say whether the arm ran, and which color " +
+                "source the relabel used",
+            native.contains("\"diagNuvioConfig=\$dvDiagNuvioConfig colorSrc=\"")
         )
         assertFalse(
-            "the three removed arms must not survive in the settings line",
+            "the removed arms must not survive in the settings line",
             native.contains("diagDropRpu=") ||
                 native.contains("diagNoColor=") ||
                 native.contains("diagWholeNalSei=")
@@ -153,26 +186,31 @@ class DolbyVisionDiagBisectContractTest {
         val screen = source(SCREEN)
         assertTrue(
             "the row must be drawn in the Dolby Vision cluster",
-            screen.contains("\"Vimu config: drop DV RPU, keep HDR10+\"")
+            screen.contains("\"Nuvio config (diag)\"")
         )
         assertTrue(
-            "and read as a temporary diagnostic like its predecessors",
-            screen.contains("Arm E, temporary diagnostic")
+            "and sit under the screen's temporary-diagnostics header, which is how " +
+                "this screen marks a row that ships for one build",
+            screen.contains("\"Diagnostics (temporary)\"")
         )
         val search = source(SEARCH)
         assertTrue(
             "a drawn toggle row that is not indexed is visible but unfindable",
-            search.contains("\"Vimu config: drop DV RPU, keep HDR10+\"")
+            search.contains("\"Nuvio config (diag)\"")
         )
     }
 
     @Test
-    fun `arms A, B and C left nothing behind`() {
+    fun `the removed arms left nothing behind`() {
         val removedSymbols = listOf(
             "diagDropRpu", "diagNoColorInfo", "diagWholeNalSeiDrop",
             "dvDiagDropRpu", "dvDiagNoColorInfo", "dvDiagWholeNalSei",
             "KEY_DV_DIAG_DROP_RPU", "KEY_DV_DIAG_NO_COLOR_INFO", "KEY_DV_DIAG_WHOLE_NAL_SEI",
-            "SeiShrinkLog", "onSeiShrunk"
+            "SeiShrinkLog", "onSeiShrunk",
+            // The Vimu arm, too: verdict'd (stall 2026-10-11), subsumed by this one.
+            "diagVimuConfig", "dvDiagVimuConfig", "KEY_DV_DIAG_VIMU_CONFIG",
+            "isDvDiagVimuConfig", "setDvDiagVimuConfig",
+            "Vimu config: drop DV RPU, keep HDR10+"
         )
         listOf(PREFS, SCREEN, SEARCH, NATIVE, COMPAT, FACTORY).forEach { path ->
             val text = source(path)
