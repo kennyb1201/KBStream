@@ -479,11 +479,20 @@ internal fun streamNavigationKey(contentType: String, streamId: String): String 
 // picker or player in the back chain, and consume one-shot detail targets before
 // showing that detail screen again. The depth guard also protects restored state
 // from malformed/cyclic return chains.
+//
+// The one player that IS a destination: the copy an actor tap in the player
+// overlay leaves behind (`Screen.Player.fromActorReturn`). It carries the
+// position the tap saved precisely so backing out of the actor page lands back
+// on that playback - paused over its overlay - rather than on the screen under
+// it. Collapsing it like every other player is what dropped the viewer on the
+// detail screen instead. A player that was not launched this way is unchanged.
 internal fun stableBackDestination(screen: Screen, depth: Int = 0): Screen {
     if (depth >= MAX_RETURN_DEPTH + 2) return Screen.Home
     return when (screen) {
         is Screen.Streams -> stableBackDestination(screen.returnTo, depth + 1)
-        is Screen.Player -> stableBackDestination(screen.returnTo, depth + 1)
+        is Screen.Player ->
+            if (screen.fromActorReturn) screen
+            else stableBackDestination(screen.returnTo, depth + 1)
         is Screen.Detail -> screen.copy(pendingTarget = null)
         else -> screen
     }
