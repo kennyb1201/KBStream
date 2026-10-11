@@ -1251,6 +1251,73 @@ internal fun browseEntriesFor(
 }
 
 /**
+ * The names on [activeNames] that [cached] cannot answer for.
+ *
+ * The disk cache is keyed by name and stores the union of both modes, so a
+ * name the active list asks for and the cache slice has no entry for is a chip
+ * that renders dead - or not at all - until something re-resolves it. A small
+ * catalog edit is exactly that, and the >= 90% completeness check in
+ * `SearchViewModel.loadBrowseCatalogCache` cannot see it: eight new names on a
+ * hundred is 92.6%, i.e. "complete", so those chips used to wait out the whole
+ * cache TTL. The resolver asks this for the names to look up on their own,
+ * separately from the full pass.
+ */
+internal fun missingBrowseNames(
+    activeNames: List<String>,
+    cached: List<BrowseEntry>
+): List<String> {
+    val have = cached.mapTo(HashSet()) { it.name }
+    return activeNames.filterNot { it in have }
+}
+
+/**
+ * [cached] and [resolved] as one list, de-duplicated by name and ordered by
+ * [nameOrder].
+ *
+ * Order is the half that is easy to lose. The resolver publishes in name-list
+ * order (its union is built from the lists and `awaitAll` keeps that order), so
+ * a targeted resolve - which only adds the handful of names the cache was
+ * missing - must not simply append: a chip added by a catalog edit would sit at
+ * the bottom of the strip until the next full resolve put it where it belongs.
+ * A name [cached] already holds wins, because that id is the one on screen and
+ * already trusted. Names [nameOrder] does not know keep their relative order at
+ * the end, which is where a name dropped from the catalog belongs: it is
+ * filtered out of the published strip anyway (see [browseEntriesFor]).
+ */
+internal fun mergeBrowseEntries(
+    cached: List<BrowseEntry>,
+    resolved: List<BrowseEntry>,
+    nameOrder: List<String>
+): List<BrowseEntry> {
+    val byName = LinkedHashMap<String, BrowseEntry>()
+    cached.forEach { byName.putIfAbsent(it.name, it) }
+    resolved.forEach { byName.putIfAbsent(it.name, it) }
+    val index = nameOrder.withIndex().associate { (order, name) -> name to order }
+    return byName.values.sortedBy { index[it.name] ?: Int.MAX_VALUE }
+}
+
+/**
+ * The order one category's disk cache is stored in: the standard name list
+ * first, then the kids-only names ([browseNamesFor] is the same split).
+ *
+ * This is the resolver's own union order, and the union is what the cache
+ * stores and what [ResolvedBrowseCatalog.forMode] slices back down - a slice
+ * keeps the union's order - so an append that wrote its new entries on the end
+ * would leave the new chip at the bottom of the strip for as long as the cache
+ * is trusted. One definition for both writers.
+ */
+internal fun browseUnionOrderFor(categoryKey: String): List<String> =
+    when (categoryKey) {
+        "keywords" -> (BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES).distinct()
+        "collections" -> (
+            BROWSE_COLLECTION_NAMES +
+                KIDS_COLLECTION_NAMES +
+                KIDS_COLLECTION_NAMES_EXTRA
+            ).distinct()
+        else -> emptyList()
+    }
+
+/**
  * The resolved keyword and collection ids for BOTH modes, as one value.
  *
  * One name-lookup pass serves both menus and the disk cache is written under a

@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.search
 
 import android.app.Application
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -1673,43 +1674,29 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         if (catalogResolveStarted) return
         catalogResolveStarted = true
 
-        // Resolve the UNION of the standard and kids name lists. The kids
-        // lists stopped being strict subsets when the second wave of
-        // kids-only franchises/keywords landed (SpongeBob, PAW Patrol,
-        // treehouse, spelling bee, ...), so a standard-only resolve would
-        // leave those chips id-less and dead. Union resolve serves both
-        // modes from one pass; the extra lookups are semaphore-capped.
+        // Resolve the UNION of the standard and kids name lists, in the order
+        // [browseUnionOrderFor] defines - the disk cache is written in that
+        // same order, so the targeted resolve can slot a newly added name into
+        // it instead of tacking it on the end. The kids lists stopped being
+        // strict subsets when the second wave of kids-only franchises/keywords
+        // landed (SpongeBob, PAW Patrol, treehouse, spelling bee, ...), so a
+        // standard-only resolve would leave those chips id-less and dead.
+        // Union resolve serves both modes from one pass; the extra lookups are
+        // semaphore-capped.
         val keywordEntries = coroutineScope {
-            (BROWSE_KEYWORD_NAMES + KIDS_KEYWORD_NAMES).distinct().map { name ->
+            browseUnionOrderFor("keywords").map { name ->
                 async {
                     catalogResolveSemaphore.withPermit {
-                        resolveWithRetry(name) {
-                            tmdbRepository.searchKeywords(name)
-                                .firstOrNull { it.name.equals(name, ignoreCase = true) }
-                                ?.let { BrowseEntry(it.id, name) }
-                        }
+                        resolveWithRetry(name) { resolveKeywordName(name) }
                     }
                 }
             }.awaitAll().filterNotNull()
         }
         val collectionEntries = coroutineScope {
-            (
-                BROWSE_COLLECTION_NAMES +
-                    KIDS_COLLECTION_NAMES +
-                    KIDS_COLLECTION_NAMES_EXTRA
-                ).distinct().map { name ->
+            browseUnionOrderFor("collections").map { name ->
                 async {
                     catalogResolveSemaphore.withPermit {
-                        resolveWithRetry(name) {
-                            // Prefer the exact-name hit: TMDB's search ranking
-                            // drifts over time and first-hit can resolve to an
-                            // unrelated collection ("The Lord of the Rings
-                            // Collection" once resolved to a making-of doc).
-                            val results = tmdbRepository.searchCollection(name)
-                            (results.firstOrNull { it.name.equals(name, ignoreCase = true) }
-                                ?: results.firstOrNull())
-                                ?.let { BrowseEntry(it.id, name) }
-                        }
+                        resolveWithRetry(name) { resolveCollectionName(name) }
                     }
                 }
             }.awaitAll().filterNotNull()
@@ -1751,6 +1738,106 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         return runCatching { lookup() }.getOrNull()
     }
 
+    /**
+     * One keyword name -> its TMDB id, exact-name hit only.
+     *
+     * Shared with the targeted pass ([resolveMissingCatalogEntries]) so the two
+     * paths cannot disagree about what a name resolves to: a chip added there
+     * has to be the chip a full resolve would have added.
+     */
+    private suspend fun resolveKeywordName(name: String): BrowseEntry? =
+        tmdbRepository.searchKeywords(name)
+            .firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?.let { BrowseEntry(it.id, name) }
+
+    /**
+     * One collection name -> its TMDB id.
+     *
+     * Prefer the exact-name hit: TMDB's search ranking drifts over time and
+     * first-hit can resolve to an unrelated collection ("The Lord of the Rings
+     * Collection" once resolved to a making-of doc). Shared with
+     * [resolveMissingCatalogEntries].
+     */
+    private suspend fun resolveCollectionName(name: String): BrowseEntry? {
+        val results = tmdbRepository.searchCollection(name)
+        return (results.firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?: results.firstOrNull())
+            ?.let { BrowseEntry(it.id, name) }
+    }
+
+    /**
+     * Resolves ONLY the names the active lists ask for that the cache has no
+     * entry for, then merges them into the published strip and appends them to
+     * the disk cache.
+     *
+     * This is the additive half of the freshness rule. The >= 90% threshold in
+     * [loadBrowseCatalogCache] still decides whether a cache is trusted for a
+     * full TTL - that is there for a resolve interrupted by TMDB throttling -
+     * but a small catalog edit reads as complete (eight new names on a hundred
+     * is 92.6%), so its chips used to stay invisible for the whole seven days.
+     * Nothing here invalidates the cache: the names that already resolved keep
+     * their ids and their order, and the full [resolveCatalogEntries] pass is
+     * untouched for the cold-start / cache-miss case.
+     *
+     * The lookups go through the same [catalogResolveSemaphore],
+     * [resolveWithRetry] and name->id rules as the full pass, and the merge
+     * republishes through [ResolvedBrowseCatalog.forMode] like every other
+     * publish path, so a targeted resolve is a smaller full one rather than a
+     * second behaviour.
+     */
+    private suspend fun resolveMissingCatalogEntries(
+        keywordNames: List<String>,
+        collectionNames: List<String>
+    ) {
+        val keywords = resolveMissingNames(keywordNames) { resolveKeywordName(it) }
+        val collections = resolveMissingNames(collectionNames) { resolveCollectionName(it) }
+        if (keywords.isEmpty() && collections.isEmpty()) return
+
+        // Read the published strip AFTER resolving: a full resolve may have
+        // published its own, fuller lists while these lookups were in flight,
+        // and merging into whatever is current never loses them.
+        val published = rawBrowseCategories
+        val existingKeywords =
+            published.firstOrNull { it.key == "keywords" }?.entries.orEmpty()
+        val existingCollections =
+            published.firstOrNull { it.key == "collections" }?.entries.orEmpty()
+        val merged = ResolvedBrowseCatalog(
+            mergeBrowseEntries(existingKeywords, keywords, activeKeywordNames()),
+            mergeBrowseEntries(existingCollections, collections, activeCollectionNames())
+        )
+        val (keywordsForMode, collectionsForMode) = merged.forMode(isKidsMode)
+
+        publishBrowseCategories(
+            baseBrowseCategories().map { category ->
+                when (category.key) {
+                    "keywords" -> category.copy(entries = keywordsForMode)
+                    "collections" -> category.copy(entries = collectionsForMode)
+                    else -> category
+                }
+            }
+        )
+
+        appendBrowseCatalogCache(keywords, collections)
+    }
+
+    /**
+     * [names] resolved concurrently under [catalogResolveSemaphore], in list
+     * order, dropping whatever TMDB does not know (the full pass does the same:
+     * a chip with no id opens nothing).
+     */
+    private suspend fun resolveMissingNames(
+        names: List<String>,
+        lookup: suspend (String) -> BrowseEntry?
+    ): List<BrowseEntry> = coroutineScope {
+        names.distinct().map { name ->
+            async {
+                catalogResolveSemaphore.withPermit {
+                    resolveWithRetry(name) { lookup(name) }
+                }
+            }
+        }.awaitAll().filterNotNull()
+    }
+
     // ------------------------------------------------------------------
     // Browse-catalog disk cache: resolved keyword/collection ids in
     // search_prefs as JSON. Makes the submenu open instantly on every run
@@ -1764,28 +1851,12 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
         runCatchingCancellable {
             val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val savedAt = prefs.getLong(KEY_BROWSE_CATALOG_SAVED_AT, 0L)
-            val keywordsJson = prefs.getString(KEY_BROWSE_KEYWORD_IDS, null)
-            val collectionsJson = prefs.getString(KEY_BROWSE_COLLECTION_IDS, null)
-            val hasData = !keywordsJson.isNullOrEmpty() || !collectionsJson.isNullOrEmpty()
-            if (!hasData) return
-
-            fun parse(json: String): List<BrowseEntry> {
-                val arr = JSONArray(json)
-                return (0 until arr.length()).mapNotNull { i ->
-                    val pair = arr.optJSONArray(i) ?: return@mapNotNull null
-                    val id = pair.optInt(0, -1)
-                    val name = pair.optString(1)
-                    if (id > 0 && name.isNotBlank()) BrowseEntry(id, name) else null
-                }
-            }
-
-            val keywords = keywordsJson?.let(::parse).orEmpty()
-            val collections = collectionsJson?.let(::parse).orEmpty()
-            if (keywords.isEmpty() && collections.isEmpty()) return
+            val cached = readBrowseCatalogCache(prefs) ?: return
 
             // The cache is keyed by name and holds the union of both modes'
             // lists, so a mode flip just re-slices it onto the active chips,
             // through the same accessor the resolver publishes with.
+            val (keywords, collections) = cached
             val (keywordsForMode, collectionsForMode) =
                 ResolvedBrowseCatalog(keywords, collections).forMode(isKidsMode)
 
@@ -1820,7 +1891,84 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 }
             )
+            // The threshold above cannot see a SMALL catalog edit - eight new
+            // names on a hundred is 92.6%, "complete" - so those chips would
+            // stay invisible for the whole TTL. Resolve exactly the names this
+            // cache has no entry for, in the background, and merge the results
+            // into the strip that is already on screen. A full resolve is
+            // skipped in that case only because the cache is fresh, which is
+            // precisely the situation this covers; when the cache is stale or
+            // absent, resolveCatalogEntries covers the same names anyway.
+            if (!catalogResolveStarted) {
+                val missingKeywords =
+                    missingBrowseNames(activeKeywordNames(), keywordsForMode)
+                val missingCollections =
+                    missingBrowseNames(activeCollectionNames(), collectionsForMode)
+                if (missingKeywords.isNotEmpty() || missingCollections.isNotEmpty()) {
+                    viewModelScope.launch {
+                        resolveMissingCatalogEntries(missingKeywords, missingCollections)
+                    }
+                }
+            }
         }.onFailure { Log.w(TAG, "browse catalog cache read failed", it) }
+    }
+
+    /**
+     * The cached union of both modes' entries as (keywords, collections), or
+     * null when nothing usable is stored. Rows that no longer parse, or whose
+     * id came back <= 0, are dropped rather than cached forever.
+     */
+    private fun readBrowseCatalogCache(
+        prefs: SharedPreferences
+    ): Pair<List<BrowseEntry>, List<BrowseEntry>>? {
+        val keywordsJson = prefs.getString(KEY_BROWSE_KEYWORD_IDS, null)
+        val collectionsJson = prefs.getString(KEY_BROWSE_COLLECTION_IDS, null)
+        if (keywordsJson.isNullOrEmpty() && collectionsJson.isNullOrEmpty()) return null
+
+        fun parse(json: String): List<BrowseEntry> {
+            val arr = JSONArray(json)
+            return (0 until arr.length()).mapNotNull { i ->
+                val pair = arr.optJSONArray(i) ?: return@mapNotNull null
+                val id = pair.optInt(0, -1)
+                val name = pair.optString(1)
+                if (id > 0 && name.isNotBlank()) BrowseEntry(id, name) else null
+            }
+        }
+
+        val keywords = keywordsJson?.let(::parse).orEmpty()
+        val collections = collectionsJson?.let(::parse).orEmpty()
+        if (keywords.isEmpty() && collections.isEmpty()) return null
+        return keywords to collections
+    }
+
+    /**
+     * Adds [keywords] / [collections] to the disk cache without touching what is
+     * already in it.
+     *
+     * Deliberately not [saveBrowseCatalogCache], which writes the whole union: a
+     * targeted resolve only knows the names it just looked up, so writing its
+     * result as the cache would drop the other mode's entries - and everything a
+     * full resolve had already stored - for the next session. The merged list is
+     * put back in [browseUnionOrderFor] order, so a chip added this way lands in
+     * the same place in the strip as one a full resolve added.
+     */
+    private fun appendBrowseCatalogCache(
+        keywords: List<BrowseEntry>,
+        collections: List<BrowseEntry>
+    ) {
+        runCatching {
+            val prefs = app.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val (existingKeywords, existingCollections) =
+                readBrowseCatalogCache(prefs) ?: (emptyList<BrowseEntry>() to emptyList())
+            saveBrowseCatalogCache(
+                keywords = mergeBrowseEntries(
+                    existingKeywords, keywords, browseUnionOrderFor("keywords")
+                ),
+                collections = mergeBrowseEntries(
+                    existingCollections, collections, browseUnionOrderFor("collections")
+                )
+            )
+        }.onFailure { Log.w(TAG, "browse catalog cache append failed", it) }
     }
 
     private fun saveBrowseCatalogCache(
