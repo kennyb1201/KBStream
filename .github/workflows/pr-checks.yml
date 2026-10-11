@@ -67,5 +67,12 @@ jobs:
           # AGP fetches platforms/build-tools itself once licenses are accepted.
           packages: platform-tools
 
+      # The MPV engine AAR is a file dependency, not a Maven one, so a fresh
+      # checkout has no native library and the app cannot compile. Fetch it the
+      # same way build.yml does - verified against the published .sha256 and the
+      # digest pinned in the script.
+      - name: Fetch MPV engine AAR
+        run: bash scripts/fetch_mpv_aar.sh
+
       - name: Lint and unit tests
         run: ./gradlew ktlintCheck testDebugUnitTest --console=plain --no-daemon

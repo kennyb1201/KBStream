@@ -161,6 +161,25 @@ jobs:
           # the build once licenses are accepted (default input).
           packages: platform-tools
 
+      # --- MPV engine native library ----------------------------------------
+      # The backup engine's AAR is not on Maven Central: it is the
+      # Riteshp2001/mpvlibAndroid v1.1.2 release asset, which
+      # scripts/fetch_mpv_aar.sh downloads into app/libs/ and verifies against
+      # both the published .sha256 and a digest pinned in the script. The app
+      # cannot compile without it (MpvPlayerView imports is.xyz.mpv.MPVLib), so
+      # this must run before any Gradle task configures the app.
+      #
+      # Cached on the digest, not the branch: the 76 MB download happens once
+      # per pinned AAR, and the script re-verifies whatever the cache restores.
+      - name: Cache MPV engine AAR
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: app/libs/mpvlib-1.1.2.aar
+          key: mpv-aar-${{ runner.os }}-2bee300d6ab79a0b
+
+      - name: Fetch MPV engine AAR
+        run: bash scripts/fetch_mpv_aar.sh
+
       # --- Optional software video decoding ---------------------------------
       # Builds the video-enabled media3 FFmpeg decoder extension into
       # libs/media3-ffmpeg-decoder.aar, which the app build picks up
@@ -285,7 +304,7 @@ jobs:
           echo "::error::${message} Re-run with allow_missing_ffmpeg if this is an upstream problem, not a regression."
           exit 1
 
-      # --- Optional ASS/SSA subtitle rendering ------------------------------
+      # --- Native ASS/SSA subtitle rendering (warned, not yet gated) ---------
       # Builds libass plus FreeType, HarfBuzz, fontconfig, fribidi and expat for
       # the app's ABIs, links them into the JNI bridge in scripts/libass-jni,
       # and drops the result at app/src/main/jniLibs/<abi>/libassjni.so -- a
@@ -293,16 +312,21 @@ jobs:
       # wiring.
       #
       # continue-on-error, and a WARNING-only check, unlike the FFmpeg block
-      # above. The two are opposites in kind: without the FFmpeg extension
-      # ExoPlayer loses its software video decoder outright, whereas a missing
-      # libass only leaves an .ass SIDECAR on the flattened-cue path it already
-      # uses (AssNative.available is false, the text renderer takes over). It
-      # would be wrong to block every release on a brand-new cross-compile in
-      # exchange for a cosmetic regression -- the string of release-less runs
-      # the FFmpeg comment describes is exactly the failure to avoid here.
+      # above. Not because a miss is acceptable -- it is not: v0.6.24 shipped
+      # without the .so, so `System.loadLibrary("assjni")` threw and embedded
+      # AND addon ASS lost their typesetting on the ExoPlayer engine on every
+      # device -- but because this cross-compile cannot yet be gated on. Every
+      # release run so far has failed it: the build step exits 1 inside its
+      # fontconfig stage without writing anything to the log, and no run has
+      # ever left a libassjni.so for the upload step to find (the `libass-jni`
+      # artifact is absent from every release run). A hard gate today would
+      # block every release, so the failure is reported loudly instead.
       #
-      # Once a run has produced the .so, tightening the check below to the
-      # FFmpeg block's hard failure (exit 1) is the right follow-up.
+      # Fixing the build is the follow-up that lets this become fatal. Note
+      # that scripts/build_libass.sh already gates ITS OWN output fatally --
+      # missing .so, unlinked libass, wrong page alignment -- so a run that
+      # does produce a library cannot leave a bad one behind; what is missing
+      # is a run that produces one at all.
       - name: Cache the libass dependency prefixes
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -352,17 +376,55 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # A warning, not the FFmpeg step's failure: see the block comment above.
-      # It still warns with the byte count in the log, so a build that lost the
-      # overlay is distinguishable from one that shipped it.
+      # A warning, not a failure: see the block comment above. It covers BOTH
+      # ABIs scripts/build_libass.sh produces (its ABIS default is
+      # "arm64-v8a armeabi-v7a"), where the check this replaces only ever
+      # looked at arm64-v8a, so a v7a-only failure is at least reported now.
+      #
+      # The alignment half runs on arm64-v8a ALONE, for the same reason the
+      # packaged-library gate below does: only 64-bit ABIs can request 16 KB
+      # pages, so demanding 0x4000 of armeabi-v7a would fail every run.
+      # scripts/build_libass.sh gates exactly the same way, per ABI.
+      #
+      # The test is the one the repo already uses for this -- a 16 KB aligned
+      # object is one with a LOAD segment whose alignment is 0x4000, the same
+      # condition scripts/build_libass.sh and scripts/build_ffmpeg_video.sh
+      # assert against their own output. This step is the workflow-level
+      # backstop for a build that reports success without leaving the .so where
+      # the APK packaging looks for it.
+      #
+      # `-lW` (wide), not plain `-l`: binutils WRAPS the long LOAD line, which
+      # pushes the alignment column onto a continuation line, so `$NF` on the
+      # LOAD line is a file offset and an aligned library reads as unaligned.
+      # The packaged-library gate below uses -lW for the same reason. (The
+      # build scripts get away with plain -l because they use the NDK's
+      # llvm-readelf, which does not wrap.)
       - name: Check whether libass was produced
         if: always()
         run: |
-          if [[ -s app/src/main/jniLibs/arm64-v8a/libassjni.so ]]; then
-            echo "libassjni.so built: $(wc -c < app/src/main/jniLibs/arm64-v8a/libassjni.so) bytes"
-            exit 0
+          set -euo pipefail
+          for abi in arm64-v8a armeabi-v7a; do
+            so="app/src/main/jniLibs/${abi}/libassjni.so"
+            if [[ -s "$so" ]]; then
+              echo "libassjni.so (${abi}) built: $(wc -c < "$so") bytes"
+            else
+              echo "::warning::libassjni.so (${abi}) was not produced, so this release's APK ships with no native ASS: embedded and addon ASS/SSA tracks fall back to Media3's flattening SSA decoder on the ExoPlayer engine. See the 'Build libass JNI library (optional)' step above, and the block comment above for why this warns instead of failing."
+            fi
+          done
+          # 16 KB page-size gate (Play requirement, Feb 1 2027): a library that
+          # is not aligned crashes on an Android 15+ device that runs with 16 KB
+          # pages. Same awk test as scripts/build_libass.sh's own gate.
+          so="app/src/main/jniLibs/arm64-v8a/libassjni.so"
+          if [[ -s "$so" ]]; then
+            if readelf -lW "$so" | awk '$1 == "LOAD" { if ($NF == "0x4000") found = 1 } END { exit(found ? 0 : 1) }'; then
+              echo "libassjni.so (arm64-v8a) is 16 KB page aligned"
+            else
+              echo "::warning::libassjni.so (arm64-v8a) is not 16 KB page aligned, so it crashes on a 16 KB page-size device (Android 15+) and Play will reject it from Feb 1 2027; rebuild with NDK r28 (see the 'Build libass JNI library' step above)"
+            fi
           fi
-          echo "::warning::libassjni.so was not produced, so this build renders .ass sidecars as flattened cues on the ExoPlayer engine (the MPV engine still typesets them). See the 'Build libass JNI library (optional)' step above."
+          # Warning-only by design so a release can still publish; see the block
+          # comment above.
+          exit 0
 
       - name: Restore release keystore
         run: |

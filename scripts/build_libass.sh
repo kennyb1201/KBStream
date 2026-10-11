@@ -15,11 +15,21 @@
 # scripts/libass-jni/libassjni.cpp bridges libass to Kotlin, and this script
 # produces the shared library that bridge lives in.
 #
-# The app does not require the result. When the .so is absent,
+# The app does not require the result to RUN. When the .so is absent,
 # AssNative.available is false, the ASS sidecar keeps going through
-# SubtitleFileParser (styling flattened, exactly as today), and everything
-# else is unaffected. That is why the CI step that runs this is
-# continue-on-error and its verify step warns by default.
+# SubtitleFileParser (styling flattened), and everything else is unaffected.
+# That is NOT acceptable for a release -- v0.6.24 shipped without the .so, so
+# `System.loadLibrary("assjni")` threw and ASS typesetting was silently lost on
+# the ExoPlayer engine on every device -- but the CI step that runs this cannot
+# gate on it yet: every run so far has failed this cross-compile, exiting 1
+# inside its fontconfig stage without writing a single line to the log, and no
+# run has ever left a libassjni.so behind. The workflow therefore reports the
+# miss as a warning instead of blocking every release; see the libass block in
+# .github/workflows/build.yml.
+#
+# This script's own gates are fatal regardless: a run that does produce the .so
+# cannot leave a library that is missing, unlinked from libass, or 4 KB aligned
+# behind (see the verify section at the end).
 #
 # Requirements
 # ------------
