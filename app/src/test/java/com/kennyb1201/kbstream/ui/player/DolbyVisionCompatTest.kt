@@ -359,11 +359,12 @@ class DolbyVisionCompatTest {
     }
 
     /**
-     * The relabel-only path calls `stripAnnexB(stripDv = false, stripHdr10Plus =
-     * true)`: only the HDR10+ SEI goes and the DV RPU is KEPT, because the
-     * decoder configured from the untouched DV VPS stalls waiting for RPUs that
-     * never arrive. Pinning keep-RPU here is what keeps a future edit from
-     * routing this path through the full strip.
+     * The keep-RPU shape of the strip — `stripAnnexB(stripDv = false,
+     * stripHdr10Plus = true)`: only the HDR10+ SEI goes and the DV RPU rides
+     * through. The relabel no longer calls it this way (it drops the RPU too,
+     * see DolbyVisionRelabelNalsStripContractTest), but the shape is still what
+     * the `dropRpuNal` arms and any caller that wants the SEI gone while the
+     * RPU stays build on, so it stays pinned at the function level.
      */
     @Test
     fun `stripAnnexB with the RPU kept drops only the HDR10 plus SEI`() {

@@ -8,12 +8,13 @@ import org.junit.Test
 
 /**
  * The relabel-only experiment (DV-decoder box, non-DV display, Auto) must strip
- * the HDR10+ SEI in place while NEVER rewriting the VPS/SPS/PPS — neither the
- * init data nor in-sample — and while KEEPING the DV RPU. That isolation is the
+ * the DV RPU/EL and the HDR10+ SEI in place while NEVER rewriting the
+ * VPS/SPS/PPS — neither the init data nor in-sample. That isolation is the
  * experiment's load-bearing property: `transformAnnexB` rewrites the VPS
- * in-sample and would void the result, and dropping the RPU from a DV-flagged
- * track is what stalled the decoder (keep-RPU/strip-HDR10+ is the surviving
- * combination).
+ * in-sample and would void the result. Dropping the RPU as well as the SEI is
+ * what Nuvio's "Always Strip DV" plays this chipset with, and the earlier arm
+ * that kept the RPU only ever ran with the wrong codec string — see the source
+ * comment on `Mode.STRIP_NALS_ONLY`.
  *
  * The branch lives inside a private `TrackOutput`, so this reads the source and
  * pins the wiring — the same pattern the other source-contract tests use.
@@ -96,17 +97,20 @@ class DolbyVisionRelabelNalsStripContractTest {
         val end = source.indexOf("val stats = DolbyVisionCompat.StripStats()", start)
         assertTrue("the STRIP_NALS_ONLY handler end not found", end > start)
         val handler = source.substring(start, end)
-        assertTrue(
-            "the handler must KEEP the DV RPU so the decoder does not stall",
+        assertFalse(
+            "the handler must not keep the DV RPU: RPU-dropped is the combination " +
+                "that has picture",
             handler.contains("stripDv = false")
         )
-        assertFalse(
-            "the handler must not drop the DV metadata",
-            handler.contains("stripDv = true")
+        // Both framing branches, not whichever one a grep happened to hit first.
+        assertEquals(
+            "BOTH the Annex-B and the length-delimited call must drop the RPU/EL",
+            2,
+            Regex("stripDv = true,").findAll(handler).count()
         )
         assertTrue(
             "the handler must drop the HDR10+ SEI (the stream is presented as static " +
-                "HDR10), leaving the RPU/EL in place",
+                "HDR10), dropping the RPU/EL",
             handler.contains("stripHdr10Plus = true")
         )
         assertFalse(
@@ -170,7 +174,7 @@ class DolbyVisionRelabelNalsStripContractTest {
             relabelCall.containsMatchIn(reroute)
         )
         assertTrue(
-            "and engage Mode.STRIP_NALS_ONLY (stripDv=false, stripHdr10Plus=true)",
+            "and engage Mode.STRIP_NALS_ONLY (stripDv=true, stripHdr10Plus=true)",
             reroute.contains("mode = Mode.STRIP_NALS_ONLY")
         )
         assertTrue(

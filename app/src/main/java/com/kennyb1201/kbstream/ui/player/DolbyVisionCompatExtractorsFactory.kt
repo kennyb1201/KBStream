@@ -94,9 +94,9 @@ internal enum class Hdr10BaseHandling { PASSTHROUGH, RELABEL_ONLY, STRIP }
  *  - [Hdr10BaseHandling.RELABEL_ONLY]: a DV-capable box on a NON-DV display in
  *    Auto. The platform pipeline black-screens the sink, and rewriting the
  *    VPS/SPS is what stalls MTK-class decoders, so the base layer is
- *    re-advertised as plain HEVC and only the HDR10+ SEI is removed in place —
- *    the DV RPU/EL is kept (dropping it stalled the decoder) and the parameter
- *    sets are never touched (see `Mode.STRIP_NALS_ONLY`).
+ *    re-advertised as plain HEVC and the DV RPU/EL and the HDR10+ SEI are
+ *    removed in place — the parameter sets are never touched (see
+ *    `Mode.STRIP_NALS_ONLY`).
  *  - [Hdr10BaseHandling.STRIP]: no DV decoder on the box, or the explicit
  *    "Strip All" override — strip the RPU/EL/HDR10+ NALs to HDR10 as before.
  */
@@ -434,14 +434,21 @@ private class VideoCompatTrackOutput(
             }
             if (handling == Hdr10BaseHandling.RELABEL_ONLY) {
                 // DV-decoder box, non-DV display (Auto): re-advertise the HDR10
-                // base layer as plain HEVC and strip only the HDR10+ SEI in
-                // place — the DV RPU/EL is kept — never rewrite the
-                // VPS/SPS/PPS, neither the init data nor in-sample. Mutating the
-                // parameter sets is what stalls MTK-class decoders (field: Strip
-                // All = configure OK, zero frames); leaving the in-band DV RPU /
-                // HDR10+ SEI in the stream is what makes the decoder re-emit its
-                // output format on every frame and the compositor drop the
-                // frames (black screen with audio). The base layer is standard
+                // base layer as plain HEVC and strip the DV RPU/EL and the
+                // HDR10+ SEI in place — never rewrite the VPS/SPS/PPS, neither
+                // the init data nor in-sample. Mutating the parameter sets is
+                // what stalls MTK-class decoders (field: Strip All = configure
+                // OK, zero frames); leaving the in-band DV RPU / HDR10+ SEI in
+                // the stream is what makes the decoder re-emit its output
+                // format on every frame and the compositor drop the frames
+                // (black screen with audio). The RPU used to be KEPT here on
+                // the theory that dropping it left a DV-flagged track with no
+                // DV metadata and the decoder stalled — but that arm was only
+                // ever field-run with the WRONG codec string (the SPS-derived
+                // one landed after it), and Nuvio's "Always Strip DV" plays
+                // this chipset RPU-dropped with a correct codec string. The
+                // relabel drops it too: RPU-dropped + correct codec string is
+                // the combination that has picture. The base layer is standard
                 // HDR10; Mode.STRIP_NALS_ONLY isolates this experiment from
                 // transformAnnexB, which rewrites the VPS in-sample.
                 // The construction is stepwise: the full relabel (declared codec
@@ -461,7 +468,7 @@ private class VideoCompatTrackOutput(
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
                             "display: re-advertising as hvc1 $relabelCodec " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
-                            "stripped, RPU kept, VPS/SPS untouched " +
+                            "stripped, RPU dropped, VPS/SPS untouched " +
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
                             " codecSrc=$codecSrc"
                     )
@@ -479,7 +486,7 @@ private class VideoCompatTrackOutput(
                 // DV-decoder hardware: the mutating strip (VPS rewrite + RPU
                 // removal) is field-dead here — zero-frame stall, proven twice.
                 // P4/P8 take the working path instead: relabel to hvc1/HDR10,
-                // strip HDR10+ SEI only, keep the RPU, leave VPS/SPS/PPS
+                // strip the HDR10+ SEI and the RPU/EL, leave VPS/SPS/PPS
                 // untouched. Same relabel the Auto non-DV-display branch above
                 // uses; this is where "Strip All" — and the 0x80001000 rescue,
                 // which forces Strip All for the session — lands on such a box.
@@ -492,7 +499,7 @@ private class VideoCompatTrackOutput(
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV-decoder " +
                             "hardware: re-advertising as hvc1 $relabelCodec " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
-                            "stripped, RPU kept, VPS/SPS untouched " +
+                            "stripped, RPU dropped, VPS/SPS untouched " +
                             "(the mutating strip is field-dead here)" +
                             " codecSrc=$codecSrc"
                     )
@@ -804,25 +811,26 @@ private class VideoCompatTrackOutput(
             val accounting =
                 if (firstSample) DolbyVisionCompat.SeiStripAccounting() else null
             // Pure removal — stripAnnexB/stripLengthDelimited never rewrite
-            // parameter sets. By default the RPU/EL is KEPT (stripDv = false)
-            // and only the HDR10+ SEI goes: dropping the RPU alone left a
-            // DV-flagged track with no DV metadata and the decoder stalled, and
-            // the theory was that the competing dynamic-metadata set is what
-            // black-screened an (intolerant) non-DV display. The `dropRpuNal`
-            // parameter can invert that pair from a caller (the Strip All
-            // button's future Nuvio-config arm); the relabel passes neither it
-            // nor `stripDv`, so the RPU/EL stays and only the HDR10+ SEI goes.
+            // parameter sets. The RPU/EL (stripDv) and the HDR10+ SEI
+            // (stripHdr10Plus) are BOTH dropped, which is the combination the
+            // field has: the old keep-the-RPU theory here — "a DV-flagged track
+            // with no DV metadata stalls the decoder" — was only ever run
+            // against the wrong codec string (arm A predates the SPS-derived
+            // one), while Nuvio's Always Strip DV plays this chipset
+            // RPU-dropped with a correct codec string. The `dropRpuNal` arm
+            // (RPU alone, HDR10+ SEI kept) is a different caller's config and
+            // is not passed here.
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
-                        pendingBuf, sampleEnd, stripDv = false,
+                        pendingBuf, sampleEnd, stripDv = true, // drop RPU/EL, like Nuvio
                         stripHdr10Plus = true,
                         accounting = accounting
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
-                        stripDv = false,
+                        stripDv = true, // drop RPU/EL, like Nuvio
                         stripHdr10Plus = true,
                         accounting = accounting
                     )
