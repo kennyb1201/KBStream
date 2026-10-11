@@ -436,7 +436,16 @@ object MdbListClient {
     // history and the app re-read it on every detail/home load, so a shorter
     // TTL spends the free key's 1,000 requests/day on re-fetching data that
     // has not changed. A mark/unmark still invalidates it outright.
-    private const val SNAPSHOT_TTL_MS = 20 * 60 * 1000L
+    //
+    // Was 20 minutes. On 2026-10-11 the free key hit 1,002 of its 1,000/day
+    // and 429'd with "Daily API limit" while this app's own counter read 762:
+    // the budget interceptor can only see THIS process's calls, and the same
+    // key is shared with other clients (scripts, other boxes) whose requests
+    // are invisible here. The app cannot cap the key, so it is the one that
+    // has to poll less. An hour of staleness is the cost, and it is the same
+    // shape the 6-hour disk TTL already accepts on cold start: watched badges
+    // and the caught-up rail can lag reality by up to [SNAPSHOT_TTL_MS].
+    private const val SNAPSHOT_TTL_MS = 60 * 60 * 1000L
     @Volatile private var cachedSnapshot: MdbListWatchedSnapshot? = null
 
     /**
@@ -448,8 +457,15 @@ object MdbListClient {
     @Volatile private var snapshotGeneration = 0
     @Volatile private var cachedSnapshotAt = 0L
 
-    /** Cached GET /sync/playback — asked for on every detail-screen open. */
-    private const val PLAYBACK_TTL_MS = 5 * 60 * 1000L
+    /**
+     * Cached GET /sync/playback — asked for on every detail-screen open.
+     *
+     * Was 5 minutes, stretched to 15 for the same volume reason as
+     * [SNAPSHOT_TTL_MS]: this read backs the paused-session resume points, so
+     * a pause made on another device can now take a quarter of an hour to
+     * appear here. That buys up to 8 fewer fetches per hour of app-open time.
+     */
+    private const val PLAYBACK_TTL_MS = 15 * 60 * 1000L
     @Volatile private var cachedPlayback: List<MdbListPlaybackItem>? = null
     @Volatile private var cachedPlaybackAt = 0L
 
@@ -458,7 +474,7 @@ object MdbListClient {
      * [cachedSnapshotKey] closes for the watched snapshot, but here for the
      * paused sessions that become Continue Watching cards. This object is
      * process-wide while the key is PROFILE-scoped (scoped prefs), so without
-     * the stamp a profile switch inside the 5-minute TTL served the incoming
+     * the stamp a profile switch inside the 15-minute TTL served the incoming
      * profile the profile it just left's /sync/playback list: its kids'
      * paused episodes appeared on the other profile's Continue Watching rail
      * until the process restarted or the TTL happened to expire.
