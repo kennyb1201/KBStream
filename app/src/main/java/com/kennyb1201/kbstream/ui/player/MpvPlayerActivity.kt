@@ -1082,6 +1082,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         view.setVolumeBoostDb(effectiveAudioVolumeBoost())
 
         fun loadStream() {
+            startFrameRateProbe()
             view.load(
                 MpvPlayerView.LoadRequest(
                     url = currentUrl,
@@ -1134,6 +1135,40 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             }
         } else {
             probeThenLoad { loadStream() }
+        }
+    }
+
+    /**
+     * Starts the panel-matching chain with a probe of the stream's head, once
+     * per session, just before the file loads.
+     *
+     * mpv reports `videoFrameRate` only once it has decoded something, and an
+     * addon stream frequently carries no rate at all — so the matcher would
+     * never be told and the panel would never switch. The probe reads the
+     * declared rate off the file's own header instead, and this creates the
+     * matcher up front so its original mode is captured before any switch. The
+     * `onVideoFrameRateChanged` handler stays as the confirmation/fallback, and
+     * the matcher dedupes repeat rates.
+     *
+     * Non-blocking on purpose: the file is already loading, and the probe lands
+     * either under the loading overlay or mid-opening. A probe that says nothing
+     * (or is too slow) leaves every path exactly as it was.
+     */
+    private fun startFrameRateProbe() {
+        if (!AppPreferences.getMatchFrameRate(this@MpvPlayerActivity)) return
+        if (frameRateMatcher == null) {
+            frameRateMatcher = FrameRateMatcher(
+                this@MpvPlayerActivity,
+                videoSurface = { surface?.holder?.surface }
+            )
+        }
+        if (!FrameRateProbe.isProbeable(currentUrl)) return
+        val matcher = frameRateMatcher ?: return
+        val probeUrl = currentUrl
+        val probeHeaders = streamHeaders
+        lifecycleScope.launch {
+            FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)
+                ?.let { fps -> matcher.onContentFrameRate(fps, FrameRateSource.PROBE) }
         }
     }
 

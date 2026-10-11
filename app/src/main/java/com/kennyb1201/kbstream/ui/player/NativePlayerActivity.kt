@@ -5550,6 +5550,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     this@NativePlayerActivity,
                     videoSurface = { videoOutputSurface() }
                 )
+                // The player's own onTracksChanged report is the confirmation;
+                // but an addon stream often carries no fps at all, so race a
+                // probe of the stream's head alongside player prep and feed the
+                // matcher the rate it would otherwise never be told. Launched
+                // once per activity, with the creation above, and deliberately
+                // non-blocking: playback never waits for it. Probe first → the
+                // switch happens under the loading spinner; player first → that
+                // wins (the matcher dedupes repeat rates); probe late → its
+                // result still applies. Live channels are never probed: a live
+                // playlist is 60 fps anyway and its bytes never end.
+                val matcher = frameRateMatcher
+                if (matcher != null && !isLiveChannel && FrameRateProbe.isProbeable(currentUrl)) {
+                    val probeUrl = currentUrl
+                    val probeHeaders = streamHeaders
+                    lifecycleScope.launch {
+                        FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)
+                            ?.let { fps -> matcher.onContentFrameRate(fps, FrameRateSource.PROBE) }
+                    }
+                }
             }
             player.addListener(createPlayerListener())
             player.addAnalyticsListener(createAnalyticsListener())

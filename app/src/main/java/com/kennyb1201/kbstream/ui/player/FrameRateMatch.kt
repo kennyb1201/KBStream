@@ -47,6 +47,15 @@ import kotlinx.coroutines.flow.asStateFlow
 internal data class DisplayModeInfo(val id: Int, val refreshRate: Double)
 
 /**
+ * Which half of the player supplied a content rate: the player's own track
+ * report ([PLAYER]), or [FrameRateProbe] reading the stream's head before
+ * playback ([PROBE]). Only the diagnostics row cares, but it is the whole
+ * difference between "the player never knew the rate" and "the probe could not
+ * read it", so it is stated rather than inferred.
+ */
+internal enum class FrameRateSource { PLAYER, PROBE }
+
+/**
  * What to hand `Surface.setFrameRate`.
  *
  * [changeFrameRateStrategy] is the non-seamless opt-in — the switch that blanks
@@ -93,6 +102,39 @@ internal object FrameRateMatch {
      */
     private const val TOLERANCE = 0.005
 
+    /**
+     * How far a mode may sit from an exact double or a 2.5x pulldown and still
+     * be taken as that fallback.
+     *
+     * Looser than [TOLERANCE] because these are not whole multiples of the
+     * content: a 60 Hz mode against 23.976 fps is 2.5x to within 0.1%, which is
+     * the pulldown every TV does, and a 50 Hz mode against 23.976 is 4.3% off
+     * its nearest ratio and rejected here on purpose. 2% takes the pulldown and
+     * leaves the near-miss.
+     */
+    private const val FALLBACK_TOLERANCE = 0.02
+
+    /**
+     * The last-resort cadence search: how far the closest mode may be from the
+     * nearest ratio before the panel is left alone. Beyond this every mode
+     * judders as much as the one the panel is already in, and a blank-screen
+     * switch buys nothing.
+     */
+    private const val CATCH_ALL_MAX_ERROR = 0.06
+
+    /**
+     * Added to a PAL mode's cadence error when the content is film/cinema, so
+     * that NTSC film only lands on 25/50 Hz when nothing else is offered — film
+     * does not belong on PAL rates.
+     */
+    private const val PAL_PENALTY = 0.03
+
+    /** The ratios a panel can drive from the content rate, in useful order. */
+    private val PULLDOWN_RATIOS = doubleArrayOf(1.0, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0)
+
+    /** Rates whose content is film/cinema, which the PAL penalty protects. */
+    private val CINEMA_RATES = doubleArrayOf(23.976, 24.0, 29.97, 30.0)
+
     /** How many panel modes the diagnostic line names before it starts counting. */
     private const val MAX_LISTED_MODES = 8
 
@@ -110,13 +152,25 @@ internal object FrameRateMatch {
     /**
      * The panel mode to switch to, or null when the panel must be left alone.
      *
-     * A mode qualifies when its rate is an exact multiple of the content rate
-     * within [TOLERANCE] — 50 Hz for 25 fps content, 60 Hz for 29.97 — and the
-     * smallest such multiple wins, because that is the one with the fewest
-     * repeated frames. Ties break on the smaller rate difference, then on the
-     * lower mode id so the answer does not depend on the order the box reports
-     * its modes in. Null also covers "already there": [currentModeId] matching
-     * the winner means there is nothing to do.
+     * A ladder, each step tried only when the one before it found nothing:
+     *
+     *  1. An exact multiple within [TOLERANCE] — 50 Hz for 25 fps content, 60 Hz
+     *     for 29.97 — where the smallest such multiple wins, since it repeats
+     *     the fewest frames. This is the behaviour that always existed.
+     *  2. A mode within [FALLBACK_TOLERANCE] of exactly double the content.
+     *  3. A mode within [FALLBACK_TOLERANCE] of a 2.5x pulldown — how a 60 Hz
+     *     panel shows 23.976 film, and how that panel already runs it.
+     *  4. The closest mode by cadence error over [PULLDOWN_RATIOS], with the PAL
+     *     penalty keeping cinema content off 25/50 Hz when alternatives exist.
+     *
+     * The important property is what the fallbacks do NOT do: each step's winner
+     * is compared against [currentModeId], and when the panel is already in it
+     * the answer is null — no request, no blank screen. Film on a single-60 Hz
+     * panel still resolves to 60 Hz itself, which is "already there", so the
+     * no-op the old code guaranteed is preserved; the fallback only ever
+     * switches where a genuinely closer mode exists. Ties break on the smaller
+     * rate difference, then the lower mode id, so the answer does not depend on
+     * the order the box reports its modes in.
      */
     fun chooseMode(
         contentFps: Double,
@@ -124,13 +178,27 @@ internal object FrameRateMatch {
         currentModeId: Int
     ): DisplayModeInfo? {
         val content = normalise(contentFps) ?: return null
+        val usable = modes.filter { it.refreshRate.isFinite() && it.refreshRate > 0.0 }
 
+        exactMultipleMode(content, usable)?.let { return it.takeIf { m -> m.id != currentModeId } }
+        ratioMode(content, usable, ratio = 2.0)?.let { return it.takeIf { m -> m.id != currentModeId } }
+        ratioMode(content, usable, ratio = 2.5)?.let { return it.takeIf { m -> m.id != currentModeId } }
+        return cadenceMode(content, usable)?.takeIf { it.id != currentModeId }
+    }
+
+    /**
+     * Step 1: the closest mode that is an exact integer multiple of the content
+     * within [TOLERANCE], small multiple first. Null when the panel offers none.
+     */
+    private fun exactMultipleMode(
+        content: Double,
+        modes: List<DisplayModeInfo>
+    ): DisplayModeInfo? {
         var best: DisplayModeInfo? = null
         var bestMultiple = 0
         var bestDiff = 0.0
 
         modes.forEach { mode ->
-            if (!mode.refreshRate.isFinite() || mode.refreshRate <= 0.0) return@forEach
             // An integer multiple, never a fraction: a mode SLOWER than the
             // content cannot show every frame and is not a match.
             val multiple = round(mode.refreshRate / content).toInt().coerceAtLeast(1)
@@ -155,7 +223,80 @@ internal object FrameRateMatch {
             }
         }
 
-        return best?.takeIf { it.id != currentModeId }
+        return best
+    }
+
+    /**
+     * Step 2/3: the mode closest to [ratio] times the content, within
+     * [FALLBACK_TOLERANCE]. Null when no mode is near that ratio.
+     */
+    private fun ratioMode(
+        content: Double,
+        modes: List<DisplayModeInfo>,
+        ratio: Double
+    ): DisplayModeInfo? {
+        val ideal = content * ratio
+        var best: DisplayModeInfo? = null
+        var bestDiff = 0.0
+        modes.forEach { mode ->
+            val diff = abs(mode.refreshRate - ideal)
+            if (diff / ideal > FALLBACK_TOLERANCE) return@forEach
+            val currentBest = best
+            val better = when {
+                currentBest == null -> true
+                diff < bestDiff - 1e-9 -> true
+                diff <= bestDiff + 1e-9 && mode.id < currentBest.id -> true
+                else -> false
+            }
+            if (better) {
+                best = mode
+                bestDiff = diff
+            }
+        }
+        return best
+    }
+
+    /**
+     * Step 4: the mode with the smallest cadence error against the nearest
+     * [PULLDOWN_RATIOS] target, capped at [CATCH_ALL_MAX_ERROR]. Modes slower
+     * than the content are skipped — they cannot show every frame — and cinema
+     * content pays [PAL_PENALTY] against a 25/50 Hz mode so film only lands
+     * there when nothing else can drive it.
+     */
+    private fun cadenceMode(
+        content: Double,
+        modes: List<DisplayModeInfo>
+    ): DisplayModeInfo? {
+        val cinema = CINEMA_RATES.any { abs(it - content) / it <= 0.01 }
+        var best: DisplayModeInfo? = null
+        var bestError = Double.MAX_VALUE
+        modes.forEach { mode ->
+            if (mode.refreshRate < content - 1e-9) return@forEach
+            var error = Double.MAX_VALUE
+            PULLDOWN_RATIOS.forEach { ratio ->
+                val target = content * ratio
+                error = minOf(error, abs(mode.refreshRate - target) / target)
+            }
+            if (cinema && isPalRate(mode.refreshRate)) error += PAL_PENALTY
+            val currentBest = best
+            val better = when {
+                currentBest == null -> true
+                error < bestError - 1e-9 -> true
+                error <= bestError + 1e-9 && mode.id < currentBest.id -> true
+                else -> false
+            }
+            if (better) {
+                best = mode
+                bestError = error
+            }
+        }
+        return best?.takeIf { bestError <= CATCH_ALL_MAX_ERROR }
+    }
+
+    /** A mode whose rate is a whole multiple of 25 Hz within [TOLERANCE]. */
+    private fun isPalRate(rate: Double): Boolean {
+        val multiple = round(rate / 25.0).toInt().coerceAtLeast(1)
+        return abs(rate - 25.0 * multiple) / (25.0 * multiple) <= TOLERANCE
     }
 
     // ── Asking the platform ─────────────────────────────────────────────────
@@ -227,6 +368,19 @@ internal object FrameRateMatch {
     fun describeSurfaceRequest(request: SurfaceRateRequest, allowNonSeamless: Boolean): String =
         "asked the platform for ${rate(request.frameRate.toDouble())} fps (" +
             if (allowNonSeamless) "a blank-screen switch is allowed)" else "no blank-screen switch)"
+
+    /**
+     * Where a content rate came from — the head the probe read, or the player's
+     * own report. The first line of the request sequence, so a report says
+     * which half of the app supplied the number.
+     */
+    fun describeSource(contentFps: Double, source: FrameRateSource): String {
+        val content = normalise(contentFps) ?: contentFps
+        return when (source) {
+            FrameRateSource.PROBE -> "probed ${rate(content)} fps from the stream head"
+            FrameRateSource.PLAYER -> "the player reported ${rate(content)} fps"
+        }
+    }
 
     /** A specific mode forced through the window's display-mode attribute. */
     fun describeModeSwitch(contentFps: Double, chosen: DisplayModeInfo, wasModeId: Int): String {
@@ -321,9 +475,12 @@ internal class FrameRateMatcher(
      * a rate that needs no switch, a panel that cannot do it, and a repeat of a
      * request already made all resolve to doing nothing.
      */
-    fun onContentFrameRate(contentFps: Double) {
+    fun onContentFrameRate(
+        contentFps: Double,
+        source: FrameRateSource = FrameRateSource.PLAYER
+    ) {
         released = false
-        runCatching { apply(contentFps) }
+        runCatching { apply(contentFps, source) }
             .onFailure { Log.w(TAG, "frame-rate match failed", it) }
     }
 
@@ -343,13 +500,19 @@ internal class FrameRateMatcher(
         }.onFailure { Log.w(TAG, "could not restore the display mode", it) }
     }
 
-    private fun apply(contentFps: Double) {
+    private fun apply(contentFps: Double, source: FrameRateSource) {
         val display = displayOf() ?: return
         val modeId = runCatching { display.mode.modeId }.getOrNull() ?: return
         val modes = supportedModes(display)
         val panel = FrameRateMatch.describeModes(modes, modeId)
         FrameRateDiagnostics.setPanel(panel)
         FrameRateDiagnostics.clearRequest()
+        // Which half of the app supplied this number, first in the sequence.
+        // Nothing is written for a rate that does not describe content, so a
+        // track the player could not measure adds no line, exactly as before.
+        FrameRateMatch.normalise(contentFps)?.let {
+            FrameRateDiagnostics.addRequest(FrameRateMatch.describeSource(it, source))
+        }
         Log.i(TAG, "panel: $panel")
 
         val request = FrameRateMatch.surfaceRateRequest(contentFps, Build.VERSION.SDK_INT)

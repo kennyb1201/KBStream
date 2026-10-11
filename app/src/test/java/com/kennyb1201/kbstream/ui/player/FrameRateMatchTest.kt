@@ -339,4 +339,93 @@ class FrameRateMatchTest {
         assertTrue(FrameRateMatch.describePath(30).contains("Android 11"))
         assertTrue(FrameRateMatch.describePath(29).contains("Android 10 and below"))
     }
+
+    // ── The lenient fallback ladder ────────────────────────────────────
+    //
+    // Reported: addon streams carry no fps and the panel never switches, even
+    // where 24p is demonstrably available. The ladder adds a double, a 2.5x
+    // pulldown and a last-resort cadence search - but none of them may turn the
+    // old no-op into a needless blank-screen switch.
+
+    @Test
+    fun `film on a 50 and 60 panel takes 60 through the 2_5x pulldown`() {
+        val chosen = FrameRateMatch.chooseMode(
+            contentFps = 23.976,
+            modes = listOf(mode(1, 50.0), mode(2, 60.0)),
+            currentModeId = 1
+        )
+
+        assertEquals(2, chosen?.id)
+    }
+
+    @Test
+    fun `the pulldown fallback preserves the no-op when 60 is already showing`() {
+        // The safety property, stated plainly: 23.976 on a single-60 Hz panel
+        // resolves to 60 itself, which is "already there" - no switch.
+        val chosen = FrameRateMatch.chooseMode(
+            contentFps = 23.976,
+            modes = listOf(mode(1, 60.0)),
+            currentModeId = 1
+        )
+
+        assertNull(chosen)
+    }
+
+    @Test
+    fun `an exact multiple still wins over the fallback`() {
+        val chosen = FrameRateMatch.chooseMode(
+            contentFps = 23.976,
+            modes = listOf(mode(1, 24.0), mode(2, 60.0)),
+            currentModeId = 2
+        )
+
+        assertEquals(1, chosen?.id)
+    }
+
+    @Test
+    fun `PAL content still takes the exact 50 Hz mode`() {
+        val chosen = FrameRateMatch.chooseMode(
+            contentFps = 25.0,
+            modes = listOf(mode(10, 50.0)),
+            currentModeId = 60
+        )
+
+        assertEquals(10, chosen?.id)
+    }
+
+    @Test
+    fun `cinema content does not land on a PAL rate when a better mode exists`() {
+        // 25/50/60 for 23.976: 60 Hz is the 2.5x pulldown, so the PAL modes are
+        // never reached and the film stays off 25/50 Hz.
+        val chosen = FrameRateMatch.chooseMode(
+            contentFps = 23.976,
+            modes = listOf(mode(1, 25.0), mode(2, 50.0), mode(3, 60.0)),
+            currentModeId = 2
+        )
+
+        assertEquals(3, chosen?.id)
+    }
+
+    @Test
+    fun `a mode slower than the content is still never chosen by the catch-all`() {
+        val chosen = FrameRateMatch.chooseMode(
+            contentFps = 60.0,
+            modes = listOf(mode(1, 24.0), mode(2, 30.0)),
+            currentModeId = 9
+        )
+
+        assertNull(chosen)
+    }
+
+    @Test
+    fun `the source line names the probe or the player`() {
+        assertEquals(
+            "probed 23.976 fps from the stream head",
+            FrameRateMatch.describeSource(23.976, FrameRateSource.PROBE)
+        )
+        assertEquals(
+            "the player reported 23.976 fps",
+            FrameRateMatch.describeSource(23.976, FrameRateSource.PLAYER)
+        )
+    }
 }
