@@ -9,6 +9,7 @@ import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
@@ -798,7 +799,10 @@ fun SettingsScreen(
                                 .padding(top = 6.dp)
                                 .fillMaxWidth()
                         ) {
-                            KBTextField(
+                            // Masked by default with a reveal chip: the key is a
+                            // secret, and this screen is on a TV in a room. The
+                            // value itself is unchanged - see KBSecretField.
+                            KBSecretField(
                                 value = omdbKeyInput,
                                 onValueChange = {
                                     omdbKeyInput = it.trim()
@@ -1467,7 +1471,19 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.labelSmall,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // Scrollable, not a plain Row: with several players installed
+                    // and one very long label, a Row runs out of width - the last
+                    // chip gets the leftover sliver, its label wraps mid-word into
+                    // a tall column and the selected background fills the wrapped
+                    // box (the "Vimu / Medi / a / Playe / r" tower). Against the
+                    // unbounded constraint a horizontal scroll hands it, each chip
+                    // measures at its natural width, so no label can ever wrap; the
+                    // D-pad walks the cards and focusing an off-screen one scrolls
+                    // it into view on the standard bring-into-view.
+                    Row(
+                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
                         externalPlayers.forEach { player ->
                             KBCard(onClick = {
                                 externalPackage = player.packageName

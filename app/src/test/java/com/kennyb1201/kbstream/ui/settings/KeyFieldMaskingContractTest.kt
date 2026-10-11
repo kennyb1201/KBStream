@@ -11,7 +11,8 @@ import org.junit.Test
  *
  * Fifth audit (2026-10-09), P1: MDBList, OpenSubtitles and TorBox each drew
  * their key in the clear on Settings -> Integrations, so anyone in the room
- * could read a live credential off the TV. The rows now go through
+ * could read a live credential off the TV; the OMDb key was added later with
+ * the plain field and had the same exposure. All four rows now go through
  * [com.kennyb1201.kbstream.ui.components.KBSecretField], which masks by default
  * and reveals on the eye chip.
  *
@@ -27,13 +28,15 @@ class KeyFieldMaskingContractTest {
     private val field by lazy { source(FIELD).squash() }
 
     @Test
-    fun `the three credential fields render masked`() {
+    fun `the four credential fields render masked`() {
         assertEquals(
-            "MDBList, OpenSubtitles and TorBox are the key rows",
-            3,
+            "MDBList, OpenSubtitles, TorBox and OMDb are the key rows",
+            4,
             Regex("KBSecretField\\(").findAll(settings).count()
         )
-        listOf("mdbListKeyInput", "subsKeyInput", "torboxKeyInput").forEach { input ->
+        listOf(
+            "mdbListKeyInput", "subsKeyInput", "torboxKeyInput", "omdbKeyInput"
+        ).forEach { input ->
             assertTrue(
                 "$input must go through the masked field, not a plain KBTextField",
                 settings.contains("KBSecretField( value = $input,")

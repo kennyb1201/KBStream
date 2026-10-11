@@ -128,6 +128,7 @@ object ExternalPlayer {
          */
         fun remember(pkg: String, label: String, scheme: String?) {
             if (found.containsKey(pkg)) return
+            if (isStubLabel(pkg, label)) return
             found[pkg] = Installed(pkg, label, scheme)
         }
 
@@ -176,6 +177,21 @@ object ExternalPlayer {
         .getOrNull()
         ?.takeIf { it.isNotBlank() }
         ?: resolve.activityInfo?.packageName.orEmpty()
+
+    /**
+     * True when the "label" is the component's own class name rather than a
+     * human name - the entry is a stub that answered the probe (Amazon's dummy
+     * gallery shows up as "amazon.dummy.gallery.DummyGalleryActivity"), not a
+     * player the viewer could meaningfully choose.
+     *
+     * The probe cannot tell a stub from a player, but the label can, and no
+     * hardcoded package exception is needed: any current or future stub with no
+     * real label is dropped by the same rule. A label the app actually set is
+     * never prefixed this way, and a bare package name - [labelFor]'s fallback
+     * for an app with no label at all - does not match either.
+     */
+    internal fun isStubLabel(packageName: String, label: String): Boolean =
+        label.startsWith("$packageName.")
 
     /**
      * The apps that resolve [probe], queried with NO categories.
