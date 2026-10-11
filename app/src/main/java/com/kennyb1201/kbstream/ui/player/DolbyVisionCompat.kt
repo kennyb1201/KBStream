@@ -420,6 +420,129 @@ internal object DolbyVisionCompat {
         return if (matches) HDR10_CODEC else null
     }
 
+    // RFC 6381 general_profile_space prefixes ("", "A", "B", "C").
+    // CodecSpecificDataUtil.buildHevcCodecString formats the same four.
+    private val HEVC_PROFILE_SPACE_STRINGS = arrayOf("", "A", "B", "C")
+
+    /**
+     * The RFC 6381 HEVC codec string the stream's own SPS declares, or null when
+     * no SPS is present or its profile_tier_level does not parse.
+     *
+     * [HDR10_CODEC] is a generic Main10@L5.1 guess. MTK-class HEVC decoders
+     * verify the advertised tier/level against the SPS before emitting output:
+     * a stream whose SPS says High tier, Level 5.0 (general_level_idc 150) but
+     * is advertised as L153 makes the decoder accept the first input frame and
+     * produce zero output frames — the DV stall this relabel exists to close.
+     * The string is built exactly the way Media3 derives it from the hvcC/SPS
+     * (CodecSpecificDataUtil.buildHevcCodecString):
+     * `hvc1.[space]<profile_idc>.<compat_flags_hex>.<tier><level_idc>`, with the
+     * six general constraint bytes appended and trailing zero bytes omitted.
+     *
+     * Handles both parameter-set forms Media3 delivers: Annex-B buffers
+     * (Matroska/TS) and the hvcC configuration record of MP4/fMP4. Callers fall
+     * back to [HDR10_CODEC] on null.
+     */
+    fun hevcCodecFromInitData(initData: List<ByteArray>): String? {
+        for (buf in initData) {
+            val rbsp = spsRbsp(buf) ?: continue
+            val codec = codecStringFromSpsRbsp(rbsp)
+            if (codec != null) return codec
+        }
+        return null
+    }
+
+    /** The emulation-prevention-free RBSP of the first SPS NAL in [buf], or null. */
+    private fun spsRbsp(buf: ByteArray): ByteArray? =
+        if (isHvcCRecord(buf)) spsRbspFromHvcC(buf) else spsRbspFromAnnexB(buf)
+
+    /** SPS RBSP (nal_unit_type 33) out of an Annex-B parameter-set buffer. */
+    private fun spsRbspFromAnnexB(buf: ByteArray): ByteArray? {
+        var read = 0
+        while (read < buf.size) {
+            val code = indexOfStartCode(buf, read, buf.size)
+            if (code < 0) return null
+            val codeLen =
+                if (code + 3 < buf.size && buf[code + 2].toInt() == 0 && buf[code + 3].toInt() == 1) 4 else 3
+            val header = code + codeLen
+            var nalEnd = indexOfStartCode(buf, header, buf.size)
+            if (nalEnd < 0) nalEnd = buf.size
+            if (nalEnd - header >= 2 &&
+                (((buf[header].toInt() and 0xFF) ushr 1) and 0x3F) == NAL_SPS
+            ) {
+                return removeEmulationPrevention(buf, header + 2, nalEnd)
+            }
+            // Back-to-back start codes give nalEnd == header; advance by the
+            // header so the walk can never stand still.
+            read = if (nalEnd > header) nalEnd else header + 1
+        }
+        return null
+    }
+
+    /** SPS RBSP (nal_unit_type 33) out of an hvcC (ISO/IEC 14496-15) record. */
+    private fun spsRbspFromHvcC(buf: ByteArray): ByteArray? {
+        if (buf.size < 24) return null
+        val numArrays = buf[22].toInt() and 0xFF
+        var pos = 23
+        for (a in 0 until numArrays) {
+            if (pos + 3 > buf.size) return null
+            val nalType = buf[pos].toInt() and 0x3F
+            val numNals = ((buf[pos + 1].toInt() and 0xFF) shl 8) or (buf[pos + 2].toInt() and 0xFF)
+            pos += 3
+            for (j in 0 until numNals) {
+                if (pos + 2 > buf.size) return null
+                val nalLen = ((buf[pos].toInt() and 0xFF) shl 8) or (buf[pos + 1].toInt() and 0xFF)
+                pos += 2
+                if (nalLen < 2 || pos + nalLen > buf.size) return null
+                if (nalType == NAL_SPS) {
+                    return removeEmulationPrevention(buf, pos + 2, pos + nalLen)
+                }
+                pos += nalLen
+            }
+        }
+        return null
+    }
+
+    /**
+     * Reads the SPS's profile_tier_level (ITU-T H.265 7.3.3) and formats it the
+     * way Media3 does. Returns null when the RBSP is too short or ends early.
+     */
+    private fun codecStringFromSpsRbsp(rbsp: ByteArray): String? {
+        val br = VpsBitReader(rbsp)
+        // sps_video_parameter_set_id(4) + sps_max_sub_layers_minus1(3) +
+        // sps_temporal_id_nesting_flag(1), then profile_tier_level(1, ...).
+        if (!br.skipBits(8)) return null
+        val profileSpace = br.readBits(2)
+        val tierFlag = br.readBits(1)
+        val profileIdc = br.readBits(5)
+        if (profileSpace < 0 || tierFlag < 0 || profileIdc < 0) return null
+        // Media3 assigns the i-th compatibility flag bit to bit i (LSB-first),
+        // so this hex digit is the reverse of the raw u(32) field.
+        var compat = 0L
+        for (i in 0 until 32) {
+            when (br.readBits(1)) {
+                -1L -> return null
+                1L -> compat = compat or (1L shl i)
+            }
+        }
+        val constraints = LongArray(6)
+        for (i in 0 until 6) {
+            val b = br.readBits(8)
+            if (b < 0) return null
+            constraints[i] = b
+        }
+        val levelIdc = br.readBits(8)
+        if (levelIdc < 0) return null
+        val sb = StringBuilder("hvc1.")
+        sb.append(HEVC_PROFILE_SPACE_STRINGS[profileSpace.toInt()])
+        sb.append(profileIdc)
+        sb.append('.').append(compat.toString(16).uppercase())
+        sb.append('.').append(if (tierFlag == 1L) 'H' else 'L').append(levelIdc)
+        for (i in 0..constraints.indexOfLast { it != 0L }) {
+            sb.append('.').append(constraints[i].toString(16).padStart(2, '0').uppercase())
+        }
+        return sb.toString()
+    }
+
     /**
      * Strips RPU / enhancement-layer NAL units (and optionally HDR10+ SEI) from
      * an Annex-B HEVC access unit, compacting in place. Returns the new length,
@@ -430,11 +553,11 @@ internal object DolbyVisionCompat {
      * and one surgically shrunk. It is diagnostic only: the bytes emitted are
      * identical with or without it.
      *
-     * [dropRpuNal] is a TEMPORARY diagnostic arm, the Nuvio config: it removes
-     * the RPU (type 62) while the caller keeps the HDR10+ SEI, which is what
-     * Nuvio's "Always Strip DV" (and Kodi) play on this chipset with Dolby
-     * Vision disabled. It leaves the EL (63), the parameter sets and every other
-     * NAL alone. Default false = every existing caller byte-for-byte unchanged.
+     * [dropRpuNal] removes the RPU (type 62) while the caller keeps the HDR10+
+     * SEI — the config Nuvio's "Always Strip DV" (and Kodi) play on this
+     * chipset with Dolby Vision disabled. It leaves the EL (63), the parameter
+     * sets and every other NAL alone. Default false = every existing caller
+     * byte-for-byte unchanged.
      */
     fun stripAnnexB(
         buf: ByteArray,
@@ -543,9 +666,8 @@ internal object DolbyVisionCompat {
      * [accounting] is [stripAnnexB]'s first-sample diagnostic, recorded in NAL
      * bytes excluding the length field.
      *
-     * [dropRpuNal] is [stripAnnexB]'s TEMPORARY diagnostic arm, identically —
-     * the Nuvio config, RPU dropped with the HDR10+ SEI kept — in an MP4/fMP4
-     * sample as in Annex-B.
+     * [dropRpuNal] is [stripAnnexB]'s RPU-drop arm — RPU dropped with the
+     * HDR10+ SEI kept — in an MP4/fMP4 sample as in Annex-B.
      */
     fun stripLengthDelimited(
         buf: ByteArray,

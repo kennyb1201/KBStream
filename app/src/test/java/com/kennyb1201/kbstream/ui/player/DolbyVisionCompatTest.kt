@@ -391,20 +391,17 @@ class DolbyVisionCompatTest {
         )
     }
 
-    // ── TEMPORARY diagnostic arm: the Nuvio config (2026-10-11) ──────────
+    // ── The RPU-drop arm and the relabel's color hook (permanent APIs) ────
     //
-    // The relabel path (DV-capable box, non-DV display) stalled with zero
-    // output frames, and every earlier arm stalled too: RPU dropped with the
-    // HDR10+ still stripped, the color info skipped, the whole SEI NAL dropped,
-    // and the Vimu arm (RPU dropped, HDR10+ SEI KEPT, but the forced HDR10 color
-    // info still attached). The Nuvio arm is what Nuvio's "Always Strip DV"
-    // does, and the one combination KBStream has never run: the RPU dropped, the
-    // HDR10+ SEI KEPT, and the container's own color info left alone. These pin
-    // that call shape and the color step's two branches — and that the arm is
-    // OFF by default, so the bytes of a default build are unchanged.
+    // `dropRpuNal` is the Strip All button's future Nuvio-config arm: the RPU
+    // (type 62) goes while the HDR10+ SEI stays — the config Nuvio's "Always
+    // Strip DV" plays on MTK-class hardware. Default false, so every existing
+    // caller's bytes are unchanged. The relabel's `applyColorInfo` hook defaults
+    // to the forced DV_HDR10_COLOR_INFO; the identity form is what a caller can
+    // use to ship whatever the container declared. These pin both.
 
     @Test
-    fun `the Nuvio arm drops type 62 and forwards the HDR10+ SEI bit-exact`() {
+    fun `dropRpuNal drops type 62 and forwards the HDR10+ SEI bit-exact`() {
         val vps = nal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
         val sps = nal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
         val pps = nal(34, byteArrayOf(0x0D, 0x0E, 0x0F))
@@ -415,19 +412,17 @@ class DolbyVisionCompatTest {
 
         val au = vps + sps + pps + rpu + el + sei + vcl
         val buf = au.copyOf()
-        // The arm's exact call shape: the two flags the factory passes.
+        // The RPU-drop arm's call shape.
         val newLen = DolbyVisionCompat.stripAnnexB(
             buf, au.size, stripDv = false, stripHdr10Plus = false, dropRpuNal = true
         )
 
         assertTrue("the RPU must have been removed", newLen >= 0)
-        // Only type 62 goes: the EL (63), the parameter sets, the VCL and — the
-        // whole point of the arm — the HDR10+ SEI all ride through bit-exact.
-        // The arms before this one never shipped that pair: the Vimu arm kept the
-        // RPU and stripped the SEI.
+        // Only type 62 goes: the EL (63), the parameter sets, the VCL and the
+        // HDR10+ SEI all ride through bit-exact.
         val expected = vps + sps + pps + el + sei + vcl
         assertArrayEquals(
-            "the Nuvio arm must drop the RPU and keep the HDR10+ SEI",
+            "dropRpuNal must drop the RPU and keep the HDR10+ SEI",
             expected,
             buf.copyOf(newLen)
         )
@@ -462,7 +457,7 @@ class DolbyVisionCompatTest {
     }
 
     @Test
-    fun `the Nuvio arm is off by default, so the strip output is unchanged`() {
+    fun `the RPU-drop arm is off by default, so the strip output is unchanged`() {
         val rpu = nal(62, byteArrayOf(0x11, 0x22))
         val sei = nal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
         val vcl = nal(19, byteArrayOf(0x55, 0x66))
@@ -488,7 +483,7 @@ class DolbyVisionCompatTest {
     }
 
     @Test
-    fun `the Nuvio arm drops type 62 and keeps the SEI on length-delimited samples too`() {
+    fun `dropRpuNal drops type 62 and keeps the SEI on length-delimited samples too`() {
         val rpu = ldNal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
         val el = ldNal(63, byteArrayOf(0x0A, 0x0B))
         val sei = ldNal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
@@ -534,12 +529,11 @@ class DolbyVisionCompatTest {
     }
 
     @Test
-    fun `the Nuvio arm ships the container color and the shipping step forces HDR10`() {
-        // The color half of the arm, behaviorally. Under the arm the relabel's
-        // applyColorInfo step is the identity, so a container that DID declare a
-        // color info must reach the decoder untouched — not replaced by the
-        // forced DV_HDR10_COLOR_INFO (which carries no hdrStaticInfo, and is the
-        // shape every arm before this one shipped).
+    fun `the identity color hook ships the container color and the default forces HDR10`() {
+        // The relabel's color hook, behaviorally. With the identity step a
+        // container that DID declare a color info reaches the decoder untouched
+        // — not replaced by the forced DV_HDR10_COLOR_INFO (which carries no
+        // hdrStaticInfo).
         val containerColor = ColorInfo.Builder()
             .setColorTransfer(C.COLOR_TRANSFER_HLG)
             .setColorSpace(C.COLOR_SPACE_BT2020)
@@ -551,20 +545,20 @@ class DolbyVisionCompatTest {
             .setColorInfo(containerColor)
             .build()
 
-        val nuvio = relabelDvFormat(
+        val identity = relabelDvFormat(
             container, "hvc1.2.4.L153.B0", applyColorInfo = { it }
         )
-        assertNotNull("the identity step must still produce a relabel", nuvio)
+        assertNotNull("the identity step must still produce a relabel", identity)
         assertEquals(
-            "the arm must hand the container's own color info to the decoder",
+            "the identity hook must hand the container's own color info to the decoder",
             containerColor,
-            nuvio!!.format.colorInfo
+            identity!!.format.colorInfo
         )
 
         val shipping = relabelDvFormat(container, "hvc1.2.4.L153.B0")
         assertNotNull(shipping)
         assertEquals(
-            "with the arm off the forced HDR10 color info replaces the container's",
+            "in the default shape the forced HDR10 color info replaces the container's",
             DV_HDR10_COLOR_INFO,
             shipping!!.format.colorInfo
         )

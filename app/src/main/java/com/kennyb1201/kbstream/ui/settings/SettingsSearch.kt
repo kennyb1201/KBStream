@@ -202,17 +202,6 @@ internal object SettingsSearchIndex {
             "Strip HDR10+",
             "hdr10+ hdr plus strip playback picture"
         ),
-        // TEMPORARY: the Dolby Vision stall-bisect arm (the Nuvio config) lives
-        // in the same cluster. It is drawn as a ToggleRow, so the index has to
-        // carry it or it would be visible but unfindable — and it comes back
-        // out with the row once the field verdict is in.
-        SettingSearchEntry(
-            "playback.diag-nuvio-config",
-            SettingsPane.PLAYBACK,
-            "Nuvio config (diag)",
-            "dolby vision diagnostic bisect nuvio strip dv rpu hdr10+ sei color " +
-                "info stall black screen arm"
-        ),
         SettingSearchEntry(
             "playback.auto-select-stream",
             SettingsPane.PLAYBACK,

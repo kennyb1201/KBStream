@@ -45,13 +45,14 @@ class DolbyVisionRelabelNalsStripContractTest {
      * The shared relabel construction: the call plus its two fixed arguments,
      * whitespace-tolerant.
      *
-     * The sites have grown a named color-info argument (the temporary bisect arm
-     * B), so the call is now written across lines — the pin is on the call and
-     * on the arguments that must be identical at both sites, not on one line's
-     * spelling. A site that stopped going through `relabelDvFormat` still fails,
-     * and both sites are still counted independently below.
+     * The codec string handed to the relabel is the SPS-derived one when the
+     * track's parameter sets parse (see hevcCodecFromInitData) and rewriteCodec
+     * only as the fallback, so the variable at both sites is `relabelCodec`.
+     * The pin is on the call and the arguments that must be identical at both
+     * sites, not on one line's spelling. A site that stopped going through
+     * `relabelDvFormat` still fails, and both sites are counted independently.
      */
-    private val relabelCall = Regex("relabelDvFormat\\(\\s*format,\\s*rewriteCodec\\b")
+    private val relabelCall = Regex("relabelDvFormat\\(\\s*format,\\s*relabelCodec\\b")
 
     /** The `RELABEL_ONLY` branch body, up to the strip path's log line. */
     private fun relabelBranch(): String {
@@ -104,10 +105,9 @@ class DolbyVisionRelabelNalsStripContractTest {
             handler.contains("stripDv = true")
         )
         assertTrue(
-            "the handler must drop the HDR10+ SEI by default (the stream is presented " +
-                "as static HDR10) — the Nuvio arm is the only thing that flips it, with " +
-                "stripHdr10Plus = !diagNuvioConfig",
-            handler.contains("stripHdr10Plus = !diagNuvioConfig")
+            "the handler must drop the HDR10+ SEI (the stream is presented as static " +
+                "HDR10), leaving the RPU/EL in place",
+            handler.contains("stripHdr10Plus = true")
         )
         assertFalse(
             "the handler must be pure removal, never the in-sample transform",
@@ -172,6 +172,10 @@ class DolbyVisionRelabelNalsStripContractTest {
         assertTrue(
             "and engage Mode.STRIP_NALS_ONLY (stripDv=false, stripHdr10Plus=true)",
             reroute.contains("mode = Mode.STRIP_NALS_ONLY")
+        )
+        assertTrue(
+            "the reroute's relabel must carry the SPS-derived codec string",
+            reroute.contains("relabelDvFormat(format, relabelCodec)")
         )
         assertFalse(
             "the reroute must never rewrite the parameter sets",

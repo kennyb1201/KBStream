@@ -124,20 +124,7 @@ internal class DolbyVisionCompatExtractorsFactory(
      * MTK-class decoders, so P4/P8 take the relabel-only path instead (see
      * [selectHdr10BaseHandling]).
      */
-    private val nonDvDisplayOnDvDevice: Boolean = false,
-    /**
-     * TEMPORARY diagnostic arm of the 2026-10-11 DV stall bisect: the Nuvio
-     * config. The two relabel strip calls drop the DV RPU NAL (type 62) while
-     * KEEPING the HDR10+ SEI, and the relabeled format keeps the extractor's own
-     * (container) colorInfo instead of attaching the forced
-     * [DV_HDR10_COLOR_INFO] — together, exactly what Nuvio's "Always Strip DV"
-     * does, and the one combination KBStream has never run (the earlier arms
-     * either kept the RPU or dropped it with the HDR10+ SEI still stripped, and
-     * every arm attached the forced color info). Relabel path only — the sniff
-     * path and the mutating strip are untouched. Default false = byte-identical
-     * output to the current release.
-     */
-    private val diagNuvioConfig: Boolean = false
+    private val nonDvDisplayOnDvDevice: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -178,8 +165,7 @@ internal class DolbyVisionCompatExtractorsFactory(
         )
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-            diagNuvioConfig
+            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
         )
     }
 }
@@ -197,8 +183,7 @@ private class VideoCompatExtractor(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNuvioConfig: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -206,8 +191,7 @@ private class VideoCompatExtractor(
         delegate.init(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                diagNuvioConfig
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
             )
         )
     }
@@ -233,8 +217,7 @@ private class VideoCompatExtractorOutput(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNuvioConfig: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -242,8 +225,7 @@ private class VideoCompatExtractorOutput(
         return if (type == C.TRACK_TYPE_VIDEO) {
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                diagNuvioConfig
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
             )
         } else {
             track
@@ -269,8 +251,7 @@ private class VideoCompatTrackOutput(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNuvioConfig: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
@@ -285,12 +266,6 @@ private class VideoCompatTrackOutput(
     private var mode = Mode.NORMAL
     private var sniffRemaining = 0
     private var currentCodecs: String? = null
-    // The color info the extractor handed us for the current track — the
-    // container's own declaration (a DV remux usually carries a full one,
-    // hdrStaticInfo included). Captured so the first-sample strip log below can
-    // report what the relabel would keep under the Nuvio arm, and so a
-    // container that declared none is visible rather than silent.
-    private var containerColorInfo: ColorInfo? = null
     // Original format (untouched init data) of the current track, kept so the
     // sniff path can re-emit the format with rewritten VPS/SPS once in-band
     // Dolby Vision is confirmed on a track whose codec config was forwarded
@@ -322,7 +297,6 @@ private class VideoCompatTrackOutput(
     override fun format(format: Format) {
         currentCodecs = format.codecs
         lastFormat = format
-        containerColorInfo = format.colorInfo
         isP5Content = DolbyVisionCompat.isP5Profile(format.codecs)
         Log.i(
             "PLAYER_DV",
@@ -433,6 +407,15 @@ private class VideoCompatTrackOutput(
                 DolbyVisionCompat.hdr10Codec(format.codecs, true)
             } else null
         if (rewriteCodec != null && hdr10BaseLayerProfile) {
+            // The relabel advertises a plain-HEVC codec string to the decoder.
+            // HDR10_CODEC is a generic Main10@L5.1 guess; MTK-class decoders
+            // check the advertised tier/level against the SPS and emit zero
+            // output frames when they disagree (field: dvhe.08.06 = High tier
+            // Level 5.0, advertised as L153). Derive the true string from the
+            // track's own SPS and only guess when it cannot be parsed.
+            val spsCodec = DolbyVisionCompat.hevcCodecFromInitData(format.initializationData)
+            val relabelCodec = spsCodec ?: rewriteCodec
+            val codecSrc = if (spsCodec != null) "sps" else "fallback"
             val handling = selectHdr10BaseHandling(
                 nativeDvSupported = nativeDvSupported,
                 nonDvDisplayOnDvDevice = nonDvDisplayOnDvDevice,
@@ -471,23 +454,16 @@ private class VideoCompatTrackOutput(
                 // identifies which step threw. The success log is emitted only
                 // AFTER the build, so it can never announce a relabel that did
                 // not happen.
-                val relabeled = relabelDvFormat(
-                    format, rewriteCodec,
-                    applyColorInfo = {
-                        if (diagNuvioConfig) it // keep the container's colorInfo, like Nuvio
-                        else it.setColorInfo(DV_HDR10_COLOR_INFO)
-                    }
-                )
+                val relabeled = relabelDvFormat(format, relabelCodec)
                 if (relabeled != null) {
                     Log.i(
                         "PLAYER_DV",
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
-                            "display: re-advertising as hvc1 " +
+                            "display: re-advertising as hvc1 $relabelCodec " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
                             "stripped, RPU kept, VPS/SPS untouched " +
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
-                            " diagNuvioConfig=$diagNuvioConfig colorSrc=" +
-                            "${if (diagNuvioConfig) "container" else "forced"}"
+                            " codecSrc=$codecSrc"
                     )
                     delegate.format(relabeled.format)
                     // Bit-exact relabel plus in-place metadata NAL removal:
@@ -509,23 +485,16 @@ private class VideoCompatTrackOutput(
                 // which forces Strip All for the session — lands on such a box.
                 // Boxes WITHOUT a DV decoder keep the mutating strip below: it
                 // is the tested working path there, so it is left alone.
-                val relabeled = relabelDvFormat(
-                    format, rewriteCodec,
-                    applyColorInfo = {
-                        if (diagNuvioConfig) it // keep the container's colorInfo, like Nuvio
-                        else it.setColorInfo(DV_HDR10_COLOR_INFO)
-                    }
-                )
+                val relabeled = relabelDvFormat(format, relabelCodec)
                 if (relabeled != null) {
                     Log.i(
                         "PLAYER_DV",
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV-decoder " +
-                            "hardware: re-advertising as hvc1 " +
+                            "hardware: re-advertising as hvc1 $relabelCodec " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
                             "stripped, RPU kept, VPS/SPS untouched " +
                             "(the mutating strip is field-dead here)" +
-                            " diagNuvioConfig=$diagNuvioConfig colorSrc=" +
-                            "${if (diagNuvioConfig) "container" else "forced"}"
+                            " codecSrc=$codecSrc"
                     )
                     delegate.format(relabeled.format)
                     mode = Mode.STRIP_NALS_ONLY
@@ -839,25 +808,22 @@ private class VideoCompatTrackOutput(
             // and only the HDR10+ SEI goes: dropping the RPU alone left a
             // DV-flagged track with no DV metadata and the decoder stalled, and
             // the theory was that the competing dynamic-metadata set is what
-            // black-screened an (intolerant) non-DV display. The Nuvio config
-            // (diagNuvioConfig) inverts that pair — the RPU goes and the HDR10+
-            // SEI stays — and its relabel keeps the container's own color info
-            // too, which is what Nuvio's "Always Strip DV" plays on this
-            // chipset.
+            // black-screened an (intolerant) non-DV display. The `dropRpuNal`
+            // parameter can invert that pair from a caller (the Strip All
+            // button's future Nuvio-config arm); the relabel passes neither it
+            // nor `stripDv`, so the RPU/EL stays and only the HDR10+ SEI goes.
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
                         pendingBuf, sampleEnd, stripDv = false,
-                        stripHdr10Plus = !diagNuvioConfig,
-                        dropRpuNal = diagNuvioConfig,
+                        stripHdr10Plus = true,
                         accounting = accounting
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
                         stripDv = false,
-                        stripHdr10Plus = !diagNuvioConfig,
-                        dropRpuNal = diagNuvioConfig,
+                        stripHdr10Plus = true,
                         accounting = accounting
                     )
             }
@@ -873,11 +839,7 @@ private class VideoCompatTrackOutput(
                     "PLAYER_DV",
                     "Relabel NALS-strip: first sample (codecs=${currentCodecs ?: "?"}) " +
                         "modified=${stripped >= 0} nals=$inventory " +
-                        "sei=${accounting?.summary()?.ifEmpty { "none" } ?: "none"} " +
-                        // What the container declared, as parsed, so a null
-                        // colorInfo is visible rather than silent alongside the
-                        // colorSrc= on the relabel line above.
-                        "containerColor=${describeColorInfo(containerColorInfo)}"
+                        "sei=${accounting?.summary()?.ifEmpty { "none" } ?: "none"}"
                 )
             }
             emit(if (stripped >= 0) stripped else sampleEnd)
@@ -991,17 +953,6 @@ private class VideoCompatTrackOutput(
         private val PLAIN_HEVC_CODEC = Regex("(?i)^(hvc1|hev1)\\.")
         private const val SNIFF_BUDGET_SAMPLES = 24
     }
-}
-
-/**
- * A [ColorInfo]'s transfer/space/range, for the first-sample log, or `none`
- * when the container declared no color info at all — which the Nuvio arm's
- * relabel then ships, so the field capture has to be able to say so.
- */
-private fun describeColorInfo(info: ColorInfo?): String = if (info == null) {
-    "none"
-} else {
-    "transfer=${info.colorTransfer} space=${info.colorSpace} range=${info.colorRange}"
 }
 
 /**
