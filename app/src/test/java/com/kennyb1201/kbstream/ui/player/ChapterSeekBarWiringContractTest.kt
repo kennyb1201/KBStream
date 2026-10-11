@@ -68,7 +68,7 @@ class ChapterSeekBarWiringContractTest {
         val view = read(MPV_VIEW)
         assertTrue(
             "the step must go through mpv's `add chapter` command",
-            view.contains("mpv.command(arrayOf(\"add\", \"chapter\", delta.toString()))")
+            view.contains("MPVLib.command(\"add\", \"chapter\", delta.toString())")
         )
         val activity = read(MPV_ACTIVITY)
         assertTrue("PREV steps back one chapter", activity.contains("surface?.addChapter(-1)"))

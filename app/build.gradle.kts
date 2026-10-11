@@ -132,13 +132,13 @@ android {
 
     defaultConfig {
         applicationId = "com.kennyb1201.kbstream"
-        // 26, not 24: libmpv (the backup playback engine) declares minSdk 26
-        // itself, so matching it retires the manifest's tools:overrideLibrary
-        // hack and stops desugaring for a range of devices that never had a
-        // working MPV engine anyway - PlayerEngine refuses MPV below 26, and
-        // without the FFmpeg extension ExoPlayer has no software video, so an
-        // API 24-25 box was already ExoPlayer-on-MediaCodec only. work-runtime
-        // 2.12 (minSdk 24) is satisfied by 26 as well.
+        // 26, not 24: this is the app's OWN floor now. PlayerEngine refuses the
+        // MPV engine below 26, and without the FFmpeg extension ExoPlayer has
+        // no software video, so an API 24-25 box was already
+        // ExoPlayer-on-MediaCodec only. (The MPV AAR moved to the mpvlibAndroid
+        // build, which declares minSdk 24 - below this - so no
+        // tools:overrideLibrary is needed either way.) work-runtime 2.12
+        // (minSdk 24) is satisfied by 26 as well.
         minSdk = 26
         // 36, not 35: Play rejects updates from phone/tablet/foldable apps that
         // do not target API 36+, and this manifest also carries a plain LAUNCHER
@@ -542,22 +542,41 @@ dependencies {
     // Backup playback engine (MPV): what plays a title when ExoPlayer cannot
     // — decoder-resource exhaustion on Realtek/TCL boxes, containers/codecs
     // MediaCodec has no decoder for, and fansub ASS/SSA typesetting (mpv
-    // renders it with libass). It bundles its own FFmpeg + mpv + libass as
-    // native libraries for all four ABIs, so it needs no other dependency and
-    // no app-side extraction.
+    // renders it with libass). It bundles its own FFmpeg + mpv + libass +
+    // libplayer as native libraries for all four ABIs, so it needs no other
+    // dependency and no app-side extraction.
     //
-    // Pinned to 1.0.0: it carries the same `dev.jdtech.mpv.MPVLib` static API
-    // the reference mpv-android player uses and MpvPlayerView drives (checked
-    // against the artifact's classes), for all four ABIs including the
-    // armeabi-v7a the TCL box runs, with a newer bundled mpv/FFmpeg than 0.5.1.
-    // Its 64-bit .so files are 16 KB page aligned (verified with readelf), so
-    // nothing here needs the FFmpeg script's page-size work.
+    // The backend is the Riteshp2001/mpvlibAndroid (Mpv∞) build: the same mpv
+    // core, but an actively maintained, Vulkan-capable Android build. The
+    // previous `dev.jdtech.mpv:libmpv` 1.0.0 pinned here showed black video
+    // over playing audio on the Onn 4K Plus, where Mpv∞ plays the same files -
+    // so the library is the variable, and every mpv option and player behaviour
+    // above it is deliberately unchanged. MpvPlayerView drives its `MPVLib`
+    // singleton API (`is.xyz.mpv.MPVLib`), verified against the released AAR's
+    // compiled classes.
     //
-    // It declares minSdk 26, which now matches the app's own floor, so unlike
-    // the old 0.5.1 pin the manifest needs no tools:overrideLibrary. (The pin
-    // used to be held back because 1.0.0 is Kotlin-compiled and an older
-    // toolchain could not read its metadata; that ended with Kotlin 2.4.20.)
-    implementation(libs.libmpv)
+    // It is not on Maven Central: it is the release AAR the library's README
+    // documents as a file dependency. A ~76 MB binary is deliberately not
+    // vendored in git (app/libs/ is gitignored, like libs/); instead
+    // scripts/fetch_mpv_aar.sh downloads mpvlib-1.1.2.aar from the v1.1.2
+    // GitHub release and verifies it against the published .sha256, and both CI
+    // workflows run that script before building. Its 64-bit .so files were
+    // checked 16 KB page aligned (readelf, 2026-10-11) and the release
+    // workflow's APK-level check re-verifies them on every release.
+    //
+    // It declares minSdk 24, below the app's floor of 26, so the manifest needs
+    // no tools:overrideLibrary.
+    val mpvAar = file("libs/mpvlib-1.1.2.aar")
+    if (!mpvAar.isFile) {
+        throw GradleException(
+            "The MPV engine AAR is missing at ${mpvAar.path}. Run " +
+                "scripts/fetch_mpv_aar.sh (it downloads mpvlib-1.1.2.aar and " +
+                "verifies its sha256), or drop the file there from a previous " +
+                "build. The app cannot compile without it: MpvPlayerView.kt " +
+                "imports is.xyz.mpv.MPVLib from this AAR."
+        )
+    }
+    implementation(files(mpvAar))
     implementation(libs.androidx.recyclerview)
     // Pinned to the COMMIT behind tag v0.26.4 (43f8e6ebeef4…, full hash
     // 43f8e6ebeef469db7c5328714bc5f33c9f06f092), not the tag itself: tags are

@@ -23,7 +23,7 @@
 # decoders.
 #
 # The result ships libffmpegJNI.so, which is what lets it coexist with libmpv
-# (dev.jdtech.mpv:libmpv). libmpv already brings libavcodec.so / libavutil.so /
+# (the mpvlibAndroid AAR). libmpv already brings libavcodec.so / libavutil.so /
 # libswresample.so / libswscale.so of its own, so any extension that ships
 # THOSE sonames (NextLib, the ExoPlayer-video-extension projects) cannot be
 # linked into the same APK: two dependencies providing one native library name

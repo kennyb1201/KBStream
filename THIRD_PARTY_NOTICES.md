@@ -9,7 +9,7 @@ code shipped in the APK and the licenses its authors publish it under.
 | Component | Where it comes from | License |
 | --- | --- | --- |
 | NewPipeExtractor | `com.github.TeamNewPipe:NewPipeExtractor`, pinned to commit `43f8e6eb` (tag `v0.26.4`) | GPL-3.0-or-later |
-| mpv (libmpv) | `dev.jdtech.mpv:libmpv:0.5.1` | LGPL-2.1-or-later (mpv is LGPL-2.1+ with some optional GPL parts) |
+| mpv (libmpv) | the `mpvlib-1.1.2.aar` release AAR from [`Riteshp2001/mpvlibAndroid`](https://github.com/Riteshp2001/mpvlibAndroid) (release `v1.1.2`, sha256 `2bee300d…`), fetched into `app/libs/` by `scripts/fetch_mpv_aar.sh` — this replaced the old `dev.jdtech.mpv:libmpv` Maven artifact | LGPL-2.1-or-later (mpv is LGPL-2.1+ with some optional GPL parts) |
 | FFmpeg | the video-enabled `media3-ffmpeg-decoder.aar` built by `scripts/build_ffmpeg_video.sh`, and the FFmpeg linked into libmpv | LGPL-2.1-or-later for the libraries as built here (FFmpeg can be built as GPL; the build script enables only LGPL-compatible components) |
 | libass | linked into libmpv (subtitle typesetting) | ISC |
 | libass | also linked into `libassjni.so`, built by `scripts/build_libass.sh`, which is what typesets an `.ass` SIDECAR on the ExoPlayer engine | ISC |
@@ -46,9 +46,9 @@ apart from attribution, impose no distribution obligations:
 ## How to regenerate this inventory
 
 The authoritative list is the `dependencies` block of `app/build.gradle.kts`,
-plus the native components that are not dependencies at all: the FFmpeg AAR
-produced by `scripts/build_ffmpeg_video.sh` and the libass/FreeType/HarfBuzz/
-fontconfig/FriBidi/expat set linked into `libassjni.so` by
-`scripts/build_libass.sh`. When a dependency is added or upgraded, update the
-tables above. Dependabot
+plus the native components that are not dependencies at all: the mpvlibAndroid
+AAR fetched by `scripts/fetch_mpv_aar.sh`, the FFmpeg AAR produced by
+`scripts/build_ffmpeg_video.sh`, and the libass/FreeType/HarfBuzz/fontconfig/
+FriBidi/expat set linked into `libassjni.so` by `scripts/build_libass.sh`.
+When a dependency is added or upgraded, update the tables above. Dependabot
 (`.github/dependabot.yml`) opens the upgrade PRs.

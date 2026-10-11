@@ -14,9 +14,11 @@ __pycache__/
 # scripts. Neither is source, and neither belongs in a commit.
 scripts/_*.json
 scripts/*.txt
-# Video-enabled FFmpeg decoder extension (scripts/build_ffmpeg_video.sh, or
-# the "Build FFmpeg video extension" workflow artifact): a multi-MB native
-# binary, consumed by app/build.gradle.kts when present, never committed.
+# Multi-MB native binaries the build consumes but never vendors in git:
+# the video-enabled FFmpeg decoder extension (scripts/build_ffmpeg_video.sh,
+# or the "Build FFmpeg video extension" workflow artifact), and the MPV
+# engine's AAR (scripts/fetch_mpv_aar.sh, fetched into app/libs/). The pattern
+# has no leading slash, so it covers both the repo-root libs/ and app/libs/.
 libs/
 # libass JNI bridge (scripts/build_libass.sh, or the "Build libass JNI
 # library" workflow artifact). Dropped into the default jniLibs source set so

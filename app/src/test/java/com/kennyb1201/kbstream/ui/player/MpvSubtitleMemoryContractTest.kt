@@ -119,7 +119,7 @@ class MpvSubtitleMemoryContractTest {
         )
         assertTrue(
             "and the match is selected through mpv's sid",
-            apply.contains("mpv.setPropertyInt(\"sid\", match.id)")
+            apply.contains("MPVLib.setPropertyInt(\"sid\", match.id)")
         )
     }
 

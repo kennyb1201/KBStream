@@ -68,9 +68,9 @@ class MpvEngineOverlayContractTest {
 
     @Test
     fun `the video output pins the API its own context and opengl-es already imply`() {
-        val context = view.indexOf("mpv.setOptionString(\"gpu-context\", \"android\")")
-        val api = view.indexOf("mpv.setOptionString(\"gpu-api\", \"opengl\")")
-        val es = view.indexOf("mpv.setOptionString(\"opengl-es\", \"yes\")")
+        val context = view.indexOf("MPVLib.setOptionString(\"gpu-context\", \"android\")")
+        val api = view.indexOf("MPVLib.setOptionString(\"gpu-api\", \"opengl\")")
+        val es = view.indexOf("MPVLib.setOptionString(\"opengl-es\", \"yes\")")
         assertTrue("the Android GPU context is still configured", context >= 0)
         assertTrue("and OpenGL ES is still what it renders with", es >= 0)
         assertTrue(

@@ -81,7 +81,7 @@ class MpvTlsCaContractTest {
         )
         assertTrue(
             "mpv must be pointed at the staged bundle",
-            view.contains("mpv.setOptionString(\"tls-ca-file\"")
+            view.contains("MPVLib.setOptionString(\"tls-ca-file\"")
         )
     }
 
@@ -90,12 +90,12 @@ class MpvTlsCaContractTest {
         val view = source(PLAYER_VIEW)
         assertTrue(
             "verification must stay ON whenever the roots were staged",
-            view.contains("mpv.setOptionString(\"tls-verify\", \"yes\")")
+            view.contains("MPVLib.setOptionString(\"tls-verify\", \"yes\")")
         )
         assertTrue(
             "a failed staging must fall back to unverified playback, not to " +
                 "failing every stream",
-            view.contains("mpv.setOptionString(\"tls-verify\", \"no\")")
+            view.contains("MPVLib.setOptionString(\"tls-verify\", \"no\")")
         )
     }
 }

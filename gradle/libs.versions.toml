@@ -42,7 +42,6 @@ coil = "3.6.3"
 
 # --- Playback / sync / reporting ---
 media3 = "1.11.1"
-libmpv = "1.0.0"
 newpipe-extractor = "43f8e6ebeef4"
 sentry = "8.59.0"
 supabase = "3.8.0"
@@ -110,7 +109,11 @@ media3-session = { module = "androidx.media3:media3-session", version.ref = "med
 media3-datasource-okhttp = { module = "androidx.media3:media3-datasource-okhttp", version.ref = "media3" }
 
 # --- Playback engines / stream extraction ---
-libmpv = { module = "dev.jdtech.mpv:libmpv", version.ref = "libmpv" }
+# The MPV engine's native library is no longer a Maven coordinate: it is the
+# Riteshp2001/mpvlibAndroid (Mpv∞) release AAR, fetched into app/libs/ and
+# consumed as a file dependency (see app/build.gradle.kts and
+# scripts/fetch_mpv_aar.sh). The `libmpv` alias dev.jdtech.mpv:libmpv used to
+# live here and is deliberately retired - nothing may point back at it.
 newpipe-extractor = { module = "com.github.TeamNewPipe:NewPipeExtractor", version.ref = "newpipe-extractor" }
 
 # --- Coil ---

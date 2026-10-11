@@ -40,12 +40,12 @@ import java.util.concurrent.atomic.AtomicReference
 object PlayerEngine {
 
     /**
-     * libmpv's own floor, and now the app's too: both declare minSdk 26, so
-     * the manifest's tools:overrideLibrary is gone and this check is
-     * unconditionally true on every device the app can install on. It is kept
-     * as the single explicit gate MPV is selected through, and so the floor
-     * cannot drift back below the native library without someone noticing
-     * this line.
+     * The app's own floor, and the API level MPV is selected from. It used to
+     * coincide with libmpv's (both declared 26); the mpvlibAndroid AAR now
+     * declares minSdk 24 - below this - so this is purely the app's own choice,
+     * kept as the single explicit gate MPV is selected through and so the floor
+     * cannot drift back below the native library without someone noticing this
+     * line.
      */
     const val MIN_SDK = Build.VERSION_CODES.O
 
@@ -54,11 +54,11 @@ object PlayerEngine {
 
     /**
      * The stored choice, coerced to something this device can actually run.
-     * The app's floor and libmpv's now coincide (both 26), so [isMpvAvailable]
-     * is unconditionally true and the API-25 case this used to guard against
-     * is gone; the coercion stays as the single place a stored choice meets
-     * the runtime capability, which still covers native libraries that fail to
-     * load for a reason other than the API level.
+     * The app's floor (26) sits above the AAR's declared minSdk (24), so
+     * [isMpvAvailable] is unconditionally true and the API-25 case this used to
+     * guard against is gone; the coercion stays as the single place a stored
+     * choice meets the runtime capability, which still covers native libraries
+     * that fail to load for a reason other than the API level.
      */
     fun selected(context: Context): Int {
         val chosen = AppPreferences.getPlayerEngine(context)

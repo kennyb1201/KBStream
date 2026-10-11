@@ -64,6 +64,16 @@
     native <methods>;
 }
 
+# --- mpv JNI bridge (mpvlibAndroid) ---
+# The AAR ships no consumer proguard.txt (the dev.jdtech.mpv one it replaces
+# shipped `-keep class dev.jdtech.mpv.MPVLib { *; }`), so the rule has to live
+# here now. The library's native side looks classes up by NAME and constructs
+# them from JNI: MPVLib itself, the MPVNode subclasses it builds for every
+# event/property payload, and the nested observer/enum types. Without this the
+# release build renames or strips them and the first event throws
+# NoClassDefFoundError / UnsatisfiedLinkError at runtime, never at build time.
+-keep class is.xyz.mpv.** { *; }
+
 # --- Player diagnostics: class names are printed into PLAYER_DV / PLAYER_VIDEO ---
 # The Dolby Vision compat layer narrates itself through javaClass.simpleName
 # ("Compat extractor configured=...", "Wrapping extractor=..."). R8 renames
