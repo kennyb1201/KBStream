@@ -389,17 +389,50 @@ class DolbyVisionCompatTest {
         )
     }
 
-    // ── TEMPORARY diagnostic arms: the DV stall bisect (2026-10-11) ───────
+    // ── TEMPORARY diagnostic arm E: the Vimu config (2026-10-11) ────────
     //
     // The relabel path (DV-capable box, non-DV display) stalled with zero
-    // output frames. Two things about the relabeled stream are new relative to
-    // the build that produced a picture: the RPU is KEPT under an hvc1 label,
-    // and explicit HDR10 color info is attached. These pin the two switches
-    // that turn each one off in turn — and that they are OFF by default, so the
-    // bytes of a default build are unchanged.
+    // output frames, and the earlier arms (RPU dropped with HDR10+ still
+    // stripped, color info skipped, whole-NAL SEI drop) all stalled too. Arm E
+    // is the one combination they never tried and the one the community prior
+    // for this chipset says works: the RPU dropped, the HDR10+ SEI KEPT. These
+    // pin that call shape — and that it is OFF by default, so the bytes of a
+    // default build are unchanged.
 
     @Test
-    fun `the diagnostic RPU arm drops type 62 and leaves the EL and parameter sets`() {
+    fun `the Vimu arm drops type 62 and forwards the HDR10+ SEI bit-exact`() {
+        val vps = nal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
+        val sps = nal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
+        val pps = nal(34, byteArrayOf(0x0D, 0x0E, 0x0F))
+        val rpu = nal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val el = nal(63, byteArrayOf(0x0A, 0x0B, 0x0C))
+        val sei = nal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66, 0x77, 0x88.toByte()))
+
+        val au = vps + sps + pps + rpu + el + sei + vcl
+        val buf = au.copyOf()
+        // The arm's exact call shape: the two flags the factory passes.
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = false, stripHdr10Plus = false, dropRpuNal = true
+        )
+
+        assertTrue("the RPU must have been removed", newLen >= 0)
+        // Only type 62 goes: the EL (63), the parameter sets, the VCL and — the
+        // whole point of the arm — the HDR10+ SEI all ride through bit-exact.
+        // Arm A never tried this; it dropped the RPU with the SEI still gone.
+        val expected = vps + sps + pps + el + sei + vcl
+        assertArrayEquals(
+            "arm E must drop the RPU and keep the HDR10+ SEI",
+            expected,
+            buf.copyOf(newLen)
+        )
+    }
+
+    @Test
+    fun `the Vimu RPU flag still drops only type 62 when the SEI strip runs too`() {
+        // The pin the earlier arms left behind: with the HDR10+ strip on as
+        // well, dropRpuNal removes the RPU alone — never the EL (63), never a
+        // parameter set.
         val vps = nal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
         val sps = nal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
         val pps = nal(34, byteArrayOf(0x0D, 0x0E, 0x0F))
@@ -415,18 +448,16 @@ class DolbyVisionCompatTest {
         )
 
         assertTrue("the RPU and the HDR10+ SEI must have been removed", newLen >= 0)
-        // Only type 62 goes on top of the HDR10+ SEI: the EL (63) is untouched,
-        // as are the parameter sets and the VCL. Arm A is not "strip DV again".
         val expected = vps + sps + pps + el + vcl
         assertArrayEquals(
-            "arm A must drop the RPU and not the EL",
+            "dropRpuNal must drop the RPU and not the EL",
             expected,
             buf.copyOf(newLen)
         )
     }
 
     @Test
-    fun `the diagnostic RPU arm is off by default, so the strip output is unchanged`() {
+    fun `the Vimu arm is off by default, so the strip output is unchanged`() {
         val rpu = nal(62, byteArrayOf(0x11, 0x22))
         val sei = nal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
         val vcl = nal(19, byteArrayOf(0x55, 0x66))
@@ -452,7 +483,7 @@ class DolbyVisionCompatTest {
     }
 
     @Test
-    fun `the diagnostic RPU arm drops type 62 on length-delimited samples too`() {
+    fun `the Vimu arm drops type 62 and keeps the SEI on length-delimited samples too`() {
         val rpu = ldNal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
         val el = ldNal(63, byteArrayOf(0x0A, 0x0B))
         val sei = ldNal(39, byteArrayOf(0x04, 0x06, 0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04))
@@ -461,20 +492,20 @@ class DolbyVisionCompatTest {
         val buf = sample.copyOf()
 
         val newLen = DolbyVisionCompat.stripLengthDelimited(
-            buf, sample.size, 4, stripDv = false, stripHdr10Plus = true, dropRpuNal = true
+            buf, sample.size, 4, stripDv = false, stripHdr10Plus = false, dropRpuNal = true
         )
 
-        assertTrue("the RPU and the HDR10+ SEI must have been removed", newLen >= 0)
+        assertTrue("the RPU must have been removed", newLen >= 0)
         assertArrayEquals(
-            "the EL must survive the RPU arm in an MP4 sample as well",
-            el + vcl,
+            "the EL and the HDR10+ SEI must survive in an MP4 sample as well",
+            el + sei + vcl,
             buf.copyOf(newLen)
         )
     }
 
     @Test
     fun `the identity color-info lambda leaves the format's own color info alone`() {
-        // Arm B: skipping the attached HDR10 color info must leave whatever the
+        // The relabel's color-info hook must be able to leave whatever the
         // extractor produced - including NOTHING - and must not throw, so the
         // full->minimal fallback this file already guards is untouched.
         val source = Format.Builder()
@@ -491,154 +522,10 @@ class DolbyVisionCompatTest {
             r.attempt
         )
         assertNull(
-            "arm B ships the relabeled format without the attached color info",
+            "the identity hook ships the relabeled format without attached color info",
             r.format.colorInfo
         )
         assertEquals(MimeTypes.VIDEO_H265, r.format.sampleMimeType)
-    }
-
-    // ── TEMPORARY diagnostic arm C: the whole-NAL HDR10+ SEI drop ───────
-    //
-    // Prime suspect for the 2026-10-11 stall: the HDR10+ removal changed from
-    // a whole-NAL drop to a per-message in-place rewrite, and the first-sample
-    // log only ever covers sample #1 (where nothing is shrunk) — a corrupt
-    // surgically-shrunk SEI a few access units in matches the stall signature
-    // exactly. Arm C puts the 14:04 transformation back behind a toggle, so one
-    // playback separates the surgery from the relabeled stream itself.
-
-    @Test
-    fun `the whole-NAL arm drops the SEI NAL even when other messages ride in it`() {
-        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
-        val sei = nal(39, t35Message(HDR10_PLUS_HEADER) + other + byteArrayOf(0x80.toByte()))
-        val vcl = nal(19, byteArrayOf(0x55, 0x66))
-        val au = sei + vcl
-        val buf = au.copyOf()
-
-        val newLen = DolbyVisionCompat.stripAnnexB(
-            buf, au.size, stripDv = false, stripHdr10Plus = true, wholeNalSeiDrop = true
-        )
-
-        assertEquals("the whole SEI NAL goes, its kept message included", vcl.size, newLen)
-        assertArrayEquals(
-            "every other NAL must be byte-identical",
-            vcl,
-            buf.copyOf(newLen)
-        )
-    }
-
-    @Test
-    fun `the whole-NAL arm records a whole drop, not a shrink`() {
-        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
-        val sei = nal(39, t35Message(HDR10_PLUS_HEADER) + other + byteArrayOf(0x80.toByte()))
-        val vcl = nal(19, byteArrayOf(0x55, 0x66))
-        val au = sei + vcl
-        val buf = au.copyOf()
-        val accounting = DolbyVisionCompat.SeiStripAccounting()
-
-        DolbyVisionCompat.stripAnnexB(
-            buf, au.size, stripDv = false, stripHdr10Plus = true,
-            wholeNalSeiDrop = true, accounting = accounting
-        )
-
-        val entry = accounting.entries.single()
-        assertEquals(39, entry.nalType)
-        assertEquals(sei.size - 4, entry.originalSize)
-        assertEquals(DolbyVisionCompat.SeiStripAccounting.Action.DROPPED, entry.action)
-        assertEquals("39:${sei.size - 4}->dropped", accounting.summary())
-    }
-
-    @Test
-    fun `the whole-NAL arm is off by default, so the surgery still runs`() {
-        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
-        val sei = nal(39, t35Message(HDR10_PLUS_HEADER) + other + byteArrayOf(0x80.toByte()))
-        val vcl = nal(19, byteArrayOf(0x55, 0x66))
-        val au = sei + vcl
-
-        val implicit = au.copyOf()
-        val implicitLen = DolbyVisionCompat.stripAnnexB(
-            implicit, au.size, stripDv = false, stripHdr10Plus = true
-        )
-        val explicit = au.copyOf()
-        val explicitLen = DolbyVisionCompat.stripAnnexB(
-            explicit, au.size, stripDv = false, stripHdr10Plus = true, wholeNalSeiDrop = false
-        )
-
-        assertEquals("omitting the arm must mean the same as false", implicitLen, explicitLen)
-        assertArrayEquals(
-            "the default must be byte-identical to the shipping surgical strip",
-            implicit.copyOf(implicitLen),
-            explicit.copyOf(explicitLen)
-        )
-        // The kept message survives inside the NAL: that is the surgery, and it
-        // is what makes arm C a different transformation rather than a switch.
-        val kept = nal(39, other + byteArrayOf(0x80.toByte()))
-        assertEquals("the NAL survives shrunk, not dropped", kept.size + vcl.size, implicitLen)
-    }
-
-    @Test
-    fun `the whole-NAL arm drops whole on length-delimited samples too`() {
-        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
-        val sei = ldNal(39, t35Message(HDR10_PLUS_HEADER) + other + byteArrayOf(0x80.toByte()))
-        val vcl = ldNal(19, byteArrayOf(0x55, 0x66))
-        val sample = sei + vcl
-        val buf = sample.copyOf()
-
-        val newLen = DolbyVisionCompat.stripLengthDelimited(
-            buf, sample.size, 4, stripDv = false, stripHdr10Plus = true, wholeNalSeiDrop = true
-        )
-
-        assertEquals("the whole SEI NAL goes in an MP4 sample as well", vcl.size, newLen)
-        assertArrayEquals("the VCL must be byte-identical", vcl, buf.copyOf(newLen))
-    }
-
-    @Test
-    fun `the shrink callback names each surgically shrunk SEI and stays silent for a drop`() {
-        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
-        val shared = nal(39, t35Message(HDR10_PLUS_HEADER) + other + byteArrayOf(0x80.toByte()))
-        val whole = nal(39, t35Message(HDR10_PLUS_HEADER))
-        val vcl = nal(19, byteArrayOf(0x55, 0x66))
-        val au = shared + whole + vcl
-        val kept = nal(39, other + byteArrayOf(0x80.toByte()))
-
-        val buf = au.copyOf()
-        val shrunk = mutableListOf<String>()
-        DolbyVisionCompat.stripAnnexB(
-            buf, au.size, stripDv = false, stripHdr10Plus = true,
-            onSeiShrunk = { type, old, new -> shrunk.add("$type:$old->$new") }
-        )
-
-        assertEquals(
-            "only the shared NAL was shrunk; the HDR10+-only one went whole",
-            listOf("39:${shared.size - 4}->${kept.size}"),
-            shrunk
-        )
-
-        // Arm C never shrinks anything, so the callback must never fire: this is
-        // what keeps a SHRUNK line in the field evidence of the surgery firing.
-        val armCBuf = au.copyOf()
-        val armCLines = mutableListOf<String>()
-        DolbyVisionCompat.stripAnnexB(
-            armCBuf, au.size, stripDv = false, stripHdr10Plus = true,
-            wholeNalSeiDrop = true,
-            onSeiShrunk = { type, old, new -> armCLines.add("$type:$old->$new") }
-        )
-        assertTrue("arm C must not report a shrink", armCLines.isEmpty())
-    }
-
-    @Test
-    fun `the shrink callback is never invoked when nothing is shrunk`() {
-        val sei = nal(39, t35Message(HDR10_PLUS_HEADER))
-        val vcl = nal(19, byteArrayOf(0x55, 0x66))
-        val au = sei + vcl
-        val buf = au.copyOf()
-        var calls = 0
-
-        DolbyVisionCompat.stripAnnexB(
-            buf, au.size, stripDv = false, stripHdr10Plus = true,
-            onSeiShrunk = { _, _, _ -> calls++ }
-        )
-
-        assertEquals("a whole-NAL drop is not a shrink", 0, calls)
     }
 
     // ── HDR10+ detection is a PREFIX match ────────────────────────────────

@@ -126,29 +126,15 @@ internal class DolbyVisionCompatExtractorsFactory(
      */
     private val nonDvDisplayOnDvDevice: Boolean = false,
     /**
-     * TEMPORARY diagnostic arm A of the 2026-10-11 DV stall bisect: drop the DV
-     * RPU NAL (type 62) from the relabel path's samples, so one build can say
-     * whether an RPU under an hvc1 label is what the decoder refuses. Default
-     * false — with it off, every byte this factory emits is unchanged.
+     * TEMPORARY diagnostic arm E of the 2026-10-11 DV stall bisect: the Vimu
+     * config. The two relabel strip calls drop the DV RPU NAL (type 62) and KEEP
+     * the HDR10+ SEI — what Vimu and Kodi play on this chipset with Dolby Vision
+     * disabled, and the one combination the earlier arms never tested (A dropped
+     * the RPU with HDR10+ still stripped; B and C never dropped the RPU at all).
+     * Relabel path only — the sniff path and the mutating strip are untouched.
+     * Default false = byte-identical output to the current release.
      */
-    private val diagDropRpu: Boolean = false,
-    /**
-     * TEMPORARY diagnostic arm B of the same bisect: skip the explicit HDR10
-     * color info the relabel attaches, keeping whatever color info the extractor
-     * produced (or none) — exactly the 14:04 build's format. Default false.
-     */
-    private val diagNoColorInfo: Boolean = false,
-    /**
-     * TEMPORARY diagnostic arm C of the same bisect: drop an SEI NAL the HDR10+
-     * detector fires on WHOLE, instead of `15bd0cc5`'s per-message in-place
-     * surgery — the 14:04 picture build's transformation (RPU kept, color
-     * attached, HDR10+ SEI gone whole). Prime suspect for the 2026-10-11
-     * zero-frame stall is a corrupt surgically-shrunk SEI a few access units in,
-     * which only this arm can separate from the relabeled stream itself. Relabel
-     * path only — the sniff path and the mutating strip are untouched. Default
-     * false = byte-identical output to the current release.
-     */
-    private val diagWholeNalSeiDrop: Boolean = false
+    private val diagVimuConfig: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -190,7 +176,7 @@ internal class DolbyVisionCompatExtractorsFactory(
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
             convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-            diagDropRpu, diagNoColorInfo, diagWholeNalSeiDrop
+            diagVimuConfig
         )
     }
 }
@@ -209,9 +195,7 @@ private class VideoCompatExtractor(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagDropRpu: Boolean,
-    private val diagNoColorInfo: Boolean,
-    private val diagWholeNalSeiDrop: Boolean
+    private val diagVimuConfig: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -220,7 +204,7 @@ private class VideoCompatExtractor(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
                 convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                diagDropRpu, diagNoColorInfo, diagWholeNalSeiDrop
+                diagVimuConfig
             )
         )
     }
@@ -247,9 +231,7 @@ private class VideoCompatExtractorOutput(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagDropRpu: Boolean,
-    private val diagNoColorInfo: Boolean,
-    private val diagWholeNalSeiDrop: Boolean
+    private val diagVimuConfig: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -258,7 +240,7 @@ private class VideoCompatExtractorOutput(
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
                 convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                diagDropRpu, diagNoColorInfo, diagWholeNalSeiDrop
+                diagVimuConfig
             )
         } else {
             track
@@ -285,20 +267,11 @@ private class VideoCompatTrackOutput(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagDropRpu: Boolean,
-    private val diagNoColorInfo: Boolean,
-    private val diagWholeNalSeiDrop: Boolean
+    private val diagVimuConfig: Boolean
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
     private val convertTo81 = convertP7To81 || convertP5To81
-
-    /**
-     * Throttled logcat for the relabel path's surgical SEI shrink (see
-     * [SeiShrinkLog]). One instance per track and one nullable call per shrunk
-     * NAL — the steady state already parses every sample, so this is noise.
-     */
-    private val seiShrinkLog = SeiShrinkLog()
 
     // The HDR10 color metadata every DV->HDR10 rewrite path below attaches —
     // see [DV_HDR10_COLOR_INFO] for why it is not optional.
@@ -490,12 +463,7 @@ private class VideoCompatTrackOutput(
                 // not happen.
                 val relabeled = relabelDvFormat(
                     format, rewriteCodec,
-                    // Diagnostic arm B: the identity lambda hands the builder
-                    // back untouched, so the format keeps whatever color info the
-                    // extractor produced (or none) - the 14:04 build's shape, and
-                    // it cannot throw, so the full->minimal fallback is unchanged.
-                    applyColorInfo = if (diagNoColorInfo) ({ it })
-                    else ({ it.setColorInfo(DV_HDR10_COLOR_INFO) })
+                    applyColorInfo = { it.setColorInfo(DV_HDR10_COLOR_INFO) }
                 )
                 if (relabeled != null) {
                     Log.i(
@@ -505,8 +473,7 @@ private class VideoCompatTrackOutput(
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
                             "stripped, RPU kept, VPS/SPS untouched " +
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
-                            " diagDropRpu=$diagDropRpu diagNoColor=$diagNoColorInfo" +
-                            " diagWholeNalSei=$diagWholeNalSeiDrop"
+                            " diagVimuConfig=$diagVimuConfig"
                     )
                     delegate.format(relabeled.format)
                     // Bit-exact relabel plus in-place metadata NAL removal:
@@ -530,9 +497,7 @@ private class VideoCompatTrackOutput(
                 // is the tested working path there, so it is left alone.
                 val relabeled = relabelDvFormat(
                     format, rewriteCodec,
-                    // Diagnostic arm B, exactly as at the non-DV-display site.
-                    applyColorInfo = if (diagNoColorInfo) ({ it })
-                    else ({ it.setColorInfo(DV_HDR10_COLOR_INFO) })
+                    applyColorInfo = { it.setColorInfo(DV_HDR10_COLOR_INFO) }
                 )
                 if (relabeled != null) {
                     Log.i(
@@ -542,8 +507,7 @@ private class VideoCompatTrackOutput(
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
                             "stripped, RPU kept, VPS/SPS untouched " +
                             "(the mutating strip is field-dead here)" +
-                            " diagDropRpu=$diagDropRpu diagNoColor=$diagNoColorInfo" +
-                            " diagWholeNalSei=$diagWholeNalSeiDrop"
+                            " diagVimuConfig=$diagVimuConfig"
                     )
                     delegate.format(relabeled.format)
                     mode = Mode.STRIP_NALS_ONLY
@@ -846,10 +810,6 @@ private class VideoCompatTrackOutput(
 
         if (mode == Mode.STRIP_NALS_ONLY) {
             val firstSample = !stripReported
-            // Arm C corroboration counts the samples the relabel path parses:
-            // the accounting below covers sample #1 only, so a SHRUNK line that
-            // fires later has to be able to say where in the stream it is.
-            seiShrinkLog.sample()
             val inventory =
                 if (firstSample) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
             // Per-SEI accounting, first sample only - all later samples pass
@@ -857,38 +817,29 @@ private class VideoCompatTrackOutput(
             val accounting =
                 if (firstSample) DolbyVisionCompat.SeiStripAccounting() else null
             // Pure removal — stripAnnexB/stripLengthDelimited never rewrite
-            // parameter sets. The RPU/EL is KEPT (stripDv = false): dropping
-            // it left a DV-flagged track with no DV metadata, and the decoder
-            // stalled. Only the HDR10+ SEI goes, on the theory that the
-            // competing dynamic-metadata set is what black-screened a
-            // (intolerant) non-DV display. The temporary diagnostic arm A
-            // (diagDropRpu) removes the RPU alone on top of that; with the arm
-            // off this call is exactly the one this path has always made.
+            // parameter sets. By default the RPU/EL is KEPT (stripDv = false)
+            // and only the HDR10+ SEI goes: dropping the RPU alone left a
+            // DV-flagged track with no DV metadata and the decoder stalled, and
+            // the theory was that the competing dynamic-metadata set is what
+            // black-screened an (intolerant) non-DV display. Arm E
+            // (diagVimuConfig) inverts that pair — the RPU goes and the HDR10+
+            // SEI stays — which is the Vimu config, and is exactly what arm A
+            // never tried (it dropped the RPU with the SEI still stripped).
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
-                        pendingBuf, sampleEnd, stripDv = false, stripHdr10Plus = true,
-                        // Diagnostic arm A: with the toggle off this is exactly
-                        // the call this path has always made.
-                        dropRpuNal = diagDropRpu,
-                        // Diagnostic arm C: the whole SEI NAL goes (the 14:04
-                        // picture build) instead of the surgery. Off, the
-                        // surgery below it runs as it always has.
-                        wholeNalSeiDrop = diagWholeNalSeiDrop,
-                        accounting = accounting,
-                        // Diagnostic: past sample #1 the surgery is otherwise
-                        // invisible, so every SHRUNK reports through this. It
-                        // changes no byte — see [SeiShrinkLog].
-                        onSeiShrunk = seiShrinkLog
+                        pendingBuf, sampleEnd, stripDv = false,
+                        stripHdr10Plus = !diagVimuConfig,
+                        dropRpuNal = diagVimuConfig,
+                        accounting = accounting
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
-                        stripDv = false, stripHdr10Plus = true,
-                        dropRpuNal = diagDropRpu,
-                        wholeNalSeiDrop = diagWholeNalSeiDrop,
-                        accounting = accounting,
-                        onSeiShrunk = seiShrinkLog
+                        stripDv = false,
+                        stripHdr10Plus = !diagVimuConfig,
+                        dropRpuNal = diagVimuConfig,
+                        accounting = accounting
                     )
             }
             if (firstSample) {
@@ -1127,63 +1078,3 @@ internal fun relabelDvFormat(
     return null
 }
 
-/**
- * Throttled logcat for the relabel path's surgical SEI shrink — diagnostic arm
- * C's corroboration half.
- *
- * Arm C exists because the HDR10+ removal changed from a whole-NAL drop to an
- * in-place per-message rewrite, and a corrupt surgically-shrunk SEI a few
- * access units into the stream matches the stall signature exactly (decoder
- * takes the first input frame, emits nothing). The first-sample accounting
- * covers sample #1 only, and in practice sample #1 carries no shrink at all, so
- * without this the surgery's own firing is invisible in the field.
- *
- * The first [DETAIL_LINES] shrinks are named with the sample they came from;
- * after that at most one summary per [SUMMARY_MS], so a stream where the surgery
- * fires on every access unit cannot flood logcat. A class rather than a lambda
- * so the counter survives across samples and the steady state allocates nothing.
- *
- * Nothing here reads or writes sample bytes: it is called after the strip has
- * already recorded what it did.
- */
-private class SeiShrinkLog : (Int, Int, Int) -> Unit {
-
-    private var samples = 0
-    private var shrunk = 0
-    private var windowShrunk = 0
-    private var detailed = 0
-    private var lastSummaryAtMs = 0L
-
-    /** Counts one sample the relabel path parsed - the number the log cites. */
-    fun sample() {
-        samples++
-    }
-
-    override fun invoke(nalType: Int, oldSize: Int, newSize: Int) {
-        shrunk++
-        windowShrunk++
-        val now = System.currentTimeMillis()
-        if (detailed < DETAIL_LINES) {
-            detailed++
-            lastSummaryAtMs = now
-            Log.i(
-                "PLAYER_DV",
-                "Relabel NALS-strip: surgically shrunk SEI type=$nalType " +
-                    "$oldSize->$newSize (sample #$samples)"
-            )
-        } else if (now - lastSummaryAtMs >= SUMMARY_MS) {
-            Log.i(
-                "PLAYER_DV",
-                "Relabel NALS-strip: SEI shrink summary — $windowShrunk in the last " +
-                    "${SUMMARY_MS / 1000}s ($shrunk total, latest sample #$samples)"
-            )
-            windowShrunk = 0
-            lastSummaryAtMs = now
-        }
-    }
-
-    private companion object {
-        const val DETAIL_LINES = 3
-        const val SUMMARY_MS = 60_000L
-    }
-}

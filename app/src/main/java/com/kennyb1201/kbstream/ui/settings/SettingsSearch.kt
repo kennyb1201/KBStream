@@ -202,28 +202,16 @@ internal object SettingsSearchIndex {
             "Strip HDR10+",
             "hdr10+ hdr plus strip playback picture"
         ),
-        // TEMPORARY: the three Dolby Vision stall-bisect arms live in the same
-        // cluster. They are drawn as ToggleRows, so the index has to carry them
-        // or they would be visible but unfindable — and they come back out with
-        // the rows once the field verdict is in.
+        // TEMPORARY: the Dolby Vision stall-bisect arm E (the Vimu config) lives
+        // in the same cluster. It is drawn as a ToggleRow, so the index has to
+        // carry it or it would be visible but unfindable — and it comes back
+        // out with the row once the field verdict is in.
         SettingSearchEntry(
-            "playback.diag-drop-rpu",
+            "playback.diag-vimu-config",
             SettingsPane.PLAYBACK,
-            "Diagnostic: drop RPU NAL (type 62)",
-            "dolby vision diagnostic bisect rpu nal type 62 stall black screen arm"
-        ),
-        SettingSearchEntry(
-            "playback.diag-no-color-info",
-            SettingsPane.PLAYBACK,
-            "Diagnostic: skip HDR10 color info",
-            "dolby vision diagnostic bisect color info hdr10 stall black screen arm"
-        ),
-        SettingSearchEntry(
-            "playback.diag-whole-nal-sei",
-            SettingsPane.PLAYBACK,
-            "Drop HDR10+ SEI whole (no per-message surgery)",
-            "dolby vision diagnostic bisect hdr10+ sei whole nal surgery shrink " +
-                "stall black screen arm"
+            "Vimu config: drop DV RPU, keep HDR10+",
+            "dolby vision diagnostic bisect vimu kodi rpu hdr10+ sei stall black " +
+                "screen arm"
         ),
         SettingSearchEntry(
             "playback.auto-select-stream",

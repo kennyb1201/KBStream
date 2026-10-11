@@ -5088,12 +5088,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             AppPreferences.getDvCompatMode(this)
         }
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
-        // TEMPORARY diagnostic arms for the 2026-10-11 DV stall bisect (see the
-        // settings rows). All default off, and with them off every byte the
-        // extractor emits is what today's release emits.
-        val dvDiagDropRpu = AppPreferences.isDvDiagDropRpu(this)
-        val dvDiagNoColorInfo = AppPreferences.isDvDiagNoColorInfo(this)
-        val dvDiagWholeNalSei = AppPreferences.isDvDiagWholeNalSei(this)
+        // TEMPORARY diagnostic arm for the 2026-10-11 DV stall bisect (see the
+        // settings row). Defaults off, and with it off every byte the extractor
+        // emits is what today's release emits.
+        val dvDiagVimuConfig = AppPreferences.isDvDiagVimuConfig(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         // True when the platform advertises a Dolby Vision decoder. On such
         // devices single-layer DV (P4/P8) normally passes through as native
@@ -5256,10 +5254,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 "displaySupportsDv=$displaySupportsDv " +
                 "audioDecoder=$audioDecoderPriority " +                    "audioOutput=$audioOutputMode decodeToPcm=$decodeToPcm " +
                         "audioSeparate=${!currentAudioUrl.isNullOrBlank()} " +
-                        // The three bisect arms, so every field capture says
-                        // which one it ran.
-                        "diagDropRpu=$dvDiagDropRpu diagNoColor=$dvDiagNoColorInfo " +
-                            "diagWholeNalSei=$dvDiagWholeNalSei"
+                        // The bisect arm, so every field capture says which one
+                        // it ran.
+                        "diagVimuConfig=$dvDiagVimuConfig"
         )
         // The compat extractor is needed when DV conversion is on OR the
         // HDR10+ strip toggle is on — both run inside it.
@@ -5298,9 +5295,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     convertP5To81 = convertP5To81,
                     nativeDvSupported = nativeDvSupported,
                     nonDvDisplayOnDvDevice = dvDisplayMismatch,
-                    diagDropRpu = dvDiagDropRpu,
-                    diagNoColorInfo = dvDiagNoColorInfo,
-                    diagWholeNalSeiDrop = dvDiagWholeNalSei
+                    diagVimuConfig = dvDiagVimuConfig
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(cachedFactory, extractorsFactory)
