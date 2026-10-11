@@ -9,10 +9,10 @@ import org.junit.Test
 /**
  * The sports line in the one-tap diagnostics report.
  *
- * The hub's matching pass already prints its four stages to logcat under
- * `SPORTS PERF`, and logcat is exactly what a viewer on a couch cannot reach -
- * so the same figures have to travel with the report that gets copied to the
- * clipboard. These cases pin the two halves that make that useful: the line is
+ * The hub's matching pass records its four stages into PerfTrace, and that is
+ * the only sink: logcat is exactly what a viewer on a couch cannot reach, so
+ * the figures have to travel with the report that gets copied to the clipboard.
+ * These cases pin the two halves that make that useful: the line is
  * absent until the hub has actually run (a clean report keeps its length, and no
  * "sports: 0 cards" noise appears), and when it does appear it reads as the
  * spec asks - counts first, then each stage's milliseconds.

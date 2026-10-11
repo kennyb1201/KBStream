@@ -648,7 +648,9 @@ class DolbyVisionCompatTest {
         // has to be able to tell them from a drop: the detector never fired (an
         // RPU-shaped T35 payload, the marker bytes only mid-payload), and the
         // detector fired but the surgical parse failed open (a matching message
-        // followed by a malformed one). Neither removes anything.
+        // followed by a malformed one). Neither removes anything. Both are also
+        // exactly what the 14:04 picture build's subsequence detector WOULD have
+        // dropped, so each carries the legacy-drop flag.
         val rpuShaped = ByteArray(10) { (0x10 + it).toByte() } + HDR10_PLUS_HEADER
         val cases = listOf(
             "the detector did not fire" to t35Message(rpuShaped),
@@ -670,11 +672,111 @@ class DolbyVisionCompatTest {
             assertEquals("$name: nothing may be removed", -1, newLen)
             assertArrayEquals("$name: the sample must be bit-exact", au, buf)
             assertEquals(
-                "$name: the NAL is recorded as kept, at its own size",
-                "39:${sei.size - 4}->kept",
+                "$name: the NAL is recorded as kept, at its own size, flagged as a legacy drop",
+                "39:${sei.size - 4}->kept,legacyDrop",
+                accounting.summary()
+            )
+            assertTrue(
+                "$name: the flag is what the field replay reads off the log line",
+                accounting.entries.single().legacyDrop
+            )
+        }
+    }
+
+    @Test
+    fun `only a kept SEI the legacy detector would have dropped carries the flag`() {
+        // The 14:04 picture build's subsequence detector dropped the marker
+        // wherever it appeared in the T35 payload. The prefix matcher keeps an
+        // RPU-shaped payload whose marker sits mid-payload - and that kept NAL
+        // is exactly the behavior delta the field replay is looking for, so the
+        // accounting has to say so. A payload no detector would drop is kept
+        // with no flag: absence is the answer, not a default-true.
+        val rpuShaped = ByteArray(10) { (0x10 + it).toByte() } + HDR10_PLUS_HEADER
+        val cases = listOf(
+            Triple(
+                "a kept NAL the subsequence detector would have dropped",
+                t35Message(rpuShaped),
+                true
+            ),
+            Triple(
+                "a kept NAL no detector would drop",
+                unregisteredMessage(byteArrayOf(0x11, 0x22)) + byteArrayOf(0x80.toByte()),
+                false
+            )
+        )
+        cases.forEach { (name, payload, flagged) ->
+            val sei = nal(39, payload)
+            val vcl = nal(19, byteArrayOf(0x55, 0x66))
+            val au = sei + vcl
+            val buf = au.copyOf()
+            val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+            val newLen = DolbyVisionCompat.stripAnnexB(
+                buf, au.size, stripDv = false, stripHdr10Plus = true,
+                accounting = accounting
+            )
+
+            assertEquals("$name: nothing may be removed", -1, newLen)
+            val entry = accounting.entries.single()
+            assertEquals(
+                "$name: the NAL is kept",
+                DolbyVisionCompat.SeiStripAccounting.Action.KEPT,
+                entry.action
+            )
+            assertEquals(
+                "$name: the flag mirrors the 14:04 detector's verdict",
+                flagged,
+                entry.legacyDrop
+            )
+            assertEquals(
+                "$name: the summary renders the flag only when it is set",
+                "39:${sei.size - 4}->kept" + if (flagged) ",legacyDrop" else "",
                 accounting.summary()
             )
         }
+    }
+
+    @Test
+    fun `a whole-NAL drop carries no legacy flag, because the flag is only on KEPT`() {
+        // A prefix match is also a subsequence match, so a dropped or shrunk NAL
+        // is trivially "would have been dropped" by the legacy detector too. It
+        // is not a delta between the two builds, so the flag is not recorded on
+        // it - only on the KEPT NALs the prefix matcher rescues.
+        val sei = nal(39, t35Message(HDR10_PLUS_HEADER))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = sei + vcl
+        val buf = au.copyOf()
+        val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+        DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = false, stripHdr10Plus = true, accounting = accounting
+        )
+
+        val entry = accounting.entries.single()
+        assertEquals(
+            DolbyVisionCompat.SeiStripAccounting.Action.DROPPED,
+            entry.action
+        )
+        assertFalse("a drop is not flagged", entry.legacyDrop)
+        assertEquals("39:${sei.size - 4}->dropped", accounting.summary())
+    }
+
+    @Test
+    fun `the summary renders a legacy-flagged kept NAL among a mixed entry list`() {
+        val accounting = DolbyVisionCompat.SeiStripAccounting()
+        accounting.record(39, 69, DolbyVisionCompat.SeiStripAccounting.Action.DROPPED)
+        accounting.record(39, 30, DolbyVisionCompat.SeiStripAccounting.Action.KEPT)
+        accounting.record(
+            39, 30, DolbyVisionCompat.SeiStripAccounting.Action.KEPT, legacyDrop = true
+        )
+        accounting.record(40, 35, DolbyVisionCompat.SeiStripAccounting.Action.KEPT)
+        accounting.record(
+            39, 69, DolbyVisionCompat.SeiStripAccounting.Action.SHRUNK, newSize = 22
+        )
+        assertEquals(
+            "39:69->dropped,39:30->kept,39:30->kept,legacyDrop,40:35->kept,39:69->shrunk=22",
+            accounting.summary()
+        )
     }
 
     @Test

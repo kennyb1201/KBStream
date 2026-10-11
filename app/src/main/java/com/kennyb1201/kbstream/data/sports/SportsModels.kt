@@ -63,18 +63,49 @@ data class SportsTeam(
      * the feed carries none (a person), where the display name is used instead.
      */
     val shortName: String? = null,
+    /**
+     * The league path this side was read from, e.g. "basketball/nba".
+     *
+     * Here rather than only on the game because it is half of the side's
+     * identity as far as a favourite is concerned - see [favoriteKey]. Null
+     * only for a side built by hand (a test, a caller with no game in hand),
+     * which is the unscoped shape this field exists to replace.
+     */
+    val league: String? = null,
 ) {
     /**
-     * The key a favourite is stored under.
+     * What identifies this side inside its own league: ESPN's id where there is
+     * one, and the display name where there is not - which is how a person is
+     * keyed (a tennis player, a fighter), and they are precisely the names the
+     * feed is unambiguous about.
      *
-     * ESPN's id where there is one, and the display name where there is not -
-     * which is how a person is keyed (a tennis player, a fighter), and they are
-     * precisely the names the feed is unambiguous about. Stored, not computed
-     * per call site, so a team favourited on one screen is matchable on
-     * another.
+     * Bare on purpose: two leagues can publish the same one. [favoriteKey] is
+     * what a favourite is stored under, and what a store is rewritten against -
+     * see [com.kennyb1201.kbstream.data.sports.SportsFavoriteKeys].
+     */
+    internal val bareFavoriteKey: String
+        get() = id?.trim()?.takeIf { it.isNotEmpty() } ?: displayName.trim().lowercase()
+
+    /**
+     * The key a favourite is stored under: [bareFavoriteKey], scoped by the
+     * league the side came from.
+     *
+     * The scope is not decoration. ESPN's ids are unique within a LEAGUE, not
+     * across the site - id 13 is the NBA's Lakers and the NFL's Raiders - so a
+     * favourite stored as a bare id is a favourite of every team that shares
+     * it. That is the whole of "random teams I didn't mark as favorite are
+     * favorited": the star appeared on a side the viewer never picked, and its
+     * game led the slate because the hub read it as one of theirs.
+     *
+     * The league path ("basketball/nba") rather than the sport, because the pro
+     * and the college feeds of one sport overlap the same way; the path is the
+     * only scope the feed itself is unambiguous about. Stored, not computed per
+     * call site, so a team favourited on one screen is matchable on another.
      */
     val favoriteKey: String
-        get() = id?.trim()?.takeIf { it.isNotEmpty() } ?: displayName.trim().lowercase()
+        get() = league?.trim()?.takeIf { it.isNotEmpty() }
+            ?.let { scope -> "$scope:$bareFavoriteKey" }
+            ?: bareFavoriteKey
 }
 
 /**

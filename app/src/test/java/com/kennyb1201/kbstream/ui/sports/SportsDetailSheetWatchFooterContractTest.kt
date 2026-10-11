@@ -71,8 +71,8 @@ class SportsDetailSheetWatchFooterContractTest {
         )
         assertTrue(
             "the stats move with the body, as its first child",
-            body.contains("StatsSection(game = game, summary = stats)") &&
-                body.indexOf("StatsSection(game = game, summary = stats)") <
+            body.contains("StatsSection(") &&
+                body.indexOf("StatsSection(") <
                 body.indexOf("SportsDetailRules.detailRows(game).forEach")
         )
     }
@@ -108,9 +108,14 @@ class SportsDetailSheetWatchFooterContractTest {
             body.contains("summary?.takeIf { SportsDetailRules.hasStats(it) }?.let { stats ->")
         )
         assertTrue(
+            "and they are the matched list minus its head: the head is what the footer plays, so a " +
+                "correction that leads the list leaves the other feeds here as the backups",
+            body.contains("val backups = channels.drop(1)")
+        )
+        assertTrue(
             "the backup feeds stay in the scrolling middle, under that stats block",
             body.contains("if (backups.isNotEmpty()) {") &&
-                body.indexOf("StatsSection(game = game, summary = stats)") <
+                body.indexOf("StatsSection(") <
                 body.indexOf("if (backups.isNotEmpty()) {") &&
                 body.contains("BackupChannelLabel(channel = backup)")
         )
@@ -133,8 +138,9 @@ class SportsDetailSheetWatchFooterContractTest {
                 )
         )
         assertTrue(
-            "and the action below them names the LAST pill as the stop above it - the pill nearest it",
-            sheetCall.contains(".focusUpTo(backupButtons.lastOrNull())")
+            "and the action below them names the LAST pill - or, with no pills, the LAST stat row - " +
+                "as the stop above it",
+            sheetCall.contains(".focusUpTo(backupButtons.lastOrNull() ?: statRows.lastOrNull())")
         )
         assertTrue(
             "the one requester per pill is still made from the same list the body draws",
@@ -171,7 +177,7 @@ class SportsDetailSheetWatchFooterContractTest {
     }
 
     @Test
-    fun `the top of the body is a D-pad stop, and only the first pill hands Up to it`() {
+    fun `the top of the body is a D-pad stop, and the first pill hands Up to the last stat row`() {
         // Reported 2026-10-10, on top of the split above: "i cant scroll up all
         // the way to see the stats it stops at the first backup channel." The
         // stats, the venue rows and the leaders are Text and take no focus, so
@@ -194,11 +200,11 @@ class SportsDetailSheetWatchFooterContractTest {
         )
         val anchor =
             "Box( modifier = Modifier .size(1.dp) .focusRequester(topAnchor) " +
-                ".focusDownTo(backupButtons.firstOrNull()) .focusProperties { canFocus = true } " +
-                ".focusable() )"
+                ".focusDownTo(statRows.firstOrNull() ?: backupButtons.firstOrNull()) " +
+                ".focusProperties { canFocus = true } .focusable() )"
         assertTrue(
             "the anchor is a real focus TARGET - an invisible 1dp box with a requester, no press " +
-                "handling, and its own Down back to the first pill",
+                "handling, and its own Down to the first stat row (the first pill when there are none)",
             body.contains(anchor)
         )
         assertTrue(
@@ -207,10 +213,13 @@ class SportsDetailSheetWatchFooterContractTest {
         )
         val firstPill = body.substring(body.indexOf("backups.forEachIndexed { index, backup ->"))
         assertTrue(
-            "and exactly the first pill names it as the stop above - the rest keep the platform's " +
-                "own Up, which already walked the pills",
-            firstPill.contains("if (index == 0) Modifier.focusUpTo(topAnchor) else Modifier") &&
-                1 == Regex("focusUpTo\\(topAnchor\\)").findAll(body).count()
+            "and exactly the first pill names the LAST stat row as the stop above it - the rest keep " +
+                "the platform's own Up, which already walked the pills",
+            firstPill.contains(
+                "if (index == 0) Modifier.focusUpTo(statRows.lastOrNull() ?: topAnchor) else Modifier"
+            ) &&
+                1 == Regex("focusUpTo\\(statRows.lastOrNull\\(\\) \\?: topAnchor\\)")
+                    .findAll(body).count()
         )
         assertTrue(
             "the anchor's own requester is the sheet's, so focusing it from the pill scrolls THIS " +

@@ -39,26 +39,27 @@ class SportsMatchSpeedContractTest {
     }
 
     @Test
-    fun `every stage is timed and logged under one greppable prefix`() {
-        assertTrue(
-            "the lineup read",
-            resolve.contains("SPORTS PERF channels=${d}{channels.size} took=${d}{channelsMs}ms")
+    fun `the per-stage logging is gone, and PerfTrace is the one sink`() {
+        // The four stages were mirrored to logcat as `SPORTS PERF` lines so the
+        // next slowdown could be read live. They found it (the ChannelIndex hoist
+        // below), and on a 30-second live tick they were 60+ lines a pass - so
+        // the live sink is gone and the diagnostics report is the only reader.
+        assertFalse(
+            "no stage is logged any more: one line per card per pass was the spam",
+            resolve.contains("SPORTS PERF")
         )
         assertTrue(
-            "the guide index",
-            resolve.contains("SPORTS PERF guideIndex=${d}{guideIndex.size} took=${d}{guideMs}ms")
-        )
-        assertTrue(
-            "the EPG query",
-            resolve.contains("SPORTS PERF programs=${d}{programs.size} took=${d}{epgMs}ms")
-        )
-        assertTrue(
-            "and the match loop",
-            resolve.contains("SPORTS PERF matched=${d}{found.size} took=${d}{matchMs}ms")
-        )
-        assertTrue(
-            "the live view stays, because it is how the next slowdown is diagnosed",
+            "the one log line that stays is per PASS, not per card",
             resolve.contains("SPORTS MATCHES cards=${d}{games.size + events.size} matched=${d}{found.size}")
+        )
+        assertTrue(
+            "and the stages are still recorded, so the report kept its numbers",
+            listOf(
+                "sports.match.channels",
+                "sports.match.guide_index",
+                "sports.match.epg_query",
+                "sports.match.match_loop"
+            ).all { resolve.contains("PerfTrace.record(\"$it\",") }
         )
     }
 
@@ -78,7 +79,7 @@ class SportsMatchSpeedContractTest {
             )
         }
         assertTrue(
-            "one measurement feeds both sinks, so the log and the report cannot disagree",
+            "each recorded sample is the measured stage's own number, not a re-measure",
             resolve.contains("PerfTrace.record(\"sports.match.channels\", channelsMs)") &&
                 resolve.contains("PerfTrace.record(\"sports.match.match_loop\", matchMs)")
         )
@@ -134,11 +135,11 @@ class SportsMatchSpeedContractTest {
 
     @Test
     fun `the tier that cost a second a card normalizes the playlist once a pass`() {
-        // The measured bug this pins: the per-card `net=` stage of the SPORTS PERF
-        // line was read as a network call, and it is not one - it is the
-        // broadcast/RSN tier, a local scan of the channel list, and it cost 1-3
-        // SECONDS a card because every card re-normalized every channel's name
-        // before comparing anything. On the 40k-channel playlist the benchmark
+        // The measured bug this pins: the pass's `net` cost was read as a network
+        // call, and it is not one - it is the broadcast/RSN tier, a local scan of
+        // the channel list, and it cost 1-3 SECONDS a card because every card
+        // re-normalized every channel's name before comparing anything. On the
+        // 40k-channel playlist the benchmark
         // runs over, sixty cards went from ~11s to ~10ms of tier time once the
         // names were hoisted out of the loop (plus ~120ms once for the index).
         assertTrue(

@@ -687,6 +687,35 @@ class SportsChannelMatcherTest {
         assertEquals(other, hit)
     }
 
+    @Test
+    fun `a remembered tournament channel leads and keeps the other feeds too`() {
+        // The tournament half of the same rule, and the same dead end if it is
+        // missed: a golf pick that turned out to be the wrong channel must not
+        // take the other feeds with it.
+        val golf = channel("golf", "Golf Channel")
+        val other = channel("other", "Other Sports")
+        val event = TournamentEvent(
+            id = "t1",
+            league = "golf/pga",
+            name = "Baycurrent Classic",
+            dateMs = firstPitch,
+            state = GameState.LIVE,
+            statusDetail = "",
+            leaders = emptyList(),
+            broadcastNames = listOf("Other Sports"),
+        )
+        val remembered: (String) -> IptvChannel? = { key -> golf.takeIf { key == event.favoriteKey } }
+
+        val feeds = SportsChannelMatcher.matches(
+            event = event,
+            channels = listOf(other, golf),
+            programs = emptyList(),
+            remembered = remembered,
+        )
+
+        assertEquals(listOf(golf, other), feeds)
+    }
+
     // ── Backups: every feed the playlist holds, not just the best one ───
     //
     // A game carried on two feeds is the case this list exists for: the head is
@@ -1063,6 +1092,54 @@ class SportsChannelMatcherTest {
         )
 
         assertEquals(espn, hit)
+    }
+
+    @Test
+    fun `a remembered channel leads the list and keeps the other feeds behind it`() {
+        // Reported 2026-10-11: "i clicked one of the backup links it was wrong so
+        // i tried to go back and click the other backup link and it wont let me
+        // see them now or scroll them". The recall returned the picked channel
+        // ALONE, so the pass after a correction deleted every other feed for the
+        // game: the sheet's BACKUP CHANNELS rows vanished and the one feed the
+        // viewer had just rejected was the only one left to press.
+        val yes = channel("yes", "YES Network")
+        val espn = channel("espn", "ESPN")
+        val game = game(yankees, redSox, broadcasts = listOf("ESPN"))
+        val remembered: (String) -> IptvChannel? = { key -> yes.takeIf { key == game.home.favoriteKey } }
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(espn, yes),
+            programs = emptyList(),
+            remembered = remembered,
+        )
+
+        assertEquals(
+            "the pick is the head, and the tier's own feed is still there behind it",
+            listOf(yes, espn),
+            feeds
+        )
+    }
+
+    @Test
+    fun `a remembered channel leads the guide's own hits too`() {
+        // The same rule when the tier that answers is the guide rather than the
+        // network name: the correction reorders, it does not prune.
+        val yes = channel("yes", "YES Network")
+        val espn = channel("espn", "ESPN")
+        val game = game(yankees, redSox)
+        val remembered: (String) -> IptvChannel? = { key -> yes.takeIf { key == game.home.favoriteKey } }
+
+        val feeds = SportsChannelMatcher.matches(
+            game = game,
+            channels = listOf(espn, yes),
+            programs = listOf(
+                program("espn", "Yankees vs. Red Sox", firstPitch, firstPitch + 180 * minute)
+            ),
+            remembered = remembered,
+        )
+
+        assertEquals(listOf(yes, espn), feeds)
     }
 
     // ── The pass's channel index ────────────────────────────────

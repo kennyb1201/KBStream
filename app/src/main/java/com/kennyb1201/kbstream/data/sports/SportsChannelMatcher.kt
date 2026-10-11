@@ -220,7 +220,9 @@ internal object SportsChannelMatcher {
      *
      * [remembered] is the viewer's own correction memory, keyed by a team's
      * [SportsTeam.favoriteKey]. It is a lambda so the matcher stays pure - the
-     * caller owns the storage - and a hit skips every tier below.
+     * caller owns the storage - and a hit LEADs the list: the tiers below still
+     * run, so the other feeds the playlist holds for the same game stay behind
+     * it and the sheet still has backups to offer (see [leadWith]).
      */
     fun matches(
         game: SportsGame,
@@ -246,45 +248,55 @@ internal object SportsChannelMatcher {
          * The pass's channel index, built once and handed to EVERY card the pass
          * matches (see [ChannelIndex]): the names it normalizes are the playlist's
          * and do not change under a pass. Defaults to building one here, which is
-         * what a one-off call wants - and it is why this parameter sits ABOVE the
-         * trailing one, so a pass's trailing `onTier` lambda still lands on it.
+         * what a one-off call wants.
          */
         channelIndex: ChannelIndex = ChannelIndex.of(channels),
-        /**
-         * TEMP: an optional per-tier timer for the hub's match-loop diagnosis
-         * (remove with the SPORTS PERF game= logs). Invoked with a tier name and
-         * its nanoseconds only when that tier actually ran; a recalled pick
-         * returns before any tier and fires nothing.
-         *
-         * Both tiers it names are LOCAL: "epg" is the program scan, "broadcast"
-         * is the playlist-name scan in [ChannelIndex], and neither touches the
-         * network. A slow "broadcast" reading is therefore this tier's own cost
-         * over the channel list - never a request.
-         */
-        onTier: ((String, Long) -> Unit)? = null,
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
         // The viewer's own past pick beats every heuristic: if they once chose a
-        // channel for a game involving either team, play that again. A hit skips
-        // all three tiers; a pick that is gone from the playlist falls through.
+        // channel for a game involving either team, that channel LEADS the list.
+        //
+        // It leads the list rather than BEING it, and that distinction is the
+        // fix for a dead end: a correction reorders the feeds, it does not
+        // delete them. Returning the pick alone meant the pass after a
+        // correction dropped every other channel for the game, so the sheet's
+        // backup rows disappeared and the feed the viewer had just rejected was
+        // the only one left to play - "i clicked one of the backup links it was
+        // wrong so i tried to go back and click the other backup link and it
+        // wont let me see them now". A pick that is gone from the playlist is
+        // ignored and the tiers answer as they always did.
         val present = channelIndex.ids
         val recalled = listOfNotNull(
             remembered(game.home.favoriteKey),
             remembered(game.away.favoriteKey),
         ).filter { it.id in present }
-        if (recalled.isNotEmpty()) return cap(recalled)
-        val epgStartedAt = System.nanoTime()
         val epg = epgHits(game, programs, channelById, variants)
-        onTier?.invoke("epg", System.nanoTime() - epgStartedAt)
-        if (epg.isNotEmpty()) return cap(epg)
+        if (epg.isNotEmpty()) return leadWith(recalled, cap(epg))
         // Home before away: a regional playlist is likelier to carry the home
         // broadcast. Within a family, the best-named channel comes first.
-        val netStartedAt = System.nanoTime()
         val networks = game.broadcastNames + rsnNetworks(game.home) + rsnNetworks(game.away)
         val networkHits = cap(networks.flatMap { channelIndex.channelsFor(it) })
-        onTier?.invoke("broadcast", System.nanoTime() - netStartedAt)
-        return networkHits
+        return leadWith(recalled, networkHits)
     }
+
+    /**
+     * The feeds a game or event answers with: the viewer's own recalled channel
+     * (if there is one) first, then the tiers' hits behind it.
+     *
+     * The head is what a card plays and what the player's own ladder falls from;
+     * the tail is what the sheet's BACKUP CHANNELS rows offer. So a correction
+     * moves a feed to the front WITHOUT taking the alternatives away, which is
+     * the one thing a viewer who has just picked the wrong feed needs. [cap]
+     * de-duplicates, so a recalled channel a tier also found is listed once, at
+     * the head.
+     *
+     * Empty [recalled] is the ordinary case and answers [tierHits] itself, so an
+     * uncorrected game is byte-for-byte the list it was before this existed.
+     */
+    private fun leadWith(
+        recalled: List<IptvChannel>,
+        tierHits: List<IptvChannel>,
+    ): List<IptvChannel> = if (recalled.isEmpty()) tierHits else cap(recalled + tierHits)
 
     /** The channel carrying a tournament event, or null. */
     fun match(
@@ -299,9 +311,10 @@ internal object SportsChannelMatcher {
      *
      * [remembered] is the viewer's own correction memory, keyed by the event's
      * own [TournamentEvent.favoriteKey] - a tournament has no teams to key it by,
-     * so its stable name is what a past pick hangs off. It is checked before the
-     * EPG and broadcast tiers, exactly as on the game path, and a pick that is
-     * gone from the playlist falls through to them.
+     * so its stable name is what a past pick hangs off. As on the game path it
+     * leads the returned list and the tiers still run behind it, so the event
+     * keeps its other feeds; a pick that is gone from the playlist falls through
+     * to them unseen.
      */
     fun matches(
         event: TournamentEvent,
@@ -311,20 +324,18 @@ internal object SportsChannelMatcher {
         channelById: Map<String, IptvChannel> = channels.associateBy { it.id },
         /** The pass's channel index, as on the game path; see there. */
         channelIndex: ChannelIndex = ChannelIndex.of(channels),
-        /** TEMP: the same per-tier timer as the game path; see there. */
-        onTier: ((String, Long) -> Unit)? = null,
     ): List<IptvChannel> {
         if (channels.isEmpty()) return emptyList()
         val present = channelIndex.ids
-        remembered(event.favoriteKey)?.takeIf { it.id in present }?.let { return cap(listOf(it)) }
-        val epgStartedAt = System.nanoTime()
+        // The tournament half of the same rule: the viewer's pick leads, the
+        // tiers' other feeds stay behind it (see [leadWith]).
+        val recalled = listOfNotNull(
+            remembered(event.favoriteKey)?.takeIf { it.id in present }
+        )
         val epg = epgNameHits(event, programs, channelById)
-        onTier?.invoke("epg", System.nanoTime() - epgStartedAt)
-        if (epg.isNotEmpty()) return cap(epg)
-        val netStartedAt = System.nanoTime()
+        if (epg.isNotEmpty()) return leadWith(recalled, cap(epg))
         val networkHits = cap(event.broadcastNames.flatMap { channelIndex.channelsFor(it) })
-        onTier?.invoke("broadcast", System.nanoTime() - netStartedAt)
-        return networkHits
+        return leadWith(recalled, networkHits)
     }
 
     // ── Search ───────────────────────────────────────────────────────
@@ -627,16 +638,15 @@ internal object SportsChannelMatcher {
      * The pass's playlist, indexed ONCE so no card has to walk it again.
      *
      * This is the fix for the slow match loop, and what it removes is worth
-     * stating exactly, because the field the cost was logged under pointed the
-     * wrong way. The broadcast tier below is NOT I/O: it reads the in-memory
-     * channel list and compares names. What made it cost 1-3 SECONDS PER CARD on
-     * a real provider playlist - the `net=` of every `SPORTS PERF game=` line,
-     * and the whole of the 70-second pass - is that each card re-normalized
-     * every channel's name from scratch, twice, before comparing anything: five
-     * figures of channels through [canonicalNetwork] and [words] for a name that
-     * had not changed since the previous card, allocating a lowercased string
-     * and a fresh word list each time and throwing both away. Sixty cards over
-     * forty thousand channels is millions of rebuilds of the same strings.
+     * stating exactly. The broadcast tier below is NOT I/O: it reads the
+     * in-memory channel list and compares names. What made it cost 1-3 SECONDS
+     * PER CARD on a real provider playlist, and the whole of the 70-second pass,
+     * is that each card re-normalized every channel's name from scratch, twice,
+     * before comparing anything: five figures of channels through
+     * [canonicalNetwork] and [words] for a name that had not changed since the
+     * previous card, allocating a lowercased string and a fresh word list each
+     * time and throwing both away. Sixty cards over forty thousand channels is
+     * millions of rebuilds of the same strings.
      *
      * So the playlist is normalized HERE, once per pass, into [Fact]s - the same
      * `displayName.ifBlank { name }`, the same [canonicalNetwork], the same first

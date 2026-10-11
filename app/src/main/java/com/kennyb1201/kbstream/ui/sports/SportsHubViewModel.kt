@@ -23,6 +23,7 @@ import com.kennyb1201.kbstream.data.sports.GameState
 import com.kennyb1201.kbstream.data.sports.MatcherProgram
 import com.kennyb1201.kbstream.data.sports.SportsChannelMatcher
 import com.kennyb1201.kbstream.data.sports.SportsChannelMemory
+import com.kennyb1201.kbstream.data.sports.SportsFavoriteKeys
 import com.kennyb1201.kbstream.data.sports.SportsGame
 import com.kennyb1201.kbstream.data.sports.SportsKind
 import com.kennyb1201.kbstream.data.sports.SportsLeague
@@ -162,45 +163,6 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             scope = viewModelScope,
             started = SharingStarted.Eagerly,
             initialValue = LeagueSection(SportsLeagues.FAVORITES)
-        )
-
-    /**
-     * The league tabs' sections with the viewer's own games first: within each
-     * section the games one of the followed teams is playing float above the
-     * rest, everything else keeping ESPN's own order (see [SportsGameOrder]).
-     *
-     * Ordering only - the live/upcoming/final grouping, the channel matcher,
-     * the sheet and the reminders all key off ids or read [_sections] itself,
-     * and the FAVORITES tab keeps reading [favoritesSection]. A viewer who
-     * follows nobody gets the sections back untouched, the same instances
-     * rather than copies, so the slate is byte-for-byte what it was before
-     * this existed. Following or unfollowing a team re-sorts instantly,
-     * through the [_favoriteTeamKeys] flow this already combines.
-     */
-    val displaySections: StateFlow<List<LeagueSection>> =
-        combine(_sections, _favoriteTeamKeys) { sections, keys ->
-            if (keys.isEmpty()) {
-                sections
-            } else {
-                sections.map { section ->
-                    // A tournament section carries no games at all - there is
-                    // nothing in a field or a grid to follow - so it has no
-                    // order to change and is handed back as it is.
-                    if (section.games.isEmpty()) {
-                        section
-                    } else {
-                        section.copy(
-                            games = SportsGameOrder.favoritesFirst(section.games, keys)
-                        )
-                    }
-                }
-            }
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            // [MutableStateFlow]'s own initial, so the first frame before the
-            // combine emits is the same empty hub it is today.
-            initialValue = emptyList()
         )
 
     /**
@@ -640,12 +602,34 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         refreshJob = viewModelScope.launch {
             val fetched = fetchSections(leagues)
             _sections.value = fetched
+            adoptLegacyFavoriteKeys(fetched)
             _isLoading.value = false
             resolveMatches(fetched)
             // The selection's live set may have moved with this refresh, so the
             // tick is re-aimed from the fresh sections.
             syncLivePoll()
         }
+    }
+
+    /**
+     * Rewrites favourites stored before their keys were league-scoped onto the
+     * slate that just loaded (see [SportsFavoriteKeys]).
+     *
+     * Run here rather than at construction because the rewrite needs the feed:
+     * the league a stored bare id belongs to is only knowable from the teams the
+     * hub has loaded, and this is the one place they arrive. It is idempotent
+     * and returns the store itself when nothing moved, so an ordinary refresh
+     * costs a set comparison and no write at all.
+     */
+    private fun adoptLegacyFavoriteKeys(sections: List<LeagueSection>) {
+        val current = _favoriteTeamKeys.value
+        val migrated = SportsFavoriteKeys.migrate(
+            stored = current,
+            games = sections.flatMap { section -> section.games }
+        )
+        if (migrated === current) return
+        AppPreferences.setSportsFavoriteTeams(getApplication(), migrated)
+        _favoriteTeamKeys.value = migrated
     }
 
     /**
@@ -801,11 +785,10 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         val channelsStarted = SystemClock.elapsedRealtime()
         val channels = channelsOrEmpty()
         val channelsMs = SystemClock.elapsedRealtime() - channelsStarted
-        // One measurement, two sinks: the SPORTS PERF line below and this
-        // PerfTrace sample are the same number, so the report and the live log
-        // can never disagree about which stage was slow.
+        // PerfTrace is the one sink: these samples are what the one-tap
+        // diagnostics report carries (see [Diagnostics.sportsLine]), and the
+        // match pass runs every 30 seconds, so nothing here is logged.
         PerfTrace.record("sports.match.channels", channelsMs)
-        Log.d(TAG, "SPORTS PERF channels=${channels.size} took=${channelsMs}ms")
         if (channels.isEmpty()) {
             _lineupStatus.value = LineupStatus.MISSING
             _matches.value = emptyMap()
@@ -825,7 +808,6 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             // its job: the guide index is a pure function of the lineup and the
             // guide URLs, both fixed while the hub is open.
             PerfTrace.record("sports.match.guide_index", guideMs)
-            Log.d(TAG, "SPORTS PERF guideIndex=${guideIndex.size} took=${guideMs}ms")
             val epgStarted = SystemClock.elapsedRealtime()
             // Games and tournaments draw from ONE ceiling over the one index
             // (see [EpgLookups]); the tournament rows are the fix for a golf
@@ -843,37 +825,25 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
             }
             val epgMs = SystemClock.elapsedRealtime() - epgStarted
             PerfTrace.record("sports.match.epg_query", epgMs)
-            Log.d(TAG, "SPORTS PERF programs=${programs.size} took=${epgMs}ms")
             val matchStarted = SystemClock.elapsedRealtime()
             // The viewer's own corrections, resolved once for the whole pass:
             // the memory is keyed by team, so every game's two teams are read
             // against the same channel list. A remembered channel beats all
             // three tiers; see [SportsChannelMemory].
-            //
-            // TEMP (remove with the SPORTS PERF game= logs): the accumulating
-            // recall total lets each card's log report its own recall cost,
-            // which is the difference the tiers-vs-IO question turns on.
-            var recallNanos = 0L
-            val remembered: (String) -> IptvChannel? = { key ->
-                val recallStartedAt = System.nanoTime()
-                val channel = SportsChannelMemory.recall(getApplication(), key, channels)
-                recallNanos += System.nanoTime() - recallStartedAt
-                channel
-            }
+            val remembered: (String) -> IptvChannel? =
+                { key -> SportsChannelMemory.recall(getApplication(), key, channels) }
             // Built ONCE for the whole pass, not once per game or per program:
             // the channel list is fixed under the pass, and a team's name forms
             // do not change between programs. Rebuilding both per program is what
             // made this loop take 82s on a full slate (see [TeamVariants]).
             val channelById = channels.associateBy { it.id }
             // And the playlist's own NAMES, normalized once for the same reason
-            // (see [SportsChannelMatcher.ChannelIndex]). This is the one the
-            // field log was measuring: the `net=` stage of every per-card line is
-            // the broadcast/RSN tier, which is a scan of the in-memory channel
-            // list and not a request - and it took 1-3s a card because every card
-            // re-normalized all five figures of channel names before comparing
-            // any of them. Hoisted, the tier only compares the strings it is
-            // handed, and a network is scanned for once a pass however many cards
-            // name it.
+            // (see [SportsChannelMatcher.ChannelIndex]). The broadcast/RSN tier
+            // is a scan of the in-memory channel list, not a request - and it
+            // took 1-3s a card because every card re-normalized all five figures
+            // of channel names before comparing any of them. Hoisted, the tier
+            // only compares the strings it is handed, and a network is scanned
+            // for once a pass however many cards name it.
             val channelIndex = SportsChannelMatcher.ChannelIndex.of(channels)
             val gameVariants: Map<String, TeamVariants> = games.associate { game ->
                 game.id to TeamVariants(
@@ -888,30 +858,8 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 // it - dies here rather than running out its whole 82 seconds in
                 // the background.
 
-                var epgNanos = 0L
-                var netNanos = 0L
-                val recallBefore = recallNanos
-                val matchStartedAt = System.nanoTime()
-                val matchedFeeds = SportsChannelMatcher.matches(game, channels, programs, remembered, channelById, gameVariants.getValue(game.id), channelIndex) { tier, nanos ->
-                    when (tier) {
-                        "epg" -> epgNanos += nanos
-                        "broadcast" -> netNanos += nanos
-                    }
-                }
-                // TEMP per-game split of the match loop (remove once the slow
-                // stage is found): recall is the per-team SharedPreferences
-                // decode inside SportsChannelMemory.recall, epg is the program
-                // scan, and net is the broadcast/RSN tier - a scan of the
-                // IN-MEMORY channel list, with no I/O anywhere in [matches]; it
-                // read as the whole bottleneck once, and it was, but as name
-                // normalization rather than as a request. Log.w, because release
-                // builds strip Log.d (see proguard-rules.pro).
-                Log.w(
-                    TAG,
-                    "SPORTS PERF game=${game.id} took=${(System.nanoTime() - matchStartedAt) / 1_000_000}ms " +
-                        "recall=${(recallNanos - recallBefore) / 1_000_000}ms " +
-                        "epg=${epgNanos / 1_000_000}ms net=${netNanos / 1_000_000}ms"
-                )
+                val matchedFeeds = SportsChannelMatcher.matches(game, channels, programs, remembered, channelById,
+                    gameVariants.getValue(game.id), channelIndex)
                 matchedFeeds.takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[game.id] = feeds
@@ -938,38 +886,20 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
                 // the event's own stable name (see [TournamentEvent.favoriteKey]):
                 // a viewer who moved a golf tournament to Golf Channel gets that
                 // back on the next pass instead of the matcher's guess.
-                var epgNanos = 0L
-                var netNanos = 0L
-                val recallBefore = recallNanos
-                val matchStartedAt = System.nanoTime()
-                val matchedFeeds = SportsChannelMatcher.matches(event, channels, programs, remembered, channelById, channelIndex) { tier, nanos ->
-                    when (tier) {
-                        "epg" -> epgNanos += nanos
-                        "broadcast" -> netNanos += nanos
-                    }
-                }
-                Log.w(
-                    TAG,
-                    "SPORTS PERF event=${event.id} took=${(System.nanoTime() - matchStartedAt) / 1_000_000}ms " +
-                        "recall=${(recallNanos - recallBefore) / 1_000_000}ms " +
-                        "epg=${epgNanos / 1_000_000}ms net=${netNanos / 1_000_000}ms"
-                )
+                val matchedFeeds = SportsChannelMatcher.matches(event, channels, programs, remembered, channelById, channelIndex)
                 matchedFeeds.takeIf { it.isNotEmpty() }
                     ?.let { feeds ->
                         found[event.id] = feeds
                         _matches.update { it + (event.id to feeds) }
                     }
             }
-            // Per-stage timing, at debug, in the order the stages run: which of
-            // the four is the slow one is a grep rather than a guess. The guide
-            // number is ~0 on every pass after the first, which is the cached
-            // index doing its job. `SPORTS PERF` is the live view; the same
-            // numbers are also recorded into PerfTrace, which is what the
-            // one-tap diagnostics report carries (see Diagnostics.sportsLine) -
-            // two sinks, one measurement each (taken just above).
+            // Per-stage timing, in the order the stages run: which of the four
+            // is the slow one is what the one-tap diagnostics report says (see
+            // Diagnostics.sportsLine). The guide number is ~0 on every pass
+            // after the first, which is the cached index doing its job. PerfTrace
+            // is the one sink - nothing here is logged.
             val matchMs = SystemClock.elapsedRealtime() - matchStarted
             PerfTrace.record("sports.match.match_loop", matchMs)
-            Log.d(TAG, "SPORTS PERF matched=${found.size} took=${matchMs}ms")
             Log.d(
                 TAG,
                 "SPORTS MATCHES cards=${games.size + events.size} matched=${found.size} " +

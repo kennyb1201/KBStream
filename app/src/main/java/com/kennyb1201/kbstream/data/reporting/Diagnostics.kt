@@ -86,11 +86,11 @@ object Diagnostics {
         // session whose player never had a decoder problem (see
         // PlaybackEngineTrace), so a clean report stays short.
         PlaybackEngineTrace.summary()?.let { report.appendLine(it) }
-        // What the last sports-hub matching pass cost, stage by stage. The same
-        // figures go to logcat as `SPORTS PERF`, and logcat is exactly what is
-        // not reachable from the couch - so the pass that a viewer reports as
-        // "it takes a minute to find the channels" travels with the report.
-        // Absent until the hub has run (see [sportsLine]).
+        // What the last sports-hub matching pass cost, stage by stage. These
+        // PerfTrace samples are the only place the figures live - logcat is
+        // exactly what is not reachable from the couch, so the pass a viewer
+        // reports as "it takes a minute to find the channels" travels with the
+        // report. Absent until the hub has run (see [sportsLine]).
         sportsLine()?.let { report.appendLine(it) }
         artLine()?.let { report.appendLine(it) }
         // Episode identity per playback session and per handoff between them:
@@ -242,8 +242,8 @@ object Diagnostics {
      * of a minute (a paged lineup read, a guide index over five figures of
      * channels, an indexed EPG search, then the honest per-card matching), and
      * the four stages are what says WHICH of them did it. The labels are the
-     * same ones the `SPORTS PERF` lines print, recorded from the same
-     * measurement, so the live view and the report can never disagree.
+     * PerfTrace sample names `resolveMatches` records - the report's only source
+     * for the breakdown.
      *
      * `channels` is the lineup read - the one stage that cannot be made cheaper,
      * since it reads every channel of every playlist - and `guide_index` is ~0

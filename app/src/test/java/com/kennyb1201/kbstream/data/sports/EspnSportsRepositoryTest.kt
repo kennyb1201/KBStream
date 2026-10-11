@@ -804,9 +804,10 @@ class EspnSportsRepositoryTest {
         assertEquals("27", game.away.id)
         assertEquals("18", game.home.id)
         // The id is the key, not the name: a club can be renamed without the
-        // viewer losing the team they follow.
-        assertEquals("27", game.away.favoriteKey)
-        assertEquals("18", game.home.favoriteKey)
+        // viewer losing the team they follow - and the league it was read from
+        // is the key's scope, since an id is unique only within its league.
+        assertEquals("football/nfl:27", game.away.favoriteKey)
+        assertEquals("football/nfl:18", game.home.favoriteKey)
     }
 
     @Test
@@ -841,11 +842,12 @@ class EspnSportsRepositoryTest {
         val game = parseScoreboard(tennis, "tennis/atp").single()
 
         assertEquals("900", game.home.id)
-        assertEquals("900", game.home.favoriteKey)
+        assertEquals("tennis/atp:900", game.home.favoriteKey)
         // No id in the feed: the name is the only stable thing left, normalised
-        // so the next fetch's casing cannot orphan the favourite.
+        // so the next fetch's casing cannot orphan the favourite - and scoped
+        // the same way an id is.
         assertNull(game.away.id)
-        assertEquals("alexander zverev", game.away.favoriteKey)
+        assertEquals("tennis/atp:alexander zverev", game.away.favoriteKey)
     }
 
     @Test

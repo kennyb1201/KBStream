@@ -287,8 +287,12 @@ class SportsGameDetailSheetContractTest {
             sheet.contains("val backupButtons = remember(backups.size) { List(backups.size) { FocusRequester() } }")
         )
         assertTrue(
-            "WATCH sits below the list now, so it hands Up to the last pill itself",
-            sheet.contains(".focusRequester(watchButton) .focusUpTo(backupButtons.lastOrNull())")
+            "WATCH sits below the list now, so it hands Up to the last pill - or the last stat row " +
+                "when the sheet has no backups",
+            sheet.contains(
+                ".focusRequester(watchButton) " +
+                    ".focusUpTo(backupButtons.lastOrNull() ?: statRows.lastOrNull())"
+            )
         )
         assertTrue(
             "and each pill hands Down to the one under it, in the order they are drawn",
@@ -332,7 +336,7 @@ class SportsGameDetailSheetContractTest {
         assertTrue(
             "the plate keeps its inset through its own padding, so the veil covers the whole window " +
                 "instead of stopping short of it",
-            sheet.contains(".padding(horizontal = 24.dp, vertical = 24.dp) .fillMaxWidth(0.72f)")
+            sheet.contains(".padding(horizontal = 24.dp, vertical = 16.dp) .fillMaxWidth(0.72f)")
         )
         assertTrue(
             "black at 60%, drawn as one shape",

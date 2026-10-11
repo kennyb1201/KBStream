@@ -75,40 +75,48 @@ class SportsHubFavoritesContractTest {
     }
 
     @Test
-    fun `each league tab leads with the viewer's own games`() {
+    fun `each league group leads with the viewer's own games`() {
         assertTrue(
-            "the sections the tabs draw combine the loaded ones with the follow set",
-            vmFlat.contains("val displaySections: StateFlow<List<LeagueSection>> =") &&
-                vmFlat.contains("combine(_sections, _favoriteTeamKeys) { sections, keys ->")
+            "all three of a league's groups are ordered by the pure rule",
+            3 == Regex("val (live|upcoming|final) = SportsGameOrder.favoritesFirst").findAll(hub).count()
         )
         assertTrue(
-            "each league's games are ordered by the pure rule, which is what makes it stable",
-            vmFlat.contains("games = SportsGameOrder.favoritesFirst(section.games, keys)")
+            "and each group is ordered AFTER it is cut and date-sorted - ordering the SECTION first " +
+                "was thrown away by the partition's own sort, which is why the star only ever led the " +
+                "slate by luck",
+            hubFlat.contains("val live = SportsGameOrder.favoritesFirst(liveGames, favoriteKeys)") &&
+                hubFlat.contains("val upcoming = SportsGameOrder.favoritesFirst(upcomingGames, favoriteKeys)") &&
+                hubFlat.contains("val final = SportsGameOrder.favoritesFirst(finalGames, favoriteKeys)") &&
+                hubFlat.contains(
+                    "val upcomingGames = section.games.filter { it.state == GameState.UPCOMING }" +
+                        ".sortedBy { it.dateMs }"
+                ) &&
+                hubFlat.contains(
+                    "val finalGames = section.games.filter { it.state == GameState.FINAL }" +
+                        ".sortedByDescending { it.dateMs }"
+                )
         )
         assertTrue(
-            "the grouping and every other consumer keep reading the unordered sections",
-            vmFlat.contains("val sections: StateFlow<List<LeagueSection>> = _sections.asStateFlow()")
+            "and the hub groups the loaded sections, in the feed's own order",
+            hubFlat.contains("val sections by viewModel.sections.collectAsStateWithLifecycle()")
         )
         assertTrue(
-            "and the hub's tabs read the ordered flow, not the raw one",
-            hubFlat.contains("val sections by viewModel.displaySections.collectAsStateWithLifecycle()") &&
-                !hubFlat.contains("viewModel.sections.collectAsStateWithLifecycle")
+            "no ordering is left in the ViewModel to be silently discarded by that partition",
+            !vmFlat.contains("displaySections") &&
+                !vmFlat.contains("SportsGameOrder.favoritesFirst")
         )
     }
 
     @Test
     fun `no favourites is the slate it always was, and a tournament is untouched`() {
         assertTrue(
-            "an empty follow set passes the sections through",
-            vmFlat.contains("if (keys.isEmpty()) { sections } else {")
+            "the ordering is driven by the live follow set, so an empty one falls to the rule's own " +
+                "identity case - the feed's list back, instance for instance (see SportsGameOrderTest)",
+            hubFlat.contains("favoriteKeys = favoriteKeys,")
         )
         assertTrue(
-            "a section with no games - a tournament, or a league with nothing on - is not copied",
-            vmFlat.contains("if (section.games.isEmpty()) { section } else {")
-        )
-        assertTrue(
-            "and the tab states its initial the same way the sections do, so the first frame is unchanged",
-            vmFlat.contains("initialValue = emptyList()")
+            "a tournament section carries no games, so the ordering is applied to games only",
+            hubFlat.contains("if (section.tournaments.isNotEmpty()) {")
         )
         assertTrue(
             "the FAVORITES tab still reads its own section, which this ordering never touches",

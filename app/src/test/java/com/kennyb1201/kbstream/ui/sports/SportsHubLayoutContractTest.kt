@@ -93,6 +93,11 @@ class SportsHubLayoutContractTest {
             mark.contains("SubcomposeAsyncImage(") && mark.contains("size(40.dp)")
         )
         assertTrue(
+            "the plate is sized by a parameter, so the sheet can run it at 40dp while a card keeps " +
+                "the 48dp default",
+            mark.contains("size: Dp = 48.dp") && mark.contains(".size(size)")
+        )
+        assertTrue(
             "a dead URL leaves the letter tile, not the empty plate it used to",
             mark.contains("loading = { TeamInitials(team = team) }") &&
                 mark.contains("error = { TeamInitials(team = team) }")

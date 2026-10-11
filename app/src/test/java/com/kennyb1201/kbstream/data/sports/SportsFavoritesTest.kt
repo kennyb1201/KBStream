@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.sports
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -10,9 +11,17 @@ import org.junit.Test
  * whether a game is one of yours.
  *
  * Both live on the data model rather than in the hub, because "who do I follow"
- * has to mean the same thing on the FAVORITES tab, in the card's star and in
- * the follow dialog - and a favourite outlives the process, so the key it is
+ * has to mean the same thing on the FAVORITES tab, in the card's star and in the
+ * follow dialog - and a favourite outlives the process, so the key it is
  * written under is a format, not a detail.
+ *
+ * The format carries a SCOPE, and the tests that matter here are the ones that
+ * pin it. ESPN's ids are unique within a league and nowhere else: id 13 is the
+ * NBA's Lakers AND the NFL's Raiders, so a favourite stored as a bare id is a
+ * favourite of every team sharing it - the reported "there's random teams I
+ * didn't mark as favorite favorited", and the other half of "favorites aren't
+ * always showing up first", since the wrong league's game floats to the top
+ * with the star on it.
  */
 class SportsFavoritesTest {
 
@@ -20,6 +29,7 @@ class SportsFavoritesTest {
         id: String? = null,
         displayName: String = "Tampa Bay Buccaneers",
         abbreviation: String = "TB",
+        league: String? = "football/nfl",
     ) = SportsTeam(
         id = id,
         abbreviation = abbreviation,
@@ -28,11 +38,16 @@ class SportsFavoritesTest {
         score = null,
         isHome = false,
         record = null,
+        league = league,
     )
 
-    private fun game(away: SportsTeam, home: SportsTeam) = SportsGame(
+    private fun game(
+        away: SportsTeam,
+        home: SportsTeam,
+        league: String = "football/nfl",
+    ) = SportsGame(
         id = "1",
-        league = "football/nfl",
+        league = league,
         name = "away at home",
         dateMs = 0L,
         state = GameState.UPCOMING,
@@ -43,20 +58,63 @@ class SportsFavoritesTest {
     )
 
     @Test
-    fun `a team is stored under ESPN's own id`() {
-        assertEquals("27", team(id = "27").favoriteKey)
+    fun `a team is stored under ESPN's own id, scoped to its league`() {
+        assertEquals("football/nfl:27", team(id = "27").favoriteKey)
+    }
+
+    @Test
+    fun `the same id in another league is a different favourite`() {
+        // The reported bug, at the rule that causes it: id 13 is both the NBA's
+        // Lakers and the NFL's Raiders, so the bare id cannot be the key - the
+        // star would appear on a side the viewer never picked and its game would
+        // lead the slate.
+        val lakers = team(id = "13", displayName = "Los Angeles Lakers", league = "basketball/nba")
+        val raiders = team(id = "13", displayName = "Las Vegas Raiders", league = "football/nfl")
+
+        assertNotEquals(lakers.favoriteKey, raiders.favoriteKey)
+
+        val lakersGame = game(
+            away = lakers,
+            home = team(id = "2", displayName = "Boston Celtics", league = "basketball/nba"),
+            league = "basketball/nba",
+        )
+        val raidersGame = game(
+            away = raiders,
+            home = team(id = "12", displayName = "Kansas City Chiefs"),
+        )
+
+        assertTrue(lakersGame.involvesFavorite(setOf(lakers.favoriteKey)))
+        assertFalse(
+            "following the Lakers must not follow the Raiders",
+            raidersGame.involvesFavorite(setOf(lakers.favoriteKey))
+        )
+        assertFalse(
+            "nor must the bare id an older build wrote match either league",
+            raidersGame.involvesFavorite(setOf("13"))
+        )
     }
 
     @Test
     fun `a team the feed gives no id for is stored under its display name`() {
         // A person, on the days ESPN omits the id: the name is the only stable
         // thing left, and it is normalised so a favourite survives the feed
-        // re-casing it.
+        // re-casing it - and scoped the same way an id is.
         assertEquals(
-            "carlos alcaraz",
-            team(id = null, displayName = "  Carlos Alcaraz ").favoriteKey
+            "tennis/atp:carlos alcaraz",
+            team(id = null, displayName = "  Carlos Alcaraz ", league = "tennis/atp").favoriteKey
         )
-        assertEquals("carlos alcaraz", team(id = "  ", displayName = "Carlos Alcaraz").favoriteKey)
+        assertEquals(
+            "tennis/atp:carlos alcaraz",
+            team(id = "  ", displayName = "Carlos Alcaraz", league = "tennis/atp").favoriteKey
+        )
+    }
+
+    @Test
+    fun `a side with no league is keyed bare, the pre-scope shape`() {
+        // Only a hand-built side does this - the parser always carries the
+        // league (see espnTeamOf). Pinned so the fallback stays deliberate
+        // rather than becoming the shape a real feed silently falls back to.
+        assertEquals("27", team(id = "27", league = null).favoriteKey)
     }
 
     @Test
@@ -65,9 +123,9 @@ class SportsFavoritesTest {
         val home = team(id = "18", displayName = "New Orleans Saints")
         val fixture = game(away = away, home = home)
 
-        assertTrue(fixture.involvesFavorite(setOf("18")))
-        assertTrue(fixture.involvesFavorite(setOf("27")))
-        assertTrue(fixture.involvesFavorite(setOf("18", "27")))
+        assertTrue(fixture.involvesFavorite(setOf("football/nfl:18")))
+        assertTrue(fixture.involvesFavorite(setOf("football/nfl:27")))
+        assertTrue(fixture.involvesFavorite(setOf("football/nfl:18", "football/nfl:27")))
     }
 
     @Test
@@ -75,11 +133,12 @@ class SportsFavoritesTest {
         val fixture = game(away = team(id = "27"), home = team(id = "18"))
 
         assertFalse(fixture.involvesFavorite(emptySet()))
-        assertFalse(fixture.involvesFavorite(setOf("3", "12")))
-        // The nickname is not the key: a favourite written under a name must not
-        // match a team that has an id, or the star would appear on the wrong
-        // side of the grid.
+        assertFalse(fixture.involvesFavorite(setOf("football/nfl:3", "football/nfl:12")))
+        // The nickname is not the key, and neither is the bare id: a favourite
+        // written under either must not match a scoped team, or the star would
+        // appear on the wrong side of the grid.
         assertFalse(fixture.involvesFavorite(setOf("tampa bay buccaneers")))
+        assertFalse(fixture.involvesFavorite(setOf("27")))
     }
 
     @Test

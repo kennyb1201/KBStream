@@ -347,7 +347,11 @@ private fun espnEventToGame(event: JSONObject, leaguePath: String): SportsGame? 
     var home: SportsTeam? = null
     for (i in 0 until competitors.length()) {
         val row = competitors.optJSONObject(i) ?: continue
-        val team = espnTeamOf(row, homeAway = row.optString("homeAway", ""))
+        val team = espnTeamOf(
+            row = row,
+            homeAway = row.optString("homeAway", ""),
+            leaguePath = leaguePath
+        )
         if (team.isHome) home = team else away = team
     }
     // A head-to-head card needs two sides; a one-sided payload is not a game.
@@ -616,8 +620,13 @@ internal fun espnNote(vararg notes: JSONArray?): String? {
  * competitor that is only an athlete still gets a name to print. There is no
  * abbreviation and no crest for a person, which is fine: the card falls back to
  * the name's initials on the same plate a club without a logo gets.
+ *
+ * [leaguePath] rides along as the side's league, which is what scopes its
+ * [SportsTeam.favoriteKey]: ESPN's ids are unique per league, not across the
+ * site, so the scope is the only thing that stops a followed team from starring
+ * whichever team in another league shares its id.
  */
-private fun espnTeamOf(row: JSONObject, homeAway: String): SportsTeam {
+private fun espnTeamOf(row: JSONObject, homeAway: String, leaguePath: String): SportsTeam {
     val team = row.optJSONObject("team")
     val athlete = row.optJSONObject("athlete")
     val displayName = team?.optString("displayName", "")?.takeIf { it.isNotBlank() }
@@ -644,10 +653,9 @@ private fun espnTeamOf(row: JSONObject, homeAway: String): SportsTeam {
         ?: athlete?.optJSONObject("headshot")?.optString("href", "")
             ?.takeIf { it.isNotBlank() }
         ?: athlete?.optJSONObject("flag")?.optString("href", "")
-            ?.takeIf { it.isNotBlank() }
-    // ESPN's own id, which is what a favourite is stored under: a club can be
-    // renamed, and a person's display name can be spelled six ways, but the id
-    // is the same row in the feed every week.
+            ?.takeIf { it.isNotBlank() }        // ESPN's own id, which - with the league beside it - is what a favourite
+    // is stored under: a club can be renamed, and a person's display name can be
+    // spelled six ways, but the id is the same row in the feed every week.
     val id = team?.optString("id", "")?.takeIf { it.isNotBlank() }
         ?: athlete?.optString("id", "")?.takeIf { it.isNotBlank() }
     return SportsTeam(
@@ -671,6 +679,8 @@ private fun espnTeamOf(row: JSONObject, homeAway: String): SportsTeam {
         // reminder's title.
         shortName = team?.optString("shortDisplayName", "")?.takeIf { it.isNotBlank() }
             ?: athlete?.optString("shortName", "")?.takeIf { it.isNotBlank() },
+        // Half of the side's identity for a favourite: see espnTeamOf.
+        league = leaguePath,
     )
 }
 

@@ -23,9 +23,14 @@ import org.junit.Test
  * the sheet from it once, via the same state a card tap sets.
  *
  * What is deliberately NOT changed is pinned too: the guide's launches still
- * state `Screen.Guide`, the Streams branch still sends a channel player to Live
- * TV, and a Screen.Sports persists as the plain hub, so a restored app never
- * reopens a sheet the viewer did not open.
+ * state `Screen.Guide`, and a Screen.Sports persists as the plain hub, so a
+ * restored app never reopens a sheet the viewer did not open.
+ *
+ * The two branches that used to answer "channel" with the guide are pinned as
+ * well, because they are the other half of the same report. A channel whose
+ * sources were picked by hand, or played with auto-select off, left the player
+ * through a branch that had never heard of the hub - so it went to Live TV no
+ * matter how the game was launched.
  */
 class SportsReturnToSheetContractTest {
 
@@ -72,9 +77,7 @@ class SportsReturnToSheetContractTest {
     fun `the player branch no longer hardcodes the guide for channel launches`() {
         assertTrue(
             "the branch delegates to the launch's own destination",
-            activity.contains(
-                "is Screen.Player -> stableBackDestination(current.returnTo) is Screen.Streams ->"
-            )
+            activity.contains("is Screen.Player -> stableBackDestination(current.returnTo)")
         )
         assertFalse(
             "which is exactly what the channel-means-guide hardcode prevented",
@@ -85,11 +88,25 @@ class SportsReturnToSheetContractTest {
             activity.contains("returnTo = Screen.Guide")
         )
         assertTrue(
-            "the Streams branch is untouched - the hub never routes through it",
+            "the Streams branch reads the same launch: a channel's picker is the same session, and the " +
+                "hub reaches it whenever auto-select is off",
+            activity.contains("is Screen.Streams -> stableBackDestination(current.returnTo)")
+        )
+    }
+
+    @Test
+    fun `backing out of a playing channel reads the launch, guide or hub alike`() {
+        assertTrue(
+            "a channel always exits to its launch's own destination, so a game's sheet comes with it",
             activity.contains(
-                "is Screen.Streams -> if (current.parentType == \"channel\") { Screen.Guide } " +
-                    "else { stableBackDestination(current.returnTo) }"
+                "if ( current.parentType == \"channel\" || AppPreferences.getAutoSelectStream(context) ) " +
+                    "{ screen = stableBackDestination(current.returnTo) }"
             )
+        )
+        assertFalse(
+            "and the channel-means-guide hardcode is gone from the exit path too, not just the Back " +
+                "handler",
+            activity.contains("if (current.parentType == \"channel\") { screen = Screen.Guide }")
         )
     }
 

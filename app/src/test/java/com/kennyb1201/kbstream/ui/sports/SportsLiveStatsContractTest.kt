@@ -84,7 +84,7 @@ class SportsLiveStatsContractTest {
     @Test
     fun `the stats section sits between the score header and the channels`() {
         val scoreLine = sheet.indexOf("SportsDetailRules.scoreLine(game)")
-        val stats = sheet.indexOf("StatsSection(game = game, summary = stats)")
+        val stats = sheet.indexOf("StatsSection(")
         val detailRows = sheet.indexOf("SportsDetailRules.detailRows(game).forEach")
         val backups = sheet.indexOf("text = \"BACKUP CHANNELS\"")
 
@@ -107,7 +107,7 @@ class SportsLiveStatsContractTest {
         // stats are the TOP of the scrolling body, and WATCH is the body's
         // pinned footer - since focusing WATCH cannot scroll a body it is not
         // inside, the block stays exactly where it is drawn.
-        val stats = sheet.indexOf("StatsSection(game = game, summary = stats)")
+        val stats = sheet.indexOf("StatsSection(")
         val scroll = sheet.indexOf(".verticalScroll(rememberScrollState())")
         val watch = sheet.indexOf(".focusRequester(watchButton)")
         assertTrue(
@@ -133,8 +133,8 @@ class SportsLiveStatsContractTest {
         assertTrue(
             "the three parts are drawn in reading order: probability, stats, last play",
             sheet.indexOf("WinProbabilityBar(game = game, homePercent = chance)") <
-                sheet.indexOf("StatCompareRow(away = awayValue, label = label, home = homeValue)") &&
-                sheet.indexOf("StatCompareRow(away = awayValue, label = label, home = homeValue)") <
+                sheet.indexOf("StatCompareRow(") &&
+                sheet.indexOf("StatCompareRow(") <
                 sheet.indexOf("text = \"Last: \$play\"")
         )
         assertTrue(
@@ -143,7 +143,58 @@ class SportsLiveStatsContractTest {
         )
         assertTrue(
             "and the rows read away | label | home, the score header's own order",
-            sheet.contains("private fun StatCompareRow(away: String, label: String, home: String)")
+            sheet.contains(
+                "private fun StatCompareRow( away: String, label: String, home: String, " +
+                    "focusRequester: FocusRequester, focusUpTo: FocusRequester?, " +
+                    "focusDownTo: FocusRequester?, )"
+            )
+        )
+    }
+
+    @Test
+    fun `the win-probability bar is drawn only for a game that is not final`() {
+        // Field 2026-10-11 (SC @ FLA final, 38-19): ESPN sends homeWinProbability
+        // = 0 for the final, so the sheet drew a full away-colour bar labelled
+        // "FLA 0%" under FINAL STATS - noise on a decided game, and a row the
+        // comparison rows below it could have used. The bar is gated on the
+        // game being in play; a live or upcoming summary draws it as before.
+        assertTrue(
+            "the bar sits behind a not-final gate",
+            sheet.contains("if (game.state != GameState.FINAL) {") &&
+                sheet.indexOf("if (game.state != GameState.FINAL) {") <
+                sheet.indexOf("WinProbabilityBar(game = game, homePercent = chance)")
+        )
+        assertTrue(
+            "and the live/upcoming path is untouched: the bar still takes the summary's own chance",
+            sheet.contains("summary.homeWinProbability?.let { chance ->")
+        )
+    }
+
+    @Test
+    fun `every team-stat row is a D-pad stop, chained through the body`() {
+        // The stat rows are the body's only focusables besides the pills, and
+        // focus is the only thing that scrolls this body: without a stop per
+        // row a stat below the fold could never be pulled into view. The chain
+        // is the pills' own, one level up - row i names row i-1 (or the anchor)
+        // above and row i+1 (or the first pill) below.
+        assertTrue(
+            "the sheet makes one requester per row, keyed on the row count",
+            sheet.contains("val statRows = remember(stats?.teamStats?.size ?: 0) {") &&
+                sheet.contains("List(stats?.teamStats?.size ?: 0) { FocusRequester() }")
+        )
+        assertTrue(
+            "the rows take the requesters and both chain links",
+            sheet.contains("rowRequesters = statRows,") &&
+                sheet.contains("focusRequester = rowRequesters[index],") &&
+                sheet.contains("focusUpTo = rowRequesters.getOrNull(index - 1) ?: topAnchor,") &&
+                sheet.contains(
+                    "focusDownTo = rowRequesters.getOrNull(index + 1) ?: backupButtons.firstOrNull()"
+                )
+        )
+        assertTrue(
+            "and the anchor and the first pill name the ends of the row list",
+            sheet.contains(".focusDownTo(statRows.firstOrNull() ?: backupButtons.firstOrNull())") &&
+                sheet.contains("focusUpTo(statRows.lastOrNull() ?: topAnchor)")
         )
     }
 

@@ -464,6 +464,11 @@ internal object DolbyVisionCompat {
                     keep = false
                 }
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType)) {
+                    // Diagnostic only, computed only when someone is listening:
+                    // would the 14:04 picture build's subsequence detector have
+                    // dropped this NAL? (See [seiWouldLegacyDrop].)
+                    val legacyDrop = accounting != null &&
+                        seiWouldLegacyDrop(buf, header + 2, nalEnd)
                     if (!seiCarriesHdr10Plus(buf, header + 2, nalEnd)) {
                         // The detector did not fire: this SEI NAL is forwarded
                         // bit-exact, which is a third thing the first-sample log
@@ -471,7 +476,8 @@ internal object DolbyVisionCompat {
                         // this" is not the same as "it looked and removed
                         // nothing".
                         accounting?.record(
-                            nalType, nalEnd - header, SeiStripAccounting.Action.KEPT
+                            nalType, nalEnd - header, SeiStripAccounting.Action.KEPT,
+                            legacyDrop = legacyDrop
                         )
                     } else {
                         // Surgical removal: only the HDR10+ messages go, the SEI
@@ -481,7 +487,8 @@ internal object DolbyVisionCompat {
                         if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
                         when (val res = stripHdr10PlusMessagesInPlace(buf, header + 2, nalEnd, dest)) {
                             SEI_STRIP_UNTOUCHED -> accounting?.record(
-                                nalType, nalEnd - header, SeiStripAccounting.Action.KEPT
+                                nalType, nalEnd - header, SeiStripAccounting.Action.KEPT,
+                                legacyDrop = legacyDrop
                             )
                             SEI_STRIP_DROP -> {
                                 keep = false
@@ -557,14 +564,23 @@ internal object DolbyVisionCompat {
                     keep = false
                 }
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) && nal >= 4) {
+                    // Diagnostic only, computed only when someone is listening:
+                    // would the 14:04 picture build's subsequence detector have
+                    // dropped this NAL? (See [seiWouldLegacyDrop].)
+                    val legacyDrop = accounting != null &&
+                        seiWouldLegacyDrop(buf, payload + 2, payload + nal)
                     if (!seiCarriesHdr10Plus(buf, payload + 2, payload + nal)) {
-                        accounting?.record(nalType, nal, SeiStripAccounting.Action.KEPT)
+                        accounting?.record(
+                            nalType, nal, SeiStripAccounting.Action.KEPT,
+                            legacyDrop = legacyDrop
+                        )
                     } else {
                         val dest = write + fieldLen + 2
                         if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
                         when (val res = stripHdr10PlusMessagesInPlace(buf, payload + 2, payload + nal, dest)) {
                             SEI_STRIP_UNTOUCHED -> accounting?.record(
-                                nalType, nal, SeiStripAccounting.Action.KEPT
+                                nalType, nal, SeiStripAccounting.Action.KEPT,
+                                legacyDrop = legacyDrop
                             )
                             SEI_STRIP_DROP -> {
                                 keep = false
@@ -626,16 +642,25 @@ internal object DolbyVisionCompat {
             val originalSize: Int,
             val action: Action,
             /** Meaningful only for SHRUNK: the NAL's new size. */
-            val newSize: Int = 0
+            val newSize: Int = 0,
+            /** Only meaningful for KEPT: the 14:04 subsequence detector would have dropped this NAL. */
+            val legacyDrop: Boolean = false
         )
         val entries = mutableListOf<Entry>()
-        fun record(nalType: Int, originalSize: Int, action: Action, newSize: Int = 0) {
-            entries.add(Entry(nalType, originalSize, action, newSize))
+        fun record(
+            nalType: Int,
+            originalSize: Int,
+            action: Action,
+            newSize: Int = 0,
+            legacyDrop: Boolean = false
+        ) {
+            entries.add(Entry(nalType, originalSize, action, newSize, legacyDrop))
         }
         /** Compact logcat rendering, e.g. "39:69->dropped,39:30->kept,40:35->shrunk=22". */
         fun summary(): String = entries.joinToString(",") { e ->
             "${e.nalType}:${e.originalSize}->${e.action.name.lowercase()}" +
-                if (e.action == Action.SHRUNK) "=${e.newSize}" else ""
+                if (e.action == Action.SHRUNK) "=${e.newSize}" else "" +
+                if (e.action == Action.KEPT && e.legacyDrop) ",legacyDrop" else ""
         }
     }
 
@@ -1921,6 +1946,65 @@ internal object DolbyVisionCompat {
             }
         }
         return p == HDR10_PLUS_MARKER.size
+    }
+
+    /**
+     * The pre-b7ba0d5d detector, kept ONLY as a diagnostic oracle for the
+     * STRIP_NALS_ONLY accounting: it reports whether the 14:04 picture build's
+     * subsequence detector would have dropped a given SEI NAL. It never decides
+     * a strip - the prefix matcher remains the sole detector.
+     */
+    private fun containsHdr10PlusMarkerLegacy(buf: ByteArray, from: Int, to: Int): Boolean {
+        val limit = minOf(to, buf.size)
+        var p = 0
+        var i = from
+        while (i < limit && p < HDR10_PLUS_MARKER.size) {
+            val v = buf[i].toInt() and 0xFF
+            if (v == HDR10_PLUS_MARKER[p]) {
+                p++
+                i++
+            } else if (v == 0x03 && p > 0) {
+                // Emulation-prevention byte inserted into a 0x00 run.
+                i++
+            } else {
+                p = 0
+                if (v == HDR10_PLUS_MARKER[0]) p = 1
+                i++
+            }
+        }
+        return p == HDR10_PLUS_MARKER.size
+    }
+
+    /**
+     * Mirrors [seiCarriesHdr10Plus] with the legacy subsequence matcher: true
+     * when the 14:04 picture build would have dropped this SEI NAL whole.
+     */
+    private fun seiWouldLegacyDrop(buf: ByteArray, from: Int, to: Int): Boolean {
+        var pos = from
+        val end = minOf(to, buf.size)
+        while (pos + 1 <= end) {
+            var payloadType = 0
+            var b: Int
+            do {
+                if (pos >= end) return false
+                b = buf[pos].toInt() and 0xFF
+                payloadType += b
+                pos++
+            } while (b == 0xFF)
+            var payloadSize = 0
+            do {
+                if (pos >= end) return false
+                b = buf[pos].toInt() and 0xFF
+                payloadSize += b
+                pos++
+            } while (b == 0xFF)
+            if (pos + payloadSize > end) return false
+            if (payloadType == 4 &&
+                containsHdr10PlusMarkerLegacy(buf, pos, pos + payloadSize)
+            ) return true
+            pos += payloadSize
+        }
+        return false
     }
 
     // ── Profile 7 / Profile 5 → Profile 8.1 conversion ───────────────────

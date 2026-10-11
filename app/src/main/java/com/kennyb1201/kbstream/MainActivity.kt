@@ -1279,12 +1279,12 @@ fun AppRoot(
             is Screen.Player ->
                 stableBackDestination(current.returnTo)
 
+            // The channel's source picker is the same launch, and states the
+            // same returnTo the player does, so it is read rather than assumed:
+            // hardcoding the guide here is the other half of "backing out of a
+            // game from the sports hub still sends me to the guide".
             is Screen.Streams ->
-                if (current.parentType == "channel") {
-                    Screen.Guide
-                } else {
-                    stableBackDestination(current.returnTo)
-                }
+                stableBackDestination(current.returnTo)
 
             // Every drill-down goes through stableBackDestination for the
             // same reason Detail/Streams/Player do: it strips a one-shot
@@ -2569,9 +2569,18 @@ fun AppRoot(
                         )
                         autoPlayedStreamKeys =
                             (autoPlayedStreamKeys + exitedKey).distinct()
-                        if (current.parentType == "channel") {
-                            screen = Screen.Guide
-                        } else if (AppPreferences.getAutoSelectStream(context)) {
+                        // A channel always backs out to its launch's own
+                        // destination, because every channel launch states one:
+                        // the guide's sets Screen.Guide, the hub's sets
+                        // Screen.Sports with the sheet that raised it. Assuming
+                        // the guide for anything typed "channel" is what used to
+                        // drop a game's sheet on the way back; see
+                        // liveChannelScreen's callers. Everything else keeps the
+                        // auto-select rule below it.
+                        if (
+                            current.parentType == "channel" ||
+                            AppPreferences.getAutoSelectStream(context)
+                        ) {
                             screen = stableBackDestination(current.returnTo)
                         } else {
                             // Auto-select is off: the user chose a source manually,

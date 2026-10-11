@@ -59,6 +59,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -192,11 +193,12 @@ fun SportsHubScreen(
 ) {
     val enabled by viewModel.enabledLeagues.collectAsStateWithLifecycle()
     val leagueOrder by viewModel.leagueOrder.collectAsStateWithLifecycle()
-    // The ordered sections: within each league's live / upcoming / final groups,
-    // the viewer's own games lead (see SportsHubViewModel.displaySections). The
-    // grouping below, the search and the reopen lookup are all order-preserving
-    // or id-keyed, so the favorites-first order flows through them untouched.
-    val sections by viewModel.displaySections.collectAsStateWithLifecycle()
+    // The loaded sections, ESPN's own order. Ordering is the BODY's business,
+    // not the state's: a league is drawn grouped into live / upcoming / final,
+    // and a favorites-first sort applied before that partition is thrown away by
+    // the partition's own sort - which is why the star only ever led the slate
+    // when nothing was grouped. See LeagueBody.
+    val sections by viewModel.sections.collectAsStateWithLifecycle()
     val selectedPath by viewModel.selectedLeaguePath.collectAsStateWithLifecycle()
     val matches by viewModel.matches.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -1007,13 +1009,19 @@ private fun LeagueBody(
     onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
-    val live = section.games.filter { it.state == GameState.LIVE }
-    val upcoming = section.games
-        .filter { it.state == GameState.UPCOMING }
-        .sortedBy { it.dateMs }
-    val final = section.games
-        .filter { it.state == GameState.FINAL }
-        .sortedByDescending { it.dateMs }
+    // The viewer's own games lead each group, everything else keeping the order
+    // the group itself asks for. Applied AFTER the partition and after the date
+    // sort, because both reorder: sorting the section first (which the hub used
+    // to do in the ViewModel) left a followed team's game wherever its kick-off
+    // happened to fall, so the star was only ever at the top by luck. The pure
+    // rule is stable, so favorites keep the date/feed order among themselves and
+    // the rest keep it among themselves - see [SportsGameOrder].
+    val liveGames = section.games.filter { it.state == GameState.LIVE }
+    val upcomingGames = section.games.filter { it.state == GameState.UPCOMING }.sortedBy { it.dateMs }
+    val finalGames = section.games.filter { it.state == GameState.FINAL }.sortedByDescending { it.dateMs }
+    val live = SportsGameOrder.favoritesFirst(liveGames, favoriteKeys)
+    val upcoming = SportsGameOrder.favoritesFirst(upcomingGames, favoriteKeys)
+    val final = SportsGameOrder.favoritesFirst(finalGames, favoriteKeys)
 
     // Scroll to the live games when they first arrive. The section is drawn
     // before the ESPN poll returns, so its top is UPCOMING; when the live
@@ -1426,6 +1434,11 @@ private fun TeamColumn(
      */
     possession: Boolean = false,
     modifier: Modifier = Modifier,
+    /**
+     * The mark's plate size. The sheet's header runs it at 40dp to buy the
+     * scrolling middle a stat row back; a card keeps the 48dp default.
+     */
+    markSize: Dp = 48.dp,
 ) {
     // The mark over the name, not beside it: with two cards sharing a row the
     // side-by-side form left the crest floating in the middle of its half, and
@@ -1435,7 +1448,7 @@ private fun TeamColumn(
         modifier = modifier,
         horizontalAlignment = if (alignEnd) Alignment.End else Alignment.Start
     ) {
-        TeamMark(team = team)
+        TeamMark(team = team, size = markSize)
         Spacer(modifier = Modifier.height(6.dp))
         // The code line, with the ball in front of it on the side that has it.
         // A Row only so the marker can sit beside the code rather than under
@@ -1672,10 +1685,10 @@ private fun ScoreText(
  * handling as the guide's channel logos: the plate IS the placeholder.
  */
 @Composable
-private fun TeamMark(team: SportsTeam, modifier: Modifier = Modifier) {
+private fun TeamMark(team: SportsTeam, modifier: Modifier = Modifier, size: Dp = 48.dp) {
     Box(
         modifier = modifier
-            .size(48.dp)
+            .size(size)
             .clip(KBShapeChip)
             // The plate wears the club's own colour where ESPN publishes one a
             // crest can be seen on, so the mark reads as team-branded rather
@@ -2828,17 +2841,27 @@ private fun GameDetailSheet(
     // that Up has somewhere to go, and focusing it brings its own 1dp into view
     // at the top of the body (see [DetailSheetBody] and [SheetScrollBody]).
     val topAnchor = remember { FocusRequester() }
+    // One requester per team-stat row, so the comparison rows are D-pad stops
+    // like the backup pills: focus is the only thing that scrolls this body, so
+    // without a stop per row the stats below the fold could never be brought
+    // into view. Keyed on the row count like the pills are, because a summary
+    // can land while the sheet is open. Zero rows with no stats section, and
+    // every chain then falls back to exactly the behaviour of before.
+    val stats = summary?.takeIf { SportsDetailRules.hasStats(it) }
+    val statRows = remember(stats?.teamStats?.size ?: 0) {
+        List(stats?.teamStats?.size ?: 0) { FocusRequester() }
+    }
 
     androidx.compose.ui.window.Dialog(
         onDismissRequest = onClose,
         properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        // The dock fills the window and the plate keeps its 24dp inset through
-        // its own padding, so the scrim below covers the whole window instead of
-        // stopping 24dp short of it - a dimmed plate with a brighter frame
-        // around it would read as a mistake rather than as a veil. The plate's
-        // size and position are unchanged: it is still 72% by 92% of the window
-        // less its inset, on the bottom edge.
+        // The dock fills the window and the plate keeps its inset through its
+        // own padding, so the scrim below covers the whole window instead of
+        // stopping short of it - a dimmed plate with a brighter frame around it
+        // would read as a mistake rather than as a veil. The plate's size and
+        // position are unchanged: it is still 72% by 92% of the window less its
+        // inset, on the bottom edge.
         Box(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.BottomCenter
@@ -2857,14 +2880,14 @@ private fun GameDetailSheet(
             // the crests off the top edge.
             Column(
                 modifier = Modifier
-                    .padding(horizontal = 24.dp, vertical = 24.dp)
+                    .padding(horizontal = 24.dp, vertical = 16.dp)
                     .fillMaxWidth(0.72f)
                     .fillMaxHeight(0.92f)
                     .focusGroup()
                     .background(KBSurface, KBShapePanel)
                     .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
                     .padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
                     text = "MATCHUP",
@@ -2890,7 +2913,8 @@ private fun GameDetailSheet(
                         team = game.away,
                         favorite = false,
                         possession = SportsDetailRules.possesses(game, game.away),
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        markSize = 40.dp
                     )
                     Text(
                         text = "@",
@@ -2903,7 +2927,8 @@ private fun GameDetailSheet(
                         favorite = false,
                         possession = SportsDetailRules.possesses(game, game.home),
                         alignEnd = true,
-                        modifier = Modifier.weight(1f)
+                        modifier = Modifier.weight(1f),
+                        markSize = 40.dp
                     )
                 }
 
@@ -2935,6 +2960,7 @@ private fun GameDetailSheet(
                     summary = summary,
                     channels = channels,
                     backupButtons = backupButtons,
+                    statRows = statRows,
                     topAnchor = topAnchor,
                     onManualPick = onManualPick,
                     onPlay = onPlay
@@ -2965,7 +2991,7 @@ private fun GameDetailSheet(
                             .fillMaxWidth()
                             .padding(top = 10.dp)
                             .focusRequester(watchButton)
-                            .focusUpTo(backupButtons.lastOrNull())
+                            .focusUpTo(backupButtons.lastOrNull() ?: statRows.lastOrNull())
                     ) {
                         WatchButtonLabel(
                             label = SportsDetailRules.watchLabel(true),
@@ -3024,7 +3050,7 @@ private fun ColumnScope.SheetScrollBody(
             modifier = Modifier
                 .weight(1f)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             content()
             Spacer(modifier = Modifier.height(KBFocusRowInset))
@@ -3086,6 +3112,13 @@ private fun ColumnScope.DetailSheetBody(
     channels: List<IptvChannel>,
     backupButtons: List<FocusRequester>,
     /**
+     * One requester per team-stat row, in the order [StatsSection] draws them.
+     * The rows are the body's other focusables now (see [StatCompareRow]); the
+     * chains that reach them live in [StatsSection], and the anchor and the
+     * first pill name the ends of this list.
+     */
+    statRows: List<FocusRequester>,
+    /**
      * The invisible stop at the top of this scroll (see [GameDetailSheet]).
      * Passed in rather than remembered here because the first backup pill -
      * drawn below, inside this same body - has to name it as its Up target (see
@@ -3110,7 +3143,7 @@ private fun ColumnScope.DetailSheetBody(
             modifier = Modifier
                 .size(1.dp)
                 .focusRequester(topAnchor)
-                .focusDownTo(backupButtons.firstOrNull())
+                .focusDownTo(statRows.firstOrNull() ?: backupButtons.firstOrNull())
                 .focusProperties { canFocus = true }
                 .focusable()
         )
@@ -3124,7 +3157,13 @@ private fun ColumnScope.DetailSheetBody(
         // just-ended slate on the board and the box score is exactly what a
         // viewer reopens it for.
         summary?.takeIf { SportsDetailRules.hasStats(it) }?.let { stats ->
-            StatsSection(game = game, summary = stats)
+            StatsSection(
+                game = game,
+                summary = stats,
+                rowRequesters = statRows,
+                topAnchor = topAnchor,
+                backupButtons = backupButtons
+            )
         }
 
         // Every row is already filtered to the non-blanks, so a game with no
@@ -3193,7 +3232,7 @@ private fun ColumnScope.DetailSheetBody(
                         .focusRequester(backupButtons[index])
                         .focusDownTo(backupButtons.getOrNull(index + 1))
                         .then(
-                            if (index == 0) Modifier.focusUpTo(topAnchor)
+                            if (index == 0) Modifier.focusUpTo(statRows.lastOrNull() ?: topAnchor)
                             else Modifier
                         )
                 ) {
@@ -3219,10 +3258,16 @@ private fun ColumnScope.DetailSheetBody(
  * call this at all (see `SportsDetailRules.hasStats`).
  */
 @Composable
-private fun StatsSection(game: SportsGame, summary: EspnGameSummary) {
+private fun StatsSection(
+    game: SportsGame,
+    summary: EspnGameSummary,
+    rowRequesters: List<FocusRequester>,
+    topAnchor: FocusRequester,
+    backupButtons: List<FocusRequester>,
+) {
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Text(
             text = SportsDetailRules.statsHeading(game),
@@ -3231,12 +3276,24 @@ private fun StatsSection(game: SportsGame, summary: EspnGameSummary) {
             modifier = Modifier.padding(top = 4.dp)
         )
 
-        summary.homeWinProbability?.let { chance ->
-            WinProbabilityBar(game = game, homePercent = chance)
+        if (game.state != GameState.FINAL) {
+            // A finished game's probability is 0 or 100 by definition - the bar
+            // is noise under FINAL STATS, and dropping it gives the comparison
+            // rows the room back.
+            summary.homeWinProbability?.let { chance ->
+                WinProbabilityBar(game = game, homePercent = chance)
+            }
         }
 
-        summary.teamStats.forEach { (label, awayValue, homeValue) ->
-            StatCompareRow(away = awayValue, label = label, home = homeValue)
+        summary.teamStats.forEachIndexed { index, (label, awayValue, homeValue) ->
+            StatCompareRow(
+                away = awayValue,
+                label = label,
+                home = homeValue,
+                focusRequester = rowRequesters[index],
+                focusUpTo = rowRequesters.getOrNull(index - 1) ?: topAnchor,
+                focusDownTo = rowRequesters.getOrNull(index + 1) ?: backupButtons.firstOrNull()
+            )
         }
 
         summary.lastPlay?.takeIf { it.isNotBlank() }?.let { play ->
@@ -3303,9 +3360,28 @@ private fun WinProbabilityBar(game: SportsGame, homePercent: Int) {
  * left-to-right order, so each number sits under the side it belongs to.
  */
 @Composable
-private fun StatCompareRow(away: String, label: String, home: String) {
+private fun StatCompareRow(
+    away: String,
+    label: String,
+    home: String,
+    focusRequester: FocusRequester,
+    focusUpTo: FocusRequester?,
+    focusDownTo: FocusRequester?,
+) {
+    // A deliberately quiet focus treatment: a tint, not a button - no scale and
+    // no border, so a focused row reads as reachable rather than as pressable.
+    var focused by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(KBShapeChip)
+            .background(if (focused) KBSurfaceRaised else Color.Transparent)
+            .onFocusChanged { focused = it.isFocused }
+            .focusRequester(focusRequester)
+            .focusable()
+            .focusUpTo(focusUpTo)
+            .focusDownTo(focusDownTo)
+            .padding(horizontal = 8.dp, vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
