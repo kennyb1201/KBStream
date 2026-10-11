@@ -119,18 +119,42 @@ internal object FrameRateProbe {
         headers: Map<String, String>,
         cacheDir: File?
     ): Double? {
-        if (!isProbeable(url)) return null
+        // Every null return names itself. The probe says nothing on at least
+        // five different paths, so without these the field log cannot tell
+        // "the probe never ran" from "it ran and found nothing" - which is
+        // exactly the ambiguity a field report of a missing AFR switch leaves.
+        if (!isProbeable(url)) {
+            Log.i(TAG, "probe skipped: URL not probeable (host=${hostOf(url)})")
+            return null
+        }
         cache[url]?.let { return it }
         val measured = withTimeoutOrNull(budgetMs) {
             runCatchingCancellable { downloadAndRead(url, headers, cacheDir) }
                 .onFailure { Log.w(TAG, "frame-rate probe failed", it) }
                 .getOrNull()
         }
-        val fps = measured?.let { FrameRateMatch.normalise(it) } ?: return null
+        if (measured == null) {
+            Log.w(TAG, "probe: no reading (timeout or download failed, host=${hostOf(url)})")
+            return null
+        }
+        val fps = FrameRateMatch.normalise(measured)
+        if (fps == null) {
+            Log.w(TAG, "probe: reading $measured fps unusable (host=${hostOf(url)})")
+            return null
+        }
         cache[url] = fps
         Log.i(TAG, "probed $fps fps from the stream head")
         return fps
     }
+
+    /**
+     * The host of [url] for the log lines, or "?" when it will not parse.
+     *
+     * Never the URL itself: addon and debrid links are signed, so their query
+     * string is a credential, and a field log is a thing users paste in public.
+     */
+    private fun hostOf(url: String): String =
+        runCatching { Request.Builder().url(url).build().url.host }.getOrNull() ?: "?"
 
     private suspend fun downloadAndRead(
         url: String,
@@ -151,13 +175,17 @@ internal object FrameRateProbe {
             executeWithTimeout(request(url, headers, from = 0L, to = HEAD_BYTES - 1), budgetMs)
                 .use { response ->
                     if (response.code != 206 && !response.isSuccessful) {
+                        Log.w(TAG, "probe head request: HTTP ${response.code}")
                         return@withContext null
                     }
                     response.body.byteStream().use { input ->
                         temp.outputStream().use { output -> input.copyTo(output) }
                     }
                 }
-            if (temp.length() == 0L) return@withContext null
+            if (temp.length() == 0L) {
+                Log.w(TAG, "probe head: empty body")
+                return@withContext null
+            }
             fpsReader(temp)
         } finally {
             runCatching { temp.delete() }
@@ -194,7 +222,13 @@ internal object FrameRateProbe {
                 val mime = format.getString(MediaFormat.KEY_MIME) ?: continue
                 if (!mime.startsWith("video/")) continue
                 readFrameRate(format)?.let { return@runCatching it }
+                // The video track is here and simply has no rate: a different
+                // failure from "no video track at all", and the one a
+                // mislabelled container produces.
+                Log.i(TAG, "probe: video track has no frame-rate key (mime=$mime)")
+                return@runCatching null
             }
+            Log.i(TAG, "probe: head has no video track")
             null
         } finally {
             runCatching { extractor.release() }

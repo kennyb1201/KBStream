@@ -5580,6 +5580,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)
                             ?.let { fps -> matcher.onContentFrameRate(fps, FrameRateSource.PROBE) }
                     }
+                } else {
+                    // The probe's own log lines only exist once it RUNS, so a
+                    // probe that was never launched - matching off, a live
+                    // channel, an unprobeable URL - is otherwise invisible in
+                    // a field log. Same PLAYER_AFR tag as the probe.
+                    Log.i(
+                        "PLAYER_AFR",
+                        "probe not launched: matcher=${matcher != null} " +
+                            "live=$isLiveChannel probeable=${FrameRateProbe.isProbeable(currentUrl)}"
+                    )
                 }
             }
             player.addListener(createPlayerListener())
