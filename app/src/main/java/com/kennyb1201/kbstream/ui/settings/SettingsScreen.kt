@@ -110,6 +110,7 @@ import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBAccentPalette
 import com.kennyb1201.kbstream.ui.theme.KBDanger
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
@@ -1476,12 +1477,27 @@ fun SettingsScreen(
                     // chip gets the leftover sliver, its label wraps mid-word into
                     // a tall column and the selected background fills the wrapped
                     // box (the "Vimu / Medi / a / Playe / r" tower). Against the
-                    // unbounded constraint a horizontal scroll hands it, each chip
+                    // unbounded constraint the scroller hands each item, a chip
                     // measures at its natural width, so no label can ever wrap; the
                     // D-pad walks the cards and focusing an off-screen one scrolls
                     // it into view on the standard bring-into-view.
+                    //
+                    // The inset is the breathing room for the focus ring: a
+                    // focused KBCard scales up and draws its 2dp ring + glow
+                    // OUTSIDE its layout bounds, and a scroller clips its own
+                    // content, so without it the leading edge of the first (and
+                    // trailing edge of the last) chip is cut flat - the same bug
+                    // class as the context-menu focus clip. The padding goes
+                    // AFTER the scroll, which is the only place it is inside the
+                    // clip and can hold the growth; the negative offset BEFORE
+                    // it cancels the inset on the outside so the chips stay
+                    // flush with the label above. See KBFocusRowInset, and
+                    // AddonTabs for the same pairing.
                     Row(
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
+                        modifier = Modifier
+                            .offset(x = -KBFocusRowInset)
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = KBFocusRowInset),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         externalPlayers.forEach { player ->
