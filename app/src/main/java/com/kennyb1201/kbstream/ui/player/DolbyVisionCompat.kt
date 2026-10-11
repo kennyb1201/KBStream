@@ -424,12 +424,18 @@ internal object DolbyVisionCompat {
      * Strips RPU / enhancement-layer NAL units (and optionally HDR10+ SEI) from
      * an Annex-B HEVC access unit, compacting in place. Returns the new length,
      * or -1 when nothing was removed / the unit was too short to parse.
+     *
+     * [accounting], when given, records what the HDR10+ SEI strip did to every
+     * SEI NAL it examined - which is the difference between a NAL dropped whole
+     * and one surgically shrunk. It is diagnostic only: the bytes emitted are
+     * identical with or without it.
      */
     fun stripAnnexB(
         buf: ByteArray,
         length: Int,
         stripDv: Boolean,
-        stripHdr10Plus: Boolean
+        stripHdr10Plus: Boolean,
+        accounting: SeiStripAccounting? = null
     ): Int {
         if (length < 5) return -1
         var write = 0
@@ -457,20 +463,40 @@ internal object DolbyVisionCompat {
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
-                if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) &&
-                    seiCarriesHdr10Plus(buf, header + 2, nalEnd)
-                ) {
-                    // Surgical removal: only the HDR10+ messages go, the SEI NAL
-                    // and every other message in it stay (see the field case in
-                    // stripHdr10PlusMessagesInPlace).
-                    val dest = write + codeLen + 2
-                    if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
-                    when (val res = stripHdr10PlusMessagesInPlace(buf, header + 2, nalEnd, dest)) {
-                        SEI_STRIP_UNTOUCHED -> Unit
-                        SEI_STRIP_DROP -> keep = false
-                        else -> {
-                            write += codeLen + 2 + res
-                            keep = false
+                if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType)) {
+                    if (!seiCarriesHdr10Plus(buf, header + 2, nalEnd)) {
+                        // The detector did not fire: this SEI NAL is forwarded
+                        // bit-exact, which is a third thing the first-sample log
+                        // has to be able to say - "the detector never looked at
+                        // this" is not the same as "it looked and removed
+                        // nothing".
+                        accounting?.record(
+                            nalType, nalEnd - header, SeiStripAccounting.Action.KEPT
+                        )
+                    } else {
+                        // Surgical removal: only the HDR10+ messages go, the SEI
+                        // NAL and every other message in it stay (see the field
+                        // case in stripHdr10PlusMessagesInPlace).
+                        val dest = write + codeLen + 2
+                        if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
+                        when (val res = stripHdr10PlusMessagesInPlace(buf, header + 2, nalEnd, dest)) {
+                            SEI_STRIP_UNTOUCHED -> accounting?.record(
+                                nalType, nalEnd - header, SeiStripAccounting.Action.KEPT
+                            )
+                            SEI_STRIP_DROP -> {
+                                keep = false
+                                accounting?.record(
+                                    nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
+                                )
+                            }
+                            else -> {
+                                write += codeLen + 2 + res
+                                keep = false
+                                accounting?.record(
+                                    nalType, nalEnd - header, SeiStripAccounting.Action.SHRUNK,
+                                    newSize = codeLen + 2 + res
+                                )
+                            }
                         }
                     }
                 }
@@ -491,13 +517,17 @@ internal object DolbyVisionCompat {
      * a length-delimited (MP4/fMP4) HEVC sample, compacting in place. Returns
      * the new length, or -1 when nothing was removed or the sample is not
      * well-formed (in which case it must be forwarded untouched).
+     *
+     * [accounting] is [stripAnnexB]'s first-sample diagnostic, recorded in NAL
+     * bytes excluding the length field.
      */
     fun stripLengthDelimited(
         buf: ByteArray,
         length: Int,
         nalLengthFieldLength: Int,
         stripDv: Boolean,
-        stripHdr10Plus: Boolean
+        stripHdr10Plus: Boolean,
+        accounting: SeiStripAccounting? = null
     ): Int {
         val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
         if (length <= fieldLen) return -1
@@ -526,18 +556,29 @@ internal object DolbyVisionCompat {
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                 }
-                if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) && nal >= 4 &&
-                    seiCarriesHdr10Plus(buf, payload + 2, payload + nal)
-                ) {
-                    val dest = write + fieldLen + 2
-                    if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
-                    when (val res = stripHdr10PlusMessagesInPlace(buf, payload + 2, payload + nal, dest)) {
-                        SEI_STRIP_UNTOUCHED -> Unit
-                        SEI_STRIP_DROP -> keep = false
-                        else -> {
-                            writeLength(buf, write, res + 2, fieldLen)
-                            write += fieldLen + 2 + res
-                            keep = false
+                if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) && nal >= 4) {
+                    if (!seiCarriesHdr10Plus(buf, payload + 2, payload + nal)) {
+                        accounting?.record(nalType, nal, SeiStripAccounting.Action.KEPT)
+                    } else {
+                        val dest = write + fieldLen + 2
+                        if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                        when (val res = stripHdr10PlusMessagesInPlace(buf, payload + 2, payload + nal, dest)) {
+                            SEI_STRIP_UNTOUCHED -> accounting?.record(
+                                nalType, nal, SeiStripAccounting.Action.KEPT
+                            )
+                            SEI_STRIP_DROP -> {
+                                keep = false
+                                accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
+                            }
+                            else -> {
+                                writeLength(buf, write, res + 2, fieldLen)
+                                write += fieldLen + 2 + res
+                                keep = false
+                                accounting?.record(
+                                    nalType, nal, SeiStripAccounting.Action.SHRUNK,
+                                    newSize = 2 + res
+                                )
+                            }
                         }
                     }
                 }
@@ -568,6 +609,34 @@ internal object DolbyVisionCompat {
         var vpsRewriteFailedReason: String? = null
         var spsRewriteFailedReason: String? = null
         var rpuRewritten = 0
+    }
+
+    /**
+     * First-sample diagnostic for the relabel (STRIP_NALS_ONLY) path: records
+     * what the HDR10+ SEI strip did to each SEI NAL it examined. Diagnostic
+     * only - it never influences the strip.
+     *
+     * Sizes are NAL-unit bytes excluding framing (start code / length field),
+     * matching [describeNals]' convention.
+     */
+    internal class SeiStripAccounting {
+        internal enum class Action { KEPT, DROPPED, SHRUNK }
+        internal data class Entry(
+            val nalType: Int,
+            val originalSize: Int,
+            val action: Action,
+            /** Meaningful only for SHRUNK: the NAL's new size. */
+            val newSize: Int = 0
+        )
+        val entries = mutableListOf<Entry>()
+        fun record(nalType: Int, originalSize: Int, action: Action, newSize: Int = 0) {
+            entries.add(Entry(nalType, originalSize, action, newSize))
+        }
+        /** Compact logcat rendering, e.g. "39:69->dropped,39:30->kept,40:35->shrunk=22". */
+        fun summary(): String = entries.joinToString(",") { e ->
+            "${e.nalType}:${e.originalSize}->${e.action.name.lowercase()}" +
+                if (e.action == Action.SHRUNK) "=${e.newSize}" else ""
+        }
     }
 
     // ── VPS rewriting ──────────────────────────────────────────────────────

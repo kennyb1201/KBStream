@@ -253,6 +253,114 @@ class EspnSportsRepositoryTest {
         assertNull(game.away.logoUrl)
     }
 
+    // ── The AP Top 25 ranking (college sports) ─────────────────────
+
+    @Test
+    fun `a ranked college side carries its ranking, and an unranked one does not`() {
+        // ESPN publishes the ranking on the COMPETITOR: `curatedRank` is a
+        // sibling of `team` in the scoreboard's JSON, not a field inside it -
+        // and an unranked side is the sentinel 99 rather than a missing key, so
+        // a number only becomes a rank when it is inside the poll.
+        val college = """
+            {
+              "events": [
+                {
+                  "id": "700",
+                  "name": "Georgia Bulldogs at Texas Longhorns",
+                  "date": "2024-11-16T20:00Z",
+                  "status": { "type": { "state": "pre", "shortDetail": "Sat 3:30 PM" } },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        {
+                          "homeAway": "home",
+                          "curatedRank": { "current": 5 },
+                          "team": { "abbreviation": "TEX", "displayName": "Texas Longhorns" },
+                          "records": [{ "summary": "8-0" }]
+                        },
+                        {
+                          "homeAway": "away",
+                          "curatedRank": { "current": 99 },
+                          "team": { "abbreviation": "UGA", "displayName": "Georgia Bulldogs" },
+                          "records": [{ "summary": "4-0" }]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "id": "701",
+                  "name": "Kansas Jayhawks at Houston Cougars",
+                  "date": "2024-11-16T21:00Z",
+                  "status": { "type": { "state": "pre", "shortDetail": "Sat 4:30 PM" } },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        {
+                          "homeAway": "home",
+                          "team": { "abbreviation": "HOU", "displayName": "Houston Cougars" }
+                        },
+                        {
+                          "homeAway": "away",
+                          "curatedRank": { "current": 1 },
+                          "team": { "abbreviation": "KU", "displayName": "Kansas Jayhawks" }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val games = parseScoreboard(college, "football/college-football")
+
+        assertEquals(5, games[0].home.rank)
+        // 99 is the feed's "outside the poll", not the 99th-best team.
+        assertNull(games[0].away.rank)
+        // A side the feed says nothing about is unranked too, and the rank sits
+        // on the competitor rather than on the team it belongs to.
+        assertNull(games[1].home.rank)
+        assertEquals(1, games[1].away.rank)
+        // The record rides along untouched: the card prints "#5 TEX · 8-0".
+        assertEquals("8-0", games[0].home.record)
+    }
+
+    @Test
+    fun `a pro scoreboard, and a sport whose sides are people, carry no ranking`() {
+        // Nothing here has an AP poll to be in. If a pro feed ever did send a
+        // rank, the card would print it - which is why this is asserted rather
+        // than assumed.
+        val mlb = parseScoreboard(scoreboard, "baseball/mlb").first()
+        assertNull(mlb.home.rank)
+        assertNull(mlb.away.rank)
+        val tennis = parseScoreboard(
+            """
+            {
+              "events": [
+                {
+                  "id": "710",
+                  "name": "Carlos Alcaraz vs Jannik Sinner",
+                  "date": "2024-11-16T20:00Z",
+                  "status": { "type": { "state": "pre", "shortDetail": "Not started" } },
+                  "competitions": [
+                    {
+                      "competitors": [
+                        { "homeAway": "home", "athlete": { "displayName": "Jannik Sinner" } },
+                        { "homeAway": "away", "athlete": { "displayName": "Carlos Alcaraz" } }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """.trimIndent(),
+            "tennis/atp"
+        ).single()
+        assertNull(tennis.home.rank)
+        assertNull(tennis.away.rank)
+    }
+
     @Test
     fun `a payload that is not a scoreboard yields no games rather than throwing`() {
         assertTrue(parseScoreboard("not json at all", "basketball/nba").isEmpty())

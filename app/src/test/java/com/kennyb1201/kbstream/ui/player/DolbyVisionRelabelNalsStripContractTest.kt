@@ -105,6 +105,37 @@ class DolbyVisionRelabelNalsStripContractTest {
         )
     }
 
+    @Test
+    fun `the first-sample relabel log reports what happened, not what was expected`() {
+        // The old line said "first sample HDR10+ SEI dropped" whether or not
+        // anything was removed, so the 2026-10-10 stall could not be read off
+        // it: the 39:69 prefix-SEI NAL may have gone whole, been shrunk, or
+        // ridden through untouched, and all three logged identically. It now
+        // reports whether the sample was modified at all, plus the fate of each
+        // SEI NAL the strip examined (see SeiStripAccounting).
+        assertFalse(
+            "the unconditional drop claim must be gone - it asserted a removal that may not " +
+                "have happened",
+            source.contains("first sample HDR10+ SEI dropped")
+        )
+        assertTrue(
+            "the line reports whether the sample changed at all",
+            source.contains("modified=\${stripped >= 0}")
+        )
+        assertTrue(
+            "and the per-SEI accounting, with the nothing-to-report case spelled out",
+            source.contains("sei=\${accounting?.summary()?.ifEmpty { \"none\" } ?: \"none\"}")
+        )
+        assertTrue(
+            "the accounting exists for the first sample only, so later samples pay nothing",
+            source.contains("if (firstSample) DolbyVisionCompat.SeiStripAccounting() else null")
+        )
+        assertTrue(
+            "and it is handed to the strip, which is what fills it in",
+            source.contains("accounting = accounting")
+        )
+    }
+
     // ── the DV-hardware reroute out of the mutating strip ─────────────
     //
     // The mutating strip (VPS rewrite + RPU/EL removal) is field-dead on

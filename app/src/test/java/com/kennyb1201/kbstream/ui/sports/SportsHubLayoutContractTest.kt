@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.sports
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -20,6 +21,7 @@ import org.junit.Test
  * record line, the week/venue context, the score as the largest thing on it),
  * the section heading's rhythm, and the single shared LIVE pulse.
  */
+@OptIn(ExperimentalFoundationApi::class)
 class SportsHubLayoutContractTest {
 
     /**
@@ -119,6 +121,39 @@ class SportsHubLayoutContractTest {
         assertTrue(
             "and a note that repeats it is not drawn twice",
             flat.contains("!note.equals(context, ignoreCase = true)")
+        )
+    }
+
+    @Test
+    fun `a ranked side prints its ranking on the code line, and an unranked one is unchanged`() {
+        // "#5 TEX · 4-0": the ranking is part of the code a scoreboard prints,
+        // not a chip beside it. That is what keeps it safe - no new row means no
+        // new height, and a card whose height does not change is a card a poll
+        // cannot move - and it is why a pro or unranked side prints exactly the
+        // line it always did.
+        assertTrue(
+            "the ranking prefixes the abbreviation with a space, so the code reads \"#5 TEX\"",
+            flat.contains(
+                "val code = listOfNotNull( team.rank?.let { \"#\$it\" }, " +
+                    "team.abbreviation.ifBlank { team.displayName } ).joinToString(\" \")"
+            )
+        )
+        assertTrue(
+            "and the record is still joined to the whole of that line with the middot",
+            flat.contains(
+                "text = listOfNotNull( code, team.record?.trim()?.takeIf { it.isNotBlank() } )" +
+                    ".joinToString(\" · \").let { if (favorite) \"★ \$it\" else it }"
+            )
+        )
+        assertEquals(
+            "the star is applied once - to the finished string, ranking and all",
+            1,
+            Regex("★ ").findAll(flat).count()
+        )
+        assertEquals(
+            "and the card and the sheet share the one column, so a ranking cannot land on only one",
+            1,
+            Regex("private fun TeamColumn\\(").findAll(flat).count()
         )
     }
 
@@ -259,6 +294,98 @@ class SportsHubLayoutContractTest {
         )
     }
 
+    /**
+     * The landing the hub installs, at the inset it resolves to on a
+     * TV-density screen. Arithmetic, so what follows is asserted on the spec
+     * itself rather than read out of its source - the same way the Home rail's
+     * landing is (see CollectionRailFocusLandingContractTest).
+     */
+    private val spec: SportsCardBringIntoViewSpec =
+        SportsCardBringIntoViewSpec(insetPx = INSET_PX)
+
+    @Test
+    fun `a card already inside the viewport is never scrolled, wherever it sits in it`() {
+        // v5, and the last of the movement: reported "only LIVE cards bob, the
+        // whole card moving up and down, focused only". v1-v3 made the card's
+        // CONTENT stable across a poll and v4 took the focus scale off live
+        // cards, so what was left was the scroll. Bring-into-view is asked again
+        // every time the focused card remeasures, and a LIVE card remeasures on
+        // the 30s poll - and a card resting INSIDE the margin still had a
+        // distance to travel to it, worked out from the card's own measured
+        // rectangle, so a poll that shifted that rectangle by any amount
+        // scrolled the card by the same amount. Inside the viewport the answer
+        // is now zero however the card measured, so no recomposition can move
+        // it. The two bands below are the ones the landing used to pull at, and
+        // the property that ends the bob is that both are 0f rather than a
+        // fresh distance.
+        assertEquals(
+            "a card clear of both margins rests",
+            0f,
+            spec.calculateScrollDistance(
+                offset = 234f,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        assertEquals(
+            "and so does one inside the LEADING margin: inside the viewport is inside the viewport",
+            0f,
+            spec.calculateScrollDistance(offset = 5f, size = CARD_HEIGHT, containerSize = VIEWPORT),
+            TOLERANCE
+        )
+        assertEquals(
+            "and one that stops a few pixels short of the trailing edge",
+            0f,
+            spec.calculateScrollDistance(
+                offset = VIEWPORT - CARD_HEIGHT - 5f,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+    }
+
+    @Test
+    fun `a card off the viewport is still landed on the margin, and stays where it lands`() {
+        // The half that must not change: a card focus has to scroll to is still
+        // brought in with [KBFocusRowInset] of room for the ring its LAYOUT
+        // rectangle does not cover, in both directions - and the position it
+        // lands on asks for no further scroll, which is what keeps a landing
+        // from repeating itself.
+        val overshoot =
+            spec.calculateScrollDistance(
+                offset = 1800f,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            )
+        assertTrue("a card past the trailing margin is pulled back", overshoot > 0f)
+        assertEquals(
+            "and lands exactly on the margin",
+            VIEWPORT - INSET_PX,
+            1800f - overshoot + CARD_HEIGHT,
+            TOLERANCE
+        )
+        assertEquals(
+            "where it asks for no further scroll",
+            0f,
+            spec.calculateScrollDistance(
+                offset = 1800f - overshoot,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            ),
+            TOLERANCE
+        )
+        val backOff =
+            spec.calculateScrollDistance(
+                offset = -100f,
+                size = CARD_HEIGHT,
+                containerSize = VIEWPORT
+            )
+        assertTrue("a card above the leading margin is backed off", backOff < 0f)
+        assertEquals("onto the same margin", INSET_PX, -100f - backOff, TOLERANCE)
+    }
+
     // ── Source access ───────────────────────────────────────────────
 
     private fun slice(startMarker: String, endMarker: String): String {
@@ -293,5 +420,16 @@ class SportsHubLayoutContractTest {
 
     private companion object {
         const val SCREEN = "com/kennyb1201/kbstream/ui/sports/SportsHubScreen.kt"
+
+        /** The value the hub resolves [KBFocusRowInset] to on a TV-density screen. */
+        const val INSET_PX = 16f
+
+        /** A card's height, in the raw pixels the spec is handed. */
+        const val CARD_HEIGHT = 150f
+
+        /** A 1080p viewport, in the raw pixels the spec is handed. */
+        const val VIEWPORT = 1920f
+
+        const val TOLERANCE = 0.001f
     }
 }

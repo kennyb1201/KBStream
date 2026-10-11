@@ -117,7 +117,7 @@ class SportsMatchDiagnosticsContractTest {
         )
         assertTrue(
             "and the launch is handed the whole ordered list",
-            hub.contains("onPlay = { feeds -> detailGame = null onPlayChannels(feeds) }")
+            hub.contains("onPlay = { feeds -> detailGame = null onPlayChannels(game.id, null, feeds) }")
         )
         assertTrue(
             "which the hub turns into the channel plus its backups",

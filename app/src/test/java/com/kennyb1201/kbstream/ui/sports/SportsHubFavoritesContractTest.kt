@@ -75,6 +75,48 @@ class SportsHubFavoritesContractTest {
     }
 
     @Test
+    fun `each league tab leads with the viewer's own games`() {
+        assertTrue(
+            "the sections the tabs draw combine the loaded ones with the follow set",
+            vmFlat.contains("val displaySections: StateFlow<List<LeagueSection>> =") &&
+                vmFlat.contains("combine(_sections, _favoriteTeamKeys) { sections, keys ->")
+        )
+        assertTrue(
+            "each league's games are ordered by the pure rule, which is what makes it stable",
+            vmFlat.contains("games = SportsGameOrder.favoritesFirst(section.games, keys)")
+        )
+        assertTrue(
+            "the grouping and every other consumer keep reading the unordered sections",
+            vmFlat.contains("val sections: StateFlow<List<LeagueSection>> = _sections.asStateFlow()")
+        )
+        assertTrue(
+            "and the hub's tabs read the ordered flow, not the raw one",
+            hubFlat.contains("val sections by viewModel.displaySections.collectAsStateWithLifecycle()") &&
+                !hubFlat.contains("viewModel.sections.collectAsStateWithLifecycle")
+        )
+    }
+
+    @Test
+    fun `no favourites is the slate it always was, and a tournament is untouched`() {
+        assertTrue(
+            "an empty follow set passes the sections through",
+            vmFlat.contains("if (keys.isEmpty()) { sections } else {")
+        )
+        assertTrue(
+            "a section with no games - a tournament, or a league with nothing on - is not copied",
+            vmFlat.contains("if (section.games.isEmpty()) { section } else {")
+        )
+        assertTrue(
+            "and the tab states its initial the same way the sections do, so the first frame is unchanged",
+            vmFlat.contains("initialValue = emptyList()")
+        )
+        assertTrue(
+            "the FAVORITES tab still reads its own section, which this ordering never touches",
+            hubFlat.contains("val favoritesSection by viewModel.favoritesSection.collectAsStateWithLifecycle()")
+        )
+    }
+
+    @Test
     fun `a favourite survives the process`() {
         assertTrue(
             "the store is a preference, read back when the ViewModel is built",

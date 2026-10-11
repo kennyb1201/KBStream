@@ -177,8 +177,19 @@ sealed class Screen {
      * button in the guide's header. Back returns to Live TV, which is where it
      * is opened from - and the only place the playlist it resolves against is
      * configured.
+     *
+     * [detailGameId] / [detailTournamentId] name the detail sheet the hub reopens
+     * on entry, and are set by the player launched FROM that sheet and nowhere
+     * else (see the hub branch below). Back from a game therefore returns to the
+     * sheet it was played from, rather than dropping the viewer on the bare
+     * slate. At most one is ever non-null, a hub opened from the guide carries
+     * neither, and neither survives process death - a restore opens the plain
+     * hub (see decodeScreen in NavStateSerialization.kt).
      */
-    object Sports : Screen()
+    data class Sports(
+        val detailGameId: String? = null,
+        val detailTournamentId: String? = null,
+    ) : Screen()
 
     object Library : Screen()
 
@@ -1107,7 +1118,7 @@ fun AppRoot(
         // Screen, reached from the guide's header, and this is the same
         // destination - the reminder deep link adds no new entry point.
         if (intent?.getBooleanExtra(NotificationCenter.EXTRA_OPEN_SPORTS, false) == true) {
-            screen = Screen.Sports
+            screen = Screen.Sports()
             return true
         }
         when (
@@ -1258,12 +1269,15 @@ fun AppRoot(
             is Screen.Addons ->
                 stableBackDestination(current.returnTo)
 
+            // A channel player backs out to whatever launched it, which every
+            // launch states: the guide's own (live, catch-up and DVR alike) set
+            // returnTo = Screen.Guide, and the hub's sets Screen.Sports with the
+            // sheet that raised the launch. Both are explicit at their call
+            // sites (see liveChannelScreen's callers), so "channel" no longer has
+            // to mean "Live TV" here - which is exactly what used to send a game
+            // launched from the hub to the guide with its sheet gone.
             is Screen.Player ->
-                if (current.parentType == "channel") {
-                    Screen.Guide
-                } else {
-                    stableBackDestination(current.returnTo)
-                }
+                stableBackDestination(current.returnTo)
 
             is Screen.Streams ->
                 if (current.parentType == "channel") {
@@ -1289,9 +1303,10 @@ fun AppRoot(
                 stableBackDestination(current.returnTo)
 
             // The hub is opened from the guide's own header, so Back returns
-            // there rather than to Home. A channel launched from the hub
-            // behaves exactly like one launched from the guide (Back to Live
-            // TV) - that is the point of there being one launch path.
+            // there rather than to Home. A game played FROM the hub is a Player
+            // screen of its own and backs out to Screen.Sports with its sheet
+            // (see the Player branch above), so this branch is only ever the hub
+            // being left for the guide.
             is Screen.Sports ->
                 Screen.Guide
 
@@ -1849,7 +1864,7 @@ fun AppRoot(
                 // guide is showing. Back returns here, which is why the hub is
                 // a sibling of the guide rather than a pane inside it.
                 onOpenSports = {
-                    screen = Screen.Sports
+                    screen = Screen.Sports()
                 },
 
                 // Catch-up (DVR): launch the recorded broadcast URL directly.
@@ -1907,7 +1922,7 @@ fun AppRoot(
                 // Back destination. There is no second player and no second
                 // channel route - a card that matched a channel hands it to the
                 // SAME liveChannelScreen the guide uses.
-                onPlayChannels = { channels ->
+                onPlayChannels = { gameId, tournamentId, channels ->
                     // The head is the feed the hub's matcher chose and the rest
                     // are the backups the sheet listed; the player walks them in
                     // this order if one will not open.
@@ -1916,10 +1931,22 @@ fun AppRoot(
                             channel = primary,
                             backups = channels.drop(1),
                             epgIconUrl = null,
-                            returnTo = Screen.Sports
+                            // One of these two is the id of the sheet WATCH was
+                            // pressed in; Back from the game returns here and
+                            // the hub raises that sheet again.
+                            returnTo = Screen.Sports(
+                                detailGameId = gameId,
+                                detailTournamentId = tournamentId
+                            )
                         )
                     }
                 },
+
+                // The same two ids, read back on entry: a hub reached by a
+                // player's Back opens on the sheet it came from. Null for every
+                // other way in, which is every other hub.
+                initialDetailGameId = current.detailGameId,
+                initialDetailTournamentId = current.detailTournamentId,
             )
         }
 

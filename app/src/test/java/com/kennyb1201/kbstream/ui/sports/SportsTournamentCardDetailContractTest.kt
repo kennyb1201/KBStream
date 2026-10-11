@@ -61,7 +61,7 @@ class SportsTournamentCardDetailContractTest {
         assertTrue("which is the head of the feed list", card.contains("val channel = channels.firstOrNull()"))
         assertTrue(
             "and the whole ordered list, head first, is what it plays - exactly as before",
-            card.contains("onClick = { onPlayChannels(channels) }")
+            card.contains("onClick = { onPlayChannels(null, null, channels) }")
         )
         assertTrue(
             "the screen threads both callbacks into the card builder",
@@ -115,7 +115,9 @@ class SportsTournamentCardDetailContractTest {
         )
         assertTrue(
             "and that Watch plays through the hub's one existing launch",
-            hub.contains("onPlay = { feeds -> detailTournament = null onPlayChannels(feeds) }")
+            hub.contains(
+                "onPlay = { feeds -> detailTournament = null onPlayChannels(null, event.id, feeds) }"
+            )
         )
     }
 

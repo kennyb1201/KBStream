@@ -107,7 +107,7 @@ class SportsGameDetailSheetContractTest {
         )
         assertTrue(
             "the screen hands that to the same launch a card tap used to take",
-            hub.contains("onPlay = { feeds -> detailGame = null onPlayChannels(feeds) }")
+            hub.contains("onPlay = { feeds -> detailGame = null onPlayChannels(game.id, null, feeds) }")
         )
         assertTrue(
             "and it is focused by default, so one press watches",

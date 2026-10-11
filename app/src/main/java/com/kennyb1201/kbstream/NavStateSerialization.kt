@@ -241,7 +241,12 @@ internal fun decodeScreen(
             "search" -> Screen.Search
             "simkl" -> Screen.Simkl
             "guide" -> Screen.Guide
-            "sports" -> Screen.Sports
+            // The hub always restores as the plain hub. The detail ids a
+            // Screen.Sports may carry are a one-shot "reopen the sheet this game
+            // was played from" and are deliberately NOT persisted: a restored
+            // hub was not returned to by a player, so it must not raise a sheet
+            // the viewer never opened.
+            "sports" -> Screen.Sports()
             "library" -> Screen.Library
             "settings" -> Screen.Settings
             "stats" -> Screen.Stats

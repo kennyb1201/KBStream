@@ -36,6 +36,19 @@ data class SportsTeam(
     /** "41-12", or null when the feed carries no record (tennis, MMA). */
     val record: String?,
     /**
+     * The side's AP Top 25 ranking (1-25), or null where its sport has none:
+     * every pro league, every side outside the poll, and the sports whose
+     * "sides" are people.
+     *
+     * College football and college basketball are the feeds that carry it, and
+     * they publish it on the COMPETITOR - `curatedRank` is a sibling of `team`
+     * in the scoreboard's JSON, not a field inside it - where an unranked side
+     * is a sentinel (99) rather than a missing key. Only a value inside the poll
+     * is kept, so this is either a real ranking or nothing; the card prints it
+     * on the code line ("#5 TEX · 4-0") and prints the code alone otherwise.
+     */
+    val rank: Int? = null,
+    /**
      * ESPN's own club colour, as a bare hex string ("860038"); the card tints
      * the mark's plate with it so a crest sits on its club's colour rather than
      * on grey. Null when the feed gives none (a person, a tournament stop), and

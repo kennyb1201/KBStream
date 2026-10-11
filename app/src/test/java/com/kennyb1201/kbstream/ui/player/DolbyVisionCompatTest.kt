@@ -585,6 +585,319 @@ class DolbyVisionCompatTest {
         assertArrayEquals("only the VCL NAL remains", vcl, buf.copyOf(newLen))
     }
 
+    // ── The first-sample SEI accounting (diagnostic) ────────────────
+    //
+    // The relabel path logged "first sample HDR10+ SEI dropped" whether or not
+    // anything was removed, so a field stall could not be read off it: the 39:69
+    // prefix-SEI NAL that sits next to the 216-byte RPU may have been dropped
+    // whole, surgically shrunk, or forwarded bit-exact, and the log said the
+    // same thing all three ways. The accounting records which - per SEI NAL,
+    // with its size before and, for a shrink, after - and it is DIAGNOSTIC
+    // ONLY: the bytes emitted for a given input are identical with or without
+    // it, which the last test below pins directly.
+
+    @Test
+    fun `the accounting records a whole-SEI drop, with the NAL's own size`() {
+        val sei = nal(39, t35Message(HDR10_PLUS_HEADER))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = sei + vcl
+        val buf = au.copyOf()
+        val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = false, stripHdr10Plus = true, accounting = accounting
+        )
+
+        assertEquals("a NAL whose only message is HDR10+ goes whole", vcl.size, newLen)
+        val entry = accounting.entries.single()
+        assertEquals(39, entry.nalType)
+        // NAL bytes excluding the start code, the size describeNals prints.
+        assertEquals(sei.size - 4, entry.originalSize)
+        assertEquals(DolbyVisionCompat.SeiStripAccounting.Action.DROPPED, entry.action)
+        assertEquals("39:${sei.size - 4}->dropped", accounting.summary())
+    }
+
+    @Test
+    fun `the accounting records a shrunk SEI at the size it was left at`() {
+        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val sei = nal(39, t35Message(HDR10_PLUS_HEADER) + other + byteArrayOf(0x80.toByte()))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = sei + vcl
+        val buf = au.copyOf()
+        val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = false, stripHdr10Plus = true, accounting = accounting
+        )
+
+        val kept = nal(39, other + byteArrayOf(0x80.toByte()))
+        assertEquals("the NAL survives as the kept message", kept.size + vcl.size, newLen)
+        val entry = accounting.entries.single()
+        assertEquals(39, entry.nalType)
+        assertEquals(sei.size - 4, entry.originalSize)
+        assertEquals(DolbyVisionCompat.SeiStripAccounting.Action.SHRUNK, entry.action)
+        // The recorded new size is the NAL's real new size (its framing
+        // included), so the log can be read against what the decoder is handed.
+        assertEquals(kept.size, entry.newSize)
+        assertEquals("39:${sei.size - 4}->shrunk=${kept.size}", accounting.summary())
+    }
+
+    @Test
+    fun `the accounting records a kept SEI, both ways the strip can leave one alone`() {
+        // Two ways a SEI NAL is forwarded bit-exact, and the first-sample log
+        // has to be able to tell them from a drop: the detector never fired (an
+        // RPU-shaped T35 payload, the marker bytes only mid-payload), and the
+        // detector fired but the surgical parse failed open (a matching message
+        // followed by a malformed one). Neither removes anything.
+        val rpuShaped = ByteArray(10) { (0x10 + it).toByte() } + HDR10_PLUS_HEADER
+        val cases = listOf(
+            "the detector did not fire" to t35Message(rpuShaped),
+            "the surgical parse failed open" to
+                t35Message(HDR10_PLUS_HEADER) + byteArrayOf(0x04)
+        )
+        cases.forEach { (name, payload) ->
+            val sei = nal(39, payload)
+            val vcl = nal(19, byteArrayOf(0x55, 0x66))
+            val au = sei + vcl
+            val buf = au.copyOf()
+            val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+            val newLen = DolbyVisionCompat.stripAnnexB(
+                buf, au.size, stripDv = false, stripHdr10Plus = true,
+                accounting = accounting
+            )
+
+            assertEquals("$name: nothing may be removed", -1, newLen)
+            assertArrayEquals("$name: the sample must be bit-exact", au, buf)
+            assertEquals(
+                "$name: the NAL is recorded as kept, at its own size",
+                "39:${sei.size - 4}->kept",
+                accounting.summary()
+            )
+        }
+    }
+
+    @Test
+    fun `the accounting changes nothing about the bytes emitted`() {
+        // The diagnostic's whole contract: strip the same input twice, once with
+        // and once without it, and the emitted bytes and the return value must be
+        // equal - across every shape the strip can meet, because the record calls
+        // sit right beside the in-place compaction. The RPU NAL rides through
+        // untouched (stripDv = false) and is never recorded: only SEI NALs are.
+        val hdr10 = t35Message(HDR10_PLUS_HEADER)
+        val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val rpuShaped = ByteArray(10) { (0x10 + it).toByte() } + HDR10_PLUS_HEADER
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val rpu = nal(62, ByteArray(16) { it.toByte() })
+        val annexB = listOf(
+            "whole drop" to nal(39, hdr10) + vcl,
+            "shrink" to nal(39, hdr10 + other + byteArrayOf(0x80.toByte())) + vcl,
+            "detector silent" to nal(39, t35Message(rpuShaped)) + vcl,
+            "fail open" to nal(39, hdr10 + byteArrayOf(0x04)) + vcl,
+            "nothing to strip" to nal(39, other + byteArrayOf(0x80.toByte())) + vcl,
+            "rpu kept" to rpu + vcl,
+            "everything at once" to nal(39, hdr10 + other + byteArrayOf(0x80.toByte())) +
+                nal(39, hdr10) + rpu + vcl
+        )
+        annexB.forEach { (name, au) ->
+            val plain = au.copyOf()
+            val counted = au.copyOf()
+            val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+            val plainLen = DolbyVisionCompat.stripAnnexB(
+                plain, au.size, stripDv = false, stripHdr10Plus = true
+            )
+            val countedLen = DolbyVisionCompat.stripAnnexB(
+                counted, au.size, stripDv = false, stripHdr10Plus = true,
+                accounting = accounting
+            )
+
+            assertEquals(
+                "$name: the return value must not depend on the accounting",
+                plainLen,
+                countedLen
+            )
+            assertArrayEquals(
+                "$name: the bytes emitted must be identical",
+                if (plainLen < 0) plain else plain.copyOf(plainLen),
+                if (countedLen < 0) counted else counted.copyOf(countedLen)
+            )
+            assertTrue(
+                "$name: a non-SEI NAL is never recorded - the RPU is not a SEI",
+                accounting.entries.all { it.nalType == 39 || it.nalType == 40 }
+            )
+        }
+        // And the order is the order the NALs were met in, which is what lets
+        // the log be read against the `nals=` inventory on the same line.
+        val mixed = annexB.single { it.first == "everything at once" }.second.copyOf()
+        val actions = DolbyVisionCompat.SeiStripAccounting()
+        DolbyVisionCompat.stripAnnexB(
+            mixed, mixed.size, stripDv = false, stripHdr10Plus = true, accounting = actions
+        )
+        assertEquals(
+            "a shrunk NAL, then the one that goes whole, and nothing about the RPU",
+            listOf(39, 39),
+            actions.entries.map { it.nalType }
+        )
+        assertEquals(
+            listOf(
+                DolbyVisionCompat.SeiStripAccounting.Action.SHRUNK,
+                DolbyVisionCompat.SeiStripAccounting.Action.DROPPED
+            ),
+            actions.entries.map { it.action }
+        )
+
+        val lengthDelimited = listOf(
+            "whole drop" to ldNal(39, hdr10) + ldNal(19, byteArrayOf(0x55, 0x66)),
+            "shrink" to
+                ldNal(39, hdr10 + other + byteArrayOf(0x80.toByte())) + ldNal(19, byteArrayOf(0x55, 0x66)),
+            "detector silent" to ldNal(39, t35Message(rpuShaped)) + ldNal(19, byteArrayOf(0x55, 0x66)),
+            "nothing to strip" to ldNal(39, other + byteArrayOf(0x80.toByte())) + ldNal(19, byteArrayOf(0x55, 0x66)),
+            "rpu kept" to ldNal(62, ByteArray(16) { it.toByte() }) + ldNal(19, byteArrayOf(0x55, 0x66))
+        )
+        lengthDelimited.forEach { (name, sample) ->
+            val plain = sample.copyOf()
+            val counted = sample.copyOf()
+            val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+            val plainLen = DolbyVisionCompat.stripLengthDelimited(
+                plain, sample.size, 4, stripDv = false, stripHdr10Plus = true
+            )
+            val countedLen = DolbyVisionCompat.stripLengthDelimited(
+                counted, sample.size, 4, stripDv = false, stripHdr10Plus = true,
+                accounting = accounting
+            )
+
+            assertEquals(
+                "ld $name: the return value must not depend on the accounting",
+                plainLen,
+                countedLen
+            )
+            assertArrayEquals(
+                "ld $name: the bytes emitted must be identical",
+                if (plainLen < 0) plain else plain.copyOf(plainLen),
+                if (countedLen < 0) counted else counted.copyOf(countedLen)
+            )
+            assertTrue(
+                "ld $name: a non-SEI NAL is never recorded",
+                accounting.entries.all { it.nalType == 39 || it.nalType == 40 }
+            )
+        }
+    }
+
+    @Test
+    fun `a seeded sweep of SEI-shaped samples strips identically with and without accounting`() {
+        // The with/without equality above, pushed past the hand-written shapes:
+        // the record calls sit inside the compaction branches, so the guard has
+        // to hold for inputs nobody thought of - truncated messages, 0xFF
+        // varints, emulation-prevention bytes, a header that opens the payload
+        // and one that only appears inside it. Seeded, so a failure repeats.
+        val random = kotlin.random.Random(20261011)
+        val alphabet = byteArrayOf(
+            0x04, 0x05, 0xB5.toByte(), 0x00, 0x3C, 0x01, 0x80.toByte(), 0xFF.toByte(), 0x03
+        )
+        val vclAnnexB = nal(19, byteArrayOf(0x55, 0x66))
+        val rpuAnnexB = nal(62, ByteArray(8) { it.toByte() })
+        val vclLd = ldNal(19, byteArrayOf(0x55, 0x66))
+        val rpuLd = ldNal(62, ByteArray(8) { it.toByte() })
+        val seen = mutableSetOf<DolbyVisionCompat.SeiStripAccounting.Action>()
+
+        repeat(200) { index ->
+            val payload = ByteArray(random.nextInt(40)) { alphabet[random.nextInt(alphabet.size)] }
+            // The detector fires on the cases whose T35 message opens with the
+            // real header, so the surgical parse is the path under test; the
+            // others are the fail-open shapes. Prefix and suffix SEI alike.
+            val sei = when (index % 4) {
+                0 -> nal(39, t35Message(HDR10_PLUS_HEADER + payload))
+                1 -> nal(40, t35Message(HDR10_PLUS_HEADER + payload) + unregisteredMessage(payload))
+                2 -> nal(39, payload)
+                else -> nal(40, t35Message(payload))
+            }
+            val au = sei + vclAnnexB + rpuAnnexB
+            val plain = au.copyOf()
+            val counted = au.copyOf()
+            val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+            val plainLen = DolbyVisionCompat.stripAnnexB(
+                plain, au.size, stripDv = false, stripHdr10Plus = true
+            )
+            val countedLen = DolbyVisionCompat.stripAnnexB(
+                counted, au.size, stripDv = false, stripHdr10Plus = true,
+                accounting = accounting
+            )
+
+            assertEquals("case $index: return value", plainLen, countedLen)
+            assertArrayEquals(
+                "case $index: emitted bytes",
+                if (plainLen < 0) plain else plain.copyOf(plainLen),
+                if (countedLen < 0) counted else counted.copyOf(countedLen)
+            )
+            assertTrue(
+                "case $index: only SEI NALs are ever recorded",
+                accounting.entries.all { it.nalType == 39 || it.nalType == 40 }
+            )
+
+            val sample = ldNal(
+                39,
+                t35Message(HDR10_PLUS_HEADER + payload) + unregisteredMessage(payload)
+            ) + vclLd + rpuLd
+            val ldPlain = sample.copyOf()
+            val ldCounted = sample.copyOf()
+            val ldAccounting = DolbyVisionCompat.SeiStripAccounting()
+            val ldPlainLen = DolbyVisionCompat.stripLengthDelimited(
+                ldPlain, sample.size, 4, stripDv = false, stripHdr10Plus = true
+            )
+            val ldCountedLen = DolbyVisionCompat.stripLengthDelimited(
+                ldCounted, sample.size, 4, stripDv = false, stripHdr10Plus = true,
+                accounting = ldAccounting
+            )
+
+            assertEquals("case $index: ld return value", ldPlainLen, ldCountedLen)
+            assertArrayEquals(
+                "case $index: ld emitted bytes",
+                if (ldPlainLen < 0) ldPlain else ldPlain.copyOf(ldPlainLen),
+                if (ldCountedLen < 0) ldCounted else ldCounted.copyOf(ldCountedLen)
+            )
+            assertTrue(
+                "case $index: ld records only SEI NALs",
+                ldAccounting.entries.all { it.nalType == 39 || it.nalType == 40 }
+            )
+            seen += accounting.entries.map { it.action }
+            seen += ldAccounting.entries.map { it.action }
+        }
+
+        assertEquals(
+            "the sweep has to have met all three fates, or it is not a guard on any of them",
+            setOf(
+                DolbyVisionCompat.SeiStripAccounting.Action.KEPT,
+                DolbyVisionCompat.SeiStripAccounting.Action.SHRUNK,
+                DolbyVisionCompat.SeiStripAccounting.Action.DROPPED
+            ),
+            seen
+        )
+    }
+
+    @Test
+    fun `the length-delimited strip accounts for its SEI NALs the same way`() {
+        val sei = ldNal(39, t35Message(HDR10_PLUS_HEADER))
+        val vcl = ldNal(19, byteArrayOf(0x55, 0x66))
+        val sample = sei + vcl
+        val buf = sample.copyOf()
+        val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+        val newLen = DolbyVisionCompat.stripLengthDelimited(
+            buf, sample.size, 4, stripDv = false, stripHdr10Plus = true, accounting = accounting
+        )
+
+        assertEquals("the whole SEI NAL goes", vcl.size, newLen)
+        val entry = accounting.entries.single()
+        assertEquals(39, entry.nalType)
+        // NAL bytes excluding the 4-byte length field.
+        assertEquals(sei.size - 4, entry.originalSize)
+        assertEquals(DolbyVisionCompat.SeiStripAccounting.Action.DROPPED, entry.action)
+        assertEquals("39:${sei.size - 4}->dropped", accounting.summary())
+    }
+
     @Test
     fun `the mutating strip keeps a shared SEI NAL and removes only the HDR10 plus message`() {
         // The Strip All / no-DV-decoder path has the same bug and must go

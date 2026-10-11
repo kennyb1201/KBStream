@@ -659,6 +659,12 @@ private fun espnTeamOf(row: JSONObject, homeAway: String): SportsTeam {
         isHome = homeAway.equals("home", ignoreCase = true),
         record = row.optJSONArray("records")?.optJSONObject(0)?.optString("summary", "")
             ?.takeIf { it.isNotBlank() },
+        // The AP Top 25 ranking, which only the college feeds carry. ESPN
+        // publishes it on the COMPETITOR - `curatedRank` is a sibling of
+        // `team`, not a field inside it - and an unranked side is a sentinel
+        // (99) rather than a missing key, so a number only becomes a rank when
+        // it is inside the poll. Every pro feed and every person reads null.
+        rank = row.optJSONObject("curatedRank")?.optInt("current")?.takeIf { it in 1..25 },
         colorHex = team?.optString("color", "")?.takeIf { it.isNotBlank() },
         // The nickname ESPN publishes ("Yankees", "Red Sox"), used where a
         // heading reads better with the name than the code - see a game

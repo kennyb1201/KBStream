@@ -176,16 +176,27 @@ private const val SHEET_SCRIM_ALPHA = 0.6f
  * Playback is not this screen's business. A card hands the feeds the playlist
  * holds for its game - strongest first - to [onPlayChannels], which is the same
  * launch a guide click takes.
+ *
+ * [initialDetailGameId] / [initialDetailTournamentId] reopen the sheet the
+ * player being returned from was launched out of - see [SportsReopenRules] and
+ * the reopen effect below. Both are null for every other way into the hub.
  */
 @Composable
 fun SportsHubScreen(
     viewModel: SportsHubViewModel = viewModel(),
     modifier: Modifier = Modifier,
-    onPlayChannels: (List<IptvChannel>) -> Unit = {},
+    onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit =
+        { _, _, _ -> },
+    initialDetailGameId: String? = null,
+    initialDetailTournamentId: String? = null,
 ) {
     val enabled by viewModel.enabledLeagues.collectAsStateWithLifecycle()
     val leagueOrder by viewModel.leagueOrder.collectAsStateWithLifecycle()
-    val sections by viewModel.sections.collectAsStateWithLifecycle()
+    // The ordered sections: within each league's live / upcoming / final groups,
+    // the viewer's own games lead (see SportsHubViewModel.displaySections). The
+    // grouping below, the search and the reopen lookup are all order-preserving
+    // or id-keyed, so the favorites-first order flows through them untouched.
+    val sections by viewModel.displaySections.collectAsStateWithLifecycle()
     val selectedPath by viewModel.selectedLeaguePath.collectAsStateWithLifecycle()
     val matches by viewModel.matches.collectAsStateWithLifecycle()
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
@@ -293,6 +304,32 @@ fun SportsHubScreen(
     // to play, and the sheet is where the reason is stated. A MATCHED card still
     // plays, exactly as it did.
     var detailTournament by remember { mutableStateOf<TournamentEvent?>(null) }
+
+    // Back from the player returns to the sheet its WATCH was pressed in: the
+    // Screen the player was launched with carries that game's (or tournament's)
+    // id, and the first composition that can see it in the loaded sections raises
+    // the sheet. The lookup is [SportsReopenRules]', so "the game has dropped off
+    // the board" is a null result - the hub simply renders - rather than an empty
+    // sheet or a crash.
+    //
+    // One-shot: [reopenConsumed] latches on the first hit, so closing the sheet
+    // leaves it closed and a later recomposition (or the sections arriving from
+    // the 30-second tick) cannot raise it again. A hub reached any other way - a
+    // fresh hub, with both ids null - never opens one, and the empty lookup
+    // returns without touching [sections] at all.
+    var reopenConsumed by remember(initialDetailGameId, initialDetailTournamentId) {
+        mutableStateOf(false)
+    }
+    LaunchedEffect(initialDetailGameId, initialDetailTournamentId, sections) {
+        if (reopenConsumed) return@LaunchedEffect
+        val game = SportsReopenRules.game(sections, initialDetailGameId)
+        val tournament = SportsReopenRules.tournament(sections, initialDetailTournamentId)
+        if (game != null || tournament != null) {
+            detailGame = game
+            detailTournament = tournament
+            reopenConsumed = true
+        }
+    }
 
     // Any sheet over the hub pauses the section's LIVE beat (see
     // [rememberLivePulse]): the dots are behind that sheet, and a beat nobody
@@ -647,9 +684,12 @@ fun SportsHubScreen(
                 // correcting the matcher; record it so the next game with
                 // either team opens there. See [SportsChannelMemory].
                 onManualPick = { chosen -> viewModel.rememberChannel(game, chosen.id) },
+                // The launch carries this game with it, so a Back from the
+                // player lands on this sheet again rather than on the bare hub.
+                // See Screen.Sports / the reopen effect above.
                 onPlay = { feeds ->
                     detailGame = null
-                    onPlayChannels(feeds)
+                    onPlayChannels(game.id, null, feeds)
                 },
                 onClose = { detailGame = null },
             )
@@ -674,9 +714,10 @@ fun SportsHubScreen(
                 // it against the tournament's own key; the game sheet does the
                 // same for a game's two teams. See [SportsChannelMemory].
                 onManualPick = { chosen -> viewModel.rememberTournamentChannel(event, chosen.id) },
+                // Same one-shot return for a tournament sheet.
                 onPlay = { feeds ->
                     detailTournament = null
-                    onPlayChannels(feeds)
+                    onPlayChannels(null, event.id, feeds)
                 },
                 onClose = { detailTournament = null },
             )
@@ -883,14 +924,31 @@ private fun HubList(
  * and the edge of the viewport it is being scrolled to; see [HubList] for why
  * the default landing is not enough.
  *
- * The rule is the default one with a margin at each edge: scroll the child only
- * as far as it takes to clear that margin, and not at all when it already has.
- * Landing ON the margin rather than on a fixed line is what keeps it steady -
- * the distance depends on the focused card's own rectangle and nothing else, so
- * every card lands the same way and the scroll cannot bounce mid-flight.
+ * The rule is the default one with a margin at each edge, for a card that has
+ * to be brought IN: scroll the child only as far as it takes to clear that
+ * margin, and not at all when it already has. Landing ON the margin rather than
+ * on a fixed line is what keeps it steady - the distance depends on the focused
+ * card's own rectangle and nothing else, so every card lands the same way and
+ * the scroll cannot bounce mid-flight.
+ *
+ * A card that is ALREADY inside the viewport is the other page of the same
+ * rule, and it answers zero: there is no landing to make. It is the page a
+ * RE-REQUEST lands on, and re-requests are what a LIVE card produces, because
+ * it remeasures on every 30s poll.
+ *
+ * The two pages are drawn here, in the one spec a scroll container reads,
+ * rather than in the card they are about: `LocalBringIntoViewSpec` is consumed
+ * by the scrolling surface itself (Compose attaches its bring-into-view node
+ * where `Modifier.scrollable` is), and a lazy list's items are subcompositions
+ * of that list - so a spec provided around a card never reaches the node that
+ * calculates the scroll, whatever it says.
+ *
+ * `internal`, like the Home rail's own landing beside it, because what it
+ * computes is arithmetic a contract test asserts exactly - with no device and
+ * no D-pad.
  */
 @OptIn(ExperimentalFoundationApi::class)
-private class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringIntoViewSpec {
+internal class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringIntoViewSpec {
 
     override fun calculateScrollDistance(
         offset: Float,
@@ -905,6 +963,18 @@ private class SportsCardBringIntoViewSpec(private val insetPx: Float) : BringInt
         // the card that asked to be brought into view, which is also the thing
         // carrying the cue.
         val trailingEdge = offset + abs(size)
+        // Already inside the viewport: nothing to bring into view, and this is
+        // the page a RE-REQUEST lands on. Bring-into-view is asked again every
+        // time the focused card remeasures, and a LIVE card remeasures on the
+        // 30s poll. With the margin rule alone the answer there is not zero - a
+        // card resting inside the margin still has a distance to travel to it,
+        // worked out from the card's own measured rectangle - so a poll that
+        // shifted that rectangle by any amount scrolled the card by the same
+        // amount, and the focused card rode it up and down. The unfocused cards
+        // beside it never asked to be brought into view, which is why only one
+        // card moved. A card that is off the viewport is landed exactly as it
+        // always was: the margin rule below still decides that.
+        if (offset >= 0f && trailingEdge <= containerSize) return 0f
         return when {
             // Past the bottom margin: scroll forward just far enough to clear it.
             trailingEdge > containerSize - margin -> trailingEdge - (containerSize - margin)
@@ -934,7 +1004,7 @@ private fun LeagueBody(
     matchingDone: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
     onOpenTournamentDetail: (TournamentEvent) -> Unit,
-    onPlayChannels: (List<IptvChannel>) -> Unit,
+    onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
     val live = section.games.filter { it.state == GameState.LIVE }
@@ -1383,12 +1453,21 @@ private fun TeamColumn(
             // "TB · 4-1": the code and the season record on one line, which is how
             // a scoreboard says it. The record is simply absent where the feed
             // carries none (tennis, MMA) and the line is the code alone.
+            //
+            // A ranked side reads "#5 TB" - the ranking is part of the code,
+            // not a chip beside it, so it costs no height and an unranked or
+            // pro side prints exactly the line it always did. Only the college
+            // feeds carry a ranking at all (see [SportsTeam.rank]).
+            val code = listOfNotNull(
+                team.rank?.let { "#$it" },
+                team.abbreviation.ifBlank { team.displayName }
+            ).joinToString(" ")
             Text(
                 // The star is the whole "this is one of yours" signal, so it sits on
                 // the code the way a broadcast mark sits on a channel: no second
                 // row, no badge to decode.
                 text = listOfNotNull(
-                    team.abbreviation.ifBlank { team.displayName },
+                    code,
                     team.record?.trim()?.takeIf { it.isNotBlank() }
                 ).joinToString(" · ").let { if (favorite) "★ $it" else it },
                 style = MaterialTheme.typography.titleSmall,
@@ -1895,7 +1974,7 @@ private fun TournamentCard(
     livePulse: State<Float>,
     lineupMissing: Boolean,
     matchingDone: Boolean,
-    onPlayChannels: (List<IptvChannel>) -> Unit,
+    onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit,
     onOpenDetail: (TournamentEvent) -> Unit,
 ) {
     val channel = channels.firstOrNull()
@@ -1966,7 +2045,11 @@ private fun TournamentCard(
         KBCard(
             // The whole ordered list, head first: the tournament plays on the
             // feed the matcher chose and falls to the rest if it will not open.
-            onClick = { onPlayChannels(channels) },
+            // No ids: this card plays WITHOUT raising a sheet, so a Back from
+            // the player has no sheet to reopen and the hub is what it should
+            // be - the hub. (The sheet's own WATCH is the path that carries
+            // them; see Screen.Sports.)
+            onClick = { onPlayChannels(null, null, channels) },
             focusedScale = KBFocusRow,
             shape = KBShapeCard,
             modifier = Modifier.fillMaxWidth()

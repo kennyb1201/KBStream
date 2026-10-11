@@ -165,6 +165,45 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         )
 
     /**
+     * The league tabs' sections with the viewer's own games first: within each
+     * section the games one of the followed teams is playing float above the
+     * rest, everything else keeping ESPN's own order (see [SportsGameOrder]).
+     *
+     * Ordering only - the live/upcoming/final grouping, the channel matcher,
+     * the sheet and the reminders all key off ids or read [_sections] itself,
+     * and the FAVORITES tab keeps reading [favoritesSection]. A viewer who
+     * follows nobody gets the sections back untouched, the same instances
+     * rather than copies, so the slate is byte-for-byte what it was before
+     * this existed. Following or unfollowing a team re-sorts instantly,
+     * through the [_favoriteTeamKeys] flow this already combines.
+     */
+    val displaySections: StateFlow<List<LeagueSection>> =
+        combine(_sections, _favoriteTeamKeys) { sections, keys ->
+            if (keys.isEmpty()) {
+                sections
+            } else {
+                sections.map { section ->
+                    // A tournament section carries no games at all - there is
+                    // nothing in a field or a grid to follow - so it has no
+                    // order to change and is handed back as it is.
+                    if (section.games.isEmpty()) {
+                        section
+                    } else {
+                        section.copy(
+                            games = SportsGameOrder.favoritesFirst(section.games, keys)
+                        )
+                    }
+                }
+            }
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            // [MutableStateFlow]'s own initial, so the first frame before the
+            // combine emits is the same empty hub it is today.
+            initialValue = emptyList()
+        )
+
+    /**
      * Which body the hub is showing for the selected league.
      *
      * A toggle within the league rather than a top-level STANDINGS tab (the

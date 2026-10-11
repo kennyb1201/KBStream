@@ -785,8 +785,13 @@ private class VideoCompatTrackOutput(
         }
 
         if (mode == Mode.STRIP_NALS_ONLY) {
+            val firstSample = !stripReported
             val inventory =
-                if (!stripReported) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
+                if (firstSample) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
+            // Per-SEI accounting, first sample only - all later samples pass
+            // null, so the steady state pays nothing for this.
+            val accounting =
+                if (firstSample) DolbyVisionCompat.SeiStripAccounting() else null
             // Pure removal — stripAnnexB/stripLengthDelimited never rewrite
             // parameter sets. The RPU/EL is KEPT (stripDv = false): dropping
             // it left a DV-flagged track with no DV metadata, and the decoder
@@ -796,20 +801,29 @@ private class VideoCompatTrackOutput(
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
-                        pendingBuf, sampleEnd, stripDv = false, stripHdr10Plus = true
+                        pendingBuf, sampleEnd, stripDv = false, stripHdr10Plus = true,
+                        accounting = accounting
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
-                        stripDv = false, stripHdr10Plus = true
+                        stripDv = false, stripHdr10Plus = true,
+                        accounting = accounting
                     )
             }
-            if (!stripReported) {
+            if (firstSample) {
                 stripReported = true
+                // The old line asserted "HDR10+ SEI dropped" whether or not
+                // anything was removed. This one reports what actually
+                // happened: whether the sample was modified at all, and the
+                // fate of each SEI NAL - dropped whole, surgically shrunk, or
+                // forwarded bit-exact. That distinction is what says whether a
+                // stall is the removal or the relabeled stream itself.
                 Log.i(
                     "PLAYER_DV",
-                    "Relabel NALS-strip: first sample HDR10+ SEI dropped " +
-                        "(codecs=${currentCodecs ?: "?"}) nals=$inventory"
+                    "Relabel NALS-strip: first sample (codecs=${currentCodecs ?: "?"}) " +
+                        "modified=${stripped >= 0} nals=$inventory " +
+                        "sei=${accounting?.summary()?.ifEmpty { "none" } ?: "none"}"
                 )
             }
             emit(if (stripped >= 0) stripped else sampleEnd)
