@@ -10,7 +10,6 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
 import com.kennyb1201.kbstream.data.debrid.TorBoxCachedBadges
 import com.kennyb1201.kbstream.data.debrid.TorBoxClient
-import com.kennyb1201.kbstream.data.device.DeviceCapability
 import com.kennyb1201.kbstream.data.player.DolbyVisionCapability
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.player.SourceAddonMemory
@@ -60,15 +59,9 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
     private val repository = AddonRepository.getInstance()
     private val addonManager = AddonManager.getInstance(application)
 
-    // Resolved once: the ranker demotes 4K on a box that cannot decode it, so
-    // the fact about this device is passed into every rank call below.
-    private val constrainedDevice: Boolean by lazy {
-        DeviceCapability.constrainedStreamDevice(application)
-    }
-
     /**
      * Whether a Dolby Vision label is worth anything on this box, resolved once
-     * like [constrainedDevice].
+     * and reused by every rank call below.
      *
      * Two things have to be true for it to be: the device must advertise a DV
      * decoder to MediaCodec, and the viewer must not have told Settings that
@@ -382,7 +375,6 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                 StreamRanker.rank(
                     allStreams,
                     requestedEpisode,
-                    constrainedDevice,
                     dolbyVisionUseful,
                     runtimeMinutes,
                     addonOf = addonOf,
@@ -444,7 +436,6 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                         StreamRanker.rank(
                             result.streams,
                             requestedEpisode,
-                            constrainedDevice,
                             dolbyVisionUseful,
                             runtimeMinutes,
                             addonOf = addonOf,
@@ -531,7 +522,6 @@ class StreamsViewModel(application: Application) : AndroidViewModel(application)
                         StreamRanker.explain(
                             stream,
                             requestedEpisode,
-                            constrainedDevice,
                             // The parameters the order was actually built with,
                             // not the defaults: a report that printed a DV
                             // bonus for a box that cannot show DV - or a

@@ -801,39 +801,34 @@ class StreamRankerTest {
         assertEquals("https://host/web.mkv", StreamRanker.rank(streams).first().url)
     }
 
-    // ── The device ──
+    // ── Resolution is not a device question ──
     //
-    // Reported: auto-play "will always pick the 40 Mbps remux on your 1.7 GB
-    // TCL". The 4K bonus was unconditional, so a file the box cannot decode
-    // outranked the 1080p it could.
-
-    private fun orderConstrained(vararg streams: Stream): List<Stream> =
-        StreamRanker.rank(streams.toList(), constrainedDevice = true)
+    // The ranker used to demote 4K below 1080p on a box reporting under 2.5 GB
+    // of RAM, reading RAM as a proxy for "can this decode 4K". Field,
+    // 2026-10-11: 4K plays on all of Kenny's devices, 50 GB files included - the
+    // 2 GB TV stick among them. The proxy was wrong, and demoting on it
+    // overrode the viewer; the way to prefer a smaller stream is Settings ->
+    // auto-play quality cap (`max_auto_play_quality`, see [AutoPlayQuality]), a
+    // pick rule that never touches this list. So the 4K copy heads its own
+    // title's 1080p on every box, whatever its size.
 
     @Test
-    fun `a capable device still prefers the 4K remux`() {
+    fun `the 4K copy outranks the same title's 1080p on every box`() {
         val uhd = stream("Some Film 2024 2160p REMUX DV 40 GB", url = "https://host/4k.mkv")
         val hd = stream("Some Film 2024 1080p WEB-DL 6 GB", url = "https://host/1080.mkv")
 
         assertEquals(listOf(uhd, hd), order(uhd, hd))
+        // The add-on's own order does not save the 1080p either: resolution is
+        // the stronger fact on hardware of any size.
+        assertEquals(listOf(uhd, hd), order(hd, uhd))
     }
 
     @Test
-    fun `a constrained device prefers the 1080p over a heavy 4K remux`() {
-        val uhd = stream("Some Film 2024 2160p REMUX DV 40 GB", url = "https://host/4k.mkv")
-        val hd = stream("Some Film 2024 1080p WEB-DL 6 GB", url = "https://host/1080.mkv")
-
-        assertEquals(listOf(hd, uhd), orderConstrained(uhd, hd))
-    }
-
-    @Test
-    fun `a constrained device still prefers 4K over 720p`() {
-        // The 4K bonus drops below 1080p but stays above 720p: it is demoted,
-        // not vetoed.
+    fun `4K still outranks 720p`() {
         val uhd = stream("Some Film 2024 2160p WEB-DL 8 GB", url = "https://host/4k.mkv")
         val hd = stream("Some Film 2024 720p HDTV 1 GB", url = "https://host/720.mkv")
 
-        assertEquals(listOf(uhd, hd), orderConstrained(uhd, hd))
+        assertEquals(listOf(uhd, hd), order(uhd, hd))
     }
 
     // ── Dolby Vision, where it can be shown ──

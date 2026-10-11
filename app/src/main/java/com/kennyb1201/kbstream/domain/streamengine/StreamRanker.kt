@@ -59,7 +59,17 @@ import com.kennyb1201.kbstream.data.addon.Stream
  *     deliberately put a cached 1080p there.
  *  6. Resolution, HDR/DV, release type, size (or density, when the title's
  *     runtime is known), seeders and a resolution label its own file size
- *     contradicts, in that order of weight. The Dolby Vision half of the HDR
+ *     contradicts, in that order of weight. Resolution reads the same on every
+ *     box: 4K takes the full bonus on a 2 GB TV stick exactly as on a phone,
+ *     because RAM is not a decode test - the low-memory boxes play 4K fine,
+ *     50 GB files included. This ranker used to read RAM as that proxy and
+ *     demote 4K below 1080p on a low-memory device; the proxy was wrong, and it
+ *     is gone. The viewer's control for "I do not want heavy streams" is
+ *     Settings -> auto-play quality cap (`max_auto_play_quality`), a pick rule
+ *     (see [AutoPlayQuality]) that moves only the head auto-play starts, never
+ *     the picker's order.
+ *
+ *     The Dolby Vision half of the HDR
  *     bonus is paid only where this box can actually show it (see [rank]'s
  *     `dolbyVisionUseful`). Two small nudges sit in here as well: a
  *     PROPER/REPACK/RERIP copy of an otherwise identical release (the scene's
@@ -299,23 +309,6 @@ object StreamRanker {
     private const val MIN_PLAUSIBLE_1080P_GB = 0.25
 
     /**
-     * The 4K bonus on a device that cannot decode it: deliberately BELOW the
-     * 1080p bonus, so a well-served 1080p outranks a 4K remux the box will
-     * stall on. It still beats 720p, so 4K is preferred over genuinely lower
-     * resolutions rather than vetoed.
-     */
-    private const val CONSTRAINED_4K_BONUS = 90
-
-    /**
-     * On a constrained device, a 4K/high-bitrate file at or above this size is
-     * a stall rather than a treat: the box has neither the decode headroom nor
-     * the buffer to ride out its bitrate. A 4K file this large also implies a
-     * bitrate (tens of Mbps) the tuner-class hardware manages poorly.
-     */
-    private const val CONSTRAINED_HEAVY_4K_GB = 12.0
-    private const val CONSTRAINED_HEAVY_PENALTY = 120
-
-    /**
      * The corrected copy of an encode the scene had nuked: enough to separate it
      * from the identical original, far below any resolution or release-type
      * step, so it can only ever break a tie it belongs in.
@@ -372,7 +365,6 @@ object StreamRanker {
     fun rank(
         streams: List<Stream>,
         episode: Pair<Int, Int>? = null,
-        constrainedDevice: Boolean = false,
         // Default = today's behaviour: every existing caller keeps the DV bonus
         // it has always had, and a caller that knows better opts out.
         dolbyVisionUseful: Boolean = true,
@@ -439,7 +431,6 @@ object StreamRanker {
                         score(
                             it.stream,
                             it.text,
-                            constrainedDevice,
                             dolbyVisionUseful,
                             runtimeMinutes
                         )
@@ -461,7 +452,6 @@ object StreamRanker {
     internal fun explain(
         stream: Stream,
         episode: Pair<Int, Int>? = null,
-        constrainedDevice: Boolean = false,
         dolbyVisionUseful: Boolean = true,
         runtimeMinutes: Int? = null,
         // The same two facts [rank] sorted on, for the same reason the DV verdict
@@ -482,13 +472,12 @@ object StreamRanker {
                 append(" debrid-served")
             }
             if (INSTANT_HINT.containsMatchIn(text)) append(" instant")
-            if (constrainedDevice) append(" constrained-device")
             if (!dolbyVisionUseful) append(" dv-stripped")
             // The same score [rank] sorted on, read through the same parameters:
             // a report that quietly kept the default would print a number that
             // is not the one that decided the order.
             append(" score=")
-                .append(score(stream, text, constrainedDevice, dolbyVisionUseful, runtimeMinutes))
+                .append(score(stream, text, dolbyVisionUseful, runtimeMinutes))
             sizeInGb(stream, text)?.let { size ->
                 append(" size=")
                     .append(String.format(java.util.Locale.US, "%.1f", size))
@@ -646,7 +635,6 @@ object StreamRanker {
     private fun score(
         stream: Stream,
         text: String,
-        constrainedDevice: Boolean,
         dolbyVisionUseful: Boolean,
         runtimeMinutes: Int?
     ): Int {
@@ -665,13 +653,16 @@ object StreamRanker {
 
         // --- Resolution ---
         //
-        // On a memory-constrained box the 4K bonus drops below the 1080p one:
-        // the +200 that was unconditional is what put a 40 Mbps remux at the
-        // head of auto-play on hardware that cannot decode it. A capable device
-        // is untouched.
+        // The 4K bonus is unconditional. It used to drop to something
+        // deliberately BELOW the 1080p bonus on a low-memory box, because RAM
+        // was read as a decode test - and the field says it is not one: the 2 GB
+        // boxes decode 4K, including 50 GB remuxes. Demoting on that proxy
+        // silently overrode the viewer, whatever their box. Preferring a smaller
+        // stream is the viewer's own call, through Settings -> auto-play quality
+        // cap (`max_auto_play_quality`, see [AutoPlayQuality]), which moves the
+        // auto-play pick and never the picker's order.
         when {
-            "2160p" in text || "4k" in text ->
-                score += if (constrainedDevice) CONSTRAINED_4K_BONUS else 200
+            "2160p" in text || "4k" in text -> score += 200
             "1440p" in text -> score += 175
             "1080p" in text -> score += 150
             "720p" in text -> score += 100
@@ -762,14 +753,6 @@ object StreamRanker {
                     DENSITY_POINTS_PER_GB_PER_HOUR).toInt()
         } else {
             sizeGb?.let { score += (it.coerceAtMost(SIZE_CAP_GB) * SIZE_POINTS_PER_GB).toInt() }
-        }
-
-        // A heavy 4K on a constrained device is the stall this ranker was
-        // picking: penalize it below the honest 1080p it was beating.
-        if (constrainedDevice && sizeGb != null && sizeGb >= CONSTRAINED_HEAVY_4K_GB &&
-            ("2160p" in text || "4k" in text)
-        ) {
-            score -= CONSTRAINED_HEAVY_PENALTY
         }
 
         // --- The one penalty left in the score ---

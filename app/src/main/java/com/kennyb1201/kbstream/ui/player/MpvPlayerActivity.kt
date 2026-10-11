@@ -37,7 +37,6 @@ import com.kennyb1201.kbstream.data.addon.Stream
 import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.badges.StreamBadge
 import com.kennyb1201.kbstream.data.cache.DiskSweep
-import com.kennyb1201.kbstream.data.device.DeviceCapability
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
@@ -1310,7 +1309,6 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             StreamRanker.rank(
                 parsedSources,
                 requestedEpisode,
-                constrainedDevice = DeviceCapability.constrainedStreamDevice(this),
                 dolbyVisionUseful = dolbyVisionUseful
             )
         } else {
