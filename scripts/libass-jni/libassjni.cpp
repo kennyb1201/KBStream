@@ -51,6 +51,15 @@ extern "C" {
 #define ASS_FONTPROVIDER_AUTODETECT 1
 #endif
 
+// The message callback's level, named here because libass does not export a
+// name for it: ass_set_message_cb documents the parameter as 0 (FATAL) through
+// 7 (verbose DEBUG) and its 0.17 header -- the one this builds against --
+// declares no ASS_LOG_* identifier at all, so the ASS_LOG_WARN this file used
+// at first was libass-internal and did not compile. 2 is where warnings start
+// (0 fatal, 1 error, 2 warning, then INFO and DEBUG), which is the same line
+// that constant drew.
+#define ASSJNI_LOG_WARN 2
+
 #define LOG_TAG "AssJni"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
@@ -71,7 +80,7 @@ struct AssHandle {
 void logCallback(int level, const char* fmt, va_list args, void* /*data*/) {
     // libass is chatty at INFO for every font lookup; only warnings and
     // errors are worth a logcat line in a TV app.
-    if (level > ASS_LOG_WARN) return;
+    if (level > ASSJNI_LOG_WARN) return;
     char buffer[512];
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     LOGW("libass: %s", buffer);
