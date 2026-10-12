@@ -137,6 +137,28 @@ object EpisodeMatch {
     }
 
     /**
+     * The show id a series stream id was written under, or null when the id
+     * names no episode at all.
+     *
+     * The mirror of [requestedFrom] - the same parse, the part it drops - and
+     * it answers null on exactly the ids that one does, so the two can never
+     * disagree about whether a given id says where it points.
+     *
+     * It exists because a stream id the app was HANDED is not necessarily one
+     * the app would build now: a playback-history row or a deep link carries
+     * the show the id was filed under at the time, and a row written before the
+     * root was verified carries the catalog's id instead of TMDB's. Its episode
+     * half is still the file that was played, so the caller that has the right
+     * root re-reads the id against it rather than asking for a stream under an
+     * id it can no longer vouch for (see `DetailScreen`'s play target).
+     */
+    fun seriesRootFrom(streamId: String?): String? {
+        val id = streamId?.trim() ?: return null
+        if (requestedFrom(id) == null) return null
+        return id.split(':').dropLast(2).joinToString(":")
+    }
+
+    /**
      * The episode [stream]'s own text declares, or null when it declares none.
      *
      * The fields are read in the order a viewer reads them on the picker card

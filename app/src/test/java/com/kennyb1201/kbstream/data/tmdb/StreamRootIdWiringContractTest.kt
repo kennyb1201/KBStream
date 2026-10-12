@@ -149,6 +149,94 @@ class StreamRootIdWiringContractTest {
         )
     }
 
+    // ── the play paths wait for the resolution ───────────────────────
+    //
+    // Resolving the root is only half of it: a play press that arrives before
+    // the lookup answers reads the blank state and names the request with the
+    // CATALOG id, which is how every episode of one show ended up requesting
+    // another title's streams. So the press waits for the resolved value -
+    // bounded - and builds its target from the root it waited for.
+
+    @Test
+    fun `a play action waits for the resolved root before it names its request`() {
+        val wait = section(
+            detailViewModel,
+            "internal suspend fun waitForStreamRootId(",
+            "fun computeEpisodeWatched("
+        )
+        assertTrue(
+            "the wait must be bounded rather than open-ended",
+            wait.contains("withTimeoutOrNull(timeoutMs)")
+        )
+        assertTrue(
+            "and it must wait for a NON-BLANK root, not for any value",
+            wait.contains("rootId.first { it.isNotBlank() }")
+        )
+        assertTrue(
+            "a wait that runs out must answer the route id, the old behavior",
+            wait.contains("?: routeId")
+        )
+        assertTrue(
+            "the bound is the five-second budget",
+            detailViewModel.contains("private const val STREAM_ROOT_WAIT_MS = 5_000L")
+        )
+        assertTrue(
+            "and the screen reads the wait through the ViewModel's own state",
+            detailViewModel.contains(
+                "): String = waitForStreamRootId(_streamRootId, routeId, timeoutMs)"
+            )
+        )
+    }
+
+    @Test
+    fun `every play path builds its target from the root it waited for`() {
+        assertTrue(
+            "the movie target must be built from the root id it is given, not from the screen's",
+            section(detailScreen, "if (type == \"movie\") {", "} else {")
+                .contains("playTargetFor = { streamRootId ->")
+        )
+        assertTrue(
+            "the series target must re-derive its fallback file id from that root",
+            detailScreen.contains("?: fallbackIdFor(streamRootId)")
+        )
+        assertEquals(
+            "the autoplay effect, the Play button and the random button's fallback " +
+                "must each name the request by the awaited root",
+            3,
+            Regex("awaitStreamRootId\\(id\\)").findAll(detailScreen).count()
+        )
+        assertFalse(
+            "and no play path may hand the painted target on: it is built from a " +
+                "root id the request cannot have waited for",
+            Regex("onNavigateStreams\\(\\s*playTarget,").containsMatchIn(detailScreen)
+        )
+    }
+
+    @Test
+    fun `a stored id is only played under the root the request is named by`() {
+        // Continue Watching hands this screen an id it did not build: the
+        // history row's own episodeStreamId, written when the row was filed.
+        // A row filed before the root was verified carries the CATALOG id, so
+        // playing it as-is is the other title's streams all over again - the
+        // row's half of "the fix resolved the root but play did not use it".
+        assertTrue(
+            "a stored id must be read against the root it is played under",
+            detailScreen.contains(
+                "streamId?.takeIf { EpisodeMatch.seriesRootFrom(it) == rootId }"
+            )
+        )
+        assertEquals(
+            "both stored rungs - the history row and the deep link - must go through it",
+            2,
+            Regex("\\?\\.let \\{ filedUnder\\(it, streamRootId\\) \\}")
+                .findAll(detailScreen).count()
+        )
+        assertFalse(
+            "neither stored id may be used as-is, or a stale catalog root names the request",
+            Regex("\\?: resumeStreamId\\?\\.[^\\n]*takeIf").containsMatchIn(detailScreen)
+        )
+    }
+
     // ── the ViewModel state ──────────────────────────────────────────
 
     @Test

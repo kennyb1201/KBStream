@@ -307,4 +307,27 @@ class EpisodeMatchTest {
         assertNull(EpisodeMatch.requestedFrom("tt3121722:3:special"))
         assertNull(EpisodeMatch.requestedFrom(null))
     }
+
+    // ── the show an id was written under ────────────────────────────────────
+
+    @Test
+    fun `the show a series id was written under is everything before its tail`() {
+        assertEquals("tt3121722", EpisodeMatch.seriesRootFrom("tt3121722:7:3"))
+        assertEquals("tt4873036", EpisodeMatch.seriesRootFrom(" tt4873036:7:3 "))
+        // A show reachable only as "tmdb:<n>" keeps its own colon: the tail is
+        // read from the END, so the show part is the rest of the id.
+        assertEquals("tmdb:57532", EpisodeMatch.seriesRootFrom("tmdb:57532:7:3"))
+    }
+
+    @Test
+    fun `an id that names no episode has no show to read`() {
+        // The same ids [requestedFrom] refuses: there is no show part to take
+        // from an id that does not say which episode it points at, and the
+        // caller has to fall back rather than keep a root it guessed.
+        assertNull(EpisodeMatch.seriesRootFrom("tt3121722"))
+        assertNull(EpisodeMatch.seriesRootFrom("tt3121722:7"))
+        assertNull(EpisodeMatch.seriesRootFrom("tt3121722:7:special"))
+        assertNull(EpisodeMatch.seriesRootFrom("tt3121722:special:3"))
+        assertNull(EpisodeMatch.seriesRootFrom(null))
+    }
 }

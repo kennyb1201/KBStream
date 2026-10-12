@@ -42,9 +42,16 @@ class PlayPressRetiresAutoPlayContractTest {
         )
     }
 
-    /** The body of `val openStreams = { ... }` up to its terminating `}`. */
+    /**
+     * The body of `val openStreams = ...` up to the navigation it ends in.
+     *
+     * Anchored on the declaration rather than on its exact initializer: the
+     * press is asynchronous now (it names its request from the root it waits
+     * for - see DetailViewModel.awaitStreamRootId), so the lambda is declared
+     * `() -> Unit` instead of letting the launch at its end set the type.
+     */
     private fun openStreamsBody(): String {
-        val start = source.indexOf("val openStreams = {")
+        val start = source.indexOf("val openStreams")
         assertTrue("openStreams not found", start >= 0)
         val end = source.indexOf("onNavigateStreams(", start)
         assertTrue("openStreams does not navigate", end > start)

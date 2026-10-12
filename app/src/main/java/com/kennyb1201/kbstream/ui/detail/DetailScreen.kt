@@ -118,6 +118,7 @@ import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
+import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBImdbTint
@@ -1760,6 +1761,14 @@ fun DetailScreen(
             val context = LocalContext.current
 
             val playLabel: String
+
+            // Builds this screen's play target for a root id the CALLER
+            // supplies: the screen's own `streamRootId` for the target painted
+            // here, or the root a play press waited for - which is a different
+            // id while the TMDB external-ids lookup is still in flight, and the
+            // one that has to name the request (see
+            // DetailViewModel.awaitStreamRootId).
+            val playTargetFor: (String) -> StreamsTarget
             val playTarget: StreamsTarget
 
             // Two ways a viewer can ask to start over, and both win over the
@@ -1812,14 +1821,7 @@ fun DetailScreen(
                     // what the press actually does.
                     if (hasResume && !wantsBeginning) "RESUME" else "PLAY"
 
-                playTarget = remember(
-                    resumeInfo,
-                    id,
-                    streamRootId,
-                    displayName,
-                    tmdbDetail?.runtime,
-                    wantsBeginning
-                ) {
+                playTargetFor = { streamRootId ->
                     // Prefer the actual recorded duration (accurate for the
                     // file that was watched); fall back to TMDB's runtime.
                     val recordedMinutes =
@@ -1842,6 +1844,16 @@ fun DetailScreen(
                                 ?: tmdbDetail?.runtime
                                     ?.takeIf { it > 0 }
                     )
+                }
+                playTarget = remember(
+                    resumeInfo,
+                    id,
+                    streamRootId,
+                    displayName,
+                    tmdbDetail?.runtime,
+                    wantsBeginning
+                ) {
+                    playTargetFor(streamRootId)
                 }
             } else {
                 val targetSeason =
@@ -1891,16 +1903,39 @@ fun DetailScreen(
                     )
                 }
 
-                val targetStreamId =
-                    resolvedTargetEpisode?.streamId
-                        ?: resumeStreamId?.takeIf {
-                            isResumingHere
-                        }
-                        ?: initialTarget?.streamId?.takeIf {
-                            initialTarget.season == targetSeason &&
-                                initialTarget.episode == targetEpisode
-                        }
-                        ?: fallbackStreamId
+                // The same file under a GIVEN root id: what a play press that
+                // waited for a root this screen did not hold yet re-derives
+                // (see DetailViewModel.awaitStreamRootId), and where a stored
+                // id lands when it was written under a different root (see
+                // filedUnder below). The resolved row is the one rung already
+                // built from the root the season listing verified (see
+                // TmdbRepository.getSeasonEpisodes).
+                fun fallbackIdFor(rootId: String): String =
+                    if (rootId == streamRootId) {
+                        fallbackStreamId
+                    } else {
+                        fileEpisodeStreamId(
+                            context = context,
+                            rootId = rootId,
+                            tmdbId = tmdbDetail?.id,
+                            season = targetSeason,
+                            tmdbEpisode = targetEpisode
+                        )
+                    }
+
+                // An id this episode is ALREADY filed under - by the history
+                // row being resumed, or by the deep link that opened this
+                // screen - kept only while it was written under the root this
+                // request is being named by. A row filed before the root was
+                // verified carries the CATALOG id instead of TMDB's (see
+                // TmdbRepository.streamRootIdFor), and playing it as-is is how
+                // every episode of one show asked for another title's streams;
+                // dropping such an id hands the target to the fallback above,
+                // which names the same episode under the root the press waited
+                // for. A Continue Watching row is exactly this case, and it is
+                // the reason the rail cannot be trusted to know the root.
+                fun filedUnder(streamId: String?, rootId: String): String? =
+                    streamId?.takeIf { EpisodeMatch.seriesRootFrom(it) == rootId }
 
                 playLabel = when {
                     isDeepLinkedHere ->
@@ -1955,19 +1990,19 @@ fun DetailScreen(
                             ?.takeIf { it > 0 }
                     }
 
-                playTarget = remember(
-                    id,
-                    displayName,
-                    targetSeason,
-                    targetEpisode,
-                    targetStreamId,
-                    isResumingHere,
-                    resumeInfo?.positionMs,
-                    resumeInfo?.episodeTitle,
-                    playTargetEpisodeName,
-                    playTargetRuntimeMinutes,
-                    wantsBeginning
-                ) {
+                playTargetFor = { streamRootId ->
+                    val targetStreamId =
+                        resolvedTargetEpisode?.streamId
+                            ?: resumeStreamId
+                                ?.takeIf { isResumingHere }
+                                ?.let { filedUnder(it, streamRootId) }
+                            ?: initialTarget?.streamId
+                                ?.takeIf {
+                                    initialTarget.season == targetSeason &&
+                                        initialTarget.episode == targetEpisode
+                                }
+                                ?.let { filedUnder(it, streamRootId) }
+                            ?: fallbackIdFor(streamRootId)
                     val episodeSuffix =
                         playTargetEpisodeName?.let {
                             " • $it"
@@ -1992,6 +2027,25 @@ fun DetailScreen(
                         totalEpisodesInSeason = episodes.size,
                         runtimeMinutes = playTargetRuntimeMinutes
                     )
+                }
+                playTarget = remember(
+                    id,
+                    displayName,
+                    targetSeason,
+                    targetEpisode,
+                    streamRootId,
+                    tmdbDetail?.id,
+                    resolvedTargetEpisode,
+                    resumeStreamId,
+                    initialTarget,
+                    isResumingHere,
+                    resumeInfo?.positionMs,
+                    resumeInfo?.episodeTitle,
+                    playTargetEpisodeName,
+                    playTargetRuntimeMinutes,
+                    wantsBeginning
+                ) {
+                    playTargetFor(streamRootId)
                 }
             }
 
@@ -2134,6 +2188,15 @@ fun DetailScreen(
                 ) return@LaunchedEffect
 
                 autoPlayed = true
+                // Wait for the resolved root id before the request is named.
+                // This effect fires as soon as the target is ready, and for a
+                // Continue Watching deep link that can be before the TMDB
+                // external-ids lookup has answered - the target built then
+                // names the catalog id, which is another title's for a show
+                // whose catalog mapping is wrong (see
+                // DetailViewModel.awaitStreamRootId).
+                val autoPlayTarget =
+                    playTargetFor(viewModel.awaitStreamRootId(id))
                 if (manualPick) {
                     // Handed on rather than consumed here: MainActivity is what
                     // reads this, to open the picker for the target instead of
@@ -2144,11 +2207,11 @@ fun DetailScreen(
                     // and this is the only route that knows the target before
                     // MainActivity builds the screen.
                     ManualSourceSelection.request(
-                        "${playTarget.contentType}:${playTarget.streamId}"
+                        "${autoPlayTarget.contentType}:${autoPlayTarget.streamId}"
                     )
                 }
                 onNavigateStreams(
-                    playTarget,
+                    autoPlayTarget,
                     id,
                     type,
                     m.poster,
@@ -2283,7 +2346,7 @@ fun DetailScreen(
                             .focusRestorer()
                             .scrollToTopOnFocus(detailListState, scope)
                     ) {
-                        val openStreams = {
+                        val openStreams: () -> Unit = {
                             // The viewer has taken the play action themselves, so
                             // retire the pending auto-play effect before this
                             // navigation (HD-P2-1). For a series that is still
@@ -2298,16 +2361,24 @@ fun DetailScreen(
                             // The menu rows below clear this again on purpose:
                             // they hand the press back to the effect.
                             autoPlayed = true
-                            onNavigateStreams(
-                                playTarget,
-                                id,
-                                type,
-                                m.poster,
-                                backdropUrl,
-                                clearLogoUrl,
-                                m.description,
-                                tmdbDetail?.credits?.cast.orEmpty()
-                            )
+                            // This press NAMES the request, so it waits for the
+                            // resolved root id before building the target: a
+                            // press that lands while the TMDB external-ids
+                            // lookup is still in flight would otherwise use the
+                            // catalog id and ask for another title's streams
+                            // (see DetailViewModel.awaitStreamRootId).
+                            scope.launch {
+                                onNavigateStreams(
+                                    playTargetFor(viewModel.awaitStreamRootId(id)),
+                                    id,
+                                    type,
+                                    m.poster,
+                                    backdropUrl,
+                                    clearLogoUrl,
+                                    m.description,
+                                    tmdbDetail?.credits?.cast.orEmpty()
+                                )
+                            }
                         }
 
                         KBCard(
@@ -2366,9 +2437,13 @@ fun DetailScreen(
                                         )
                                         if (pick == null) {
                                             // Nothing aired to choose from: play the
-                                            // target the Play button would have.
+                                            // target the Play button would have -
+                                            // built from the root id this screen
+                                            // waited for, like that press.
                                             onNavigateStreams(
-                                                playTarget,
+                                                playTargetFor(
+                                                    viewModel.awaitStreamRootId(id)
+                                                ),
                                                 id,
                                                 type,
                                                 m.poster,
@@ -4860,7 +4935,12 @@ fun DetailScreen(
                                             " • $it"
                                         } ?: ""
 
-                                    val playTarget =
+                                    // Named apart from this screen's own
+                                    // `playTarget`: this one is a single
+                                    // episode row's id, already rooted by the
+                                    // season listing, and never the target the
+                                    // Play button paints.
+                                    val episodePlayTarget =
                                         StreamsTarget(
                                             contentType = "series",
                                             streamId =
@@ -4896,7 +4976,7 @@ fun DetailScreen(
                                         )
 
                                     onNavigateStreams(
-                                        playTarget,
+                                        episodePlayTarget,
                                         id,
                                         type,
                                         m.poster,

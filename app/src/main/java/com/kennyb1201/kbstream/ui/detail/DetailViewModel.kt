@@ -48,6 +48,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -89,6 +90,42 @@ private const val META_PROBE_CALL_TIMEOUT_MS = 10_000L
  * do not move in a minute, so gating them costs nothing.
  */
 private const val DETAIL_FRESH_WINDOW_MS = 60_000L
+
+/**
+ * How long a play action waits for the resolved stream root id.
+ *
+ * [DetailViewModel.streamRootId] is blank until the load's TMDB external-ids
+ * lookup answers, and the screen paints from that blank state on purpose. A
+ * play press is the one reader that may not: it is the reader that NAMES the
+ * request. The lookup is memory- and disk-cached after the first open, so a
+ * title already visited answers instantly; a cold lookup has one TMDB
+ * round-trip to make, and this is the ceiling on a slow one.
+ */
+private const val STREAM_ROOT_WAIT_MS = 5_000L
+
+/**
+ * The resolved stream root id, WAITED FOR, falling back to [routeId].
+ *
+ * Every other reader of the published root treats blank as "use the route
+ * id", which is right for painting and wrong for a play: the run that
+ * reported this bug tapped Play before the lookup finished, so the request
+ * was named by the catalog id (`tt3121722`) and every episode of the show
+ * asked for another title's streams. So the play paths wait for the first
+ * non-blank value - bounded by [timeoutMs], because a title with no TMDB
+ * record, a missing API key and an unreachable TMDB are all cases where no
+ * resolution is coming - and a wait that runs out answers exactly what the
+ * blank state would have: better to play something than to hang.
+ */
+internal suspend fun waitForStreamRootId(
+    rootId: StateFlow<String>,
+    routeId: String,
+    timeoutMs: Long = STREAM_ROOT_WAIT_MS
+): String {
+    val resolved = withTimeoutOrNull(timeoutMs) {
+        rootId.first { it.isNotBlank() }
+    }
+    return resolved ?: routeId
+}
 
 fun computeEpisodeWatched(
     parentId: String,
@@ -310,6 +347,17 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private val _streamRootId = MutableStateFlow("")
     val streamRootId: StateFlow<String> = _streamRootId.asStateFlow()
+
+    /**
+     * [streamRootId], waited for: what a play action calls before it builds its
+     * request, so a press that lands while the resolution is still in flight
+     * is named by the resolved root instead of the catalog id (see
+     * [waitForStreamRootId], and [STREAM_ROOT_WAIT_MS] for the bound).
+     */
+    suspend fun awaitStreamRootId(
+        routeId: String,
+        timeoutMs: Long = STREAM_ROOT_WAIT_MS
+    ): String = waitForStreamRootId(_streamRootId, routeId, timeoutMs)
 
     internal var imdbId: String = ""
     private var latestEpisodeSeasonRequest: Int? = null
