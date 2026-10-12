@@ -10,12 +10,15 @@ import org.junit.Test
 /**
  * The MPV engine's video output, resolved per device.
  *
- * Field problem the resolver exists for: the 6.51 mpvlibAndroid swap fixed the
- * Onn 4K Plus and black-screened the Fire TV Stick 4K Plus (`karat`, MediaTek) —
- * audio plays, frames decode, and nothing reaches the Surface
- * (`updateAcquireFence: Did not find frame`). With `vo=gpu` +
- * `gpu-context=android` there is no one configuration that works on both, so the
- * choice is a function of the device and the stored mode.
+ * Field problem the resolver exists for: the 6.51 mpvlibAndroid swap
+ * black-screened the Fire TV Stick 4K Plus (`karat`, MediaTek) — audio plays,
+ * frames decode, and nothing reaches the Surface (`updateAcquireFence: Did not
+ * find frame`) — and the Onn 4K Plus, which the swap appeared to fix, was
+ * black-screening again on the same OpenGL path by the 11 October field test.
+ * Swapping the video output is what fixes either box, so the choice is a
+ * function of the device and the stored mode, and the table has to follow the
+ * field tests rather than the history: an entry that says "known good" about a
+ * path that no longer is one is how the second black screen was shipped.
  *
  * The device table is pinned behaviorally ([MpvVideoOutput.resolve]) because no
  * test here can run a GPU, and the wiring is read out of the source the way this
@@ -86,14 +89,43 @@ class MpvVideoOutputTest {
     }
 
     @Test
-    fun `auto keeps the Onn 4K Plus on the GPU path it displays with`() {
+    fun `auto sends the Onn 4K Plus to MediaCodec as well`() {
+        // Re-pinned after the 11 October field test: the OpenGL path the swap
+        // was believed to have fixed on this box black-screens it too, so the
+        // workaround is its default until a GPU configuration is confirmed
+        // working on it on-device.
         val settings = MpvVideoOutput.resolve(
             AppPreferences.MPV_VO_AUTO, "onn", "onn. 4K Plus", "onn"
         )
-        assertEquals("gpu", settings.vo)
-        assertEquals("android", settings.gpuContext)
-        assertEquals("opengl", settings.gpuApi)
-        assertTrue(settings.openglEs)
+        assertEquals("mediacodec_embed", settings.vo)
+        assertEquals(
+            "the MediaCodec path must name no GPU context",
+            null,
+            settings.gpuContext
+        )
+        assertEquals(null, settings.gpuApi)
+        assertFalse(settings.openglEs)
+    }
+
+    @Test
+    fun `an explicit GPU mode still overrides the Onn default`() {
+        // The box has to stay testable: the settings row is what the field test
+        // cycles on it, so `gpu` is obeyed even though `auto` no longer picks
+        // it, and `auto` is one setting away from the OpenGL path again.
+        val forced = MpvVideoOutput.resolve(
+            AppPreferences.MPV_VO_GPU, "onn", "onn. 4K Plus", "onn"
+        )
+        assertEquals("gpu", forced.vo)
+        assertEquals("android", forced.gpuContext)
+        assertEquals("opengl", forced.gpuApi)
+        assertTrue(forced.openglEs)
+
+        assertTrue(
+            "and the Auto default it overrides is the workaround, not OpenGL",
+            MpvVideoOutput.resolve(
+                AppPreferences.MPV_VO_AUTO, "onn", "onn. 4K Plus", "onn"
+            ).vo == "mediacodec_embed"
+        )
     }
 
     @Test

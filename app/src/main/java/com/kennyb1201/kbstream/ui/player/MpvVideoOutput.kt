@@ -6,13 +6,14 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  * Which video output the MPV engine opens with, by device.
  *
  * The 6.51 mpvlibAndroid swap moved the black screen rather than removing it:
- * the Onn 4K Plus started displaying frames, and the Fire TV Stick 4K Plus
- * (MediaTek, `karat`) went the other way — audio plays, frames decode, and no
- * frame ever reaches the Surface (`updateAcquireFence: Did not find frame`).
- * That is a property of the video output, not of the file, so the settings
- * around `vo` have to be chosen per device. This is that choice, as one pure
- * function of the mode and the three `Build` fields it is made from, so it can
- * be pinned by a unit test rather than by two TVs.
+ * the Fire TV Stick 4K Plus (MediaTek, `karat`) lost its picture — audio plays,
+ * frames decode, and no frame ever reaches the Surface (`updateAcquireFence:
+ * Did not find frame`) — and the Onn 4K Plus, which the swap appeared to fix,
+ * was black-screening again by the 11 October field test. That is a property of
+ * the video output, not of the file, so the settings around `vo` have to be
+ * chosen per device. This is that choice, as one pure function of the mode and
+ * the three `Build` fields it is made from, so it can be pinned by a unit test
+ * rather than by two TVs.
  *
  * A resolved [Settings] is applied as mpv OPTIONS before `init()` (see
  * [MpvPlayerView.applyOptions]) and read back as a PROPERTY when a surface
@@ -84,8 +85,9 @@ internal object MpvVideoOutput {
             (model == "AFTKRT" || device == "karat")
 
     /**
-     * The Onn 4K Plus — the box the library swap fixed, and the one the OpenGL
-     * path was validated on.
+     * The Onn 4K Plus — the box whose OpenGL path the library swap was believed
+     * to have fixed, and which the 11 October field test found black-screening
+     * on that same path.
      */
     fun isOnn4kPlus(manufacturer: String, model: String): Boolean =
         manufacturer.contains("onn", ignoreCase = true) ||
@@ -102,7 +104,10 @@ internal object MpvVideoOutput {
      *
      *  - the Fire TV Stick 4K Plus, whose GPU output never delivers a frame
      *    since 6.51, goes to MediaCodec;
-     *  - the Onn 4K Plus keeps the OpenGL GPU path it is known to display with;
+     *  - the Onn 4K Plus goes there too: OpenGL stopped delivering a frame on it
+     *    as well (the 11 October field test), so the "known good" entry it used
+     *    to have is not one anymore and the workaround is the best default
+     *    until a GPU configuration is confirmed working on the box on-device;
      *  - every other box keeps that same OpenGL path, which is what this app
      *    configured before the library swap, so nothing else changes behavior
      *    on an upgrade.
@@ -123,10 +128,11 @@ internal object MpvVideoOutput {
         else -> if (isFireTvStick4kPlus(manufacturer, model, device)) {
             MEDIACODEC_EMBED
         } else if (isOnn4kPlus(manufacturer, model)) {
-            // Broken out rather than folded into the branch below: this is the
-            // box the OpenGL path is known to work on, so if the default for
-            // unknown hardware ever has to change, this one keeps it.
-            OPENGL
+            // Kept as its own branch rather than folded into the one above: it
+            // is a different box with a different history, and this is the one
+            // line to change if a working GPU configuration is ever confirmed
+            // on it (the settings row can put any output on it meanwhile).
+            MEDIACODEC_EMBED
         } else {
             OPENGL
         }
