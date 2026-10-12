@@ -24,7 +24,10 @@ import org.junit.Test
  *    while `gpu-api` was left on its `auto` default, which a box advertising
  *    Vulkan can answer with the Vulkan path - a mismatched pair that does not
  *    fail the open (audio plays, the track list populates) but never puts a
- *    frame on screen.
+ *    frame on screen. That fix is now per-device (see MpvVideoOutput), so this
+ *    test reads the pins out of the resolver, and MpvVideoOutputTest carries the
+ *    behavioural half: no mode that opens a GPU context may leave `gpu-api`
+ *    unset, and only the MediaCodec path names no context at all.
  *
  * There is no device or emulator in CI and a libmpv Activity cannot be driven in
  * a JVM test, so the structure that fixes them is read out of the source the way
@@ -68,16 +71,31 @@ class MpvEngineOverlayContractTest {
 
     @Test
     fun `the video output pins the API its own context and opengl-es already imply`() {
-        val context = view.indexOf("MPVLib.setOptionString(\"gpu-context\", \"android\")")
-        val api = view.indexOf("MPVLib.setOptionString(\"gpu-api\", \"opengl\")")
-        val es = view.indexOf("MPVLib.setOptionString(\"opengl-es\", \"yes\")")
-        assertTrue("the Android GPU context is still configured", context >= 0)
-        assertTrue("and OpenGL ES is still what it renders with", es >= 0)
+        // The three pins moved out of the view and into the resolver when the
+        // video output became a per-device choice (see MpvVideoOutput), so this
+        // asserts them where they now live. The behavioural half - that NO mode
+        // which opens a GPU context leaves gpu-api unset, and that only the
+        // MediaCodec path names no context at all - is pinned exhaustively by
+        // MpvVideoOutputTest, which is the stronger form of what the ordering
+        // check here used to say.
+        val output = read(MPV_VIDEO_OUTPUT)
+        assertTrue(
+            "the Android GPU context and its OpenGL ES flag are still configured",
+            output.contains("gpuContext = \"android\"") && output.contains("openglEs = true")
+        )
         assertTrue(
             "so gpu-api must not be left on auto: with the context and opengl-es above, a " +
                 "Vulkan-capable box is otherwise free to answer with the Vulkan path, which is " +
                 "audio over a black picture",
-            api > context && api < es
+            output.contains("gpuApi = \"opengl\"")
+        )
+        assertTrue(
+            "while the Vulkan mode pins the Vulkan API instead",
+            output.contains("gpuApi = \"vulkan\"")
+        )
+        assertFalse(
+            "and nothing may hand mpv `gpu-api=auto`, which is the mismatch itself",
+            view.contains("setOptionString(\"gpu-api\", \"auto\")")
         )
     }
 
@@ -105,5 +123,7 @@ class MpvEngineOverlayContractTest {
     private companion object {
         const val MPV = "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
         const val MPV_VIEW = "com/kennyb1201/kbstream/ui/player/MpvPlayerView.kt"
+        const val MPV_VIDEO_OUTPUT =
+            "com/kennyb1201/kbstream/ui/player/MpvVideoOutput.kt"
     }
 }

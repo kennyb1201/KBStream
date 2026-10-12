@@ -82,6 +82,24 @@ class SyncScopeTest {
     }
 
     @Test
+    fun `the MPV video output stays per-device`() {
+        // Which video output a box's GPU can put a frame on screen with is a
+        // property of that box, exactly like the decoders beside it - and it is
+        // the field knob for the 6.51 mpvlibAndroid black screens, so one TV's
+        // working configuration must never be armed on a box that stalls with
+        // it. A key missing from the exclusion list here is the silently-synced
+        // preference this test class exists to catch.
+        assertTrue(
+            "mpv_vo must be excluded",
+            "mpv_vo" in PrefsPayloadBuilder.EXCLUDED_PREF_KEYS
+        )
+        assertFalse(
+            "mpv_vo must not sync",
+            "mpv_vo" in PrefsPayloadBuilder.SYNCED_PREF_KEYS
+        )
+    }
+
+    @Test
     fun `frame-rate matching stays per-device`() {
         // A TCL panel and a Fire TV Stick do not report the same modes, so a
         // synced choice would have one device asking for a mode the other does

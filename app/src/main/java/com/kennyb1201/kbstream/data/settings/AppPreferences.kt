@@ -52,6 +52,7 @@ object AppPreferences {
     private const val KEY_ENABLE_PIP = "enable_pip"
     private const val KEY_PLAYER_ENGINE = "player_engine" // see PLAYER_ENGINE_* / PlayerEngine
     private const val KEY_MPV_FOR_ANIME = "mpv_for_anime" // see getMpvForAnime / AnimeDetect
+    private const val KEY_MPV_VO = "mpv_vo" // see getMpvVoMode / MpvVideoOutput
     // Which installed app plays a title when the engine above is EXTERNAL, and
     // whether to ask each time instead of going straight to it. Both are
     // device-local for the same reason the engine itself is: which video
@@ -587,6 +588,36 @@ object AppPreferences {
     }
 
     /**
+     * Which video output the MPV engine opens with — the knob for the 6.51
+     * mpvlibAndroid swap's black screens.
+     *
+     * That library swap fixed black screen on one box and introduced it on
+     * another: with `vo=gpu` + `gpu-context=android` the Fire TV Stick 4K Plus
+     * (MediaTek) decodes and plays audio but never gets a frame onto the
+     * Surface (`updateAcquireFence: Did not find frame`), so the video output
+     * has to be chosen per device. [com.kennyb1201.kbstream.ui.player.MpvVideoOutput]
+     * owns that choice; this is only where the override is stored. [MPV_VO_AUTO]
+     * leaves it to that device table, and the three explicit modes are what lets
+     * a viewer cycle the options on the box itself to find one that works —
+     * which is the whole field test for the row.
+     *
+     * Device-local, deliberately NOT part of syncDisplayPrefsBlob: which video
+     * output a GPU can deliver frames with is a property of that box, exactly
+     * like the decoders beside it, so syncing it would drag one TV's working
+     * configuration onto a box that black-screens with it.
+     */
+    fun getMpvVoMode(context: Context): String =
+        prefs(context).getString(KEY_MPV_VO, MPV_VO_AUTO)
+            ?.takeIf { it in MPV_VO_MODES }
+            ?: MPV_VO_AUTO
+
+    fun setMpvVoMode(context: Context, mode: String) {
+        prefs(context).edit()
+            .putString(KEY_MPV_VO, mode.takeIf { it in MPV_VO_MODES } ?: MPV_VO_AUTO)
+            .apply()
+    }
+
+    /**
      * The app the External engine hands a title to (package name), or null
      * when nothing has been chosen yet. Read through
      * [com.kennyb1201.kbstream.data.player.ExternalPlayer], which resolves a
@@ -818,6 +849,29 @@ object AppPreferences {
      * episode panels when the title finishes. See ExternalPlayerActivity.
      */
     const val PLAYER_ENGINE_EXTERNAL = 3
+
+    /**
+     * The MPV engine's video output, stored as [getMpvVoMode]. [MPV_VO_AUTO] is
+     * the device-specific default (see MpvVideoOutput); the other three are the
+     * explicit modes the settings row offers for finding a working
+     * configuration on a box that black-screens.
+     */
+    const val MPV_VO_AUTO = "auto"
+    const val MPV_VO_GPU = "gpu"
+    const val MPV_VO_MEDIACODEC_EMBED = "mediacodec_embed"
+    const val MPV_VO_GPU_VULKAN = "gpu-vulkan"
+
+    /**
+     * Every value [getMpvVoMode] will store or read back. A stored value outside
+     * this list reads as [MPV_VO_AUTO] rather than being handed to mpv as a
+     * `vo` it has no implementation for.
+     */
+    val MPV_VO_MODES = listOf(
+        MPV_VO_AUTO,
+        MPV_VO_GPU,
+        MPV_VO_MEDIACODEC_EMBED,
+        MPV_VO_GPU_VULKAN
+    )
 
     const val DV_COMPAT_AUTO = 0
     const val DV_COMPAT_OFF = 1

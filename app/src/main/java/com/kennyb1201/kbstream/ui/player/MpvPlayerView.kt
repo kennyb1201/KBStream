@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import android.content.Context
+import android.os.Build
 import android.util.AttributeSet
 import android.util.Log
 import android.view.SurfaceHolder
@@ -910,6 +911,22 @@ class MpvPlayerView @JvmOverloads constructor(
         }.getOrNull()?.also { stagedCaPath = it }
     }
 
+    /**
+     * The video output this session opens with — the stored mode resolved
+     * against this device (see [MpvVideoOutput]).
+     *
+     * Read at both ends of the surface cycle: [applyOptions] opens on it and
+     * [attachSurface] has to put it back after [surfaceDestroyed] nulls it, and
+     * a re-attach that restored a fixed `vo` would undo the very workaround the
+     * mode was chosen for.
+     */
+    private fun videoOutput(): MpvVideoOutput.Settings = MpvVideoOutput.resolve(
+        AppPreferences.getMpvVoMode(context),
+        Build.MANUFACTURER,
+        Build.MODEL,
+        Build.DEVICE
+    )
+
     private fun applyOptions() {
         // No user config: this is a fallback engine, and an mpv.conf picked up
         // from the device would change behavior between boxes.
@@ -922,19 +939,35 @@ class MpvPlayerView @JvmOverloads constructor(
         MPVLib.setOptionString("input-default-bindings", "no")
         MPVLib.setOptionString("input-vo-keyboard", "no")
 
-        // Android video output. gpu (not gpu-next) is the one the reference
-        // Android player ships as default and the one this native build is
-        // packaged for.
-        MPVLib.setOptionString("vo", "gpu")
-        MPVLib.setOptionString("gpu-context", "android")
+        // Android video output, resolved for THIS device and the stored
+        // override rather than pinned (see [MpvVideoOutput]): the 6.51
+        // mpvlibAndroid swap fixed black screen on one box and introduced it on
+        // another, so which `vo` and which GPU settings work is a property of
+        // the box. gpu (not gpu-next) is the output the reference Android
+        // player ships as default and the one this native build is packaged
+        // for. The MediaCodec path deliberately sets no `gpu-*` option at all -
+        // there is no GPU context to name when the decoder writes to the
+        // Surface directly, and naming one is the mismatch the stalled boxes
+        // choke on.
+        val vo = videoOutput()
+        MPVLib.setOptionString("vo", vo.vo)
+        vo.gpuContext?.let { MPVLib.setOptionString("gpu-context", it) }
         // Pin the API as well as the context. `gpu-api` defaults to auto, and a
         // box that advertises Vulkan can be answered with the Vulkan path while
-        // `gpu-context=android` + `opengl-es=yes` below ask for OpenGL ES - a
-        // mismatched pair that does not fail the open (audio plays, the track
-        // list populates) but never puts a frame on screen: black picture over
-        // playing sound. "opengl" is the API this app already configures for.
-        MPVLib.setOptionString("gpu-api", "opengl")
-        MPVLib.setOptionString("opengl-es", "yes")
+        // the OpenGL context asks for OpenGL ES - a mismatched pair that does
+        // not fail the open (audio plays, the track list populates) but never
+        // puts a frame on screen: black picture over playing sound. `opengl` is
+        // the API this app already configures for, and the resolved setting is
+        // never left unset on a GPU path.
+        vo.gpuApi?.let { MPVLib.setOptionString("gpu-api", it) }
+        if (vo.openglEs) MPVLib.setOptionString("opengl-es", "yes")
+        // The field test's line: which mode was stored, which device it was
+        // resolved on, and what that came out as.
+        Log.i(
+            TAG,
+            "MPV vo mode=${AppPreferences.getMpvVoMode(context)} device=${Build.MODEL} " +
+                "vo=${vo.vo} gpuApi=${vo.gpuApi ?: "none"} openglEs=${vo.openglEs}"
+        )
 
         // Decoding: try MediaCodec zero-copy, then copy-back, then software.
         // The trailing `no` is the whole point of this engine — a file the
@@ -1248,9 +1281,10 @@ class MpvPlayerView @JvmOverloads constructor(
             // (backgrounding, or the SurfaceView being re-made) then left mpv
             // decoding into the void - audio with a black screen, with the
             // track list and video-format both populated as if all were well.
-            // "gpu" is the only VO this app ever configures (see
-            // applyOptions), so restoring it unconditionally is right.
-            MPVLib.setPropertyString("vo", "gpu")
+            // What goes back is the session's own VO (see [videoOutput]), not a
+            // fixed "gpu": restoring the GPU path after a surface recreate
+            // would black-screen the very box the MediaCodec mode exists for.
+            MPVLib.setPropertyString("vo", videoOutput().vo)
             // Forces mpv to render video/subtitles into our surface even when
             // it would otherwise decide it has no window to draw into.
             MPVLib.setOptionString("force-window", "yes")

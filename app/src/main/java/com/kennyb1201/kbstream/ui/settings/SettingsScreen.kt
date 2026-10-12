@@ -384,6 +384,7 @@ fun SettingsScreen(
     // ExoPlayer, which is what this row then shows and highlights.
     var playerEngine by remember { mutableIntStateOf(PlayerEngine.selected(context)) }
     var mpvForAnime by remember { mutableStateOf(AppPreferences.getMpvForAnime(context)) }
+    var mpvVoMode by remember { mutableStateOf(AppPreferences.getMpvVoMode(context)) }
     // External engine, device-local like the engine itself: which video apps
     // are installed is a property of this box, not of the account.
     val externalPlayers = remember { ExternalPlayer.installed(context) }
@@ -1602,6 +1603,47 @@ fun SettingsScreen(
                             AppPreferences.setMpvForAnime(context, it)
                         }
                     )
+
+                    // The MPV engine's video output, per device. The 6.51
+                    // mpvlibAndroid swap moved the black screen from one box to
+                    // another, so which `vo` works cannot be pinned in code -
+                    // Auto resolves it by device (see MpvVideoOutput) and the
+                    // other three let a box be cycled by hand to find a working
+                    // configuration, which is the whole point of the row.
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "MPV video output",
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 4.dp)
+                    )
+                    Text(
+                        text = "Which video output mpv opens with. Auto picks by device: the " +
+                            "MediaCodec path on boxes whose GPU output blacks out (the Fire TV " +
+                            "Stick 4K Plus after the 6.51 engine update), the OpenGL GPU path " +
+                            "everywhere else. If MPV plays sound over a black picture, try the " +
+                            "other options: MediaCodec bypasses the GPU entirely, and Vulkan is " +
+                            "the GPU path on the Vulkan API. A change applies the next time a " +
+                            "title opens in MPV, not to the one playing.",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            AppPreferences.MPV_VO_AUTO to "Auto",
+                            AppPreferences.MPV_VO_GPU to "GPU",
+                            AppPreferences.MPV_VO_MEDIACODEC_EMBED to "MediaCodec",
+                            AppPreferences.MPV_VO_GPU_VULKAN to "Vulkan"
+                        ).forEach { (value, label) ->
+                            KBCard(onClick = {
+                                mpvVoMode = value
+                                AppPreferences.setMpvVoMode(context, value)
+                            }) {
+                                PillChip(label, mpvVoMode == value)
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))

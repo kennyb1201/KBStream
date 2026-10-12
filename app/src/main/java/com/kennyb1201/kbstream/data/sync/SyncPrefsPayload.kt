@@ -267,6 +267,12 @@ object PrefsPayloadBuilder {
         "dv_convert_p5_to_81",
         "dv_p5_gles_correction",
         "default_aspect_ratio",
+        // The MPV video output: `vo` and its GPU settings are the field knob for
+        // the 6.51 mpvlibAndroid black screens, and what a box's GPU can put a
+        // frame on screen with is a property of that box - one TV's working
+        // configuration must never be armed on another, which is exactly what a
+        // synced value would do.
+        "mpv_vo",
         "match_frame_rate"                 // which refresh rates this panel can do
     )
 
