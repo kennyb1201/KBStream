@@ -1094,18 +1094,23 @@ fun DetailScreen(
      * Consumes the press by construction: the launched block owns the move, so
      * every caller answers true rather than letting the default search - and the
      * rail's restorer - move the focus a second time.
+     *
+     * Answers whether the focus landed. The chain's last arm is the one caller
+     * that needs to know: a header with nothing left to hand the focus to is the
+     * only way this can answer false.
      */
-    suspend fun focusTopOfPage() {
+    suspend fun focusTopOfPage(): Boolean {
         runCatching { detailListState.scrollToItem(0) }
         var attempts = 0
         while (attempts < RETURN_FOCUS_STEPS) {
             val landed =
                 runCatching { movieDetailsFocusRequester.requestFocus() }.isSuccess ||
                     runCatching { playButtonFocusRequester.requestFocus() }.isSuccess
-            if (landed) return
+            if (landed) return true
             delay(RETURN_FOCUS_DELAY_MS)
             attempts += 1
         }
+        return false
     }
 
     val effectiveSeason = remember(
@@ -1608,6 +1613,131 @@ fun DetailScreen(
     }
 
     /**
+     * The detail-list item key a chain row is, or null for the two rows that
+     * are not a single rail: the HEADER, which lives above the list rather than
+     * in it, and the EPISODES section, which is a season chip row and an episode
+     * card row at once.
+     *
+     * The only place the chain's names ([DetailRow]) meet the list's keys: the
+     * chain decides WHERE a press goes, and this decides which rail that is.
+     */
+    fun detailRowKey(row: DetailRow): String? = when (row) {
+        DetailRow.HEADER -> null
+        DetailRow.KEYWORDS -> KEYWORDS_ROW_KEY
+        DetailRow.EPISODES -> null
+        DetailRow.PEOPLE -> PEOPLE_ROW_KEY
+        DetailRow.NETWORK -> NETWORK_ROW_KEY
+        DetailRow.PRODUCTION -> PRODUCTION_ROW_KEY
+    }
+
+    /**
+     * Hands the focus to the row [moveFocusVertical] picked, putting it back on
+     * screen first when the scroll has disposed it, and never leaving the press
+     * without a landing.
+     *
+     * [fromColumn] is the column the press came from, which every chip rail
+     * keeps ([focusChipColumn]); [from] is the row it came from, which is the
+     * closest scroll hint there is for a rail that is off screen
+     * ([revealAndFocusChipColumn]).
+     *
+     * The three kinds of target, and why none of them can strand:
+     *
+     *  - HEADER is the fixed play row above the list, so it needs no scroll; it
+     *    is the chain's own fallback ([focusTopOfPage]).
+     *  - EPISODES is two rails, not one, and its own rule already knows which of
+     *    them a press belongs on - the target episode, or the chip for the
+     *    season on screen ([focusSeasonOrEpisode]).
+     *  - a chip rail keeps its column, is revealed when it exists but the scroll
+     *    disposed it, and falls back to the header when it cannot answer at all.
+     */
+    suspend fun focusRow(
+        target: DetailRow,
+        fromColumn: Int,
+        from: DetailRow
+    ): Boolean = when (target) {
+        DetailRow.HEADER -> focusTopOfPage()
+        DetailRow.EPISODES -> focusSeasonOrEpisode() || focusTopOfPage()
+        DetailRow.KEYWORDS,
+        DetailRow.PEOPLE,
+        DetailRow.NETWORK,
+        DetailRow.PRODUCTION -> {
+            val targetKey = detailRowKey(target)
+            val anchorKey = detailRowKey(from)
+            when {
+                targetKey == null -> focusTopOfPage()
+                focusChipColumn(targetKey, fromColumn) -> true
+                anchorKey != null &&
+                    revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true
+                else -> focusTopOfPage()
+            }
+        }
+    }
+
+    /**
+     * Moves the focus vertically out of [from] in [direction]: the page's ONE
+     * vertical handoff.
+     *
+     * The row it lands on comes from one list, read the same way by every rail
+     * ([DetailFocusChain]), so UP and DOWN cannot disagree about what is above
+     * and below. A row that exists but the scroll has disposed is revealed
+     * rather than mistaken for a row that is not there, and a row that is not
+     * there is stepped over. Null - nothing in that direction - is only possible
+     * going DOWN out of the bottom row, and answers false so the caller can let
+     * the default search have the press.
+     */
+    suspend fun moveFocusVertical(
+        from: DetailRow,
+        direction: DetailFocusDirection,
+        fromColumn: Int,
+        presence: DetailRowPresence
+    ): Boolean {
+        val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false
+        return focusRow(target, fromColumn, from)
+    }
+
+    /**
+     * The key handler EVERY row of the page uses for its vertical presses; no
+     * rail carries its own UP/DOWN logic any more.
+     *
+     * A press the chain can act on is consumed and handed to
+     * [moveFocusVertical], which owns the (asynchronous) move: consuming it is
+     * what stops the default search - and the rail's own focusRestorer, which
+     * remembers the item it was last left on - from moving the focus a second
+     * time.
+     *
+     * A press the chain cannot act on answers false instead. That is only DOWN
+     * off the bottom row of the chain, and it is deliberate: consuming it would
+     * trap the viewer on that rail, when the rows below (reviews, collections,
+     * recommendations) are what the default search is there to reach.
+     *
+     * [directions] is the set of presses this row answers. The episodes row
+     * takes only DOWN; its UP belongs to the episode card, which owns the season
+     * chip (see [focusSeasonChip]).
+     */
+    fun detailRowVerticalFocus(
+        row: DetailRow,
+        column: Int,
+        presence: DetailRowPresence,
+        directions: Set<DetailFocusDirection> =
+            setOf(DetailFocusDirection.UP, DetailFocusDirection.DOWN)
+    ): (KeyEvent) -> Boolean = { keyEvent ->
+        val direction = when {
+            keyEvent.type != KeyEventType.KeyDown -> null
+            keyEvent.key == Key.DirectionUp -> DetailFocusDirection.UP
+            keyEvent.key == Key.DirectionDown -> DetailFocusDirection.DOWN
+            else -> null
+        }
+        if (direction == null || direction !in directions) {
+            false
+        } else if (DetailFocusChain.nextRow(row, direction, presence) == null) {
+            false
+        } else {
+            scope.launch { moveFocusVertical(row, direction, column, presence) }
+            true
+        }
+    }
+
+    /**
      * Opens a title's trailer in the fullscreen player.
      *
      * The resolve (InnerTube → NewPipe → Piped, with its caches) stays in
@@ -1740,6 +1870,22 @@ fun DetailScreen(
             val keywords = remember(tmdbDetail) {
                 tmdbDetail?.keywords?.list().orEmpty()
             }
+
+            // The rows this page actually paints, in one place: the chain
+            // ([DetailFocusChain]) reads these and nothing else, and every field
+            // is the same expression that renders its row below - so "the row
+            // exists" and "the row is on screen" cannot drift apart.
+            val networks = tmdbDetail?.networks.orEmpty()
+            val companies = tmdbDetail?.productionCompanies.orEmpty()
+            val hasProductionRow = companies.isNotEmpty()
+            val hasNetworkRow = normalizedType == "series" && networks.isNotEmpty()
+            val detailRowPresence = DetailRowPresence(
+                hasKeywordsRow = keywords.isNotEmpty(),
+                hasEpisodesRow = normalizedType == "series" && seasons.isNotEmpty(),
+                hasPeopleRow = hasPeopleRow,
+                hasNetworkRow = hasNetworkRow,
+                hasProductionRow = hasProductionRow
+            )
 
             // Add-on art first (fanart etc. from the meta provider), TMDB
             // backdrop as fallback. When no meta add-on answered, the fallback
@@ -2949,39 +3095,21 @@ fun DetailScreen(
                                         .padding(bottom = 10.dp)
                                         .focusGroup()
                                         .focusRestorer()
-                                        .onPreviewKeyEvent {
-                                            keyEvent: KeyEvent ->
-                                            if (
-                                                keyEvent.type !=
-                                                    KeyEventType.KeyDown ||
-                                                keyEvent.key !=
-                                                    Key.DirectionDown
-                                            ) {
-                                                false
-                                            } else if (
-                                                normalizedType == "movie"
-                                            ) {
-                                                // On movies there is no episode
-                                                // section, so DOWN from tags goes
-                                                // straight into the people rail
-                                                // (its focusRestorer picks the
-                                                // first card). When the rail isn't
-                                                // composed (no cast at all) the
-                                                // request throws — fall through so
-                                                // default search can reach the rows
-                                                // further down the list.
-                                                runCatching {
-                                                    movieDetailsFocusRequester
-                                                        .requestFocus()
-                                                }.isSuccess
-                                            } else if (
-                                                normalizedType == "series"
-                                            ) {
-                                                focusSeasonOrEpisode()
-                                            } else {
-                                                false
-                                            }
-                                        }
+                                        // The page's one vertical handoff: DOWN
+                                        // leaves the tag rail for the nearest
+                                        // row this page has below it - the
+                                        // episode section on a series, the
+                                        // people cards (or a chip rail) on a
+                                        // movie (see DetailFocusChain). The old
+                                        // movie/series branches are what the
+                                        // chain replaces.
+                                        .onPreviewKeyEvent(
+                                            detailRowVerticalFocus(
+                                                DetailRow.KEYWORDS,
+                                                0,
+                                                detailRowPresence
+                                            )
+                                        )
                                 ) {
                                     itemsIndexed(
                                         keywords,
@@ -2994,6 +3122,15 @@ fun DetailScreen(
                                             }
                                         railFocusRequesters[chipKey] =
                                             chipFocusRequester
+                                        // Filed by column like the chip rails
+                                        // below, so the chain can move INTO this
+                                        // rail from the episode row as well as
+                                        // out of it (see focusRow).
+                                        registerChipColumn(
+                                            KEYWORDS_ROW_KEY,
+                                            keywordIndex,
+                                            chipFocusRequester
+                                        )
 
                                         KeywordChip(
                                             name = kw.name,
@@ -3177,6 +3314,25 @@ fun DetailScreen(
                                                     )
                                                     .focusGroup()
                                                     .focusRestorer()
+                                                    // DOWN is the page's vertical
+                                                    // handoff, decided by the
+                                                    // chain like every other row.
+                                                    // UP is NOT answered here: the
+                                                    // episode card owns it, and it
+                                                    // exists to land on the season
+                                                    // chip the viewer is inside
+                                                    // (see focusSeasonChip) - an
+                                                    // ancestor handler runs first,
+                                                    // so taking UP here would throw
+                                                    // that away.
+                                                    .onPreviewKeyEvent(
+                                                        detailRowVerticalFocus(
+                                                            DetailRow.EPISODES,
+                                                            0,
+                                                            detailRowPresence,
+                                                            setOf(DetailFocusDirection.DOWN)
+                                                        )
+                                                    )
                                             ) {
                                                 items(
                                                     items = episodes,
@@ -3680,38 +3836,19 @@ fun DetailScreen(
                                                         .focusRequester(
                                                             cardFocusRequester
                                                         )
-                                                        // DOWN keeps its column
-                                                        // into the chips below:
-                                                        // the networks on a
-                                                        // series, the production
-                                                        // companies on a movie
-                                                        // (which has no network
-                                                        // rail). Left to the
-                                                        // default search this
-                                                        // landed on whichever
-                                                        // chip that rail was
-                                                        // last left on.
-                                                        .onPreviewKeyEvent {
-                                                            keyEvent ->
-                                                            if (
-                                                                column == null ||
-                                                                keyEvent.type !=
-                                                                    KeyEventType.KeyDown ||
-                                                                keyEvent.key !=
-                                                                    Key.DirectionDown
-                                                            ) {
-                                                                false
-                                                            } else {
-                                                                focusChipColumn(
-                                                                    NETWORK_ROW_KEY,
-                                                                    column
-                                                                ) ||
-                                                                    focusChipColumn(
-                                                                        PRODUCTION_ROW_KEY,
-                                                                        column
-                                                                    )
-                                                            }
-                                                        }
+                                                        // The page's one vertical
+                                                        // handoff, with the COLUMN
+                                                        // kept on the way: into the
+                                                        // chips below, or up to the
+                                                        // episode section above
+                                                        // (see DetailFocusChain).
+                                                        .onPreviewKeyEvent(
+                                                            detailRowVerticalFocus(
+                                                                DetailRow.PEOPLE,
+                                                                column ?: 0,
+                                                                detailRowPresence
+                                                            )
+                                                        )
                                                 )
                                             }
 
@@ -3750,21 +3887,6 @@ fun DetailScreen(
                                     }
                                 }
                         }
-
-                        val companies =
-                            tmdbDetail?.productionCompanies
-                                .orEmpty()
-
-                        val networks =
-                            tmdbDetail?.networks.orEmpty()
-
-                        // Whether this page has a NETWORK rail at all - the same
-                        // condition that renders it below. A production chip's
-                        // UP may only reach past this rail when it does NOT
-                        // exist; a rail the scroll disposed is put back on
-                        // screen instead (see [revealAndFocusChipColumn]).
-                        val hasNetworkRow =
-                            normalizedType == "series" && networks.isNotEmpty()
 
                         if (hasNetworkRow) {
                             item(key = "networkheader", contentType = "section-header") {
@@ -3856,92 +3978,31 @@ fun DetailScreen(
                                                 .focusRequester(
                                                     chipFocusRequester
                                                 )
-                                                // UP and DOWN keep the COLUMN:
-                                                // the people card directly
-                                                // above this chip, and the
-                                                // production chip directly
-                                                // below it. Neither rail is
-                                                // asked to remember where it
-                                                // was - that memory is what
-                                                // sent a press on the leftmost
-                                                // chip to a chip several
-                                                // columns to its right.
-                                                .onPreviewKeyEvent {
-                                                    keyEvent ->
-                                                    if (
-                                                        keyEvent.type !=
-                                                            KeyEventType.KeyDown
-                                                    ) {
-                                                        false
-                                                    } else {
-                                                        when (keyEvent.key) {
-                                                            Key.DirectionUp ->
-                                                                if (
-                                                                    focusChipColumn(
-                                                                        PEOPLE_ROW_KEY,
-                                                                        networkIndex
-                                                                    )
-                                                                ) {
-                                                                    true
-                                                                } else if (hasPeopleRow) {
-                                                                    // No chip in this column
-                                                                    // took the focus, but the
-                                                                    // rail above EXISTS: the
-                                                                    // scroll has disposed it, and
-                                                                    // "not composed" is not "not
-                                                                    // there". Bring that rail
-                                                                    // back on screen and then
-                                                                    // hand over the column, so
-                                                                    // UP reaches the card
-                                                                    // directly above this chip
-                                                                    // (see
-                                                                    // revealAndFocusChipColumn).
-                                                                    scope.launch {
-                                                                        revealAndFocusChipColumn(
-                                                                            PEOPLE_ROW_KEY,
-                                                                            NETWORK_ROW_KEY,
-                                                                            networkIndex
-                                                                        )
-                                                                    }
-                                                                    // Consume the press either way:
-                                                                    // the launched block owns the move,
-                                                                    // and returning false here would let
-                                                                    // the default search - and the
-                                                                    // network rail's restorer - move the
-                                                                    // focus a second time.
-                                                                    true
-                                                                } else {
-                                                                    // No people rail at all: an item
-                                                                    // with networks and no cast, writer
-                                                                    // or director has nothing in this
-                                                                    // column to move to, so the press
-                                                                    // goes to the top of the page -
-                                                                    // scrolled there first, and handed
-                                                                    // to a control that always exists
-                                                                    // (see focusTopOfPage).
-                                                                    scope.launch {
-                                                                        focusTopOfPage()
-                                                                    }
-                                                                    true
-                                                                }
-
-                                                            Key.DirectionDown ->
-                                                                focusChipColumn(
-                                                                    PRODUCTION_ROW_KEY,
-                                                                    networkIndex
-                                                                )
-
-                                                            else -> false
-                                                        }
-                                                    }
-                                                }
+                                                // UP and DOWN are the page's one
+                                                // vertical handoff: the chain
+                                                // decides which row this press
+                                                // leaves for, and the COLUMN is
+                                                // kept on the way - the people
+                                                // card directly above this chip,
+                                                // the production chip directly
+                                                // below it, and neither rail is
+                                                // asked to remember where it was
+                                                // (see DetailFocusChain and
+                                                // DetailChipColumns).
+                                                .onPreviewKeyEvent(
+                                                    detailRowVerticalFocus(
+                                                        DetailRow.NETWORK,
+                                                        networkIndex,
+                                                        detailRowPresence
+                                                    )
+                                                )
                                         )
                                     }
                                 }
                             }
                         }
 
-                        if (companies.isNotEmpty()) {
+                        if (hasProductionRow) {
                             item(key = "productionheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "PRODUCTION",
@@ -4020,95 +4081,18 @@ fun DetailScreen(
                                                 .focusRequester(
                                                     chipFocusRequester
                                                 )
-                                                // UP keeps its column too: the
-                                                // network chips on a series,
-                                                // and on a movie - which has no
-                                                // network rail - the people
-                                                // cards, which is the rail
-                                                // directly above this one. The
-                                                // two are told apart by whether
-                                                // the network rail EXISTS, never
-                                                // by whether a chip took the
-                                                // focus: a network row the scroll
-                                                // had disposed used to read as no
-                                                // network row, and the press then
-                                                // fell through to the people
-                                                // rail BELOW it, skipping the
-                                                // rail it was aimed at.
-                                                .onPreviewKeyEvent {
-                                                    keyEvent ->
-                                                    if (
-                                                        keyEvent.type !=
-                                                            KeyEventType.KeyDown ||
-                                                        keyEvent.key !=
-                                                            Key.DirectionUp
-                                                    ) {
-                                                        false
-                                                    } else if (hasNetworkRow) {
-                                                        // A series: the network rail
-                                                        // exists, and it is the one
-                                                        // UP must reach. No chip in
-                                                        // this column answering only
-                                                        // means it has been
-                                                        // disposed, so it is put
-                                                        // back on screen instead of
-                                                        // being skipped (see
-                                                        // revealAndFocusChipColumn).
-                                                        if (
-                                                            focusChipColumn(
-                                                                NETWORK_ROW_KEY,
-                                                                companyIndex
-                                                            )
-                                                        ) {
-                                                            true
-                                                        } else {
-                                                            scope.launch {
-                                                                revealAndFocusChipColumn(
-                                                                    NETWORK_ROW_KEY,
-                                                                    PRODUCTION_ROW_KEY,
-                                                                    companyIndex
-                                                                )
-                                                            }
-                                                            true
-                                                        }
-                                                    } else if (
-                                                        focusChipColumn(
-                                                            PEOPLE_ROW_KEY,
-                                                            companyIndex
-                                                        )
-                                                    ) {
-                                                        // A movie: no network rail, so
-                                                        // the people cards are the
-                                                        // rail above (unchanged).
-                                                        true
-                                                    } else if (hasPeopleRow) {
-                                                        // The people rail exists and
-                                                        // the scroll disposed it: the
-                                                        // same rule as the network
-                                                        // rail above.
-                                                        scope.launch {
-                                                            revealAndFocusChipColumn(
-                                                                PEOPLE_ROW_KEY,
-                                                                PRODUCTION_ROW_KEY,
-                                                                companyIndex
-                                                            )
-                                                        }
-                                                        true
-                                                    } else {
-                                                        // Neither rail exists on
-                                                        // this page, so there is
-                                                        // nothing above to land
-                                                        // on: consume the press
-                                                        // and go to the top of the
-                                                        // page rather than leaving
-                                                        // the focus stranded (see
-                                                        // focusTopOfPage).
-                                                        scope.launch {
-                                                            focusTopOfPage()
-                                                        }
-                                                        true
-                                                    }
-                                                }
+                                                // UP keeps its column like every
+                                                // other rail: the chain decides
+                                                // which row is above this one and
+                                                // the column is carried across
+                                                // (see DetailFocusChain).
+                                                .onPreviewKeyEvent(
+                                                    detailRowVerticalFocus(
+                                                        DetailRow.PRODUCTION,
+                                                        companyIndex,
+                                                        detailRowPresence
+                                                    )
+                                                )
                                         )
                                     }
                                 }

@@ -1,7 +1,7 @@
 package com.kennyb1201.kbstream.ui.detail
 
 import java.io.File
-import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -9,21 +9,18 @@ import org.junit.Test
  * The reported trap: on an item with networks but NO cast, UP on a network chip
  * did nothing at all.
  *
- * The UP handler tries the people column first, and when no chip there took the
- * focus it fell back to a scroll to the top and a bare
- * `movieDetailsFocusRequester.requestFocus()`. On an item with no cast, writer
- * or director there is no people rail for that requester to belong to, so the
- * request could only throw, the focus stayed on the chip and the key was
- * swallowed: trapped. The same handler also treated a people rail the scroll had
- * disposed as a rail that was not there.
+ * That handler tried the people column first, and when no chip there took the
+ * focus it fell back to a version of the move written out for that one row -
+ * `hasPeopleRow` deciding between a reveal and a jump to the top of the page -
+ * so the two shapes could disagree with the rails around them. A press out of a
+ * rail whose neighbour existed but had been scrolled away read as a press out
+ * of a rail that was not there.
  *
- * What this pins: the two cases are told apart by whether the rail EXISTS.
- * A rail that exists but was disposed is put back on screen and handed the
- * column ([revealAndFocusChipColumn]); a rail that does not exist sends the
- * press to the top of the page, where the play button in the fixed header above
- * the list is always composed ([focusTopOfPage]). Every arm consumes the press,
- * so the default search - and the network rail's restorer - can never move the
- * focus a second time.
+ * What this pins is that the shape cannot come back: the network chip asks the
+ * page's one chain, which resolves the press to a row that EXISTS (stepping
+ * over the ones this page does not have) and hands it over through the same
+ * reveal / header-fallback every other rail uses. There is no row-specific
+ * branch left to disagree with.
  *
  * Read from the source: these are key handlers and Compose modifiers, which
  * need a device and a remote to press.
@@ -35,25 +32,25 @@ class DetailNetworkChipUpTrapContractTest {
         normalized(stripComments(File(findMainSourceRoot(), DETAIL).readText()))
     }
 
-    /** The network chips' key handlers, and nothing else on the page. */
+    /** The network chips' key handler, and nothing else on the page. */
     private val networkRow: String by lazy {
         source
             .substringAfter("item(key = \"networkrow\"")
             .substringBefore("item(key = \"productionheader\"")
     }
 
-    /** The network chip's UP arm alone. */
-    private val upArm: String by lazy {
-        networkRow
-            .substringAfter("Key.DirectionUp ->")
-            .substringBefore("Key.DirectionDown ->")
-    }
-
     /** The page's last-resort arm. */
     private val topOfPage: String by lazy {
         source
-            .substringAfter("suspend fun focusTopOfPage() {")
+            .substringAfter("suspend fun focusTopOfPage(): Boolean {")
             .substringBefore("val effectiveSeason")
+    }
+
+    /** The move the shared handler hands a resolvable press to. */
+    private val move: String by lazy {
+        source
+            .substringAfter("suspend fun moveFocusVertical(")
+            .substringBefore("fun detailRowVerticalFocus(")
     }
 
     private fun stripComments(text: String): String =
@@ -84,65 +81,69 @@ class DetailNetworkChipUpTrapContractTest {
     }
 
     @Test
-    fun `the people column is still tried first`() {
+    fun `the network chip asks the one chain, with its own column`() {
         assertTrue(
-            "an item WITH cast must keep the unchanged behaviour: UP lands on " +
-                "the people card in this column, and only a rail that did not " +
-                "answer is looked at further",
-            upArm.contains(
-                "if ( focusChipColumn( PEOPLE_ROW_KEY, networkIndex ) ) { true } " +
-                    "else if (hasPeopleRow) {"
+            "UP and DOWN out of a network chip are decided in the same place " +
+                "as every other rail's, so this row can no longer disagree " +
+                "with the rows around it",
+            networkRow.contains(
+                "detailRowVerticalFocus( DetailRow.NETWORK, networkIndex, detailRowPresence )"
             )
         )
     }
 
     @Test
-    fun `a disposed people rail is brought back on screen instead of skipped`() {
+    fun `the press is resolved against the rows the page has, not against one guard`() {
+        assertTrue(
+            "the row a press lands on is the nearest one that exists, walked " +
+                "from the one list",
+            move.contains(
+                "val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false"
+            )
+        )
+        assertFalse(
+            "the no-cast case is no longer a branch of this row's own: " +
+                "whether a rail exists is the chain's business now",
+            networkRow.contains("hasPeopleRow")
+        )
+    }
+
+    @Test
+    fun `the press is consumed while the move runs`() {
+        assertTrue(
+            "a key handed to the (asynchronous) move must never also reach the " +
+                "default search, or the network rail's restorer would move the " +
+                "focus a second time",
+            source.contains(
+                "scope.launch { moveFocusVertical(row, direction, column, presence) } true"
+            )
+        )
+        assertTrue(
+            "and the only press that is NOT consumed is one the chain has no " +
+                "row for - UP never is, because the header always exists",
+            source.contains("DetailFocusChain.nextRow(row, direction, presence) == null")
+        )
+    }
+
+    @Test
+    fun `a rail that exists but was disposed is revealed before anything else`() {
         assertTrue(
             "the rail above exists, so no chip taking the focus means the " +
                 "scroll disposed it - which is not the same as the row not " +
                 "being there",
-            upArm.contains(
-                "revealAndFocusChipColumn( PEOPLE_ROW_KEY, NETWORK_ROW_KEY, networkIndex )"
+            source.contains(
+                "revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)"
             )
         )
-        assertTrue(
-            "and the press is consumed while that scroll runs",
-            upArm.contains(
-                "revealAndFocusChipColumn( PEOPLE_ROW_KEY, NETWORK_ROW_KEY, networkIndex ) " +
-                    "} true }"
-            )
+        val direct = source.indexOf("focusChipColumn(targetKey, fromColumn)")
+        val reveal = source.indexOf(
+            "revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)"
         )
-    }
-
-    @Test
-    fun `with no people rail the press goes to the top of the page`() {
+        val fallback = source.indexOf("else -> focusTopOfPage()")
         assertTrue(
-            "no people rail at all is the one case that falls through, and it " +
-                "falls to the page's own controls rather than nowhere",
-            upArm.contains("} else { scope.launch { focusTopOfPage() } true }")
-        )
-        val disposed = upArm.indexOf("revealAndFocusChipColumn( PEOPLE_ROW_KEY,")
-        val absent = upArm.indexOf("focusTopOfPage()")
-        assertTrue(
-            "existence decides the order: the reveal arm is reached before the " +
-                "no-rail arm",
-            disposed in 0 until absent
-        )
-    }
-
-    @Test
-    fun `the press is consumed by every arm`() {
-        assertEquals(
-            "three arms - people, dispose-that-exists, no-rail - and each one " +
-                "answers true: a key handed to an async scroll must never also " +
-                "reach the default search",
-            3,
-            Regex("\\btrue\\b").findAll(upArm).count()
-        )
-        assertTrue(
-            "the arm as a whole ends on the consuming true of its last branch",
-            upArm.trim().endsWith("true }")
+            "existence decides the order: ask the rail, put it back on screen if " +
+                "it is disposed, and only then fall back",
+            direct in 0 until reveal && reveal in 0 until fallback
         )
     }
 
@@ -166,20 +167,10 @@ class DetailNetworkChipUpTrapContractTest {
             "the request is retried while the page recomposes, not tried once",
             topOfPage.contains("while (attempts < RETURN_FOCUS_STEPS)")
         )
-    }
-
-    @Test
-    fun `the working neighbours are untouched`() {
         assertTrue(
-            "the people-column attempt itself must not have been folded into " +
-                "the reveal fallback",
-            upArm.trim().startsWith("if ( focusChipColumn( PEOPLE_ROW_KEY, networkIndex ) )")
-        )
-        assertTrue(
-            "DOWN still aims at the production chip in this column",
-            networkRow.contains(
-                "Key.DirectionDown -> focusChipColumn( PRODUCTION_ROW_KEY, networkIndex )"
-            )
+            "and the arm reports whether it landed, which is what lets the " +
+                "chain's last step be an honest answer rather than a swallow",
+            topOfPage.contains("return true") && topOfPage.contains("return false")
         )
     }
 

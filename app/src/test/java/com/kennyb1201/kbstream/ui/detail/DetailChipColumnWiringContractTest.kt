@@ -7,12 +7,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * That the detail page actually decides its vertical chip presses by column.
+ * That the detail page actually decides its vertical chip presses by column,
+ * and that the column is handed to the one chain rather than to a per-row
+ * handler.
  *
- * [DetailChipColumnsTest] pins the rule; this pins that the rule is what the
- * rails ask on UP and DOWN, that each rail files its chips under their column
- * for it to find, and that the rails whose restorer memory caused the reported
- * jump are no longer the ones deciding.
+ * [DetailChipColumnsTest] pins the rule; this pins that each rail files its
+ * chips under their column for it to find, that every vertical press - UP and
+ * DOWN, between every pair of rails - goes through the shared handler, and that
+ * the rails whose restorer memory caused the reported jump are no longer the
+ * ones deciding.
  *
  * Read from the source: these are key handlers and Compose modifiers, which
  * need a device and a remote to press.
@@ -50,15 +53,26 @@ class DetailChipColumnWiringContractTest {
         assertTrue(
             "the network chips must be reachable by column, or a press from " +
                 "above or below cannot aim at the one in the same column",
-            source.contains("registerChipColumn( NETWORK_ROW_KEY, networkIndex, chipFocusRequester )")
+            source.contains(
+                "registerChipColumn( NETWORK_ROW_KEY, networkIndex, chipFocusRequester )"
+            )
         )
         assertTrue(
-            source.contains("registerChipColumn( PRODUCTION_ROW_KEY, companyIndex, chipFocusRequester )")
+            source.contains(
+                "registerChipColumn( PRODUCTION_ROW_KEY, companyIndex, chipFocusRequester )"
+            )
         )
         assertTrue(
             "the people cards too - and by column, not by their index in a " +
                 "list that separators also occupy",
             source.contains("registerChipColumn( PEOPLE_ROW_KEY, column, cardFocusRequester )")
+        )
+        assertTrue(
+            "the tag rail as well, so the chain can move INTO it from the " +
+                "episode row and not only out of it",
+            source.contains(
+                "registerChipColumn( KEYWORDS_ROW_KEY, keywordIndex, chipFocusRequester )"
+            )
         )
         assertTrue(
             "the column a card has comes from the people list itself",
@@ -67,26 +81,34 @@ class DetailChipColumnWiringContractTest {
     }
 
     @Test
-    fun `a press on a network chip moves to the same column, not to a memory`() {
+    fun `a press carries its column into the chain, not into a memory`() {
         assertTrue(
-            "DOWN must aim at the production chip in this column: the " +
+            "the network chip hands over its index, which is the column the " +
+                "rails above and below are aimed by",
+            source.contains(
+                "detailRowVerticalFocus( DetailRow.NETWORK, networkIndex, detailRowPresence )"
+            )
+        )
+        assertTrue(
+            source.contains(
+                "detailRowVerticalFocus( DetailRow.PRODUCTION, companyIndex, detailRowPresence )"
+            )
+        )
+        assertTrue(
+            source.contains(
+                "detailRowVerticalFocus( DetailRow.PEOPLE, column ?: 0, detailRowPresence )"
+            )
+        )
+        assertTrue(
+            "and the column rule itself is still what decides the chip: the " +
                 "production rail's restorer is what sent the press to a chip " +
                 "several columns to the right",
-            source.contains("focusChipColumn( PRODUCTION_ROW_KEY, networkIndex )")
+            source.contains("fun focusChipColumn(rowKey: String, fromColumn: Int): Boolean")
         )
-        assertTrue(
-            "UP must aim at the people card in this column",
-            source.contains("focusChipColumn( PEOPLE_ROW_KEY, networkIndex )")
-        )
-        assertTrue(
-            "...and when there is no cast and no writer at all, the rail " +
-                "above is not composed, so the old guard against landing on " +
-                "the episodes row two rows up must still be there",
-            source.contains("movieDetailsFocusRequester .requestFocus()")
-        )
-        // The row's own modifier chain, up to the point its chips are built.
-        // An ancestor's key handler runs BEFORE the chip's, so a handler left
-        // here would win and put the viewer back on the restorer's chip.
+    }
+
+    @Test
+    fun `the rails no longer answer the vertical press themselves`() {
         val rowChain = source
             .substringAfter("item(key = \"networkrow\"")
             .substringBefore("{ networkIndex, n ->")
@@ -95,98 +117,53 @@ class DetailChipColumnWiringContractTest {
             rowChain.contains("focusGroup() .focusRestorer()")
         )
         assertFalse(
-            "the ROW must no longer answer the vertical press itself",
-            rowChain.contains("onPreviewKeyEvent")
+            "no bespoke UP/DOWN block is left on the row: the shared handler " +
+                "is the only thing it answers with",
+            rowChain.contains("onPreviewKeyEvent {")
         )
         assertFalse(
             "the row-level UP handler is the thing that was replaced",
             source.contains("UP belongs to PEOPLE")
         )
-    }
-
-    @Test
-    fun `the rails above and below keep their columns too`() {
-        assertTrue(
-            "UP from a production chip: the networks on a series, the people " +
-                "cards on a movie, which has no network rail",
-            source.contains("focusChipColumn( NETWORK_ROW_KEY, companyIndex )") &&
-                source.contains("focusChipColumn( PEOPLE_ROW_KEY, companyIndex )")
-        )
-        assertTrue(
-            "DOWN from a people card: the networks on a series, the " +
-                "production companies on a movie",
-            source.contains("focusChipColumn( NETWORK_ROW_KEY, column )") &&
-                source.contains("focusChipColumn( PRODUCTION_ROW_KEY, column )")
+        assertFalse(
+            "nor may a rail still ask for a specific neighbour by name - the " +
+                "chain decides that now",
+            source.contains("focusChipColumn( PRODUCTION_ROW_KEY, networkIndex )") ||
+                source.contains("focusChipColumn( NETWORK_ROW_KEY, companyIndex )") ||
+                source.contains("focusChipColumn( PEOPLE_ROW_KEY, companyIndex )") ||
+                source.contains("focusChipColumn( PEOPLE_ROW_KEY, networkIndex )")
         )
     }
 
     @Test
     fun `a rail the scroll disposed is revealed, never skipped and never stranded`() {
         assertTrue(
-            "a series: the network rail exists, so a press out of PRODUCTION " +
-                "puts it back on screen instead of falling through to the " +
-                "people rail below it - which is what skipped the row it was " +
-                "aimed at",
+            "a rail that exists but was disposed is put back on screen and then " +
+                "handed the column, anchored on the row the press came from",
             source.contains(
-                "revealAndFocusChipColumn( NETWORK_ROW_KEY, PRODUCTION_ROW_KEY, companyIndex )"
+                "revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)"
             )
         )
         assertTrue(
-            "a movie: the same rule for the people rail, so a press whose " +
-                "column found no chip is never left with nowhere to go",
-            source.contains(
-                "revealAndFocusChipColumn( PEOPLE_ROW_KEY, PRODUCTION_ROW_KEY, companyIndex )"
-            )
-        )
-        assertTrue(
-            "and the upward press out of NETWORK reveals the people rail",
-            source.contains(
-                "revealAndFocusChipColumn( PEOPLE_ROW_KEY, NETWORK_ROW_KEY, networkIndex )"
-            )
-        )
-        assertTrue(
-            "a page with neither rail still consumes the key and lands the " +
-                "focus on the top of the page",
-            source.contains("focusTopOfPage()")
+            "a page whose rails cannot answer at all still consumes the key and " +
+                "lands the focus on the top of the page",
+            source.contains("else -> focusTopOfPage()")
         )
     }
 
     @Test
-    fun `only a page without a network rail may reach past it`() {
-        val productionRow =
-            source
-                .substringAfter("item(key = \"productionrow\"")
-                .substringBefore("item(key = \"reviewsheader\"")
-        val upArm = productionRow.substringAfter("Key.DirectionUp ->")
-        assertTrue(
-            "whether the row exists, not whether a chip took the focus, is " +
-                "what decides the move",
-            upArm.contains("hasNetworkRow")
-        )
-        assertTrue(
-            "the people rail may only be asked once the network rail does " +
-                "not exist on the page",
-            upArm.indexOf("hasNetworkRow") in
-                0 until upArm.indexOf("focusChipColumn( PEOPLE_ROW_KEY, companyIndex )")
-        )
-    }
-
-    @Test
-    fun `only the column rule and its two reveal fallbacks decide these presses`() {
-        // Six call sites in the handlers, the definition, and the reveal
-        // helper's own single call: every vertical press between these rails
-        // goes through the column rule, so a seventh call site added later that
-        // does not is a change someone has to make deliberately.
+    fun `every vertical press between the rails goes through the one rule`() {
+        // The definition, the chip lookup in the chain's focusRow, and the
+        // reveal helper's own single call. A fourth call site - a rail deciding
+        // its own neighbour again - is a change someone has to make
+        // deliberately, which is exactly what this counts.
         assertEquals(
-            8,
+            3,
             Regex("focusChipColumn\\(").findAll(source).count()
         )
         assertTrue(
-            "a press whose column found no chip is answered by putting the rail " +
-                "back on screen or by going to the top of the page - never by a " +
-                "bare false the default search could move on",
             source.contains("suspend fun revealAndFocusChipColumn(") &&
-                source.contains("suspend fun focusTopOfPage()")
+                source.contains("suspend fun focusTopOfPage(): Boolean")
         )
     }
 
