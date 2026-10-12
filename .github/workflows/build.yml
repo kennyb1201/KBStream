@@ -304,29 +304,36 @@ jobs:
           echo "::error::${message} Re-run with allow_missing_ffmpeg if this is an upstream problem, not a regression."
           exit 1
 
-      # --- Native ASS/SSA subtitle rendering (warned, not yet gated) ---------
+      # --- Native ASS/SSA subtitle rendering (hard-gated) --------------------
       # Builds libass plus FreeType, HarfBuzz, fontconfig, fribidi and expat for
       # the app's ABIs, links them into the JNI bridge in scripts/libass-jni,
       # and drops the result at app/src/main/jniLibs/<abi>/libassjni.so -- a
       # default Gradle source set, so the APK packages it with no build-file
       # wiring.
       #
-      # continue-on-error, and a WARNING-only check, unlike the FFmpeg block
-      # above. Not because a miss is acceptable -- it is not: v0.6.24 shipped
-      # without the .so, so `System.loadLibrary("assjni")` threw and embedded
-      # AND addon ASS lost their typesetting on the ExoPlayer engine on every
-      # device -- but because this cross-compile cannot yet be gated on. Every
-      # release run so far has failed it: the build step exits 1 inside its
-      # fontconfig stage without writing anything to the log, and no run has
-      # ever left a libassjni.so for the upload step to find (the `libass-jni`
-      # artifact is absent from every release run). A hard gate today would
-      # block every release, so the failure is reported loudly instead.
+      # Native ASS is a shipped feature, so a miss here is a regression, not a
+      # cosmetic gap: v0.6.24 shipped without the .so, so
+      # `System.loadLibrary("assjni")` threw and embedded AND addon ASS lost
+      # their typesetting on the ExoPlayer engine on every device -- and nobody
+      # saw it, because the miss was a warning on a green run. This block is
+      # therefore gated exactly like the FFmpeg one above: no
+      # continue-on-error, and the check below exits 1.
       #
-      # Fixing the build is the follow-up that lets this become fatal. Note
-      # that scripts/build_libass.sh already gates ITS OWN output fatally --
-      # missing .so, unlinked libass, wrong page alignment -- so a run that
-      # does produce a library cannot leave a bad one behind; what is missing
-      # is a run that produces one at all.
+      # It stayed soft only while the cross-compile could not succeed at all.
+      # The fontconfig stage was where it died: fontconfig's autogen.sh needs
+      # gperf and autopoint, tests for both, and reports the refusal on STDOUT,
+      # which that stage redirected to /dev/null -- so the step was red with an
+      # empty log and every release shipped without native ASS. The step below
+      # installs both, and scripts/build_libass.sh now logs the failing
+      # project's output instead of swallowing it.
+      #
+      # There is deliberately no allow_missing_libass input (unlike
+      # allow_missing_ffmpeg): shipping without native ASS has to be a
+      # conscious temporary revert, never a standing default.
+      #
+      # scripts/build_libass.sh also gates ITS OWN output fatally -- missing
+      # .so, unlinked libass, wrong page alignment -- so a run that does
+      # produce a library cannot leave a bad one behind.
       - name: Cache the libass dependency prefixes
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -341,13 +348,18 @@ jobs:
             libass-jni-v1-${{ runner.os }}-${{ env.NDK_VERSION }}-
 
       - name: Build libass JNI library (optional)
-        continue-on-error: true
         run: |
           # Six autotools/meson/cmake projects: the runner image does not ship
           # all of their prerequisites.
+          #
+          # gperf and autopoint are fontconfig's, and their absence is what kept
+          # this cross-compile red: its autogen.sh tests for both and reports
+          # the miss on STDOUT, which scripts/build_libass.sh used to send to
+          # /dev/null, so the failure arrived as a bare exit code 1.
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            autoconf automake libtool pkg-config gettext meson ninja-build
+            autoconf automake libtool pkg-config gettext meson ninja-build \
+            gperf autopoint
           SDKMANAGER="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
           "$SDKMANAGER" "ndk;${NDK_VERSION}" "cmake;3.22.1"
@@ -376,10 +388,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # A warning, not a failure: see the block comment above. It covers BOTH
+      # A FAILURE, not a warning: see the block comment above. It covers BOTH
       # ABIs scripts/build_libass.sh produces (its ABIS default is
       # "arm64-v8a armeabi-v7a"), where the check this replaces only ever
-      # looked at arm64-v8a, so a v7a-only failure is at least reported now.
+      # looked at arm64-v8a, so a v7a-only failure is reported too.
       #
       # The alignment half runs on arm64-v8a ALONE, for the same reason the
       # packaged-library gate below does: only 64-bit ABIs can request 16 KB
@@ -403,12 +415,16 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          # Collected rather than exited on immediately, so ONE run reports
+          # every ABI that is missing or misaligned instead of only the first.
+          missing=0
           for abi in arm64-v8a armeabi-v7a; do
             so="app/src/main/jniLibs/${abi}/libassjni.so"
             if [[ -s "$so" ]]; then
               echo "libassjni.so (${abi}) built: $(wc -c < "$so") bytes"
             else
-              echo "::warning::libassjni.so (${abi}) was not produced, so this release's APK ships with no native ASS: embedded and addon ASS/SSA tracks fall back to Media3's flattening SSA decoder on the ExoPlayer engine. See the 'Build libass JNI library (optional)' step above, and the block comment above for why this warns instead of failing."
+              echo "::error::libassjni.so (${abi}) was not produced, so this release's APK would ship with no native ASS: embedded and addon ASS/SSA tracks would fall back to Media3's flattening SSA decoder on the ExoPlayer engine, silently losing their typesetting. See the 'Build libass JNI library' step above, whose log names the project that failed."
+              missing=1
             fi
           done
           # 16 KB page-size gate (Play requirement, Feb 1 2027): a library that
@@ -419,12 +435,11 @@ jobs:
             if readelf -lW "$so" | awk '$1 == "LOAD" { if ($NF == "0x4000") found = 1 } END { exit(found ? 0 : 1) }'; then
               echo "libassjni.so (arm64-v8a) is 16 KB page aligned"
             else
-              echo "::warning::libassjni.so (arm64-v8a) is not 16 KB page aligned, so it crashes on a 16 KB page-size device (Android 15+) and Play will reject it from Feb 1 2027; rebuild with NDK r28 (see the 'Build libass JNI library' step above)"
+              echo "::error::libassjni.so (arm64-v8a) is not 16 KB page aligned, so it crashes on a 16 KB page-size device (Android 15+) and Play will reject it from Feb 1 2027; rebuild with NDK r28 (see the 'Build libass JNI library' step above)"
+              missing=1
             fi
           fi
-          # Warning-only by design so a release can still publish; see the block
-          # comment above.
-          exit 0
+          exit $missing
 
       - name: Restore release keystore
         run: |

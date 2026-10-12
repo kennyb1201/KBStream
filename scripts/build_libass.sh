@@ -20,12 +20,17 @@
 # SubtitleFileParser (styling flattened), and everything else is unaffected.
 # That is NOT acceptable for a release -- v0.6.24 shipped without the .so, so
 # `System.loadLibrary("assjni")` threw and ASS typesetting was silently lost on
-# the ExoPlayer engine on every device -- but the CI step that runs this cannot
-# gate on it yet: every run so far has failed this cross-compile, exiting 1
-# inside its fontconfig stage without writing a single line to the log, and no
-# run has ever left a libassjni.so behind. The workflow therefore reports the
-# miss as a warning instead of blocking every release; see the libass block in
-# .github/workflows/build.yml.
+# the ExoPlayer engine on every device -- so the CI step that runs this is a
+# hard gate now: a miss fails the release instead of publishing without native
+# ASS. See the libass block in .github/workflows/build.yml.
+#
+# The failure that kept it soft for so long lived in the fontconfig stage:
+# fontconfig's autogen.sh needs gperf and autopoint, tests for both, and reports
+# the refusal on STDOUT -- which this script redirected to /dev/null, so the
+# step went red with an empty log and every release shipped without native ASS.
+# The workflow installs both now, the preconditions below check for them, and
+# every fontconfig step runs through run_logged so the next failure names
+# itself instead of vanishing.
 #
 # This script's own gates are fatal regardless: a run that does produce the .so
 # cannot leave a library that is missing, unlinked from libass, or 4 KB aligned
@@ -37,6 +42,8 @@
 #   * Android NDK r27+ (r28 recommended: 16 KB page alignment is the default)
 #   * autoconf, automake, libtool, pkg-config, meson, ninja, cmake, gettext
 #     (the CI runner installs these; see .github/workflows/build.yml)
+#   * gperf and autopoint, which fontconfig's autogen.sh requires (separate
+#     packages from gettext on Debian/Ubuntu: apt install gperf autopoint)
 #   * ~4 GB free disk and a few CPUs: six libraries x two ABIs is tens of
 #     minutes cold, and the per-ABI prefixes are cacheable
 #
@@ -88,6 +95,34 @@ DEP_PREFIX="${WORK_DIR}/prefix"
 log() { printf '\n=== %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+# Runs one build command with its output held back: on success just a one-line
+# "ok" reaches the log, on failure the tail is echoed before the script stops.
+#
+# Every stage here produces megabytes of configure/make noise, which is why the
+# script used to send all of it to /dev/null -- and that is exactly how a red CI
+# step ended up with nothing after it: fontconfig's autogen.sh reports its
+# missing prerequisites on STDOUT, so the reason went into /dev/null with the
+# noise and the log said only "Process completed with exit code 1".
+run_logged() {
+  local name="$1"; shift
+  local logfile="${WORK_DIR}/logs/${name// /-}.log"
+  mkdir -p "$(dirname "$logfile")"
+  # The status is captured in the else branch: after a false `if` with no
+  # else, $? is 0 again, so reading it after the fi would report every
+  # failure as a success.
+  local status=0
+  if "$@" >"$logfile" 2>&1; then
+    printf '  ok   %s\n' "$name"
+    return 0
+  else
+    status=$?
+  fi
+  printf 'error: %s failed (exit %s); last 40 lines of %s:\n' \
+    "$name" "$status" "$logfile" >&2
+  tail -n 40 "$logfile" >&2
+  return "$status"
+}
+
 # --- Preconditions ---------------------------------------------------------
 
 command -v git >/dev/null || die "git is not on PATH"
@@ -95,6 +130,15 @@ command -v cmake >/dev/null || die "cmake is not on PATH"
 command -v pkg-config >/dev/null || die "pkg-config is not on PATH"
 command -v meson >/dev/null || die "meson is not on PATH (pip install meson, or apt install meson)"
 command -v autoconf >/dev/null || die "autoconf is not on PATH"
+command -v autoreconf >/dev/null || die "autoreconf is not on PATH (apt install autoconf automake)"
+command -v libtoolize >/dev/null || die "libtoolize is not on PATH (apt install libtool)"
+command -v gettextize >/dev/null || die "gettextize is not on PATH (apt install gettext)"
+# gperf generates fontconfig's tables, and autopoint (a separate package from
+# gettext) is what its autogen.sh shells out to: both are tested for there, and
+# a miss exits 1 with everything on stdout. Naming them here turns the next
+# such miss into a one-line reason instead of an unexplained red step.
+command -v gperf >/dev/null || die "gperf is not on PATH (apt install gperf)"
+command -v autopoint >/dev/null || die "autopoint is not on PATH (apt install autopoint)"
 [[ -n "$ANDROID_NDK" ]] || die "set ANDROID_NDK (or ANDROID_HOME) to an NDK r27+ root"
 [[ -d "$ANDROID_NDK" ]] || die "NDK not found at $ANDROID_NDK"
 
@@ -216,11 +260,12 @@ build_expat() {
   local abi="$1" prefix="$2"
   (
     cd "${SRC_DIR}/expat"
-    ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
+    run_logged "expat configure ${abi}" \
+      ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --without-xmlwf --without-docbook \
-      --disable-nls >/dev/null
-    make -j"$JOBS" >/dev/null
-    make install >/dev/null
+      --disable-nls
+    run_logged "expat make ${abi}" make -j"$JOBS"
+    run_logged "expat install ${abi}" make install
   )
 }
 
@@ -228,11 +273,12 @@ build_fribidi() {
   local abi="$1" prefix="$2" cross="$3"
   (
     cd "${SRC_DIR}/fribidi"
-    meson setup _build --cross-file "$cross" --prefix="$prefix" \
+    run_logged "fribidi setup ${abi}" \
+      meson setup _build --cross-file "$cross" --prefix="$prefix" \
       --default-library=static --buildtype=release \
-      -Ddocs=false -Dtests=false -Dbin=false >/dev/null
-    ninja -C _build -j"$JOBS" >/dev/null
-    ninja -C _build install >/dev/null
+      -Ddocs=false -Dtests=false -Dbin=false
+    run_logged "fribidi build ${abi}" ninja -C _build -j"$JOBS"
+    run_logged "fribidi install ${abi}" ninja -C _build install
   )
 }
 
@@ -243,12 +289,13 @@ build_freetype() {
     # HarfBuzz is linked in by libass itself, and the PNG/zlib/bzip2 paths are
     # unused by subtitle rendering: keeping them out means the static archive
     # has no dependency the NDK does not already provide.
-    ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
+    run_logged "freetype configure ${abi}" \
+      ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --with-pic \
       --without-zlib --without-bzip2 --without-png --without-harfbuzz \
-      --without-brotli >/dev/null
-    make -j"$JOBS" >/dev/null
-    make install >/dev/null
+      --without-brotli
+    run_logged "freetype make ${abi}" make -j"$JOBS"
+    run_logged "freetype install ${abi}" make install
   )
 }
 
@@ -258,21 +305,28 @@ build_fontconfig() {
     cd "${SRC_DIR}/fontconfig"
     # fontconfig's autotools build is the plainest way in: its meson port
     # wants a generated config that assumes a host libc.
+    #
+    # None of these steps redirect to /dev/null any more: run_logged holds the
+    # output back until something fails, and then prints the whole reason. This
+    # stage is where the release lost native ASS for months, and the reason --
+    # "You must have gperf installed to compile Fontconfig." -- was on the
+    # stdout that used to be thrown away.
     if [[ ! -x ./configure ]]; then
-      NOCONFIGURE=1 ./autogen.sh >/dev/null
+      run_logged "fontconfig autogen" env NOCONFIGURE=1 ./autogen.sh
     fi
     # --disable-docs keeps the docbook toolchain out of the picture, and
     # NLS is skipped because an XML config is supplied at runtime instead of
     # a translated one.
-    ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
+    run_logged "fontconfig configure ${abi}" \
+      ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --disable-docs --disable-nls \
       --with-expat="$prefix" --with-freetype-config="$prefix/bin/freetype-config" \
       FREETYPE_CFLAGS="-I${prefix}/include/freetype2" \
       FREETYPE_LIBS="-L${prefix}/lib -lfreetype" \
       EXPAT_CFLAGS="-I${prefix}/include" \
-      EXPAT_LIBS="-L${prefix}/lib -lexpat" >/dev/null
-    make -j"$JOBS" >/dev/null
-    make install >/dev/null
+      EXPAT_LIBS="-L${prefix}/lib -lexpat"
+    run_logged "fontconfig make ${abi}" make -j"$JOBS"
+    run_logged "fontconfig install ${abi}" make install
   )
 }
 
@@ -280,7 +334,8 @@ build_harfbuzz() {
   local abi="$1" prefix="$2"
   # CMake rather than meson: harfbuzz's CMake path takes the NDK's own
   # toolchain file directly, so there is no cross file to keep in step.
-  cmake -S "${SRC_DIR}/harfbuzz" -B "${SRC_DIR}/harfbuzz/_build-${abi}" \
+  run_logged "harfbuzz configure ${abi}" \
+    cmake -S "${SRC_DIR}/harfbuzz" -B "${SRC_DIR}/harfbuzz/_build-${abi}" \
     -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI="$abi" \
     -DANDROID_PLATFORM="android-${ANDROID_API}" \
@@ -290,9 +345,11 @@ build_harfbuzz() {
     -DHB_HAVE_FREETYPE=OFF -DHB_HAVE_GLIB=OFF -DHB_HAVE_ICU=OFF \
     -DHB_HAVE_GRAPHITE2=OFF -DHB_HAVE_CORETEXT=OFF -DHB_HAVE_DIRECTWRITE=OFF \
     -DHB_BUILD_UTILS=OFF -DHB_BUILD_TESTS=OFF -DHB_BUILD_SUBSET=OFF \
-    -DHB_BUILD_DOCS=OFF >/dev/null
-  cmake --build "${SRC_DIR}/harfbuzz/_build-${abi}" -j"$JOBS" >/dev/null
-  cmake --install "${SRC_DIR}/harfbuzz/_build-${abi}" >/dev/null
+    -DHB_BUILD_DOCS=OFF
+  run_logged "harfbuzz build ${abi}" \
+    cmake --build "${SRC_DIR}/harfbuzz/_build-${abi}" -j"$JOBS"
+  run_logged "harfbuzz install ${abi}" \
+    cmake --install "${SRC_DIR}/harfbuzz/_build-${abi}"
 }
 
 build_libass() {
@@ -305,10 +362,11 @@ build_libass() {
     # libass must find the prefixes above, not the host's own copies; naming
     # PKG_CONFIG explicitly stops --host from making autotools look for a
     # ${host}-pkg-config that does not exist.
-    PKG_CONFIG=pkg-config \
-    PKG_CONFIG_PATH="${prefix}/lib/pkgconfig" \
-    PKG_CONFIG_LIBDIR="${prefix}/lib/pkgconfig" \
-    ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
+    run_logged "libass configure ${abi}" \
+      env PKG_CONFIG=pkg-config \
+        PKG_CONFIG_PATH="${prefix}/lib/pkgconfig" \
+        PKG_CONFIG_LIBDIR="${prefix}/lib/pkgconfig" \
+      ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --with-pic \
       --disable-test --enable-fontconfig \
       --with-fribidi --with-harfbuzz \
@@ -319,9 +377,9 @@ build_libass() {
       FRIBIDI_CFLAGS="-I${prefix}/include/fribidi" \
       FRIBIDI_LIBS="-L${prefix}/lib -lfribidi" \
       HARFBUZZ_CFLAGS="-I${prefix}/include/harfbuzz" \
-      HARFBUZZ_LIBS="-L${prefix}/lib -lharfbuzz" >/dev/null
-    make -j"$JOBS" >/dev/null
-    make install >/dev/null
+      HARFBUZZ_LIBS="-L${prefix}/lib -lharfbuzz"
+    run_logged "libass make ${abi}" make -j"$JOBS"
+    run_logged "libass install ${abi}" make install
   )
 }
 
@@ -367,14 +425,18 @@ for abi in $ABIS; do
   # ANDROID_STL=c++_static is set in the CMakeLists: nothing crosses a std::
   # type boundary through JNI, so the library must not add a second
   # libc++_shared.so next to the one libmpv already brings.
-  cmake -S "${REPO_ROOT}/scripts/libass-jni" -B "${WORK_DIR}/jni-${abi}" \
-    -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
-    -DANDROID_ABI="$abi" \
-    -DANDROID_PLATFORM="android-${ANDROID_API}" \
-    -DANDROID_STL=c++_static \
-    -DASS_DEPS_PREFIX="$DEP_PREFIX" \
-    -DCMAKE_BUILD_TYPE=Release >/dev/null
-  cmake --build "${WORK_DIR}/jni-${abi}" -j"$JOBS" >/dev/null
+  cmake_args=(
+    -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake"
+    -DANDROID_ABI="$abi"
+    -DANDROID_PLATFORM="android-${ANDROID_API}"
+    -DANDROID_STL=c++_static
+    -DASS_DEPS_PREFIX="$DEP_PREFIX"
+    -DCMAKE_BUILD_TYPE=Release
+  )
+  run_logged "libassjni configure ${abi}" \
+    cmake -S "${REPO_ROOT}/scripts/libass-jni" -B "${WORK_DIR}/jni-${abi}" "${cmake_args[@]}"
+  run_logged "libassjni link ${abi}" \
+    cmake --build "${WORK_DIR}/jni-${abi}" -j"$JOBS"
 
   so="$(find "${WORK_DIR}/jni-${abi}" -name 'libassjni.so' -print -quit)"
   [[ -n "$so" ]] || die "no libassjni.so produced for ${abi}"
