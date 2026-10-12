@@ -287,13 +287,76 @@ cpp_link_args = ['-L${prefix}/lib']
 EOF
 }
 
+# Every project below is configured OUT of its source tree, in a build
+# directory of its own per ABI.
+#
+# The source trees are shared between ABIs -- they are architecture-independent
+# and fetched once -- and an in-tree build leaves the first ABI's object files
+# in them. The second ABI's configure rewrites the Makefile, but make then sees
+# objects newer than the sources, builds nothing, and its `make install` copies
+# the FIRST ABI's archives into the second ABI's prefix. That is not
+# theoretical: the 2026-10-12 run built arm64-v8a from end to end and then had
+# armeabi-v7a's expat install an aarch64 libexpat.a, which fontconfig's own
+# probe rejected -- "checking for expat.h... yes / checking for
+# XML_SetDoctypeDeclHandler... no / configure: error: *** expat is required" --
+# with nothing in the log saying why the headers it could see did not link.
+# One build directory per ABI removes the whole class: object files a previous
+# ABI produced are never in front of this one.
+build_dir() {
+  local abi="$1" project="$2"
+  local dir="${WORK_DIR}/build-${abi}/${project}"
+  mkdir -p "$dir"
+  printf '%s\n' "$dir"
+}
+
+# The machine every archive in a finished prefix has to have been compiled for.
+# This is the gate that names the failure at the prefix instead of leaving it to
+# be inferred from fontconfig's configure: a wrong-architecture archive in a
+# prefix looks exactly like a correct one.
+expected_machine() {
+  case "$1" in
+    arm64-v8a)   echo AArch64 ;;
+    armeabi-v7a) echo ARM ;;
+    x86)         echo 386 ;;
+    x86_64)      echo X86-64 ;;
+    *)           die "unsupported ABI $1" ;;
+  esac
+}
+
+# llvm-readelf prints one header per archive member; the first member's machine
+# is the archive's. No llvm-readelf (a host-only checkout) means no answer, and
+# no answer is not a failure.
+prefix_arch_ok() {
+  local abi="$1" prefix="$2"
+  local readelf="${TOOLCHAIN}/bin/llvm-readelf"
+  [[ -x "$readelf" ]] || return 0
+  local want; want="$(expected_machine "$abi")"
+  local lib found
+  for lib in libass libharfbuzz libfreetype libfribidi libfontconfig libexpat; do
+    # Everything after "Machine:", spaces removed: readelf pads the column, and
+    # the x86 machine names are multi-word ("Advanced Micro Devices X86-64").
+    found="$("$readelf" -h "${prefix}/lib/${lib}.a" 2>/dev/null |
+      awk -F'Machine:' '/Machine:/ { print $2; exit }' | tr -d ' \t' || true)"
+    case "$found" in
+      *"$want"*) ;;
+      *)
+        printf 'error: %s is not a %s archive (llvm-readelf says "%s")\n' \
+          "${prefix}/lib/${lib}.a" "$want" "${found:-nothing}" >&2
+        return 1
+        ;;
+    esac
+  done
+  return 0
+}
+
 build_expat() {
   local abi="$1" prefix="$2"
+  local build; build="$(build_dir "$abi" expat)"
   (
-    cd "${SRC_DIR}/expat"
+    cd "$build"
     run_logged "expat configure ${abi}" \
       env "${CROSS_ENV[@]}" \
-      ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
+      "${SRC_DIR}/expat/configure" --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --without-xmlwf --without-docbook \
       --disable-nls
     run_logged "expat make ${abi}" make -j"$JOBS"
@@ -303,27 +366,28 @@ build_expat() {
 
 build_fribidi() {
   local abi="$1" prefix="$2" cross="$3"
-  (
-    cd "${SRC_DIR}/fribidi"
-    run_logged "fribidi setup ${abi}" \
-      meson setup _build --cross-file "$cross" --prefix="$prefix" \
-      --default-library=static --buildtype=release \
-      -Ddocs=false -Dtests=false -Dbin=false
-    run_logged "fribidi build ${abi}" ninja -C _build -j"$JOBS"
-    run_logged "fribidi install ${abi}" ninja -C _build install
-  )
+  # Per-ABI build directory here too: meson reconfigures a build dir it is
+  # handed again, and the objects already in it are the first ABI's.
+  local build="${SRC_DIR}/fribidi/_build-${abi}"
+  run_logged "fribidi setup ${abi}" \
+    meson setup "$build" --cross-file "$cross" --prefix="$prefix" \
+    --default-library=static --buildtype=release \
+    -Ddocs=false -Dtests=false -Dbin=false
+  run_logged "fribidi build ${abi}" ninja -C "$build" -j"$JOBS"
+  run_logged "fribidi install ${abi}" ninja -C "$build" install
 }
 
 build_freetype() {
   local abi="$1" prefix="$2"
+  local build; build="$(build_dir "$abi" freetype)"
   (
-    cd "${SRC_DIR}/freetype"
+    cd "$build"
     # HarfBuzz is linked in by libass itself, and the PNG/zlib/bzip2 paths are
     # unused by subtitle rendering: keeping them out means the static archive
     # has no dependency the NDK does not already provide.
     run_logged "freetype configure ${abi}" \
       env "${CROSS_ENV[@]}" \
-      ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
+      "${SRC_DIR}/freetype/configure" --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --with-pic \
       --without-zlib --without-bzip2 --without-png --without-harfbuzz \
       --without-brotli
@@ -334,25 +398,31 @@ build_freetype() {
 
 build_fontconfig() {
   local abi="$1" prefix="$2"
+  local build; build="$(build_dir "$abi" fontconfig)"
+  # fontconfig's autotools build is the plainest way in: its meson port
+  # wants a generated config that assumes a host libc.
+  #
+  # None of these steps redirect to /dev/null any more: run_logged holds the
+  # output back until something fails, and then prints the whole reason. This
+  # stage is where the release lost native ASS for months, and the reason --
+  # "You must have gperf installed to compile Fontconfig." -- was on the
+  # stdout that used to be thrown away.
+  #
+  # autogen.sh writes ./configure into the SOURCE tree and cannot run from a
+  # build directory: it is done once, here, and every configure/make below runs
+  # from this ABI's own build directory.
+  if [[ ! -x "${SRC_DIR}/fontconfig/configure" ]]; then
+    ( cd "${SRC_DIR}/fontconfig" &&
+      run_logged "fontconfig autogen" env NOCONFIGURE=1 ./autogen.sh )
+  fi
   (
-    cd "${SRC_DIR}/fontconfig"
-    # fontconfig's autotools build is the plainest way in: its meson port
-    # wants a generated config that assumes a host libc.
-    #
-    # None of these steps redirect to /dev/null any more: run_logged holds the
-    # output back until something fails, and then prints the whole reason. This
-    # stage is where the release lost native ASS for months, and the reason --
-    # "You must have gperf installed to compile Fontconfig." -- was on the
-    # stdout that used to be thrown away.
-    if [[ ! -x ./configure ]]; then
-      run_logged "fontconfig autogen" env NOCONFIGURE=1 ./autogen.sh
-    fi
+    cd "$build"
     # --disable-docs keeps the docbook toolchain out of the picture, and
     # NLS is skipped because an XML config is supplied at runtime instead of
     # a translated one.
     run_logged "fontconfig configure ${abi}" \
       env "${CROSS_ENV[@]}" \
-      ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
+      "${SRC_DIR}/fontconfig/configure" --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --disable-docs --disable-nls \
       --with-expat="$prefix" --with-freetype-config="$prefix/bin/freetype-config" \
       FREETYPE_CFLAGS="-I${prefix}/include/freetype2" \
@@ -388,11 +458,14 @@ build_harfbuzz() {
 
 build_libass() {
   local abi="$1" prefix="$2" cross="$3"
+  local build; build="$(build_dir "$abi" libass)"
+  # ./configure is generated into the source tree (autogen.sh cannot run from a
+  # build directory) and every build below happens in this ABI's own.
+  if [[ ! -x "${SRC_DIR}/libass/configure" ]]; then
+    ( cd "${SRC_DIR}/libass" && ./autogen.sh >/dev/null 2>&1 || true )
+  fi
   (
-    cd "${SRC_DIR}/libass"
-    if [[ ! -x ./configure ]]; then
-      ./autogen.sh >/dev/null 2>&1 || true
-    fi
+    cd "$build"
     # libass must find the prefixes above, not the host's own copies; naming
     # PKG_CONFIG explicitly stops --host from making autotools look for a
     # ${host}-pkg-config that does not exist.
@@ -400,7 +473,7 @@ build_libass() {
       env "${CROSS_ENV[@]}" PKG_CONFIG=pkg-config \
         PKG_CONFIG_PATH="${prefix}/lib/pkgconfig" \
         PKG_CONFIG_LIBDIR="${prefix}/lib/pkgconfig" \
-      ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
+      "${SRC_DIR}/libass/configure" --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --with-pic \
       --disable-test --enable-fontconfig \
       --with-fribidi --with-harfbuzz \
@@ -431,7 +504,11 @@ for abi in $ABIS; do
   write_meson_cross_file "$abi" "$prefix" "$cross"
   set_cross_env "$abi"
 
-  if build_prefix_complete "$prefix"; then
+  # A cached prefix is only reused when every archive is present AND every one
+  # of them was compiled for this ABI: a wrong-architecture archive in a
+  # complete-looking prefix is exactly what the 2026-10-12 run restored and
+  # then died on inside fontconfig's configure.
+  if build_prefix_complete "$prefix" && prefix_arch_ok "$abi" "$prefix"; then
     log "${abi}: dependency prefix already built (delete ${prefix} to rebuild)"
     continue
   fi
@@ -450,6 +527,8 @@ for abi in $ABIS; do
   build_libass "$abi" "$prefix" "$cross"
 
   build_prefix_complete "$prefix" || die "${abi}: dependency prefix is missing a static library"
+  prefix_arch_ok "$abi" "$prefix" ||
+    die "${abi}: a dependency archive in ${prefix} was built for another architecture"
 done
 
 # --- Build libassjni.so per ABI --------------------------------------------
