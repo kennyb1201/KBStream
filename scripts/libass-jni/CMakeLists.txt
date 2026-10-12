@@ -70,7 +70,14 @@ target_link_libraries(assjni PRIVATE
 # 64-bit output by default, but stating it here makes the requirement
 # visible and survives a toolchain that does not, matching the flag media3
 # used before 1.10. build_libass.sh verifies the result with llvm-readelf.
-target_link_options(assjni PRIVATE "-Wl,-z,max-page-size=16384")
+target_link_options(assjni PRIVATE
+    "-Wl,-z,max-page-size=16384"
+    # A shared library is allowed to keep unresolved symbols, and Android's
+    # linker is not glibc: it refuses to load the .so at all if one does not
+    # resolve, so a dropped static archive would turn into a device-side load
+    # failure instead of a build failure. This makes the link itself the proof
+    # that every ass_* call in the bridge resolves inside this library.
+    "-Wl,--no-undefined")
 
 # The ABI's own libc++ is not used: nothing here crosses a std:: type
 # boundary through JNI, and an unneeded libc++_shared.so would be one more

@@ -588,11 +588,24 @@ for abi in $ABIS; do
   so="${OUTPUT_DIR}/${abi}/libassjni.so"
 
   if [[ -x "$NM" ]]; then
-    if "$NM" --defined-only "$so" 2>/dev/null | grep -q 'ass_render_frame'; then
+    # Both symbol tables are read, into a file rather than a pipe: which of
+    # the two a release .so still names libass in is not this check's business,
+    # and `llvm-nm | grep -q` fails on its own under `pipefail` when grep exits
+    # at the first match -- the trap build_ffmpeg_video.sh documents at its own
+    # symbol pass.
+    nm_file="$(mktemp)"
+    { "$NM" -D --defined-only "$so" 2>/dev/null || true
+      "$NM" --defined-only "$so" 2>/dev/null || true
+    } > "$nm_file"
+    if grep -q 'ass_render_frame' "$nm_file"; then
       printf '  ok   %s exports a linked libass\n' "$abi"
     else
+      printf 'error: %s/libassjni.so does not contain ass_render_frame; first lines of llvm-nm output:\n' "$abi" >&2
+      head -5 "$nm_file" | sed 's/^/    /' >&2
+      rm -f "$nm_file"
       die "${abi}/libassjni.so does not contain ass_render_frame; libass was not linked in"
     fi
+    rm -f "$nm_file"
   else
     log "llvm-nm not found at ${NM}; skipping the libass symbol check"
   fi
