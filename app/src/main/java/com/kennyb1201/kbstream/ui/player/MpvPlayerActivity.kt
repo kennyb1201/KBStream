@@ -2708,9 +2708,23 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     /** Re-states the remembered track and languages once the file is open. */
     private fun applyRememberedTracks() {
         val view = surface ?: return
-        if (audioTrackSignature.isNotBlank()) {
-            view.applyRememberedAudioTrack(audioTrackSignature)
-        } else {
+        // A hand-picked track beats the language while this file still carries
+        // it: re-stating the language instead would replace it with the FIRST
+        // track in that language ("ENG stereo" for a picked "ENG DD+ 5.1").
+        //
+        // A signature that no longer resolves is the other half of that, and
+        // it has to fall THROUGH to the language rather than stop there. The
+        // next episode's copy is usually another release, so its codec or
+        // channel count differs from the one the pick was stored against; both
+        // arms then did nothing and mpv stayed on its own choice - the
+        // muxer's DEFAULT flag, which on a dual-audio EN/RU release is the
+        // Russian track. The stored pick is deliberately KEPT (the next source
+        // may carry it again, and it is re-tried on every open) and the
+        // language preference stands until it resolves - which is exactly
+        // where the ExoPlayer engine ends up, its own automatic pass having
+        // applied the language before the bridge's remembered-track pass ran.
+        // Reported: "mpv player keeps playing foreign language over english".
+        if (audioTrackSignature.isBlank() || !view.applyRememberedAudioTrack(audioTrackSignature)) {
             view.selectAudioLanguage(effectiveAudioLanguage())
         }
         // Subtitle priority, the same order the main player's bridge uses. An
@@ -4904,6 +4918,15 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         handler.removeCallbacksAndMessages(null)
         clockHandler.removeCallbacksAndMessages(null)
         nextUpCountdownHandler.removeCallbacksAndMessages(null)
+        // The scrub handler needs this one more than the three above do: its
+        // runnable RE-POSTS itself from inside its own callback, so a session
+        // that never reached onStop (a finish() from the end card, a kill while
+        // the panel was already gone) leaves a live timer that still owns this
+        // Activity through [mpvScrubRunnable] and keeps seeking into a surface
+        // that is released two lines below. Nothing else can stop it: the ramp
+        // ends on a key-up that will never come. onStop lands the scrub on the
+        // ordinary path; this is the safety net under that.
+        mpvScrubHandler.removeCallbacksAndMessages(null)
         surface?.release()
         surface = null
         clearChapters()

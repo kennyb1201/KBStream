@@ -695,8 +695,12 @@ class MpvPlayerView @JvmOverloads constructor(
      * Applies a track signature remembered for this title
      * ("language|codec|channels"), falling back to language + channel count.
      * False when neither matches: the stored track may simply not be in this
-     * episode's file, and picking a different one is worse than leaving mpv's
-     * own choice alone.
+     * episode's file.
+     *
+     * The false is a signal, not a verdict on what to play: the caller takes
+     * over the choice with the language preference (see the activity's
+     * applyRememberedTracks), because leaving mpv's own choice here is the
+     * muxer's DEFAULT - the Russian track on a dual-audio EN/RU release.
      */
     fun applyRememberedAudioTrack(signature: String): Boolean {
         if (!initialized || signature.isBlank()) return false
