@@ -7,6 +7,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.work.WorkPolicies
 
 class EpgRefreshWorker(
     appContext: Context,
@@ -34,6 +35,45 @@ class EpgRefreshWorker(
         val epgUrls = guideUrls(prefs)
         if (epgUrls.isEmpty()) {
             return Result.success()
+        }
+
+        // Two gates before the download, both reading state that already
+        // exists rather than keeping a second copy of it:
+        //
+        //  - Freshness. The guide lives in the database, and a re-import is a
+        //    multi-minute download plus a few hundred thousand inserts, so a
+        //    run landing an hour or less after the last successful one can only
+        //    re-store what is already there. `epg_updated_at` is exactly that
+        //    marker: the same key the guide screen's own staleness check reads
+        //    and that the in-app "IMPORT EPG" action writes, so a manual import
+        //    and this worker agree on what "fresh" means instead of each
+        //    holding its own idea of it.
+        //  - Playback. The import competes with the decoder and the UI for CPU
+        //    and heap - the field log had a guide rebuild finishing underneath
+        //    a starting player, with 750 ms GC pauses and a 6.9 s rebuffer. A
+        //    viewer is the one thing that must not be interrupted, and the
+        //    signal for it already exists: EpgWriteGate is set by both player
+        //    activities (and the hero trailer), so the gate is read here rather
+        //    than tracked again. It defers the whole run, where EpgWriteGate's
+        //    own hold inside the importer only paces the writes.
+        //
+        // A deferral is Result.retry() and never Result.failure(): failure
+        // cancels the periodic work outright, so a long film would cost the
+        // install its guide refreshes rather than merely postponing one.
+        val now = System.currentTimeMillis()
+        val lastImport = prefs.getLong(KEY_EPG_UPDATED_AT, 0L)
+        when (WorkPolicies.epgRefreshDecision(lastImport, now, EpgWriteGate.isPlayerActive)) {
+            WorkPolicies.EpgRefreshDecision.FRESH -> {
+                Log.i(TAG, "EPG refresh skipped: data fresh (age=${(now - lastImport) / 60_000}min)")
+                return Result.success()
+            }
+
+            WorkPolicies.EpgRefreshDecision.DEFER -> {
+                Log.i(TAG, "EPG refresh deferred: playback active")
+                return Result.retry()
+            }
+
+            WorkPolicies.EpgRefreshDecision.IMPORT -> Unit
         }
 
         // The shared instance, so a refresh that lands while the guide screen

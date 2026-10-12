@@ -160,4 +160,87 @@ class WorkPoliciesTest {
         val endedLongAgo = now - (ReminderRules.STALE_GRACE_MS + 1)
         assertFalse(WorkPolicies.shouldArmReminder(now + hour, endedLongAgo, now))
     }
+
+    // ── the periodic guide refresh's pre-flight gates ────────────────────
+
+    @Test
+    fun `a guide that was just imported is fresh`() {
+        assertEquals(
+            "an hour after an import is far inside the refresh cadence",
+            WorkPolicies.EpgRefreshDecision.FRESH,
+            WorkPolicies.epgRefreshDecision(now - hour, now, playbackActive = false)
+        )
+    }
+
+    @Test
+    fun `a fresh guide ends the attempt even while something is playing`() {
+        // Freshness is the first gate precisely so the answer that finishes the
+        // attempt never depends on the device happening to be idle.
+        assertEquals(
+            WorkPolicies.EpgRefreshDecision.FRESH,
+            WorkPolicies.epgRefreshDecision(now - hour, now, playbackActive = true)
+        )
+    }
+
+    @Test
+    fun `a guide at the age floor is no longer fresh`() {
+        // Strictly inside the floor is fresh; the floor itself is not. A plain
+        // periodic tick lands a whole interval out, so the floor is the edge a
+        // wrongly-skipped refresh would hide behind.
+        assertEquals(
+            WorkPolicies.EpgRefreshDecision.IMPORT,
+            WorkPolicies.epgRefreshDecision(
+                lastImportMs = now - WorkPolicies.EPG_MIN_AGE_MS,
+                nowMs = now,
+                playbackActive = false
+            )
+        )
+        assertEquals(
+            WorkPolicies.EpgRefreshDecision.FRESH,
+            WorkPolicies.epgRefreshDecision(
+                lastImportMs = now - WorkPolicies.EPG_MIN_AGE_MS + 1,
+                nowMs = now,
+                playbackActive = false
+            )
+        )
+    }
+
+    @Test
+    fun `a stale guide defers while something is playing`() {
+        assertEquals(
+            WorkPolicies.EpgRefreshDecision.DEFER,
+            WorkPolicies.epgRefreshDecision(now - 7 * hour, now, playbackActive = true)
+        )
+    }
+
+    @Test
+    fun `a stale guide with nothing playing is imported`() {
+        assertEquals(
+            WorkPolicies.EpgRefreshDecision.IMPORT,
+            WorkPolicies.epgRefreshDecision(now - 7 * hour, now, playbackActive = false)
+        )
+    }
+
+    @Test
+    fun `a marker that was never written is not fresh`() {
+        // The unset marker reads as 0 - the epoch, i.e. older than any window -
+        // and must never be mistaken for "imported just now".
+        assertEquals(
+            WorkPolicies.EpgRefreshDecision.IMPORT,
+            WorkPolicies.epgRefreshDecision(0L, now, playbackActive = false)
+        )
+        assertEquals(
+            WorkPolicies.EpgRefreshDecision.DEFER,
+            WorkPolicies.epgRefreshDecision(0L, now, playbackActive = true)
+        )
+    }
+
+    @Test
+    fun `the fresh floor is one hour under the refresh cadence`() {
+        // Asserted as values rather than read back from the constants: what is
+        // worth catching is somebody moving the cadence or the slack without
+        // re-reading what the guard is for.
+        assertEquals(hour, WorkPolicies.EPG_FRESH_SLACK_MS)
+        assertEquals(5 * hour, WorkPolicies.EPG_MIN_AGE_MS)
+    }
 }
