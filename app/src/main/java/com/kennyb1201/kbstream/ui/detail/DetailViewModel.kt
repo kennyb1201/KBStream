@@ -298,6 +298,19 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     private val _playButtonText = MutableStateFlow("Play")
     val playButtonText: StateFlow<String> = _playButtonText.asStateFlow()
 
+    /**
+     * The root id stream requests for this title are named by: TMDB's own IMDB
+     * id for this title's verified TMDB record, not the catalog id the screen
+     * was opened with - see [TmdbRepository.streamRootIdFor] for why that id
+     * cannot be trusted.
+     *
+     * Blank until the lookup answers, which the screen reads as "use the route
+     * id": a title whose TMDB record carries no IMDB id, an offline device and a
+     * missing key all request sources exactly as they did before this existed.
+     */
+    private val _streamRootId = MutableStateFlow("")
+    val streamRootId: StateFlow<String> = _streamRootId.asStateFlow()
+
     internal var imdbId: String = ""
     private var latestEpisodeSeasonRequest: Int? = null
 
@@ -800,6 +813,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         }
 
         imdbId = id
+        _streamRootId.value = ""
         _meta.value = initialMeta
         _tmdbDetail.value = null
         _isSyntheticDetail.value = false
@@ -958,6 +972,25 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                 tmdbDetailResult.onSuccess { earlyDetail ->
                     if (earlyDetail != null && _tmdbDetail.value == null) {
                         _tmdbDetail.value = earlyDetail
+                    }
+                }
+
+                // The id this title's stream requests will be named by. Fired
+                // BESIDE the early paint, never in front of it: the lookup is
+                // TMDB's external-ids endpoint (memory- and disk-cached, so it
+                // is free after the first open) and first paint may not wait on
+                // it. It publishes only while this load is still the one on
+                // screen, or a slow answer for a title the viewer has already
+                // left would rename the next title's requests.
+                val streamRootRouteId = id
+                viewModelScope.launch {
+                    val root = tmdbRepository.streamRootIdFor(
+                        streamRootRouteId,
+                        tmdbDetailResult.getOrNull()?.id,
+                        normalizedType
+                    )
+                    if (imdbId == streamRootRouteId) {
+                        _streamRootId.value = root
                     }
                 }
 

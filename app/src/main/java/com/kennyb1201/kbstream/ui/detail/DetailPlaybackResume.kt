@@ -186,7 +186,17 @@ internal object DetailPlaybackResume {
                 if (normalizedType == "series" && season != null && episode != null) {
                     fileEpisodeStreamId(
                         context = vm.getApplication(),
-                        rootId = id,
+                        // The root id the add-ons are asked for, which is not
+                        // necessarily the id this screen was opened with (see
+                        // [DetailViewModel.streamRootId]): the row has to name the
+                        // same episode id the season listing and the player file
+                        // their ids under, or resuming it would request another
+                        // title's streams.
+                        rootId = vm.tmdbRepository.streamRootIdFor(
+                            id,
+                            tmdbId,
+                            normalizedType
+                        ),
                         tmdbId = tmdbId,
                         season = season,
                         tmdbEpisode = episode
@@ -316,7 +326,17 @@ internal object DetailPlaybackResume {
                 if (normalizedType == "series" && season != null && episode != null) {
                     fileEpisodeStreamId(
                         context = vm.getApplication(),
-                        rootId = id,
+                        // The root id the add-ons are asked for, which is not
+                        // necessarily the id this screen was opened with (see
+                        // [DetailViewModel.streamRootId]): the row has to name the
+                        // same episode id the season listing and the player file
+                        // their ids under, or resuming it would request another
+                        // title's streams.
+                        rootId = vm.tmdbRepository.streamRootIdFor(
+                            id,
+                            tmdbId,
+                            normalizedType
+                        ),
                         tmdbId = tmdbId,
                         season = season,
                         tmdbEpisode = episode

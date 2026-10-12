@@ -821,6 +821,14 @@ fun DetailScreen(
     val vmLoadedSeason by viewModel.loadedSeason.collectAsStateWithLifecycle()
     val vmPlayButtonText by viewModel.playButtonText.collectAsStateWithLifecycle()
 
+    // The id this title's stream requests are named by: the IMDB id TMDB's own
+    // record maps to, not the catalog id this screen was opened with (see
+    // TmdbRepository.streamRootIdFor). Blank until that lookup answers, and the
+    // route id stands in then - which is what every request used before this
+    // existed, so nothing regresses when there is no TMDB record to ask about.
+    val vmStreamRootId by viewModel.streamRootId.collectAsStateWithLifecycle()
+    val streamRootId = vmStreamRootId.ifBlank { id }
+
     fun clearEpisodeTransitionState() {
         episodeTransitionState = EpisodeTransitionState()
     }
@@ -1731,6 +1739,7 @@ fun DetailScreen(
                 playTarget = remember(
                     resumeInfo,
                     id,
+                    streamRootId,
                     displayName,
                     tmdbDetail?.runtime,
                     wantsBeginning
@@ -1744,7 +1753,7 @@ fun DetailScreen(
                             ?.takeIf { it > 0 }
                     StreamsTarget(
                         contentType = "movie",
-                        streamId = id,
+                        streamId = streamRootId,
                         title = displayName,
                         displayName = displayName,
                         season = null,
@@ -1792,13 +1801,14 @@ fun DetailScreen(
                 val fallbackStreamId = remember(
                     context,
                     id,
+                    streamRootId,
                     targetSeason,
                     targetEpisode,
                     tmdbDetail?.id
                 ) {
                     fileEpisodeStreamId(
                         context = context,
-                        rootId = id,
+                        rootId = streamRootId,
                         tmdbId = tmdbDetail?.id,
                         season = targetSeason,
                         tmdbEpisode = targetEpisode

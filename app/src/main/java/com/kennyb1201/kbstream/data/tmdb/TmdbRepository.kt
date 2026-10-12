@@ -915,6 +915,33 @@ class TmdbRepository private constructor(context: Context) :
     }
 
     /**
+     * The root id a STREAM REQUEST for this title must name it by.
+     *
+     * The id the route arrived with is the catalog's, and a catalog's mapping
+     * can be wrong or stale - see [preferredStreamRootId] for the field case
+     * (a series catalog handing out another show's IMDB id, so every episode
+     * requested that other title's streams). The verified TMDB id is the one
+     * piece of the pair the app can trust, so its own external-ids mapping wins
+     * and the route id is only the fallback.
+     *
+     * The lookup is [resolveImdbId] - TMDB's `/external_ids`, cached in memory
+     * and in the resolution table with a long TTL because these mappings never
+     * change. Every case where there is nothing to ask about answers the route
+     * id, i.e. exactly the id every caller used before this existed: a title
+     * with no TMDB record (a synthetic add-on-videos detail), a blank API key,
+     * an offline device, or an API error.
+     */
+    suspend fun streamRootIdFor(
+        routeId: String,
+        tmdbId: Int?,
+        type: String
+    ): String {
+        val verified = tmdbId?.takeIf { it > 0 } ?: return routeId
+        val resolved = runCatchingCancellable { resolveImdbId(verified, type) }.getOrNull()
+        return preferredStreamRootId(routeId, resolved)
+    }
+
+    /**
      * Resolves the IMDB id of a title back to its TMDB id (the reverse of
      * [resolveImdbId]), caching both in memory and in the resolution table so
      * a later [resolveImdbId] is free too.
@@ -1432,6 +1459,14 @@ class TmdbRepository private constructor(context: Context) :
             throw IllegalStateException("TMDB API key is missing")
         }
 
+        // The id every episode id in the list is rooted in, which is NOT
+        // necessarily [imdbId]: this is the one place the series side of the app
+        // turns a show plus a season into the ids the add-ons are asked for, so
+        // resolving it here is what keeps every entry point (the season
+        // browser, Continue Watching, Up Next, random episodes, the players' own
+        // next-episode walk) on the same id. See [streamRootIdFor].
+        val streamRootId = streamRootIdFor(imdbId, tvId, "series")
+
         // Continue-watching resolution scans many seasons per show (and does so
         // once per history/Simkl row), so cache each (show, season) lookup in
         // memory with a TTL instead of hitting TMDB every time.
@@ -1442,8 +1477,11 @@ class TmdbRepository private constructor(context: Context) :
         // old mapping chose - for up to a week, on disk - and the detail screen
         // would hand the player a file that does not hold the episode (see
         // EpisodeScheme). A scheme change is a new key, so the next lookup
-        // rebuilds the list instead of aging out the old one.
-        val key = "$tvId:$season:$imdbId:${episodeSchemeTag(imdbId, tvId)}"
+        // rebuilds the list instead of aging out the old one. The resolved root
+        // is part of the key for the same reason: it is in every id in the list,
+        // and a season cached while the route id was all the app had must not
+        // outlive the first successful lookup.
+        val key = "$tvId:$season:$streamRootId:${episodeSchemeTag(streamRootId, tvId)}"
         val now = System.currentTimeMillis()
         pruneMemoryCaches()
         val cached = seasonEpisodesCache[key]
@@ -1491,7 +1529,7 @@ class TmdbRepository private constructor(context: Context) :
                 // itself stays TMDB's, on the field below.
                 streamId = fileEpisodeStreamId(
                     context = appContext,
-                    rootId = imdbId,
+                    rootId = streamRootId,
                     tmdbId = tvId,
                     season = season,
                     tmdbEpisode = ep.episodeNumber
