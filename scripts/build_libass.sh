@@ -302,6 +302,16 @@ EOF
 # with nothing in the log saying why the headers it could see did not link.
 # One build directory per ABI removes the whole class: object files a previous
 # ABI produced are never in front of this one.
+#
+# Every archive built below is also statically linked into libassjni.so, so
+# every one of them has to be position-independent. A non-PIC archive links
+# into an executable quite happily and then stops the shared object with
+# "relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol
+# 'default_langs'; recompile with -fPIC" -- which is what fontconfig's static
+# archive did, on the link that was the last thing between this release and a
+# libassjni.so. The autotools stages take --with-pic, fribidi is covered by the
+# cross file's -fPIC (meson's b_staticpic defaults to it), and CMake only
+# honours the option that names it.
 build_dir() {
   local abi="$1" project="$2"
   local dir="${WORK_DIR}/build-${abi}/${project}"
@@ -357,8 +367,8 @@ build_expat() {
     run_logged "expat configure ${abi}" \
       env "${CROSS_ENV[@]}" \
       "${SRC_DIR}/expat/configure" --host="$(autotools_host "$abi")" --prefix="$prefix" \
-      --enable-static --disable-shared --without-xmlwf --without-docbook \
-      --disable-nls
+      --enable-static --disable-shared --with-pic \
+      --without-xmlwf --without-docbook --disable-nls
     run_logged "expat make ${abi}" make -j"$JOBS"
     run_logged "expat install ${abi}" make install
   )
@@ -426,7 +436,7 @@ build_fontconfig() {
     run_logged "fontconfig configure ${abi}" \
       env "${CROSS_ENV[@]}" \
       "${SRC_DIR}/fontconfig/configure" --host="$(autotools_host "$abi")" --prefix="$prefix" \
-      --enable-static --disable-shared --disable-docs --disable-nls \
+      --enable-static --disable-shared --with-pic --disable-docs --disable-nls \
       --with-expat="$prefix" --with-freetype-config="$prefix/bin/freetype-config" \
       FREETYPE_CFLAGS="-I${prefix}/include/freetype2" \
       FREETYPE_LIBS="-L${prefix}/lib -lfreetype" \
@@ -448,6 +458,7 @@ build_harfbuzz() {
     -DANDROID_PLATFORM="android-${ANDROID_API}" \
     -DCMAKE_INSTALL_PREFIX="$prefix" \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DBUILD_SHARED_LIBS=OFF \
     -DHB_HAVE_FREETYPE=OFF -DHB_HAVE_GLIB=OFF -DHB_HAVE_ICU=OFF \
     -DHB_HAVE_GRAPHITE2=OFF -DHB_HAVE_CORETEXT=OFF -DHB_HAVE_DIRECTWRITE=OFF \
