@@ -121,13 +121,72 @@ class DetailChipColumnWiringContractTest {
     }
 
     @Test
-    fun `only the one helper decides these presses`() {
-        // Six call sites, plus the definition: every vertical press between
-        // these rails goes through the column rule, so a seventh added later
-        // that does not is a change someone has to make deliberately.
+    fun `a rail the scroll disposed is revealed, never skipped and never stranded`() {
+        assertTrue(
+            "a series: the network rail exists, so a press out of PRODUCTION " +
+                "puts it back on screen instead of falling through to the " +
+                "people rail below it - which is what skipped the row it was " +
+                "aimed at",
+            source.contains(
+                "revealAndFocusChipColumn( NETWORK_ROW_KEY, PRODUCTION_ROW_KEY, companyIndex )"
+            )
+        )
+        assertTrue(
+            "a movie: the same rule for the people rail, so a press whose " +
+                "column found no chip is never left with nowhere to go",
+            source.contains(
+                "revealAndFocusChipColumn( PEOPLE_ROW_KEY, PRODUCTION_ROW_KEY, companyIndex )"
+            )
+        )
+        assertTrue(
+            "and the upward press out of NETWORK reveals the people rail",
+            source.contains(
+                "revealAndFocusChipColumn( PEOPLE_ROW_KEY, NETWORK_ROW_KEY, networkIndex )"
+            )
+        )
+        assertTrue(
+            "a page with neither rail still consumes the key and lands the " +
+                "focus on the top of the page",
+            source.contains("focusTopOfPage()")
+        )
+    }
+
+    @Test
+    fun `only a page without a network rail may reach past it`() {
+        val productionRow =
+            source
+                .substringAfter("item(key = \"productionrow\"")
+                .substringBefore("item(key = \"reviewsheader\"")
+        val upArm = productionRow.substringAfter("Key.DirectionUp ->")
+        assertTrue(
+            "whether the row exists, not whether a chip took the focus, is " +
+                "what decides the move",
+            upArm.contains("hasNetworkRow")
+        )
+        assertTrue(
+            "the people rail may only be asked once the network rail does " +
+                "not exist on the page",
+            upArm.indexOf("hasNetworkRow") in
+                0 until upArm.indexOf("focusChipColumn( PEOPLE_ROW_KEY, companyIndex )")
+        )
+    }
+
+    @Test
+    fun `only the column rule and its two reveal fallbacks decide these presses`() {
+        // Six call sites in the handlers, the definition, and the reveal
+        // helper's own single call: every vertical press between these rails
+        // goes through the column rule, so a seventh call site added later that
+        // does not is a change someone has to make deliberately.
         assertEquals(
-            7,
+            8,
             Regex("focusChipColumn\\(").findAll(source).count()
+        )
+        assertTrue(
+            "a press whose column found no chip is answered by putting the rail " +
+                "back on screen or by going to the top of the page - never by a " +
+                "bare false the default search could move on",
+            source.contains("suspend fun revealAndFocusChipColumn(") &&
+                source.contains("suspend fun focusTopOfPage()")
         )
     }
 

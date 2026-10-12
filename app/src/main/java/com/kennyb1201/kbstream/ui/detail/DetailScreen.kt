@@ -738,6 +738,45 @@ fun DetailScreen(
         return runCatching { requester.requestFocus() }.isSuccess
     }
 
+    /**
+     * Puts the chip rail keyed [rowKey] back into composition and gives the chip
+     * in the same COLUMN the focus: the move a vertical press makes when the
+     * rail it aims at exists but the scroll has disposed it (see
+     * [focusChipColumn]).
+     *
+     * A disposed rail answers false to [focusChipColumn] because it has no chip
+     * to take the focus, and nothing on the press side can tell that from the
+     * row genuinely not being there. Treating disposal as absence is what
+     * skipped the NETWORK rail on the way up out of PRODUCTION, and what left
+     * the press with nowhere to land on the way up out of NETWORK. [revealRail]
+     * scrolls the rail back in, anchored on [fromRowKey] - the rail a vertical
+     * press came from is that rail's neighbour, so its index is the closest
+     * hint there is - and the focus request is retried while the chips compose.
+     *
+     * Answers whether the focus landed, but the caller consumes the press
+     * either way (see [focusTopOfPage]): a key handed to an async scroll must
+     * never also be handed to the default search.
+     */
+    suspend fun revealAndFocusChipColumn(
+        rowKey: String,
+        fromRowKey: String,
+        fromColumn: Int
+    ): Boolean {
+        val slots =
+            chipColumnRequesters[rowKey]?.takeIf { it.isNotEmpty() } ?: return false
+        DetailChipColumns.columnFor(fromColumn, slots.size) ?: return false
+        val hint = detailListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == fromRowKey }?.index ?: 0
+        detailListState.revealRail(rowKey, hint)
+        var attempts = 0
+        while (attempts < RETURN_FOCUS_STEPS) {
+            if (focusChipColumn(rowKey, fromColumn)) return true
+            delay(RETURN_FOCUS_DELAY_MS)
+            attempts++
+        }
+        return false
+    }
+
     // The card a drill-down off this page was opened from, read once as the
     // page composes; null on an ordinary open (see [DetailReturnFocus]).
     var returnTarget by remember { mutableStateOf<DetailReturnTarget?>(null) }
@@ -969,6 +1008,14 @@ fun DetailScreen(
         }
     }
 
+    /**
+     * Whether this page has a PEOPLE rail at all, which is what renders it (see
+     * the `peopleheader`/`peoplerow` items below) and what the chip handlers
+     * above and below tell apart from a rail the scroll has disposed. Hoisted
+     * out of the list builder so both read the same expression.
+     */
+    val hasPeopleRow = peopleItems.isNotEmpty()
+
     // The COLUMN each people item occupies, by its index in [peopleItems]: the
     // writer, the director and the cast number 0, 1, 2, ... down the rail, and
     // the separators between the groups take none. This is what the network and
@@ -1030,6 +1077,35 @@ fun DetailScreen(
 
     val movieDetailsFocusRequester = remember { FocusRequester() }
     val playButtonFocusRequester = remember { FocusRequester() }
+
+    /**
+     * The last resort of a vertical chip press whose target rail does not exist
+     * at all - the other half of [revealAndFocusChipColumn], which covers the
+     * rail that does exist but has been disposed. The list goes back to its
+     * top and the focus goes to the page's own controls: the people rail's
+     * requester, which the movie path already uses to jump into that rail, or
+     * the PLAY button, which lives in the fixed header ABOVE the list and so is
+     * always composed. Requesting the rail's focus without this scroll - and
+     * with no node behind it when there is no rail - is the only thing that
+     * could throw, and a request that threw left the viewer trapped on the chip
+     * they pressed.
+     *
+     * Consumes the press by construction: the launched block owns the move, so
+     * every caller answers true rather than letting the default search - and the
+     * rail's restorer - move the focus a second time.
+     */
+    suspend fun focusTopOfPage() {
+        runCatching { detailListState.scrollToItem(0) }
+        var attempts = 0
+        while (attempts < RETURN_FOCUS_STEPS) {
+            val landed =
+                runCatching { movieDetailsFocusRequester.requestFocus() }.isSuccess ||
+                    runCatching { playButtonFocusRequester.requestFocus() }.isSuccess
+            if (landed) return
+            delay(RETURN_FOCUS_DELAY_MS)
+            attempts += 1
+        }
+    }
 
     val effectiveSeason = remember(
         type,
@@ -3430,7 +3506,7 @@ fun DetailScreen(
                         }
 
 
-                        if (peopleItems.isNotEmpty()) {
+                        if (hasPeopleRow) {
                             item(key = "peopleheader", contentType = "section-header") {
                                 // Plain label, NOT focusable: the movie DOWN
                                 // path (keywords row) jumps straight into the
@@ -3607,10 +3683,15 @@ fun DetailScreen(
                         val networks =
                             tmdbDetail?.networks.orEmpty()
 
-                        if (
-                            normalizedType == "series" &&
-                            networks.isNotEmpty()
-                        ) {
+                        // Whether this page has a NETWORK rail at all - the same
+                        // condition that renders it below. A production chip's
+                        // UP may only reach past this rail when it does NOT
+                        // exist; a rail the scroll disposed is put back on
+                        // screen instead (see [revealAndFocusChipColumn]).
+                        val hasNetworkRow =
+                            normalizedType == "series" && networks.isNotEmpty()
+
+                        if (hasNetworkRow) {
                             item(key = "networkheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "NETWORK",
@@ -3727,35 +3808,25 @@ fun DetailScreen(
                                                                     )
                                                                 ) {
                                                                     true
-                                                                } else {
-                                                                    // No people row (no cast and no
-                                                                    // writer) or a column it has not
-                                                                    // reached: the rail above is not
-                                                                    // composed, and the header it sits
-                                                                    // under may have been disposed by
-                                                                    // the scroll too. A requestFocus
-                                                                    // here can only throw, which is what
-                                                                    // left the key trapped on this chip.
-                                                                    //
-                                                                    // Put the top of the page back into
-                                                                    // composition first, then hand the
-                                                                    // focus to the rail.
+                                                                } else if (hasPeopleRow) {
+                                                                    // No chip in this column
+                                                                    // took the focus, but the
+                                                                    // rail above EXISTS: the
+                                                                    // scroll has disposed it, and
+                                                                    // "not composed" is not "not
+                                                                    // there". Bring that rail
+                                                                    // back on screen and then
+                                                                    // hand over the column, so
+                                                                    // UP reaches the card
+                                                                    // directly above this chip
+                                                                    // (see
+                                                                    // revealAndFocusChipColumn).
                                                                     scope.launch {
-                                                                        detailListState
-                                                                            .scrollToItem(0)
-                                                                        // Give the LazyColumn
-                                                                        // a moment to re-compose
-                                                                        // the item before the
-                                                                        // request: a focus
-                                                                        // request issued in the
-                                                                        // same frame as the
-                                                                        // scroll lands on a node
-                                                                        // that is not there yet.
-                                                                        delay(100)
-                                                                        runCatching {
-                                                                            movieDetailsFocusRequester
-                                                                                .requestFocus()
-                                                                        }
+                                                                        revealAndFocusChipColumn(
+                                                                            PEOPLE_ROW_KEY,
+                                                                            NETWORK_ROW_KEY,
+                                                                            networkIndex
+                                                                        )
                                                                     }
                                                                     // Consume the press either way:
                                                                     // the launched block owns the move,
@@ -3763,6 +3834,19 @@ fun DetailScreen(
                                                                     // the default search - and the
                                                                     // network rail's restorer - move the
                                                                     // focus a second time.
+                                                                    true
+                                                                } else {
+                                                                    // No people rail at all: an item
+                                                                    // with networks and no cast, writer
+                                                                    // or director has nothing in this
+                                                                    // column to move to, so the press
+                                                                    // goes to the top of the page -
+                                                                    // scrolled there first, and handed
+                                                                    // to a control that always exists
+                                                                    // (see focusTopOfPage).
+                                                                    scope.launch {
+                                                                        focusTopOfPage()
+                                                                    }
                                                                     true
                                                                 }
 
@@ -3864,9 +3948,18 @@ fun DetailScreen(
                                                 // UP keeps its column too: the
                                                 // network chips on a series,
                                                 // and on a movie - which has no
-                                                // network row - the people
+                                                // network rail - the people
                                                 // cards, which is the rail
-                                                // directly above this one.
+                                                // directly above this one. The
+                                                // two are told apart by whether
+                                                // the network rail EXISTS, never
+                                                // by whether a chip took the
+                                                // focus: a network row the scroll
+                                                // had disposed used to read as no
+                                                // network row, and the press then
+                                                // fell through to the people
+                                                // rail BELOW it, skipping the
+                                                // rail it was aimed at.
                                                 .onPreviewKeyEvent {
                                                     keyEvent ->
                                                     if (
@@ -3876,15 +3969,69 @@ fun DetailScreen(
                                                             Key.DirectionUp
                                                     ) {
                                                         false
-                                                    } else {
-                                                        focusChipColumn(
-                                                            NETWORK_ROW_KEY,
-                                                            companyIndex
-                                                        ) ||
+                                                    } else if (hasNetworkRow) {
+                                                        // A series: the network rail
+                                                        // exists, and it is the one
+                                                        // UP must reach. No chip in
+                                                        // this column answering only
+                                                        // means it has been
+                                                        // disposed, so it is put
+                                                        // back on screen instead of
+                                                        // being skipped (see
+                                                        // revealAndFocusChipColumn).
+                                                        if (
                                                             focusChipColumn(
-                                                                PEOPLE_ROW_KEY,
+                                                                NETWORK_ROW_KEY,
                                                                 companyIndex
                                                             )
+                                                        ) {
+                                                            true
+                                                        } else {
+                                                            scope.launch {
+                                                                revealAndFocusChipColumn(
+                                                                    NETWORK_ROW_KEY,
+                                                                    PRODUCTION_ROW_KEY,
+                                                                    companyIndex
+                                                                )
+                                                            }
+                                                            true
+                                                        }
+                                                    } else if (
+                                                        focusChipColumn(
+                                                            PEOPLE_ROW_KEY,
+                                                            companyIndex
+                                                        )
+                                                    ) {
+                                                        // A movie: no network rail, so
+                                                        // the people cards are the
+                                                        // rail above (unchanged).
+                                                        true
+                                                    } else if (hasPeopleRow) {
+                                                        // The people rail exists and
+                                                        // the scroll disposed it: the
+                                                        // same rule as the network
+                                                        // rail above.
+                                                        scope.launch {
+                                                            revealAndFocusChipColumn(
+                                                                PEOPLE_ROW_KEY,
+                                                                PRODUCTION_ROW_KEY,
+                                                                companyIndex
+                                                            )
+                                                        }
+                                                        true
+                                                    } else {
+                                                        // Neither rail exists on
+                                                        // this page, so there is
+                                                        // nothing above to land
+                                                        // on: consume the press
+                                                        // and go to the top of the
+                                                        // page rather than leaving
+                                                        // the focus stranded (see
+                                                        // focusTopOfPage).
+                                                        scope.launch {
+                                                            focusTopOfPage()
+                                                        }
+                                                        true
                                                     }
                                                 }
                                         )

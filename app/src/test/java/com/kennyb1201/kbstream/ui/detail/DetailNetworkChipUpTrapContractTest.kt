@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.detail
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -8,16 +9,21 @@ import org.junit.Test
  * The reported trap: on an item with networks but NO cast, UP on a network chip
  * did nothing at all.
  *
- * The UP handler tries the people column first, and when that rail is not
- * composed (no cast and no writer) it fell back to a bare
- * `movieDetailsFocusRequester.requestFocus()`. That request throws once the
- * rail has been disposed by scrolling - LazyColumn drops what is off screen -
- * so the handler answered false, the default search had nothing in the same
- * column to move to either, and the key stayed trapped on the chip.
+ * The UP handler tries the people column first, and when no chip there took the
+ * focus it fell back to a scroll to the top and a bare
+ * `movieDetailsFocusRequester.requestFocus()`. On an item with no cast, writer
+ * or director there is no people rail for that requester to belong to, so the
+ * request could only throw, the focus stayed on the chip and the key was
+ * swallowed: trapped. The same handler also treated a people rail the scroll had
+ * disposed as a rail that was not there.
  *
- * What this pins: the fallback scrolls the page back to the top FIRST, so the
- * rail is composed again, and only then asks it for the focus; and the press is
- * consumed so the default search cannot move the focus a second time.
+ * What this pins: the two cases are told apart by whether the rail EXISTS.
+ * A rail that exists but was disposed is put back on screen and handed the
+ * column ([revealAndFocusChipColumn]); a rail that does not exist sends the
+ * press to the top of the page, where the play button in the fixed header above
+ * the list is always composed ([focusTopOfPage]). Every arm consumes the press,
+ * so the default search - and the network rail's restorer - can never move the
+ * focus a second time.
  *
  * Read from the source: these are key handlers and Compose modifiers, which
  * need a device and a remote to press.
@@ -41,6 +47,13 @@ class DetailNetworkChipUpTrapContractTest {
         networkRow
             .substringAfter("Key.DirectionUp ->")
             .substringBefore("Key.DirectionDown ->")
+    }
+
+    /** The page's last-resort arm. */
+    private val topOfPage: String by lazy {
+        source
+            .substringAfter("suspend fun focusTopOfPage() {")
+            .substringBefore("val effectiveSeason")
     }
 
     private fun stripComments(text: String): String =
@@ -74,37 +87,84 @@ class DetailNetworkChipUpTrapContractTest {
     fun `the people column is still tried first`() {
         assertTrue(
             "an item WITH cast must keep the unchanged behaviour: UP lands on " +
-                "the people card in this column",
+                "the people card in this column, and only a rail that did not " +
+                "answer is looked at further",
             upArm.contains(
-                "if ( focusChipColumn( PEOPLE_ROW_KEY, networkIndex ) ) { true } else {"
+                "if ( focusChipColumn( PEOPLE_ROW_KEY, networkIndex ) ) { true } " +
+                    "else if (hasPeopleRow) {"
             )
         )
     }
 
     @Test
-    fun `a failed people jump scrolls the page back up before asking for the focus`() {
+    fun `a disposed people rail is brought back on screen instead of skipped`() {
         assertTrue(
-            "the rail above is only composable again once the list is back at " +
-                "the top, so the scroll has to come first",
-            upArm.contains("scope.launch { detailListState .scrollToItem(0)")
+            "the rail above exists, so no chip taking the focus means the " +
+                "scroll disposed it - which is not the same as the row not " +
+                "being there",
+            upArm.contains(
+                "revealAndFocusChipColumn( PEOPLE_ROW_KEY, NETWORK_ROW_KEY, networkIndex )"
+            )
         )
-        val scroll = upArm.indexOf("scrollToItem(0)")
-        val focus = upArm.indexOf("movieDetailsFocusRequester .requestFocus()")
-        assertTrue("the focus request must follow the scroll", scroll in 0 until focus)
         assertTrue(
-            "and the LazyColumn gets a moment to re-compose the item before it: " +
-                "a request issued in the same frame as the scroll lands on a " +
-                "node that is not there yet",
-            upArm.contains("scrollToItem(0) delay(100) runCatching { movieDetailsFocusRequester .requestFocus() }")
+            "and the press is consumed while that scroll runs",
+            upArm.contains(
+                "revealAndFocusChipColumn( PEOPLE_ROW_KEY, NETWORK_ROW_KEY, networkIndex ) " +
+                    "} true }"
+            )
         )
     }
 
     @Test
-    fun `the press is consumed so the fallback search cannot move the focus twice`() {
+    fun `with no people rail the press goes to the top of the page`() {
         assertTrue(
-            "the launched block owns the move; answering false here would let " +
-                "the default search - and the network rail's restorer - run too",
-            upArm.trim().contains("} true }")
+            "no people rail at all is the one case that falls through, and it " +
+                "falls to the page's own controls rather than nowhere",
+            upArm.contains("} else { scope.launch { focusTopOfPage() } true }")
+        )
+        val disposed = upArm.indexOf("revealAndFocusChipColumn( PEOPLE_ROW_KEY,")
+        val absent = upArm.indexOf("focusTopOfPage()")
+        assertTrue(
+            "existence decides the order: the reveal arm is reached before the " +
+                "no-rail arm",
+            disposed in 0 until absent
+        )
+    }
+
+    @Test
+    fun `the press is consumed by every arm`() {
+        assertEquals(
+            "three arms - people, dispose-that-exists, no-rail - and each one " +
+                "answers true: a key handed to an async scroll must never also " +
+                "reach the default search",
+            3,
+            Regex("\\btrue\\b").findAll(upArm).count()
+        )
+        assertTrue(
+            "the arm as a whole ends on the consuming true of its last branch",
+            upArm.trim().endsWith("true }")
+        )
+    }
+
+    @Test
+    fun `the last resort scrolls before it asks, and can always take the focus`() {
+        assertTrue(
+            "the list is back at its top before anything is asked for the focus",
+            topOfPage.contains("runCatching { detailListState.scrollToItem(0) }")
+        )
+        val scroll = topOfPage.indexOf("scrollToItem(0)")
+        val rail = topOfPage.indexOf("movieDetailsFocusRequester.requestFocus()")
+        val button = topOfPage.indexOf("playButtonFocusRequester.requestFocus()")
+        assertTrue("the focus request must follow the scroll", scroll in 0 until rail)
+        assertTrue(
+            "and the PLAY button - in the fixed header ABOVE the list, so " +
+                "always composed - is the anchor behind the rail: a page with " +
+                "no people rail is exactly the case the old bare request threw on",
+            rail in 0 until button
+        )
+        assertTrue(
+            "the request is retried while the page recomposes, not tried once",
+            topOfPage.contains("while (attempts < RETURN_FOCUS_STEPS)")
         )
     }
 
@@ -112,7 +172,7 @@ class DetailNetworkChipUpTrapContractTest {
     fun `the working neighbours are untouched`() {
         assertTrue(
             "the people-column attempt itself must not have been folded into " +
-                "the scroll fallback",
+                "the reveal fallback",
             upArm.trim().startsWith("if ( focusChipColumn( PEOPLE_ROW_KEY, networkIndex ) )")
         )
         assertTrue(
