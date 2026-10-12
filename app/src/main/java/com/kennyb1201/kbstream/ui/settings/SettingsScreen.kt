@@ -407,6 +407,10 @@ fun SettingsScreen(
     // color path) is then not a choice, it is the only correct picture.
     val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
+    // Temporary DV experiment (see the row in "Dolby Vision & HDR" and
+    // AppPreferences.isDiagNoRelabel): keep the declared Dolby Vision codec
+    // string and strip the RPU/EL + HDR10+ in place instead of relabeling.
+    var diagNoRelabel by remember { mutableStateOf(AppPreferences.isDiagNoRelabel(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
@@ -1700,6 +1704,24 @@ fun SettingsScreen(
                     onToggle = {
                         stripHdr10Plus = it
                         AppPreferences.setStripHdr10Plus(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Temporary experiment, and the only diagnostic row left in
+                // this section: it answers whether the hvc1 relabel itself —
+                // not the codec string, not the metadata — is what stalls a DV
+                // box on a non-DV TV. On, the track keeps its declared
+                // dvhe.08.06 and only the RPU/EL + HDR10+ SEI are stripped.
+                // Off is the shipping relabel, unchanged.
+                ToggleRow(
+                    label = "Keep DV codec (no relabel)",
+                    description = "Experiment: leave the file's declared Dolby Vision codec string (e.g. dvhe.08.06) on the track and strip the DV RPU/EL and HDR10+ metadata in place, instead of re-advertising the base layer as plain HEVC. Turn it on only while testing a DV file that stalls on a non-DV TV — the PLAYER_CODEC line then names the codec the decoder was actually handed. Off plays the normal relabel path",
+                    checked = diagNoRelabel,
+                    onToggle = {
+                        diagNoRelabel = it
+                        AppPreferences.setDiagNoRelabel(context, it)
                     }
                 )
 

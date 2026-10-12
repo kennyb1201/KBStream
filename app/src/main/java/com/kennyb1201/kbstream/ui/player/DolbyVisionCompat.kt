@@ -548,10 +548,11 @@ internal object DolbyVisionCompat {
      * an Annex-B HEVC access unit, compacting in place. Returns the new length,
      * or -1 when nothing was removed / the unit was too short to parse.
      *
-     * [accounting], when given, records what the HDR10+ SEI strip did to every
-     * SEI NAL it examined - which is the difference between a NAL dropped whole
-     * and one surgically shrunk. It is diagnostic only: the bytes emitted are
-     * identical with or without it.
+     * [accounting], when given, records the fate of every NAL this strip
+     * removed or examined: the RPU/EL it dropped ([stripDv] / [dropRpuNal]) and
+     * every HDR10+ SEI NAL - which is the difference between a NAL dropped
+     * whole and one surgically shrunk. It is diagnostic only: the bytes emitted
+     * are identical with or without it.
      *
      * [dropRpuNal] removes the RPU (type 62) while the caller keeps the HDR10+
      * SEI — the config Nuvio's "Always Strip DV" (and Kodi) play on this
@@ -592,6 +593,13 @@ internal object DolbyVisionCompat {
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
+                    // Recorded like the SEI drops below: the first-sample log
+                    // has to be able to say the RPU/EL were removed (that is
+                    // the no-relabel arm's whole evidence), not merely that the
+                    // sample changed.
+                    accounting?.record(
+                        nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
+                    )
                 }
                 // Diagnostic arm, RPU (62) only: the EL (63) is untouched, so a
                 // P7 sample still behaves exactly as it does today.
@@ -704,6 +712,7 @@ internal object DolbyVisionCompat {
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
+                    accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
                 }
                 // Diagnostic arm, RPU (62) only (see [stripAnnexB]).
                 if (keep && dropRpuNal && nalType == NAL_DV_RPU) {
@@ -775,9 +784,12 @@ internal object DolbyVisionCompat {
     }
 
     /**
-     * First-sample diagnostic for the relabel (STRIP_NALS_ONLY) path: records
-     * what the HDR10+ SEI strip did to each SEI NAL it examined. Diagnostic
-     * only - it never influences the strip.
+     * First-sample diagnostic for the STRIP_NALS_ONLY path: records the fate of
+     * every NAL the strip removed or examined — the RPU (62) / EL (63) it
+     * dropped ([stripDv] / [dropRpuNal]) and each HDR10+ SEI NAL. The field run
+     * reads a `62:<size>->dropped` off this to see that the no-relabel arm
+     * really did strip the RPU. Diagnostic only - it never influences the
+     * strip.
      *
      * Sizes are NAL-unit bytes excluding framing (start code / length field),
      * matching [describeNals]' convention.

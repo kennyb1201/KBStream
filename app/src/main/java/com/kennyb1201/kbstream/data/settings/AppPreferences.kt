@@ -70,6 +70,7 @@ object AppPreferences {
     private const val KEY_AUDIO_OUTPUT = "audio_output_mode"                 // 0=auto, 1=passthrough, 2=decode (see PlayerAudioTuning)
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
+    private const val KEY_DIAG_NO_RELABEL = "diag_no_relabel"               // temporary DV experiment, see isDiagNoRelabel
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
     private const val KEY_DV_PASSTHROUGH_FAILED_AT = "dv_passthrough_failed_at" // learned: box's DV decoder failed, 0 = none
@@ -985,6 +986,24 @@ object AppPreferences {
 
     fun setStripHdr10Plus(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_STRIP_HDR10_PLUS, enabled).apply()
+    }
+
+    // ── Temporary DV experiment: strip the RPU/EL without relabeling ────
+    // The DV-box / non-DV-display stall arm. With this on the declared Dolby
+    // Vision codec string (e.g. dvhe.08.06) stays on the format and the RPU/EL
+    // + HDR10+ SEI are stripped in place, instead of re-advertising the base
+    // layer as hvc1 — the combination Nuvio's DolbyVisionMatroskaTransformer
+    // plays this chipset with (it never relabels). It exists to answer one
+    // question the field run cannot answer any other way: is the relabel itself
+    // what stalls the decoder, or is the codec string irrelevant?
+    //
+    // Default false, and nothing else reads it: with the flag off the relabel
+    // path is byte-for-byte what it was.
+    fun isDiagNoRelabel(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DIAG_NO_RELABEL, false)
+
+    fun setDiagNoRelabel(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DIAG_NO_RELABEL, enabled).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────

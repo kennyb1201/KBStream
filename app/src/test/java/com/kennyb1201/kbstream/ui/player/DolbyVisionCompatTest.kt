@@ -852,6 +852,46 @@ class DolbyVisionCompatTest {
     }
 
     @Test
+    fun `the accounting records the RPU and EL the strip dropped`() {
+        // The no-relabel arm's whole evidence is this line: the sample's own
+        // declared dvhe.08.06 stays because nothing relabels it, and the RPU is
+        // gone because the strip removed it. `modified=true` alone would not
+        // say which of the two NALs went, so the RPU/EL are recorded exactly
+        // like the SEI drops are - across BOTH framings, because the strip has
+        // two call sites and only one of them used to record anything.
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val rpu = nal(62, ByteArray(16) { it.toByte() })
+        val el = nal(63, ByteArray(8) { it.toByte() })
+        val au = rpu + el + vcl
+        val buf = au.copyOf()
+        val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = true, stripHdr10Plus = true, accounting = accounting
+        )
+
+        assertEquals("only the VCL NAL survives", vcl.size, newLen)
+        assertEquals(
+            "both dropped NAL types, at the size describeNals prints",
+            "62:18->dropped,63:10->dropped",
+            accounting.summary()
+        )
+
+        val sample = ldNal(62, ByteArray(16) { it.toByte() }) +
+            ldNal(63, ByteArray(8) { it.toByte() }) +
+            ldNal(19, byteArrayOf(0x55, 0x66))
+        val sampleBuf = sample.copyOf()
+        val ldAccounting = DolbyVisionCompat.SeiStripAccounting()
+
+        DolbyVisionCompat.stripLengthDelimited(
+            sampleBuf, sample.size, 4, stripDv = true, stripHdr10Plus = true,
+            accounting = ldAccounting
+        )
+
+        assertEquals("62:18->dropped,63:10->dropped", ldAccounting.summary())
+    }
+
+    @Test
     fun `the accounting records a shrunk SEI at the size it was left at`() {
         val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
         val sei = nal(39, t35Message(HDR10_PLUS_HEADER) + other + byteArrayOf(0x80.toByte()))
@@ -1018,8 +1058,10 @@ class DolbyVisionCompatTest {
         // The diagnostic's whole contract: strip the same input twice, once with
         // and once without it, and the emitted bytes and the return value must be
         // equal - across every shape the strip can meet, because the record calls
-        // sit right beside the in-place compaction. The RPU NAL rides through
-        // untouched (stripDv = false) and is never recorded: only SEI NALs are.
+        // sit right beside the in-place compaction. Every shape here runs with
+        // stripDv = false, so the RPU NAL rides through untouched and is not
+        // recorded; a stripDv = true call records the RPU/EL it drops (see
+        // `the accounting records the RPU and EL the strip dropped`).
         val hdr10 = t35Message(HDR10_PLUS_HEADER)
         val other = unregisteredMessage(byteArrayOf(0x11, 0x22, 0x33, 0x44))
         val rpuShaped = ByteArray(10) { (0x10 + it).toByte() } + HDR10_PLUS_HEADER

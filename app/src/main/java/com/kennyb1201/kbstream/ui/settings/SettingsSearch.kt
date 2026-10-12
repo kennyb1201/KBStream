@@ -202,6 +202,15 @@ internal object SettingsSearchIndex {
             "Strip HDR10+",
             "hdr10+ hdr plus strip playback picture"
         ),
+        // The temporary no-relabel DV experiment, drawn in the same cluster as
+        // Strip HDR10+. Indexed like every other drawn toggle: a row that is
+        // visible but unfindable is what that contract exists to forbid.
+        SettingSearchEntry(
+            "playback.no-relabel-dv",
+            SettingsPane.PLAYBACK,
+            "Keep DV codec (no relabel)",
+            "dolby vision dv codec relabel hvc1 dvhe experiment diagnostic rpu strip"
+        ),
         SettingSearchEntry(
             "playback.auto-select-stream",
             SettingsPane.PLAYBACK,
