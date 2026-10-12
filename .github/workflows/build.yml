@@ -343,9 +343,16 @@ jobs:
           # NDK_VERSION for the same reason the FFmpeg key is -- these are
           # static archives produced by one toolchain and must not be reused
           # by another.
-          key: libass-jni-v1-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ hashFiles('scripts/build_libass.sh', 'scripts/libass-jni/**') }}
+          #
+          # v2, not v1: every v1 entry holds x86_64 archives for BOTH ABIs,
+          # because the autotools stages were compiling with the HOST toolchain
+          # (--host alone finds no ${host}-gcc in the NDK and falls back). Such
+          # a prefix passes build_prefix_complete, so it has to be left behind
+          # rather than restored: the restore-keys prefix is v2-only for the
+          # same reason, or the v1 entry would come straight back.
+          key: libass-jni-v2-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ hashFiles('scripts/build_libass.sh', 'scripts/libass-jni/**') }}
           restore-keys: |
-            libass-jni-v1-${{ runner.os }}-${{ env.NDK_VERSION }}-
+            libass-jni-v2-${{ runner.os }}-${{ env.NDK_VERSION }}-
 
       - name: Build libass JNI library (optional)
         run: |

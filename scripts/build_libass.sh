@@ -228,6 +228,37 @@ autotools_host() {
   esac
 }
 
+# The NDK ships no ${host}-gcc, and autoconf's --host search does not stop when
+# it finds nothing: it falls back to the HOST compiler. Every autotools stage
+# here built x86_64 objects into an arm64 prefix and reported "ok" -- until
+# libass's aarch64 assembly met the host assembler ("no such instruction:
+# adrp", "too many memory references for `add'"), which is the only reason the
+# mistake was visible at all. Reproduce it by configuring any autotools project
+# with --host=aarch64-linux-android and nothing else: the Makefile's CC is gcc,
+# and readelf calls the archive it produces x86-64.
+#
+# So the cross drivers are named explicitly, the way the meson cross file below
+# names them for fribidi. CC carries the target, and with it the assembler and
+# the linker driver; the archive tools are named too so the .a files are not
+# produced by the host's ar either.
+CROSS_ENV=()
+set_cross_env() {
+  local abi="$1"
+  local triple; triple="$(clang_triple "$abi")"
+  CROSS_ENV=(
+    "CC=${TOOLCHAIN}/bin/${triple}${ANDROID_API}-clang"
+    "CXX=${TOOLCHAIN}/bin/${triple}${ANDROID_API}-clang++"
+  )
+  # Only the tools this NDK actually ships: naming a missing one would turn
+  # into a "command not found" inside make instead of autoconf's own fallback.
+  local pair file var
+  for pair in llvm-ar:AR llvm-ranlib:RANLIB llvm-strip:STRIP; do
+    file="${pair%%:*}"; var="${pair##*:}"
+    [[ -x "${TOOLCHAIN}/bin/${file}" ]] || continue
+    CROSS_ENV+=("${var}=${TOOLCHAIN}/bin/${file}")
+  done
+}
+
 write_meson_cross_file() {
   local abi="$1" prefix="$2" file="$3"
   local triple; triple="$(clang_triple "$abi")"
@@ -261,6 +292,7 @@ build_expat() {
   (
     cd "${SRC_DIR}/expat"
     run_logged "expat configure ${abi}" \
+      env "${CROSS_ENV[@]}" \
       ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --without-xmlwf --without-docbook \
       --disable-nls
@@ -290,6 +322,7 @@ build_freetype() {
     # unused by subtitle rendering: keeping them out means the static archive
     # has no dependency the NDK does not already provide.
     run_logged "freetype configure ${abi}" \
+      env "${CROSS_ENV[@]}" \
       ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --with-pic \
       --without-zlib --without-bzip2 --without-png --without-harfbuzz \
@@ -318,6 +351,7 @@ build_fontconfig() {
     # NLS is skipped because an XML config is supplied at runtime instead of
     # a translated one.
     run_logged "fontconfig configure ${abi}" \
+      env "${CROSS_ENV[@]}" \
       ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
       --enable-static --disable-shared --disable-docs --disable-nls \
       --with-expat="$prefix" --with-freetype-config="$prefix/bin/freetype-config" \
@@ -363,7 +397,7 @@ build_libass() {
     # PKG_CONFIG explicitly stops --host from making autotools look for a
     # ${host}-pkg-config that does not exist.
     run_logged "libass configure ${abi}" \
-      env PKG_CONFIG=pkg-config \
+      env "${CROSS_ENV[@]}" PKG_CONFIG=pkg-config \
         PKG_CONFIG_PATH="${prefix}/lib/pkgconfig" \
         PKG_CONFIG_LIBDIR="${prefix}/lib/pkgconfig" \
       ./configure --host="$(autotools_host "$abi")" --prefix="$prefix" \
@@ -395,6 +429,7 @@ for abi in $ABIS; do
   prefix="${DEP_PREFIX}/${abi}"
   cross="${WORK_DIR}/meson-cross-${abi}.txt"
   write_meson_cross_file "$abi" "$prefix" "$cross"
+  set_cross_env "$abi"
 
   if build_prefix_complete "$prefix"; then
     log "${abi}: dependency prefix already built (delete ${prefix} to rebuild)"
