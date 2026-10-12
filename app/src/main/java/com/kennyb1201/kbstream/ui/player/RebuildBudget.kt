@@ -7,7 +7,7 @@ package com.kennyb1201.kbstream.ui.player
  * re-asking six times, the source ladder switching on top, and the Dolby Vision
  * strip rebuilding in between — on a file whose real problem was the decoder
  * pool the rebuilds were themselves wedging. Two is the number this borrows
- * from Nuvio's player (summarized from github.com/NuvioMedia/NuvioTV, GPL-3.0):
+ * from the reference player (summarized from github.com/NuvioMedia/NuvioTV, GPL-3.0):
  * a genuinely transient failure is answered by the first or second rebuild, and
  * everything after that is re-asking the same question of the same component.
  *

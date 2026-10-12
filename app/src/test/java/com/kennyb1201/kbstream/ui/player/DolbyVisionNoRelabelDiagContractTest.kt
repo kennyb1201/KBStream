@@ -11,7 +11,7 @@ import org.junit.Test
  * Dolby Vision codec string and strip the RPU/EL + HDR10+ SEI in place, instead
  * of re-advertising the base layer as hvc1.
  *
- * That combination is what Nuvio's `DolbyVisionMatroskaTransformer` plays in
+ * That combination is what the reference transformer plays in
  * `stripRpuOnly` mode: it never relabels (`onDolbyVisionCodecString` returns
  * null, so the declared `dvhe.08.06` stays), it drops the RPU NALs and the
  * enhancement layers, and the MTK decoder configures its DV pipeline for the

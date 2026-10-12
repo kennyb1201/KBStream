@@ -1046,8 +1046,8 @@ object AppPreferences {
     // The DV-box / non-DV-display stall arm. With this on the declared Dolby
     // Vision codec string (e.g. dvhe.08.06) stays on the format and the RPU/EL
     // + HDR10+ SEI are stripped in place, instead of re-advertising the base
-    // layer as hvc1 — the combination Nuvio's DolbyVisionMatroskaTransformer
-    // plays this chipset with (it never relabels). It exists to answer one
+    // layer as hvc1 — the combination the reference transformer plays this
+    // chipset with (it never relabels). It exists to answer one
     // question the field run cannot answer any other way: is the relabel itself
     // what stalls the decoder, or is the codec string irrelevant?
     //

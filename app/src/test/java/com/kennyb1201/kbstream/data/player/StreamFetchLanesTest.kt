@@ -12,7 +12,7 @@ import org.junit.Test
  * onto it, so all parallel reads share a single window: a 67 Mbps 4K remux is
  * beyond what that connection can carry against a distant CDN no matter how
  * fast the line is. Several lanes, each on its own connection pool, is the fix
- * (the shape Nuvio's player uses, summarized from github.com/NuvioMedia/NuvioTV,
+ * (the shape the reference player uses, summarized from github.com/NuvioMedia/NuvioTV,
  * GPL-3.0).
  *
  * The gate matters as much as the lanes: a 1080p stream is nowhere near the

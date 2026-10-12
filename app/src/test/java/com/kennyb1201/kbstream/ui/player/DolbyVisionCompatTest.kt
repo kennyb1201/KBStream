@@ -394,9 +394,9 @@ class DolbyVisionCompatTest {
 
     // ── The RPU-drop arm and the relabel's color hook (permanent APIs) ────
     //
-    // `dropRpuNal` is the Strip All button's future Nuvio-config arm: the RPU
-    // (type 62) goes while the HDR10+ SEI stays — the config Nuvio's "Always
-    // Strip DV" plays on MTK-class hardware. Default false, so every existing
+    // `dropRpuNal` is the Strip All button's future reference-config arm: the
+    // RPU (type 62) goes while the HDR10+ SEI stays — the config the reference
+    // player's "Always Strip DV" plays on MTK-class hardware. Default false, so every existing
     // caller's bytes are unchanged. The relabel's `applyColorInfo` hook defaults
     // to the forced DV_HDR10_COLOR_INFO, with the container's own hdrStaticInfo
     // carried onto it when the container declared one (see dvHdr10ColorInfoFor);
@@ -574,7 +574,7 @@ class DolbyVisionCompatTest {
         // hvc1.2.4.H150.B0 and the HDR10+ SEI stripped still stalled with zero
         // decoder output, and the container's HDR10 static metadata (ST 2086
         // mastering display colour volume / content light level) was the
-        // remaining difference against Nuvio's working config. The relabel
+        // remaining difference against the reference config. The relabel
         // REPLACES the whole color info, so the static metadata has to be
         // re-attached explicitly — under the forced transfer/space/range/
         // bitdepth, never the container's own.

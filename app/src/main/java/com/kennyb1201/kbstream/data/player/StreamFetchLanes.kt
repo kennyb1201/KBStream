@@ -20,8 +20,8 @@ import okhttp3.OkHttpClient
  * The fix is more than one connection: [STREAM_LANES] OkHttp instances, each
  * with its own connection pool and dispatcher, and each reader handed to one of
  * them round-robin. Independent pools are the point — sharing a pool would
- * reuse the same HTTP/2 connection and buy nothing. This is the shape Nuvio's
- * player uses (summarized from github.com/NuvioMedia/NuvioTV, GPL-3.0).
+ * reuse the same HTTP/2 connection and buy nothing. This is the shape the
+ * reference player uses (summarized from github.com/NuvioMedia/NuvioTV, GPL-3.0).
  *
  * Gated deliberately: only a source that is known to be heavy gets lanes. A
  * 1080p stream is nowhere near the single-connection ceiling, and giving it

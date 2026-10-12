@@ -555,8 +555,8 @@ internal object DolbyVisionCompat {
      * are identical with or without it.
      *
      * [dropRpuNal] removes the RPU (type 62) while the caller keeps the HDR10+
-     * SEI — the config Nuvio's "Always Strip DV" (and Kodi) play on this
-     * chipset with Dolby Vision disabled. It leaves the EL (63), the parameter
+     * SEI — the config the reference player's "Always Strip DV" (and Kodi) play
+     * on this chipset with Dolby Vision disabled. It leaves the EL (63), the parameter
      * sets and every other NAL alone. Default false = every existing caller
      * byte-for-byte unchanged.
      */

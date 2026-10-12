@@ -10,7 +10,7 @@ import org.junit.Test
 /**
  * The DV relabel's codec string must come from the stream's own SPS, not from
  * the hardcoded Main10@L5.1 guess. Field: a `dvhe.08.06` file declares High
- * tier, Level 5.0 (`hvc1.2.4.H150.B0` in Nuvio's logcat) while KBStream
+ * tier, Level 5.0 (`hvc1.2.4.H150.B0` in the reference player's logcat) while KBStream
  * advertised `hvc1.2.4.L153.B0` — and the MTK HEVC decoder accepted the first
  * input frame and emitted zero output frames whenever the advertised tier/level
  * disagreed with the SPS.

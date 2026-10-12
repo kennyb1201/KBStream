@@ -451,9 +451,9 @@ private class VideoCompatTrackOutput(
             // Temporary experiment (the diagNoRelabel setting): strip the
             // RPU/EL + HDR10+ SEI exactly as the relabel arm below does, but
             // WITHOUT re-advertising the track as hvc1 — the declared Dolby
-            // Vision codec string (dvhe.08.06) stays on the format. Nuvio's
-            // transformer never relabels: it leaves the declared profile on the
-            // label and drops the metadata, so the MTK decoder configures its
+            // Vision codec string (dvhe.08.06) stays on the format. The
+            // reference transformer never relabels: it leaves the declared
+            // profile on the label and drops the metadata, so the MTK decoder configures its
             // DV pipeline for that profile, receives no RPU, and falls back to
             // the HDR10 base layer. Every KBStream DV arm so far relabeled, so
             // "is the relabel itself what stalls this chipset?" has never been
@@ -488,13 +488,13 @@ private class VideoCompatTrackOutput(
                 // the theory that dropping it left a DV-flagged track with no
                 // DV metadata and the decoder stalled — but that arm was only
                 // ever field-run with the WRONG codec string (the SPS-derived
-                // one landed after it), and Nuvio's "Always Strip DV" plays
-                // this chipset RPU-dropped with a correct codec string. The
+                // one landed after it), and the reference player's "Always
+                // Strip DV" plays this chipset RPU-dropped with a correct codec string. The
                 // relabel drops it too: RPU-dropped + correct codec string is
                 // the combination that has picture — and as of the 2026-10-11
                 // capture the rewritten color info also carries the container's
                 // HDR10 static metadata (see [dvHdr10ColorInfoFor]): every other
-                // visible parameter already matched Nuvio's working config, and
+                // visible parameter already matched the reference config, and
                 // hdrStaticInfo was the remaining difference. The base layer is
                 // standard HDR10; Mode.STRIP_NALS_ONLY isolates this experiment from
                 // transformAnnexB, which rewrites the VPS in-sample.
@@ -879,8 +879,8 @@ private class VideoCompatTrackOutput(
             // field has: the old keep-the-RPU theory here — "a DV-flagged track
             // with no DV metadata stalls the decoder" — was only ever run
             // against the wrong codec string (arm A predates the SPS-derived
-            // one), while Nuvio's Always Strip DV plays this chipset
-            // RPU-dropped with a correct codec string. The `dropRpuNal` arm
+            // one), while the reference player's Always Strip DV plays this
+            // chipset RPU-dropped with a correct codec string. The `dropRpuNal` arm
             // (RPU alone, HDR10+ SEI kept) is a different caller's config and
             // is not passed here.
             //
@@ -893,14 +893,14 @@ private class VideoCompatTrackOutput(
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
-                        pendingBuf, sampleEnd, stripDv = true, // drop RPU/EL, like Nuvio
+                        pendingBuf, sampleEnd, stripDv = true, // drop RPU/EL, like the reference
                         stripHdr10Plus = true,
                         accounting = accounting
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
-                        stripDv = true, // drop RPU/EL, like Nuvio
+                        stripDv = true, // drop RPU/EL, like the reference
                         stripHdr10Plus = true,
                         accounting = accounting
                     )
@@ -1066,10 +1066,10 @@ internal val DV_HDR10_COLOR_INFO: ColorInfo = ColorInfo.Builder()
  * The transfer / space / range / bitdepth are ours to force — they are the
  * values proven correct for a track re-advertised as plain HDR10 HEVC. The
  * static metadata is not: it is the stream's own ST 2086 mastering display
- * colour volume and content light level, and Nuvio's working config on this
+ * colour volume and content light level, and the reference config on this
  * chipset preserves the container's full colorInfo including it. Since the
  * 2026-10-11 field capture had every other visible parameter (RPU dropped,
- * SPS-derived hvc1.2.4.H150.B0, HDR10+ SEI stripped) matching Nuvio and still
+ * SPS-derived hvc1.2.4.H150.B0, HDR10+ SEI stripped) matching it and still
  * stalled with zero decoder output, dropping the static metadata was the
  * remaining difference — a decoder that wants it can accept input and emit no
  * frame. `Format.buildUpon()` carries the field, but the relabel REPLACES the

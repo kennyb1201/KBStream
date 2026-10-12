@@ -17,7 +17,7 @@ import org.junit.Test
  * `transformAnnexB` (which rewrites the VPS in-sample as well) out of the arm
  * is what keeps the field result attributable to the config VPS alone.
  * Dropping the RPU as well as the SEI is
- * what Nuvio's "Always Strip DV" plays this chipset with, and the earlier arm
+ * what the reference player's "Always Strip DV" plays this chipset with, and the earlier arm
  * that kept the RPU only ever ran with the wrong codec string — see the source
  * comment on `Mode.STRIP_NALS_ONLY`.
  *
