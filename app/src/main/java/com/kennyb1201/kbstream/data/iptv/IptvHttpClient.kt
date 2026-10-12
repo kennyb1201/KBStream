@@ -19,6 +19,28 @@ object IptvHttpClient {
     private const val HTTP_NOT_MODIFIED = 304
 
     /**
+     * The longest a single call may take — connect, download, and the parse
+     * that consumes the body.
+     *
+     * The parse is why this is minutes and not seconds: an XMLTV body is read
+     * by the importer AS IT STREAMS, so the call stays open through the
+     * download and every batch insert that follows it. The field device's
+     * "multi-minute download plus a few hundred thousand inserts" is a healthy
+     * import, and a cap sized for a download alone would cut it off mid-import.
+     *
+     * It is not zero, which is what it used to be. `callTimeout(0)` means no
+     * bound at all, and the read window below does not supply one: that fails a
+     * read that STALLS, so a server trickling a byte every couple of minutes
+     * resets it forever while the import never finishes and the socket is never
+     * given up. Twenty minutes is twice the window the background refresh works
+     * inside ([com.kennyb1201.kbstream.work.WorkPolicies.GUIDE_SOURCE_BUDGET_MS],
+     * which is what actually bounds a source within a refresh pass), so no
+     * healthy import is ever cut, while a source that will never finish lets go
+     * of its connection within the same session.
+     */
+    const val CALL_TIMEOUT_MS = 20L * 60L * 1000L
+
+    /**
      * What one guide fetch did.
      *
      * [NotModified] is a first-class outcome rather than an error: the server
@@ -73,7 +95,7 @@ object IptvHttpClient {
             connectTimeout(20, TimeUnit.SECONDS)
             readTimeout(180, TimeUnit.SECONDS)
             writeTimeout(180, TimeUnit.SECONDS)
-            callTimeout(0, TimeUnit.SECONDS)
+            callTimeout(CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             retryOnConnectionFailure(true)
             addInterceptor { chain ->
                 val request = chain.request().newBuilder()

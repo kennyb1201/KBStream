@@ -8,6 +8,8 @@ import androidx.work.WorkerParameters
 import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.work.WorkPolicies
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 
 class EpgRefreshWorker(
     appContext: Context,
@@ -82,8 +84,14 @@ class EpgRefreshWorker(
         val repository = IptvRepository.shared(applicationContext)
         var imported = 0
         epgUrls.forEach { url ->
-            runCatchingCancellable { repository.importGuide(url) }
-                .onSuccess { imported++ }
+            // Bounded per source, so one wedged source cannot spend the pass's
+            // whole window on its own (see
+            // WorkPolicies.GUIDE_SOURCE_BUDGET_MS). A source that runs out of
+            // budget is not a success - it must not write the freshness marker
+            // for a guide it never stored - but it is not the run's failure
+            // either: the sources after it still import.
+            runCatchingCancellable { importWithinBudget(repository, url) }
+                .onSuccess { didImport -> if (didImport) imported++ }
                 .onFailure { error ->
                     if (error is kotlinx.coroutines.CancellationException) throw error
                     Log.w(
@@ -129,6 +137,32 @@ class EpgRefreshWorker(
             .apply()
 
         return Result.success()
+    }
+
+    /**
+     * Imports one guide source, giving it the per-source time budget.
+     *
+     * Returns false when the budget ran out — the caller treats that as a
+     * source that did not import, so the run's freshness marker is still only
+     * written for a guide that really was stored. Only [TimeoutCancellationException]
+     * is absorbed here: a cancellation from WorkManager stopping the job is a
+     * different exception and still propagates, which is what lets the worker
+     * shut the import down cleanly.
+     */
+    private suspend fun importWithinBudget(repository: IptvRepository, url: String): Boolean {
+        try {
+            withTimeout(WorkPolicies.GUIDE_SOURCE_BUDGET_MS) {
+                repository.importGuide(url)
+            }
+            return true
+        } catch (timeout: TimeoutCancellationException) {
+            Log.w(
+                TAG,
+                "GUIDE REFRESH ABANDONED source=${Redaction.url(url)} after " +
+                    "${WorkPolicies.GUIDE_SOURCE_BUDGET_MS / 60_000}min"
+            )
+            return false
+        }
     }
 
     /**

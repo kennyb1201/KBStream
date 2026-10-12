@@ -117,6 +117,31 @@ internal object WorkPolicies {
     const val EPG_MIN_AGE_MS = EpgWindow.REFRESH_INTERVAL_MS - EPG_FRESH_SLACK_MS
 
     /**
+     * How long ONE guide source may take inside a refresh pass.
+     *
+     * A refresh imports every configured source in a row, and the pass runs
+     * inside a job WorkManager stops at around ten minutes — a stop that lands
+     * mid-import, leaves the guide's freshness marker unwritten, and (until the
+     * source was imported at least once, so its validators exist) makes the next
+     * run download the same guide again from the beginning. The budget is what
+     * keeps a single wedged source from spending that window on its own: a
+     * source still going after this long is abandoned, the sources after it
+     * still get their turn, and the pass reaches the end and records the result
+     * it did get.
+     *
+     * Eight minutes rather than ten: the thing being protected is the pass, and
+     * one source that used the entire window would leave nothing for the run to
+     * finish with. The in-app import is not on this clock at all — that one is
+     * watched by the user, who can see its progress and wait.
+     *
+     * Kept below the transport's own whole-call cap
+     * ([com.kennyb1201.kbstream.data.iptv.IptvHttpClient.CALL_TIMEOUT_MS]), so
+     * the attempt this abandons is cancelled by policy here rather than by a
+     * socket timeout deeper down.
+     */
+    const val GUIDE_SOURCE_BUDGET_MS = 8L * 60L * 1000L
+
+    /**
      * The guide refresh's two pre-flight gates, in the order they matter.
      *
      * Freshness first: it is the answer that ends the attempt, and a guide
