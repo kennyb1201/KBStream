@@ -366,11 +366,14 @@ build_expat() {
 
 build_fribidi() {
   local abi="$1" prefix="$2" cross="$3"
-  # Per-ABI build directory here too: meson reconfigures a build dir it is
-  # handed again, and the objects already in it are the first ABI's.
-  local build="${SRC_DIR}/fribidi/_build-${abi}"
+  # Per-ABI build directory here too: meson reconfigures a build directory it
+  # is handed a second time, and the objects already in it are the first ABI's.
+  # The source directory is named explicitly -- a single positional argument is
+  # whichever of the two meson can find a meson.build in, and the old form only
+  # worked because it ran from inside the fribidi tree.
+  local build; build="$(build_dir "$abi" fribidi)"
   run_logged "fribidi setup ${abi}" \
-    meson setup "$build" --cross-file "$cross" --prefix="$prefix" \
+    meson setup "$build" "${SRC_DIR}/fribidi" --cross-file "$cross" --prefix="$prefix" \
     --default-library=static --buildtype=release \
     -Ddocs=false -Dtests=false -Dbin=false
   run_logged "fribidi build ${abi}" ninja -C "$build" -j"$JOBS"
