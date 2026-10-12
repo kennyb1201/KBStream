@@ -94,8 +94,9 @@ internal enum class Hdr10BaseHandling { PASSTHROUGH, RELABEL_ONLY, STRIP }
  *  - [Hdr10BaseHandling.RELABEL_ONLY]: a DV-capable box on a NON-DV display in
  *    Auto. The platform pipeline black-screens the sink, and rewriting the
  *    VPS/SPS is what stalls MTK-class decoders, so the base layer is
- *    re-advertised as plain HEVC and the DV RPU/EL and the HDR10+ SEI are
- *    removed in place — the parameter sets are never touched (see
+ *    re-advertised as plain HEVC, the codec config's VPS is rewritten to a
+ *    clean single-layer set, and the DV RPU/EL and the HDR10+ SEI are removed
+ *    in place — no SPS/PPS and no in-sample parameter set is touched (see
  *    `Mode.STRIP_NALS_ONLY`).
  *  - [Hdr10BaseHandling.STRIP]: no DV decoder on the box, or the explicit
  *    "Strip All" override — strip the RPU/EL/HDR10+ NALs to HDR10 as before.
@@ -473,9 +474,12 @@ private class VideoCompatTrackOutput(
             }
             if (handling == Hdr10BaseHandling.RELABEL_ONLY) {
                 // DV-decoder box, non-DV display (Auto): re-advertise the HDR10
-                // base layer as plain HEVC and strip the DV RPU/EL and the
-                // HDR10+ SEI in place — never rewrite the VPS/SPS/PPS, neither
-                // the init data nor in-sample. Mutating the parameter sets is
+                // base layer as plain HEVC, rewrite the codec config's VPS to a
+                // clean single-layer parameter set — the decoder configured from
+                // a DV-flagged VPS and then waited for the RPUs this drops —
+                // and strip the DV RPU/EL and the HDR10+ SEI in place. The
+                // SPS/PPS are not rewritten and neither is any in-sample
+                // parameter set. Mutating the in-sample sets is
                 // what stalls MTK-class decoders (field: Strip All = configure
                 // OK, zero frames); leaving the in-band DV RPU / HDR10+ SEI in
                 // the stream is what makes the decoder re-emit its output
@@ -504,7 +508,8 @@ private class VideoCompatTrackOutput(
                 // identifies which step threw. The success log is emitted only
                 // AFTER the build, so it can never announce a relabel that did
                 // not happen.
-                val relabeled = relabelDvFormat(format, relabelCodec)
+                val relabel = relabelTargetFor(format)
+                val relabeled = relabelDvFormat(relabel.format, relabelCodec)
                 if (relabeled != null) {
                     // Reported from the format that was actually built, not from
                     // the source: the field test reads this to tell whether the
@@ -517,13 +522,16 @@ private class VideoCompatTrackOutput(
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
                             "display: re-advertising as hvc1 $relabelCodec " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
-                            "stripped, RPU dropped, VPS/SPS untouched " +
+                            "stripped, RPU dropped, vpsRewritten=${relabel.vpsRewritten} " +
+                            "(VPS rewritten in the codec config, SPS/PPS untouched) " +
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
                     delegate.format(relabeled.format)
-                    // Bit-exact relabel plus in-place metadata NAL removal:
-                    // VPS/SPS/PPS are never rewritten (see Mode.STRIP_NALS_ONLY).
+                    // The relabel is bit-exact and the removal is in-place:
+                    // the only parameter set touched is the codec config's VPS,
+                    // rewritten by relabelTargetFor above (see
+                    // Mode.STRIP_NALS_ONLY for the sample side).
                     mode = Mode.STRIP_NALS_ONLY
                 } else {
                     mode = Mode.NORMAL
@@ -535,13 +543,15 @@ private class VideoCompatTrackOutput(
                 // DV-decoder hardware: the mutating strip (VPS rewrite + RPU
                 // removal) is field-dead here — zero-frame stall, proven twice.
                 // P4/P8 take the working path instead: relabel to hvc1/HDR10,
-                // strip the HDR10+ SEI and the RPU/EL, leave VPS/SPS/PPS
-                // untouched. Same relabel the Auto non-DV-display branch above
+                // strip the HDR10+ SEI and the RPU/EL, and rewrite the codec
+                // config's VPS to a clean single-layer set (the SPS/PPS stay as
+                // they are). Same relabel the Auto non-DV-display branch above
                 // uses; this is where "Strip All" — and the 0x80001000 rescue,
                 // which forces Strip All for the session — lands on such a box.
                 // Boxes WITHOUT a DV decoder keep the mutating strip below: it
                 // is the tested working path there, so it is left alone.
-                val relabeled = relabelDvFormat(format, relabelCodec)
+                val relabel = relabelTargetFor(format)
+                val relabeled = relabelDvFormat(relabel.format, relabelCodec)
                 if (relabeled != null) {
                     val hdrStatic =
                         if (relabeled.format.colorInfo?.hdrStaticInfo != null) "preserved"
@@ -551,7 +561,8 @@ private class VideoCompatTrackOutput(
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV-decoder " +
                             "hardware: re-advertising as hvc1 $relabelCodec " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
-                            "stripped, RPU dropped, VPS/SPS untouched " +
+                            "stripped, RPU dropped, vpsRewritten=${relabel.vpsRewritten} " +
+                            "(VPS rewritten in the codec config, SPS/PPS untouched) " +
                             "(the mutating strip is field-dead here)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
@@ -1084,6 +1095,42 @@ internal enum class RelabelAttempt { FULL, MINIMAL }
 /** A relabeled format plus the attempt that built it, for the success log. */
 internal class RelabelOutcome(val format: Format, val attempt: RelabelAttempt)
 
+/** What the relabel is handed: the source format (or its VPS-rewritten form)
+ * plus whether that rewrite happened, for the success log. */
+internal class RelabelTarget(val format: Format, val vpsRewritten: Boolean)
+
+/**
+ * The format the relabel is built from: [format] with the Dolby Vision VPS
+ * rewritten to a clean single-layer parameter set in its codec private data.
+ *
+ * The relabel itself only re-advertises the track (codec string, mime, color
+ * info) and leaves the codec config bit-exact, so a DV-flagged VPS rides on to
+ * the decoder that way - and a decoder which configured from it then waits for
+ * the RPUs the relabel drops, which is the zero-output stall this exists to
+ * close. [DolbyVisionCompat.rewriteVpsInInitData] rewrites the VPS alone: the
+ * SPS/PPS stay byte-identical (the advertised codec string is derived from
+ * that SPS) and so does every sample.
+ *
+ * Every step is contained: a format that cannot be rebuilt is handed to the
+ * relabel unchanged with `vpsRewritten=false`, exactly as before this existed,
+ * rather than failing a load that must never fail.
+ */
+internal fun relabelTargetFor(
+    format: Format,
+    rewriteVps: (List<ByteArray>) -> List<ByteArray> = {
+        DolbyVisionCompat.rewriteVpsInInitData(it)
+    }
+): RelabelTarget {
+    if (format.initializationData.isEmpty()) return RelabelTarget(format, false)
+    val rewritten = runCatching { rewriteVps(format.initializationData) }.getOrNull()
+        ?: return RelabelTarget(format, false)
+    if (rewritten === format.initializationData) return RelabelTarget(format, false)
+    val patched = runCatching {
+        format.buildUpon().setInitializationData(rewritten).build()
+    }.getOrNull() ?: return RelabelTarget(format, false)
+    return RelabelTarget(patched, true)
+}
+
 /**
  * The minimal relabel: codec string and mime only — no badging label, no color
  * metadata. It is the fallback when the full relabel's construction throws, so
@@ -1103,8 +1150,9 @@ internal fun relabelDvMinimal(format: Format, rewriteCodec: String): Format {
  * declared DV codec kept on the label (so the UI can still badge the source
  * profile) and the forced HDR10 color info attached — with the source format's
  * hdrStaticInfo carried over when the container declared it (see
- * [dvHdr10ColorInfoFor]). Init data / VPS-SPS-PPS are never touched, so every
- * sample stays bit-exact.
+ * [dvHdr10ColorInfoFor]). The construction never touches samples, and the codec
+ * config it is handed is whatever the caller prepared — see [relabelTargetFor],
+ * which is where the relabel path's VPS rewrite happens.
  *
  * [applyColorInfo] is the color-info step, injectable so a unit test can drive
  * the throwing path this hardening exists for.

@@ -8,10 +8,15 @@ import org.junit.Test
 
 /**
  * The relabel-only experiment (DV-decoder box, non-DV display, Auto) must strip
- * the DV RPU/EL and the HDR10+ SEI in place while NEVER rewriting the
- * VPS/SPS/PPS — neither the init data nor in-sample. That isolation is the
- * experiment's load-bearing property: `transformAnnexB` rewrites the VPS
- * in-sample and would void the result. Dropping the RPU as well as the SEI is
+ * the DV RPU/EL and the HDR10+ SEI in place, rewrite the Dolby Vision VPS in
+ * the codec private data, and leave every other parameter set alone. The VPS
+ * rewrite is the step after the RPU drop: a decoder that configured from a
+ * DV-flagged VPS then waits for metadata that never arrives, which is the
+ * zero-output stall, and that rewrite used to be unreachable for MKV, whose
+ * codec config is not framed the way the MP4 path assumed. Keeping
+ * `transformAnnexB` (which rewrites the VPS in-sample as well) out of the arm
+ * is what keeps the field result attributable to the config VPS alone.
+ * Dropping the RPU as well as the SEI is
  * what Nuvio's "Always Strip DV" plays this chipset with, and the earlier arm
  * that kept the RPU only ever ran with the wrong codec string — see the source
  * comment on `Mode.STRIP_NALS_ONLY`.
@@ -48,12 +53,14 @@ class DolbyVisionRelabelNalsStripContractTest {
      *
      * The codec string handed to the relabel is the SPS-derived one when the
      * track's parameter sets parse (see hevcCodecFromInitData) and rewriteCodec
-     * only as the fallback, so the variable at both sites is `relabelCodec`.
+     * only as the fallback, so the variable at both sites is `relabelCodec`;
+     * the format is the VPS-rewritten one from relabelTargetFor.
      * The pin is on the call and the arguments that must be identical at both
      * sites, not on one line's spelling. A site that stopped going through
      * `relabelDvFormat` still fails, and both sites are counted independently.
      */
-    private val relabelCall = Regex("relabelDvFormat\\(\\s*format,\\s*relabelCodec\\b")
+    private val relabelCall =
+        Regex("relabelDvFormat\\(\\s*relabel\\.format,\\s*relabelCodec\\b")
 
     /** The `RELABEL_ONLY` branch body, up to the strip path's log line. */
     private fun relabelBranch(): String {
@@ -78,15 +85,26 @@ class DolbyVisionRelabelNalsStripContractTest {
     }
 
     @Test
-    fun `the relabel branch never rewrites the parameter sets`() {
+    fun `the relabel branch rewrites the codec config VPS and no other parameter set`() {
         val branch = relabelBranch()
-        assertFalse(
-            "the relabel branch must not touch init data",
-            branch.contains("setInitializationData")
+        assertTrue(
+            "the relabel must be built from the VPS-rewritten format — a DV-flagged VPS " +
+                "left in the codec config is the stall this step closes",
+            branch.contains("relabelTargetFor(format)")
+        )
+        assertTrue(
+            "and the relabel itself must be built from that format",
+            relabelCall.containsMatchIn(branch)
         )
         assertFalse(
-            "the relabel branch must not rewrite the VPS/SPS init data",
-            branch.contains("rewriteInitData")
+            "the mutating strip's config rewrite takes the SPS with it, so the relabel " +
+                "may not be routed through it",
+            branch.contains("rewriteInitData(")
+        )
+        assertTrue(
+            "the field run reads vpsRewritten off the line to tell a rewritten config " +
+                "from one that was never touched",
+            branch.contains("vpsRewritten=\${relabel.vpsRewritten}")
         )
     }
 
@@ -179,11 +197,19 @@ class DolbyVisionRelabelNalsStripContractTest {
         )
         assertTrue(
             "the reroute's relabel must carry the SPS-derived codec string",
-            reroute.contains("relabelDvFormat(format, relabelCodec)")
+            reroute.contains("relabelDvFormat(relabel.format, relabelCodec)")
+        )
+        assertTrue(
+            "and be built from the VPS-rewritten format, exactly like the Auto branch",
+            reroute.contains("relabelTargetFor(format)")
+        )
+        assertTrue(
+            "and report the VPS rewrite, so both relabel logs can be compared",
+            reroute.contains("vpsRewritten=\${relabel.vpsRewritten}")
         )
         assertFalse(
-            "the reroute must never rewrite the parameter sets",
-            reroute.contains("setInitializationData") || reroute.contains("rewriteInitData")
+            "the mutating strip's rewrite (which also takes the SPS) stays out of the reroute",
+            reroute.contains("rewriteInitData(")
         )
     }
 

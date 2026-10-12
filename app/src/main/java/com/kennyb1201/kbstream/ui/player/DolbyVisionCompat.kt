@@ -1578,6 +1578,164 @@ internal object DolbyVisionCompat {
         return if (any) out else initData
     }
 
+    /**
+     * Rewrites the VPS, and only the VPS, inside codec-private
+     * (initialization data) buffers, returning new buffers (or the same list
+     * when nothing changed).
+     *
+     * [rewriteInitDataVps] is the mutating strip's version of this: it takes
+     * the SPS with it. The relabel path must not, because the SPS is what its
+     * advertised codec string is derived from (see hevcCodecFromInitData) and
+     * because the experiment it runs has to be attributable to the VPS alone.
+     *
+     * A Dolby Vision VPS left in the codec config is a stall in its own right:
+     * the decoder configures from a DV-flagged VPS, then receives samples whose
+     * RPU NALs were all dropped, and waits for Dolby Vision metadata that never
+     * arrives. That rewrite used to be reachable only for the MP4/fMP4 hvcC
+     * record; Matroska's codec private data carries the parameter sets
+     * length-delimited instead, which is the framing
+     * [rewriteVpsInLengthDelimited] handles. All three framings Media3 can
+     * deliver are covered — length-delimited, hvcC, Annex-B — because which one
+     * a given MKV hands over is the container's choice, not ours, and the
+     * rewrite has to reach whichever it is. Nothing here logs the outcome: the
+     * caller reports whether the config actually changed.
+     */
+    fun rewriteVpsInInitData(initData: List<ByteArray>): List<ByteArray> {
+        var any = false
+        val out = ArrayList<ByteArray>(initData.size)
+        for (buf in initData) {
+            val rewritten = rewriteVpsInLengthDelimited(buf)
+                ?: rewriteVpsInHvcCRecord(buf)
+                ?: rewriteVpsInAnnexBBuffer(buf, rewriteSps = false)
+            if (rewritten != null) {
+                out.add(rewritten)
+                any = true
+            } else {
+                out.add(buf)
+            }
+        }
+        return if (any) out else initData
+    }
+
+    /**
+     * Length-delimited framing: one 4-byte big-endian length prefix per NAL,
+     * which is how an MKV's parameter sets reach the player. Rewrites that
+     * buffer's VPS NALs, re-emitting each one with its updated length prefix.
+     * Returns a new buffer, or null when the buffer does not parse end to end,
+     * holds no VPS, or its VPS was already clean - in all three cases the
+     * caller must keep the original bytes.
+     */
+    private fun rewriteVpsInLengthDelimited(buf: ByteArray): ByteArray? {
+        val fieldLen = 4
+        if (buf.size <= fieldLen || !parsesAsLengthDelimited(buf, fieldLen)) return null
+        val out = ByteArrayOutputStream(buf.size)
+        var read = 0
+        var changed = false
+        while (read + fieldLen <= buf.size) {
+            val nal = readLength(buf, read, fieldLen)
+            val payload = read + fieldLen
+            val rewritten = rewriteVpsNal(buf, payload, payload + nal)
+            if (rewritten != null) {
+                writeLengthTo(out, rewritten.size + 2, fieldLen)
+                out.write(buf, payload, 2)
+                out.write(rewritten, 0, rewritten.size)
+                changed = true
+            } else {
+                out.write(buf, read, fieldLen + nal)
+            }
+            read += fieldLen + nal
+        }
+        return if (changed) out.toByteArray() else null
+    }
+
+    /**
+     * The same rewrite inside an hvcC (HEVCDecoderConfigurationRecord) buffer -
+     * the form Media3's MP4/fMP4 and Matroska paths hand over for containers
+     * that carry a configuration record. Only the VPS arrays are touched: the
+     * record header's general profile_tier_level and the SPS/PPS arrays are
+     * copied verbatim. Returns a new record, or null when the buffer is not
+     * one, is malformed, or nothing changed.
+     */
+    private fun rewriteVpsInHvcCRecord(buf: ByteArray): ByteArray? {
+        if (!isHvcCRecord(buf)) return null
+        val numArrays = buf[22].toInt() and 0xFF
+        if (numArrays == 0) return null
+        val out = ByteArrayOutputStream(buf.size + 64)
+        out.write(buf, 0, 23)
+        var pos = 23
+        var arrays = 0
+        var changed = false
+        while (arrays < numArrays && pos + 3 <= buf.size) {
+            val arrayHeader = buf[pos].toInt() and 0xFF
+            val nalType = arrayHeader and 0x3F
+            pos++
+            val numNalus = readLength(buf, pos, 2)
+            pos += 2
+            if (numNalus <= 0) return null
+            out.write(arrayHeader)
+            out.write((numNalus ushr 8) and 0xFF)
+            out.write(numNalus and 0xFF)
+            for (i in 0 until numNalus) {
+                if (pos + 2 > buf.size) return null
+                val nalLen = readLength(buf, pos, 2)
+                pos += 2
+                if (pos + nalLen > buf.size || nalLen < 2) return null
+                val rewritten = if (nalType == NAL_VPS) rewriteVpsNal(buf, pos, pos + nalLen) else null
+                val newLen = if (rewritten != null) rewritten.size + 2 else nalLen
+                out.write((newLen ushr 8) and 0xFF)
+                out.write(newLen and 0xFF)
+                if (rewritten != null) {
+                    out.write(buf, pos, 2)
+                    out.write(rewritten, 0, rewritten.size)
+                    changed = true
+                } else {
+                    out.write(buf, pos, nalLen)
+                }
+                pos += nalLen
+            }
+            arrays++
+        }
+        if (arrays != numArrays || pos != buf.size) return null
+        return if (changed) out.toByteArray() else null
+    }
+
+    /**
+     * True when [buf] is a whole run of [fieldLen]-byte length-prefixed NALs
+     * that ends exactly at its last byte - the only shape the framing rewrite
+     * may touch. A buffer that does not parse is kept byte-exact.
+     */
+    private fun parsesAsLengthDelimited(buf: ByteArray, fieldLen: Int): Boolean {
+        var p = 0
+        var nals = 0
+        while (p + fieldLen <= buf.size) {
+            val nal = readLength(buf, p, fieldLen)
+            if (nal <= 0 || p + fieldLen + nal > buf.size) return false
+            p += fieldLen + nal
+            nals++
+        }
+        return nals > 0 && p == buf.size
+    }
+
+    /**
+     * The rewritten RBSP of the NAL spanning [from, to) when that NAL is a VPS
+     * that actually needed the rewrite, or null. The 2-byte NAL header is left
+     * to the caller: [rewriteVpsToHdr10] works on the payload after it.
+     */
+    private fun rewriteVpsNal(buf: ByteArray, from: Int, to: Int): ByteArray? {
+        if (to - from < 2) return null
+        if (((buf[from].toInt() and 0xFF) ushr 1) and 0x3F != NAL_VPS) return null
+        return when (val res = rewriteVpsToHdr10(buf, from + 2, to)) {
+            is VpsRewriteOutcome.Rewritten -> res.rbsp
+            // NoDvExtension / Failed: the original bytes are the answer.
+            else -> null
+        }
+    }
+
+    /** Big-endian length prefix out to a stream, the inverse of [readLength]. */
+    private fun writeLengthTo(out: ByteArrayOutputStream, value: Int, lengthBytes: Int) {
+        for (i in lengthBytes - 1 downTo 0) out.write((value ushr (8 * i)) and 0xFF)
+    }
+
     /** Dispatches one codec-private buffer to the hvcC or Annex-B rewrite path. */
     private fun rewriteCodecConfig(buf: ByteArray): ByteArray? {
         if (buf.size < 5) return null
@@ -1656,8 +1814,13 @@ internal object DolbyVisionCompat {
         return result
     }
 
-    /** Returns a copy of an Annex-B buffer with VPS/SPS NALs rewritten, or null if unchanged. */
-    private fun rewriteVpsInAnnexBBuffer(buf: ByteArray): ByteArray? {
+    /**
+     * Returns a copy of an Annex-B buffer with VPS NALs rewritten, or null if
+     * unchanged. [rewriteSps] additionally rewrites the SPS — the mutating
+     * strip's shape. The relabel path passes false: the codec string it
+     * advertises is derived from that SPS, so it has to stay bit-exact.
+     */
+    private fun rewriteVpsInAnnexBBuffer(buf: ByteArray, rewriteSps: Boolean = true): ByteArray? {
         if (buf.size < 5) return null
         val out = ByteArray(buf.size)
         var write = 0
@@ -1698,7 +1861,7 @@ internal object DolbyVisionCompat {
                         )
                         VpsRewriteOutcome.NoDvExtension -> Unit
                     }
-                    NAL_SPS -> when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
+                    NAL_SPS -> if (rewriteSps) when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
                         is SpsRewriteOutcome.Rewritten -> {
                             Log.i(
                                 "PLAYER_DV",

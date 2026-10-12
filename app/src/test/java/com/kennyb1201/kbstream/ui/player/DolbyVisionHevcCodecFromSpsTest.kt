@@ -213,9 +213,10 @@ class DolbyVisionHevcCodecFromSpsTest {
             factory.contains("val relabelCodec = spsCodec ?: rewriteCodec")
         )
         assertEquals(
-            "both relabel call sites must hand the derived string to relabelDvFormat",
+            "both relabel call sites must hand the derived string to relabelDvFormat, and " +
+                "the format they hand it is the VPS-rewritten one",
             2,
-            count(factory, "relabelDvFormat(format, relabelCodec)")
+            count(factory, "relabelDvFormat(relabel.format, relabelCodec)")
         )
         assertEquals(
             "and both re-advertising logs must name codecSrc=sps|fallback",
