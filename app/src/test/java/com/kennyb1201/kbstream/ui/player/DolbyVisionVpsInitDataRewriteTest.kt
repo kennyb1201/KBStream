@@ -271,9 +271,91 @@ class DolbyVisionVpsInitDataRewriteTest {
         // rather than a bad picture.
         val format = dvFormat(listOf(lengthDelimited(dvVps, sps, pps)))
 
-        val target = relabelTargetFor(format) { throw IllegalStateException("boom") }
+        // Named, not a trailing lambda: skipVpsRewrite is the last parameter on
+        // purpose (the gate is the call site's own decision), so the rewrite has
+        // to be addressed by name.
+        val target = relabelTargetFor(
+            format,
+            rewriteVps = { throw IllegalStateException("boom") }
+        )
 
         assertFalse(target.vpsRewritten)
         assertSame(format, target.format)
+    }
+
+    // ── behavioral: Nuvio parity (2026-10-13 green screen) ───────────────
+    //
+    // With libdovi stripping the samples, rewriting the codec config's VPS on
+    // top of that strip green-screened the field run at 62 kbps — the decoder
+    // rendered its first frame and then a solid green field. Nuvio's
+    // stripRpuOnly never touches the codec config, so the relabel path hands
+    // over the config byte-identical while the library is present, and keeps
+    // the rewrite for the Kotlin stripper that needs it (the arm above).
+
+    @Test
+    fun `skipVpsRewrite hands the config over byte-identical and reports nothing rewritten`() {
+        val format = dvFormat(listOf(lengthDelimited(dvVps, sps, pps)))
+        val init = format.initializationData.single()
+
+        val target = relabelTargetFor(format, skipVpsRewrite = true)
+
+        assertFalse(
+            "the field log reads this as skipped(libdovi), so it may not claim a rewrite",
+            target.vpsRewritten
+        )
+        assertSame(
+            "the relabel must be built from the source format itself, not a rebuilt copy",
+            format,
+            target.format
+        )
+        assertArrayEquals(
+            "VPS, SPS and PPS all reach the relabel exactly as they arrived — that is " +
+                "the Nuvio shape, and what the green-screen arm was missing",
+            init,
+            target.format.initializationData.single()
+        )
+        assertEquals(
+            "the relabel still re-advertises the track's own declarations",
+            "dvhe.08.06",
+            target.format.codecs
+        )
+    }
+
+    @Test
+    fun `skipVpsRewrite never invokes the rewrite at all`() {
+        // Not "the rewrite was called and returned the same bytes": the whole
+        // point is that the library's strip is the only thing that ran.
+        val format = dvFormat(listOf(lengthDelimited(dvVps, sps, pps)))
+        var consulted = false
+
+        val target = relabelTargetFor(
+            format,
+            rewriteVps = { consulted = true; it },
+            skipVpsRewrite = true
+        )
+
+        assertFalse("a skipped rewrite may not even be entered", consulted)
+        assertSame(format, target.format)
+    }
+
+    @Test
+    fun `the log's VPS verdict separates a skipped rewrite from one that was never needed`() {
+        // "vpsRewritten=false" alone cannot be read off a field log: a P8 track
+        // usually has no VPS extension to rewrite and a contained failure lands
+        // on the same value, so the verdict is a separate field.
+        assertEquals(
+            "skipped(libdovi)",
+            vpsRewriteOutcome(skippedForLibdovi = true, rewritten = false)
+        )
+        assertEquals("applied", vpsRewriteOutcome(skippedForLibdovi = false, rewritten = true))
+        assertEquals(
+            "not-needed",
+            vpsRewriteOutcome(skippedForLibdovi = false, rewritten = false)
+        )
+        assertEquals(
+            "skipping outranks whatever the rewrite would have reported",
+            "skipped(libdovi)",
+            vpsRewriteOutcome(skippedForLibdovi = true, rewritten = true)
+        )
     }
 }

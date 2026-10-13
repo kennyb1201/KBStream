@@ -8,14 +8,22 @@ import org.junit.Test
 
 /**
  * The relabel-only experiment (DV-decoder box, non-DV display, Auto) must strip
- * the DV RPU/EL and the HDR10+ SEI in place, rewrite the Dolby Vision VPS in
- * the codec private data, and leave every other parameter set alone. The VPS
- * rewrite is the step after the RPU drop: a decoder that configured from a
- * DV-flagged VPS then waits for metadata that never arrives, which is the
- * zero-output stall, and that rewrite used to be unreachable for MKV, whose
- * codec config is not framed the way the MP4 path assumed. Keeping
+ * the DV RPU/EL and the HDR10+ SEI in place and leave every other parameter set
+ * alone. The VPS rewrite is the step after the RPU drop: a decoder that
+ * configured from a DV-flagged VPS then waits for metadata that never arrives,
+ * which is the zero-output stall, and that rewrite used to be unreachable for
+ * MKV, whose codec config is not framed the way the MP4 path assumed. Keeping
  * `transformAnnexB` (which rewrites the VPS in-sample as well) out of the arm
  * is what keeps the field result attributable to the config VPS alone.
+ *
+ * As of the 2026-10-13 field run (Fire TV Stick 4K Max, non-DV TV, Auto AND
+ * Strip All: first frame rendered, then a solid green picture at 62 kbps) the
+ * config rewrite is conditional instead of unconditional — it is exactly the
+ * difference from Nuvio's stripRpuOnly, which never touches the codec config.
+ * The two relabel sites therefore pass `skipVpsRewrite = DoviBridge.available`
+ * and the mutating strip below keeps its rewrite, because that path's samples
+ * are stripped by the Kotlin parser the rewrite was written for. The gate and
+ * the log field are pinned here.
  * Dropping the RPU as well as the SEI is
  * what the reference player's "Always Strip DV" plays this chipset with, and the earlier arm
  * that kept the RPU only ever ran with the wrong codec string — see the source
@@ -85,12 +93,17 @@ class DolbyVisionRelabelNalsStripContractTest {
     }
 
     @Test
-    fun `the relabel branch rewrites the codec config VPS and no other parameter set`() {
+    fun `the relabel branch gates the codec config VPS rewrite on libdovi`() {
         val branch = relabelBranch()
         assertTrue(
-            "the relabel must be built from the VPS-rewritten format — a DV-flagged VPS " +
-                "left in the codec config is the stall this step closes",
-            branch.contains("relabelTargetFor(format)")
+            "the relabel must be built through relabelTargetFor — the libdovi verdict has " +
+                "to reach the relabel from somewhere, and this is where",
+            branch.contains("relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)")
+        )
+        assertTrue(
+            "and that gate is the bridge's own availability, not a copy of its state — a " +
+                "build with libdovi must not rewrite the config, and one without it must",
+            branch.contains("val skipVpsRewrite = DoviBridge.available")
         )
         assertTrue(
             "and the relabel itself must be built from that format",
@@ -200,8 +213,12 @@ class DolbyVisionRelabelNalsStripContractTest {
             reroute.contains("relabelDvFormat(relabel.format, relabelCodec)")
         )
         assertTrue(
-            "and be built from the VPS-rewritten format, exactly like the Auto branch",
-            reroute.contains("relabelTargetFor(format)")
+            "and be built through the same gated relabelTargetFor as the Auto branch",
+            reroute.contains("relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)")
+        )
+        assertTrue(
+            "with this branch reading the same libdovi gate off the bridge",
+            reroute.contains("val skipVpsRewrite = DoviBridge.available")
         )
         assertTrue(
             "and report the VPS rewrite, so both relabel logs can be compared",
@@ -307,6 +324,44 @@ class DolbyVisionRelabelNalsStripContractTest {
         assertTrue(
             "and still strips the RPU/EL",
             mutatingStrip.contains("mode = Mode.STRIPPING")
+        )
+        // ...and that rewrite is deliberately NOT gated on libdovi. These
+        // samples are stripped by the Kotlin parser — transformAnnexB and
+        // transformLengthDelimited never consult the bridge — so the config
+        // rewrite is exactly the arm it was written for: it closes that
+        // stripper's zero-output stall. (The two relabel sites, whose samples
+        // ARE libdovi's, are the ones that skip it.)
+        assertFalse(
+            "the Kotlin-stripped path must keep its VPS rewrite",
+            mutatingStrip.contains("skipVpsRewrite")
+        )
+    }
+
+    // ── the 2026-10-13 green-screen arm (Nuvio parity) ────────────────
+    //
+    // Both field-green paths — Auto (the RELABEL_ONLY branch) and Strip All
+    // (the DV-hardware reroute) — stripped with libdovi and then rewrote the
+    // codec config's VPS, which is where they differed from Nuvio. Every
+    // relabel site is now gated on the library, and the field log names which
+    // of the two ran.
+
+    @Test
+    fun `every relabel site skips the config VPS rewrite while libdovi is present`() {
+        assertEquals(
+            "both relabel sites — Auto's RELABEL_ONLY branch and the DV-hardware reroute — " +
+                "must pass the gate",
+            2,
+            count(source, "relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)")
+        )
+        assertEquals(
+            "and each must read it off the bridge itself",
+            2,
+            count(source, "val skipVpsRewrite = DoviBridge.available")
+        )
+        assertEquals(
+            "so a field log says which of the two paths the VPS took",
+            2,
+            count(source, "vpsRewrite=\${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)}")
         )
     }
 

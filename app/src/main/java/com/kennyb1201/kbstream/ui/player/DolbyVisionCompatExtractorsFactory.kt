@@ -469,7 +469,18 @@ private class VideoCompatTrackOutput(
                 // identifies which step threw. The success log is emitted only
                 // AFTER the build, so it can never announce a relabel that did
                 // not happen.
-                val relabel = relabelTargetFor(format)
+                // The config's VPS is rewritten only while the app's own
+                // stripper is the one removing the samples. libdovi is the
+                // stripper whenever it is in the build (see
+                // Mode.STRIP_NALS_ONLY), and the 2026-10-13 field run on a
+                // Fire TV Stick 4K Max + non-DV TV is what this arm exists for:
+                // on Auto the relabel plus libdovi's strip but with the
+                // rewritten VPS in the codec config came up as a solid green
+                // picture at 62 kbps, where Nuvio — which never touches the
+                // codec config — renders. The Kotlin fallback keeps the
+                // rewrite, because the rewrite is what closes its stall.
+                val skipVpsRewrite = DoviBridge.available
+                val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)
                 val relabeled = relabelDvFormat(relabel.format, relabelCodec)
                 if (relabeled != null) {
                     // Reported from the format that was actually built, not from
@@ -483,8 +494,10 @@ private class VideoCompatTrackOutput(
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
                             "display: re-advertising as hvc1 $relabelCodec " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
-                            "stripped, RPU dropped, vpsRewritten=${relabel.vpsRewritten} " +
-                            "(VPS rewritten in the codec config, SPS/PPS untouched) " +
+                            "stripped, RPU dropped, " +
+                            "vpsRewrite=${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)} " +
+                            "vpsRewritten=${relabel.vpsRewritten} " +
+                            "(config VPS only, SPS/PPS untouched) " +
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
@@ -511,7 +524,15 @@ private class VideoCompatTrackOutput(
                 // which forces Strip All for the session — lands on such a box.
                 // Boxes WITHOUT a DV decoder keep the mutating strip below: it
                 // is the tested working path there, so it is left alone.
-                val relabel = relabelTargetFor(format)
+                // Same libdovi gate as the Auto branch above: this is where
+                // "Strip All" (and the 0x80001000 rescue that forces it) lands
+                // on a DV-capable box, the strip itself is libdovi's, and the
+                // rewritten config VPS is what green-screened that same field
+                // run at 62 kbps. The mutating strip below keeps its rewrite —
+                // that path's samples are stripped by the Kotlin parser, which
+                // is the stall the rewrite closes.
+                val skipVpsRewrite = DoviBridge.available
+                val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)
                 val relabeled = relabelDvFormat(relabel.format, relabelCodec)
                 if (relabeled != null) {
                     val hdrStatic =
@@ -522,8 +543,10 @@ private class VideoCompatTrackOutput(
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV-decoder " +
                             "hardware: re-advertising as hvc1 $relabelCodec " +
                             "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
-                            "stripped, RPU dropped, vpsRewritten=${relabel.vpsRewritten} " +
-                            "(VPS rewritten in the codec config, SPS/PPS untouched) " +
+                            "stripped, RPU dropped, " +
+                            "vpsRewrite=${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)} " +
+                            "vpsRewritten=${relabel.vpsRewritten} " +
+                            "(config VPS only, SPS/PPS untouched) " +
                             "(the mutating strip is field-dead here)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
@@ -1085,6 +1108,22 @@ internal class RelabelOutcome(val format: Format, val attempt: RelabelAttempt)
 internal class RelabelTarget(val format: Format, val vpsRewritten: Boolean)
 
 /**
+ * The relabel log's verdict on the codec config's VPS, for the field log.
+ *
+ * Three outcomes, not two, because `vpsRewritten=false` on its own cannot be
+ * read as "the rewrite was skipped": a P8 track usually carries no VPS
+ * extension at all, and a rewrite that threw is contained to the same value
+ * (see [relabelTargetFor]). A log that called either of those "skipped(libdovi)"
+ * would send a field run hunting for libdovi in a build that has it, or the
+ * other way round — the 2026-10-13 capture is read off exactly this field.
+ */
+internal fun vpsRewriteOutcome(skippedForLibdovi: Boolean, rewritten: Boolean): String = when {
+    skippedForLibdovi -> "skipped(libdovi)"
+    rewritten -> "applied"
+    else -> "not-needed"
+}
+
+/**
  * The format the relabel is built from: [format] with the Dolby Vision VPS
  * rewritten to a clean single-layer parameter set in its codec private data.
  *
@@ -1099,14 +1138,33 @@ internal class RelabelTarget(val format: Format, val vpsRewritten: Boolean)
  * Every step is contained: a format that cannot be rebuilt is handed to the
  * relabel unchanged with `vpsRewritten=false`, exactly as before this existed,
  * rather than failing a load that must never fail.
+ *
+ * [skipVpsRewrite] is the Nuvio-parity arm: it is what every caller whose
+ * samples are stripped by libdovi passes (see the two relabel call sites and
+ * [Mode.STRIP_NALS_ONLY]). Nuvio's `stripRpuOnly` strips the samples and leaves
+ * the codec config alone, and the reference transformer it is modelled on does
+ * the same. The 2026-10-13 field run is why that matters — libdovi stripped the
+ * RPU/EL/HDR10+ and the decoder rendered its first frame, but the config's
+ * rewritten VPS on top of that strip produced a solid green picture at 62 kbps.
+ * The rewrite is not wrong for every case: it is what closes the zero-output
+ * stall of the app's OWN sample stripper, so it is the default behaviour here
+ * and every caller on the Kotlin fallback keeps it. Skipping it hands the
+ * caller the source format itself, which is what makes the config
+ * byte-identical rather than "rebuilt with the same bytes".
  */
 internal fun relabelTargetFor(
     format: Format,
     rewriteVps: (List<ByteArray>) -> List<ByteArray> = {
         DolbyVisionCompat.rewriteVpsInInitData(it)
-    }
+    },
+    skipVpsRewrite: Boolean = false
 ): RelabelTarget {
     if (format.initializationData.isEmpty()) return RelabelTarget(format, false)
+    if (skipVpsRewrite) {
+        // Nuvio parity: the VPS/SPS/PPS stay byte-identical and only the samples
+        // are stripped. The relabel still re-advertises the track as hvc1.
+        return RelabelTarget(format, false)
+    }
     val rewritten = runCatching { rewriteVps(format.initializationData) }.getOrNull()
         ?: return RelabelTarget(format, false)
     if (rewritten === format.initializationData) return RelabelTarget(format, false)
