@@ -111,7 +111,14 @@ class BrowseChipMenuFocusContractTest {
                 "this grid, and it is the action that has to hand focus to the " +
                 "chip taking a hidden one's place before that chip leaves",
             grid.contains("val chipKey = BrowseChipVisibility.key(categoryKey, entry.name)") &&
-                grid.contains("val chipFocusRequester = chipFocusRequesters.getOrPut(chipKey)") &&
+                // The registry lookup is wrapped in a remember, because lint's
+                // RememberInComposition rejects a FocusRequester built during
+                // composition outside one - and a memoising map is not
+                // something it can see through. The registry is still the
+                // caller's, still keyed by the chip's own identity, and still
+                // the one instance per chip the Hide action names.
+                grid.contains("val chipFocusRequester = remember(chipKey) {") &&
+                grid.contains("chipFocusRequesters.getOrPut(chipKey) { FocusRequester() }") &&
                 grid.contains("{ handler(categoryKey, entry, chipFocusRequester) }") &&
                 grid.contains("chipFocusRequester = chipFocusRequester,")
         )

@@ -758,8 +758,14 @@ private fun SubmenuChipGrid(
             // a hidden one's place before that chip leaves (see
             // BrowseChipVisibility.successorKey).
             val chipKey = BrowseChipVisibility.key(categoryKey, entry.name)
-            val chipFocusRequester = chipFocusRequesters.getOrPut(chipKey) {
-                FocusRequester()
+            // The registry lookup itself is REMEMBERED, not just the requester
+            // inside it: creating a FocusRequester during composition without
+            // remember is what lint's RememberInComposition rule rejects, and a
+            // memoising map is not something it can see through. Behaviour is
+            // unchanged - the registry is handed the one instance per chip, so
+            // the menu's Hide can still name a chip it is not looking at.
+            val chipFocusRequester = remember(chipKey) {
+                chipFocusRequesters.getOrPut(chipKey) { FocusRequester() }
             }
 
             SearchChip(

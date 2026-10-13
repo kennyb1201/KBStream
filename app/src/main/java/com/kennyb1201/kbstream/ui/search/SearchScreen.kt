@@ -451,10 +451,16 @@ fun SearchScreen(
                                 // local remember, so the menu's Hide can reach
                                 // a tile it is not looking at (see
                                 // titleTileFocusRequesters).
-                                val requester = titleTileFocusRequesters.getOrPut(
-                                    "${result.type}:${result.id}"
-                                ) {
-                                    FocusRequester()
+                                val tileKey = "${result.type}:${result.id}"
+                                // Remembered, for the same reason the browse
+                                // grid's registry lookup is: a FocusRequester
+                                // built during composition outside a remember
+                                // block is what lint's RememberInComposition
+                                // rule rejects (see BrowseBrowser).
+                                val requester = remember(tileKey) {
+                                    titleTileFocusRequesters.getOrPut(tileKey) {
+                                        FocusRequester()
+                                    }
                                 }
 
                                 TitlePosterTile(
