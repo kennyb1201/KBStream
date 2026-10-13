@@ -9,30 +9,39 @@ import org.junit.Test
 /**
  * The MPV engine's surface cycle, and the `fast` profile added beside it.
  *
- * Field problem: the engine rendered on NO video output — audio played, the
- * track list and `video-format` both populated, and no frame ever reached the
- * Surface. The cause was in the cycle, not in the resolver:
- * `attachSurface()` attached the surface and then set `vo` as a PROPERTY, to
- * undo the `vo=null` that `surfaceDestroyed()` set. A runtime `vo` change
- * re-initializes mpv's video output, and the surface had just been attached to
- * the output that was already open — so the replacement starts without one and
- * every decoded frame is discarded. The working reference configuration never
- * sets `vo` at runtime at all: it is an option, applied once before `init()`,
- * and the surface cycle only attaches and detaches the surface.
+ * Field history, because this file has had to change sides twice:
  *
- * Three things have to hold together, which is why they are pinned in one place:
+ *  - the engine rendered on NO video output (audio over black) because the
+ *    surface was attached before it had a native window — `initialize()`
+ *    attached from `isValid`, which is true first. The fix for that is
+ *    `surfaceCreated()` as the one attach point, and it stands;
+ *  - the next run also stopped touching `vo` on the cycle, on the theory that
+ *    the runtime re-initialization was the black screen. That theory was wrong:
+ *    with the output never nulled and never re-opened, mpv never re-initializes
+ *    its video output against the newly attached surface. The output still
+ *    points at the destroyed one (or at nothing), the decoder renders
+ *    ("Got First Frame Render") and every frame goes nowhere
+ *    (`updateAcquireFence: Did not find frame`) — the same black screen with
+ *    audio, on every output, which is what the field test reported;
+ *  - so the cycle is the reference player's (`BaseMPVView` in mpv-android, the
+ *    view Nuvio's working engine is built on), which is four calls in a fixed
+ *    order.
  *
- *  1. `applyOptions()` sets `vo` as an option before `init()`, from the
- *     device-resolved output — the one and only place it is ever set;
- *  2. `attachSurface()` attaches the surface and says nothing about the output;
- *  3. `surfaceDestroyed()` drops forced rendering and detaches, and does NOT
- *     null the VO — nulling it is what forced the re-init in the first place.
+ * What has to hold together, and is pinned here:
  *
- * The one remaining `vo` property set in the class is [MpvPlayerView.release]'s:
- * it nulls the output and destroys the instance in the same breath, so nothing
- * can re-initialize against it, and a session that starts again starts with
- * [MpvPlayerView.applyOptions] on a fresh instance. That is why the rule the
- * tests state is "set once per instance, and never on a surface cycle".
+ *  1. `applyOptions()` sets `vo` as an OPTION before `init()`, from the
+ *     device-resolved output — the session's one configuration of the output;
+ *  2. `surfaceCreated()` attaches the surface and then re-opens `vo` as a
+ *     PROPERTY from that same resolution — which is what re-initializes the
+ *     output against the surface that was just attached;
+ *  3. `surfaceDestroyed()` nulls `vo`, drops forced rendering and detaches, in
+ *     that order: the output is torn down while its surface still exists;
+ *  4. `release()`'s final `vo=null` before `destroy()` stays, so a dead instance
+ *     cannot keep an output alive, and a session that starts again starts with
+ *     `applyOptions()` on a fresh instance.
+ *
+ * Only the OPTION is "set once per instance"; the property is cycled with the
+ * surface, which is the distinction the earlier pin had backwards.
  *
  * `profile=fast` is pinned here too: it was added for the same boxes (a 4K
  * release on this class of hardware is GPU-bound), and it is only compatible
@@ -57,9 +66,11 @@ class MpvSurfaceCycleContractTest {
 
     /**
      * The same source with every comment line dropped, so a rule can be stated
-     * about the CODE. It matters here: the comments that explain this fix quote
-     * the very calls that had to go, and asserting against prose would fail on
-     * the documentation of the bug while the bug itself went unchecked.
+     * about the CODE. It matters here on both sides of the ledger: the class
+     * comment names the calls the cycle makes (`vo=null`, `force-window=no`,
+     * detachSurface), and the attach helper's explains which one it does NOT
+     * make — asserting against prose would grade the documentation instead of
+     * the code, in whichever direction the prose happened to point.
      */
     private val code: String by lazy {
         view.lines()
@@ -74,30 +85,15 @@ class MpvSurfaceCycleContractTest {
     fun `the video output is an option set once, before init`() {
         val applications = Regex("MPVLib\\.setOptionString\\(\"vo\"[^)]*\\)").findAll(code).toList()
         assertEquals(
-            "the VO must be set exactly once in the whole view - a second set is the " +
-                "re-initialization that loses the surface",
+            "the OPTION is the session's single configuration of the output: a second " +
+                "setOptionString would be a second mode decision, and it is the property that " +
+                "the surface cycle owns",
             1,
             applications.size
         )
         assertTrue(
             "and it must take the device-resolved output, not a pinned one",
             applications.single().value.contains("vo.vo")
-        )
-        // Exactly one property set is left in the file, and it is the last thing
-        // release() does before destroying the instance: a dead instance cannot
-        // re-initialize anything, so that one is teardown, not part of a cycle.
-        // Everywhere else - above all on attach - a `vo` set is the bug.
-        assertEquals(
-            "the only `vo` property set in the view is release()'s final teardown",
-            1,
-            Regex("setPropertyString\\(\"vo\"").findAll(code).count()
-        )
-        val release = code.substringAfter("fun release()")
-            .substringBefore("// --- Playback control")
-        assertTrue(
-            "and it has to be paired with destroy(), which is what makes it final",
-            release.contains("setPropertyString(\"vo\", \"null\")") &&
-                release.contains("MPVLib.destroy()")
         )
         // Options only take as options before init(): after that the same call is
         // a runtime change, which is the whole distinction this fix rests on. The
@@ -130,16 +126,14 @@ class MpvSurfaceCycleContractTest {
                 "native window exists, which is the dead-window bug: $initialize",
             initialize.contains("attachSurface()") || initialize.contains("isValid")
         )
-        val created = code.substringAfter("override fun surfaceCreated(holder: SurfaceHolder) {")
-            .substringBefore("\n    }")
         assertTrue(
             "surfaceCreated is the one point where the surface is really backed, so it " +
                 "is where the attach happens",
-            created.contains("attachSurface()")
+            surfaceCreated().contains("attachSurface()")
         )
         assertTrue(
             "and a load that was waiting for the surface starts from there too",
-            created.contains("startPendingLoad()")
+            surfaceCreated().contains("startPendingLoad()")
         )
     }
 
@@ -155,31 +149,76 @@ class MpvSurfaceCycleContractTest {
             "and forced rendering with it, or mpv decides it has no window to draw into",
             attach.contains("MPVLib.setOptionString(\"force-window\", \"yes\")")
         )
-        // The regression itself: a `vo` set here (property OR option) re-inits the
-        // output after the surface went to the old one.
+        // The output property belongs to surfaceCreated, one line after this
+        // helper returns - on the attach helper itself it would re-initialize
+        // the output in the same breath as the attach, out of the reference
+        // player's order (and, before the surface-timing fix, on a surface mpv
+        // had no window for).
         assertFalse(
-            "no video output is set on attach",
+            "the attach helper attaches and nothing else - the `vo` re-open is the callback's",
             attach.contains("videoOutput()") || attach.contains("\"vo\"")
         )
     }
 
     @Test
-    fun `teardown detaches the surface without nulling the video output`() {
-        val destroyed = code.substringAfter("override fun surfaceDestroyed(holder: SurfaceHolder)")
-            .substringBefore("private fun attachSurface()")
+    fun `the surface cycle tears the video output down and re-opens it`() {
+        // The reference player's cycle, both halves. This file has pinned each of
+        // them wrong in turn: without the tear-down the output keeps a surface
+        // that is gone, and without the re-open it never picks up the new one -
+        // either way mpv decodes and presents nothing, which is the black screen
+        // with audio the field test reports.
+        val destroyed = surfaceDestroyed()
+        val nullVo = destroyed.indexOf("setPropertyString(\"vo\", \"null\")")
+        val forceOff = destroyed.indexOf("setPropertyString(\"force-window\", \"no\")")
+        val detach = destroyed.indexOf("MPVLib.detachSurface()")
         assertTrue(
-            "forced rendering is dropped while there is no surface",
-            destroyed.contains("MPVLib.setPropertyString(\"force-window\", \"no\")")
+            "teardown must tear the video output down, not just detach the surface",
+            nullVo >= 0
+        )
+        assertTrue("and drop forced rendering", forceOff >= 0)
+        assertTrue("and detach the surface", detach >= 0)
+        assertTrue(
+            "in the reference player's order: the output goes first, while its surface still " +
+                "exists (vo=$nullVo forceWindow=$forceOff detach=$detach)",
+            nullVo < forceOff && forceOff < detach
+        )
+
+        val created = surfaceCreated()
+        val attach = created.indexOf("attachSurface()")
+        val vo = created.indexOf("setPropertyString(\"vo\", videoOutput().vo)")
+        assertTrue("the surface is attached first", attach >= 0)
+        assertTrue(
+            "and the output re-opened after it, or mpv never re-initializes against the new " +
+                "surface and every frame goes to the dead one - the call whose absence is the " +
+                "black screen (attach=$attach vo=$vo)",
+            vo >= 0
+        )
+        assertTrue("attach, then the output property", attach < vo)
+        assertTrue(
+            "re-opened from the resolution the session configured, not a pinned string",
+            created.contains("videoOutput().vo") && !created.contains("\"gpu\"")
+        )
+    }
+
+    @Test
+    fun `release still nulls the output before destroying the instance`() {
+        // Not part of the cycle: a dead instance cannot re-initialize against a
+        // null output, and a session that starts again re-applies applyOptions()
+        // on a fresh instance.
+        val release = code.substringAfter("fun release()")
+            .substringBefore("fun togglePause()")
+        assertTrue(
+            "the final `vo=null` stays",
+            release.contains("setPropertyString(\"vo\", \"null\")")
         )
         assertTrue(
-            "and the surface is detached",
-            destroyed.contains("MPVLib.detachSurface()")
+            "and has to be paired with destroy(), which is what makes it final",
+            release.contains("MPVLib.destroy()")
         )
-        // `vo=null` is what made the re-attach set a VO at all: with it gone, the
-        // option set before init() survives the destroy/create cycle by itself.
-        assertFalse(
-            "the VO survives a surface destroy/create - it must not be torn down here",
-            destroyed.contains("\"vo\"") || destroyed.contains("\"null\"")
+        assertTrue(
+            "in the reference player's teardown order - output, then surface",
+            release.indexOf("setPropertyString(\"vo\", \"null\")") <
+                release.indexOf("MPVLib.detachSurface()")
         )
     }
 
@@ -198,6 +237,16 @@ class MpvSurfaceCycleContractTest {
                 applyOptions.indexOf("MPVLib.setOptionString(\"vo\"")
         )
     }
+
+    /** The whole callback, braces included: the cycle's own body. */
+    private fun surfaceCreated(): String =
+        code.substringAfter("override fun surfaceCreated(holder: SurfaceHolder) {")
+            .substringBefore("\n    }")
+
+    /** As above; it runs to the attach helper, which is the next declaration. */
+    private fun surfaceDestroyed(): String =
+        code.substringAfter("override fun surfaceDestroyed(holder: SurfaceHolder)")
+            .substringBefore("private fun attachSurface()")
 
     private fun read(relative: String): String {
         val file = File(findSourceRoot(), relative)

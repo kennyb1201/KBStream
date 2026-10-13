@@ -227,25 +227,33 @@ class MpvVideoOutputTest {
     }
 
     @Test
-    fun `the resolved output is applied once and never restored at runtime`() {
-        // This used to pin the opposite: the VO put back on a surface re-attach
-        // had to be the session's own rather than a hardcoded "gpu". The right
-        // answer turned out to be that nothing puts a VO back at all - a runtime
-        // `vo` change re-initializes mpv's video output, and the surface had just
-        // been attached to the one that was already open, so the replacement
-        // starts without a surface and every frame is thrown away (audio plays,
-        // the track list populates). That was the black screen on every VO, not
-        // just the GPU path, which is why the shared resolution is now read by
-        // applyOptions alone.
-        // The negative half of this rule - that no surface cycle restores a VO
-        // from the resolution - is MpvSurfaceCycleContractTest's, which reads the
-        // source with its comments stripped: the fix's own documentation quotes
-        // the removed `setPropertyString("vo", …)` call to explain it, so a raw
-        // `contains` here would match prose rather than code.
+    fun `the resolved output is opened as the session option and re-opened from the same resolution`() {
+        // This test has been through both answers. It first pinned that the VO
+        // put back on a surface re-attach had to be the session's own rather
+        // than a hardcoded "gpu" - then, after the surface-timing fix, that
+        // nothing put a VO back at all, on the theory that the runtime
+        // re-initialization was the black screen. That theory was wrong: with
+        // the output never nulled and never re-opened, mpv never re-initializes
+        // against the newly attached surface, which is the same audio-over-black
+        // picture by a different route. The reference player (BaseMPVView in
+        // mpv-android) tears the output down on teardown and re-opens it on
+        // attach, and both halves read this one resolution - what is pinned here
+        // is that the re-open is the SAME resolution the option opened on, so a
+        // surface cycle can never become a second, silent mode change.
+        // The exact call order of the cycle is MpvSurfaceCycleContractTest's.
         assertTrue(
             "the resolution is applied once, as the option applyOptions opens on",
             view.contains("val vo = videoOutput()") &&
                 view.contains("MPVLib.setOptionString(\"vo\", vo.vo)")
+        )
+        assertTrue(
+            "and the surface cycle re-opens that same resolution as a property",
+            view.contains("MPVLib.setPropertyString(\"vo\", videoOutput().vo)")
+        )
+        assertFalse(
+            "never a pinned output: the cycle re-opens what this device resolved",
+            view.contains("setPropertyString(\"vo\", \"gpu\")") ||
+                view.contains("setPropertyString(\"vo\", \"mediacodec_embed\")")
         )
     }
 

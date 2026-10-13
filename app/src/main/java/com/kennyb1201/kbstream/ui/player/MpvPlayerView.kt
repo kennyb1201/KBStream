@@ -26,16 +26,18 @@ import kotlin.math.pow
  *    pre-initialize; afterwards the same call is a runtime property change);
  *  - property observers are registered before init() too, matching the
  *    reference mpv-android player;
- *  - the video surface is attached from the SurfaceHolder callback, and mpv is
- *    told `force-window=yes` only while that surface exists — this is what
- *    makes mpv render frames and OSD into it, and what has to be undone
- *    (`force-window=no`, detachSurface) before the surface goes away, or the
- *    renderer keeps using a dead window. The VO is deliberately NOT part of
- *    that cycle: it is chosen once, as an option before init(), and never
- *    touched again. The one this class used to do — `setPropertyString("vo", …)`
- *    right after attachSurface(), to undo a `vo=null` on teardown — is what
- *    black-screened the engine on every VO (see [attachSurface] and
- *    [surfaceDestroyed]);
+ *  - the video surface is attached from the SurfaceHolder callback, and the
+ *    video output is cycled with it in the reference player's order
+ *    (`BaseMPVView` in mpv-android, the view Nuvio's working engine is built
+ *    on): attach the surface, `force-window=yes`, then `vo=<resolved output>` —
+ *    and on teardown `vo=null`, `force-window=no`, detachSurface, in that
+ *    order. `vo=null` tears the output down while its surface still exists,
+ *    and the property set on the next attach is what re-initializes the output
+ *    against the new one; with neither, mpv keeps decoding while every frame
+ *    goes to a surface that is gone — audio over a black screen, the frame
+ *    count still climbing (see [surfaceCreated] and [surfaceDestroyed]). The
+ *    `vo` OPTION in [applyOptions] is still what chooses the output, once,
+ *    before init();
  *  - loadfile() is deferred until the surface is up. Loading first can leave
  *    mpv with a video track it never gets an output for, which on this stack
  *    means audio playing over a black screen.
@@ -879,11 +881,12 @@ class MpvPlayerView @JvmOverloads constructor(
      * The video output this session opens with — the stored mode resolved
      * against this device (see [MpvVideoOutput]).
      *
-     * Read ONCE per session, by [applyOptions] before init() — after that mpv
-     * owns the value and the surface cycle must not read it back. Re-setting
-     * `vo` at runtime is a video-output re-initialization, and doing it in
-     * [attachSurface] cost every frame the engine produced (see there); there is
-     * also nothing to restore, because nothing in this class unsets it.
+     * Two readers, one value. [applyOptions] sets it as the OPTION before init()
+     * — the session's configuration — and [surfaceCreated] re-opens it as a
+     * PROPERTY on every attach, because [surfaceDestroyed] nulls the output on
+     * the way out. Both are the same resolution on purpose: a cycle that
+     * re-opened a different output than the session configured would be a
+     * second, silent mode change.
      */
     private fun videoOutput(): MpvVideoOutput.Settings = MpvVideoOutput.resolve(
         AppPreferences.getMpvVoMode(context),
@@ -1226,6 +1229,17 @@ class MpvPlayerView @JvmOverloads constructor(
     override fun surfaceCreated(holder: SurfaceHolder) {
         if (!initialized || released) return
         attachSurface()
+        // Re-enable the video output on the surface that was just attached.
+        //
+        // This is the reference player's order: attach, ask for forced
+        // rendering, then set `vo`. Teardown nulled the output, so this set is
+        // what re-initializes it against the new surface — without it the
+        // output still points at the surface that was destroyed (or at
+        // nothing), and mpv decodes with nowhere to present: the track list and
+        // `video-format` populate, the decoder renders, and every frame is
+        // thrown away, which reads as "audio plays over a black screen" rather
+        // than "playback failed".
+        runCatching { MPVLib.setPropertyString("vo", videoOutput().vo) }
         if (pendingLoad != null) startPendingLoad()
     }
 
@@ -1237,19 +1251,14 @@ class MpvPlayerView @JvmOverloads constructor(
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
         if (!initialized || released) return
-        // Order matters: drop forced rendering, and only then let the surface
-        // go.
-        //
-        // The VO is deliberately NOT nulled here. `vo=null` tears the video
-        // output down, so putting the picture back meant setting `vo` again on
-        // the next attach - a runtime video-output re-initialization on a
-        // surface that had just been handed to mpv, which is the black screen
-        // this cycle is named for: mpv keeps decoding (the track list and
-        // `video-format` both populate) and throws every frame away, so it reads
-        // as "audio plays over a black screen" rather than "playback failed".
-        // The `vo` option set before init() survives a surface destroy/create by
-        // itself; only the attachment is this half of the cycle.
+        // Order matters, and it is the reference player's: null the VO first —
+        // which tears the video output down while its surface still exists —
+        // then drop forced rendering, then let the surface go. Detaching with
+        // the output still open is what leaves the next attach with nothing to
+        // re-initialize against, and the surface it would have used is already
+        // dead by then.
         runCatching {
+            MPVLib.setPropertyString("vo", "null")
             MPVLib.setPropertyString("force-window", "no")
             MPVLib.detachSurface()
         }
@@ -1259,21 +1268,13 @@ class MpvPlayerView @JvmOverloads constructor(
         val surface = holder.surface ?: return
         runCatching {
             MPVLib.attachSurface(surface)
-            // Nothing else goes here.
-            //
-            // This used to finish with `setPropertyString("vo", videoOutput().vo)`
-            // to undo the `vo=null` that teardown used to set, and that line was
-            // the engine's black screen on EVERY video output. A runtime `vo`
-            // change re-initializes mpv's video output, and the surface had just
-            // been attached to the output that was already open: the replacement
-            // starts without one, so mpv decodes and presents nothing - audio
-            // plays, the track list and `video-format` populate, no frame ever
-            // reaches the Surface. The VO is an option, set once before init()
-            // in [applyOptions], and the surface cycle only attaches and detaches
-            // the surface (the reference Android player's working configuration
-            // never sets `vo` at runtime at all). Removing the pair is the fix;
-            // restoring `vo=null` on teardown or a `vo` property set here brings
-            // the black screen straight back.
+            // The `vo` reset deliberately does NOT live here: this helper only
+            // attaches the surface and asks for forced rendering, so the order
+            // stays legible as the reference player's — attach, force-window,
+            // then the output property, which [surfaceCreated] sets once this
+            // returns. Tearing the output down and re-opening it are the two
+            // halves of the same cycle and are pinned together in
+            // MpvSurfaceCycleContractTest.
             //
             // Forces mpv to render video/subtitles into our surface even when
             // it would otherwise decide it has no window to draw into.
