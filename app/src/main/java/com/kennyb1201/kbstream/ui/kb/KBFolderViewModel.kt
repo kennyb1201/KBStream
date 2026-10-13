@@ -470,10 +470,34 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun load(folder: KBFolder, showAllTab: Boolean) {
+    /**
+     * Re-runs this folder's load, for the folder screen's RETRY.
+     *
+     * Neither existing entry point can be used for it: [loadById] answers
+     * immediately for a folder it already has, and [load] treats "same folder,
+     * not loading" as nothing to do - which is exactly the state a failed load
+     * leaves behind (the folder is set, its rails are not). A retry that went
+     * through either would be a button that does nothing, which is the defect
+     * the retry exists to fix; only a folder that never resolved at all takes
+     * the route's own resolve again.
+     */
+    fun retry(folderId: String) {
+        val folder = _state.value.folder
+        val folderKey = folder?.let { it.id ?: it.title }
+        // The route names a folder by id when it has one and by title when it
+        // does not (the same pair loadById's own guard reads), so either match
+        // means this is the folder the screen is showing.
+        if (folder != null && (folderKey == folderId || folder.title == folderId)) {
+            load(folder, folder.showAllTab, force = true)
+        } else {
+            loadById(folderId)
+        }
+    }
+
+    fun load(folder: KBFolder, showAllTab: Boolean, force: Boolean = false) {
         val folderKey = folder.id ?: folder.title
         val isSameRoute = currentFolderId == folderKey && _state.value.folder === folder
-        if (isSameRoute && !_state.value.isLoading) return
+        if (!force && isSameRoute && !_state.value.isLoading) return
 
         currentFolderId = folderKey
         tmdbRailSources.clear()

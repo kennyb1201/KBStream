@@ -80,7 +80,10 @@ internal class MpvSettingsSection(
         streamLabel = ui.label("", topMarginDp = 2).also { column.addView(it) }
 
         // ── VIDEO ──────────────────────────────────────────────────────
-        column.addView(ui.header("VIDEO", topMarginDp = 14))
+        // 16, the beat every other section header in both player panels uses:
+        // at 14 the VIDEO header sat 2dp closer to the pill grid above it than
+        // STREAM's own header did to the panel top.
+        column.addView(ui.header("VIDEO", topMarginDp = 16))
         column.addView(ui.label("Aspect ratio", topMarginDp = 6))
         ui.addPillGrid(
             column,

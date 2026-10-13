@@ -80,6 +80,31 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="open-vidhub" />
         </intent>
+        <!--
+             Every app the viewer can open, for Settings' "choose custom app"
+             picker (ExternalPlayer.allApps).
+
+             The same Android 11+ rule as everything above: an app that this
+             manifest does not declare is invisible to queryIntentActivities, so
+             a picker of "all installed apps" is exactly as long as what is
+             declared here. Both launcher categories are declared because a TV
+             build normally registers only the leanback one - that is the shape
+             of the case the picker exists for (a Play Store TV build of a
+             player that declares no video VIEW filter, so no probe can find
+             it).
+
+             The launcher categories rather than QUERY_ALL_PACKAGES: it needs no
+             permission, Play does not restrict it, and an app nobody can open
+             from the launcher is not one anybody can use as a player.
+        -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+        </intent>
     </queries>
 
     <uses-feature

@@ -67,6 +67,80 @@ object ExternalPlayer {
     )
 
     /**
+     * Packages that answer the video probe without being video players.
+     *
+     * A file manager registers `ACTION_VIEW` for every file type there is, the
+     * video wildcard included, so it matches a video probe by construction and
+     * turned up in the external-player picker as an app to hand a title to.
+     * Picking it handed the stream to a file browser.
+     *
+     * The list is exact because the general rule ([FILE_MANAGER_LABEL_KEYWORDS])
+     * cannot cover every one of them: "File Manager +", "CX File Explorer" and
+     * "ES File Explorer" name themselves, but a manager is free to call itself
+     * anything. Add reported packages here.
+     */
+    private val FILE_MANAGER_BLOCKLIST = setOf(
+        "com.marc.files",                 // File Manager +
+        "com.alphainventor.filemanager",  // File Manager
+        "com.cx.fileexplorer",            // CX File Explorer
+        "com.estrongs.android.pop",       // ES File Explorer
+        // Files by Google: registered for every file type too, and its own
+        // label ("Files") is only one word, so the keyword rule below catches it
+        // as well - it is here because a launcher may localize that label.
+        "com.google.android.apps.nbu.files"
+    )
+
+    /**
+     * What a file manager calls itself, matched case-insensitively against the
+     * resolved label. The general half of the filter: any current or future
+     * manager whose own name says what it is is dropped without needing an
+     * entry in the blocklist.
+     */
+    private val FILE_MANAGER_LABEL_KEYWORDS = listOf(
+        "file manager", "file explorer", "files"
+    )
+
+    /**
+     * Real players, which the label rule must never drop.
+     *
+     * The escape hatch the keyword list needs: a player is free to carry a name
+     * the rule would otherwise read as a manager's (a build badged "… Files"),
+     * and removing a player the viewer can actually play with is a worse
+     * failure than listing one entry too many. The probe found these through a
+     * video MIME filter, which is the evidence that they are players - the
+     * label is only a heuristic on top of it.
+     */
+    private val KNOWN_VIDEO_PLAYERS = setOf(
+        "org.videolan.vlc",              // VLC
+        "com.mxtech.videoplayer.ad",     // MX Player
+        "com.mxtech.videoplayer.pro",    // MX Player Pro
+        "org.xbmc.kodi",                 // Kodi
+        "com.brouken.player",            // Just Player
+        "com.vimu.player",               // Vimu
+        "com.plexapp.android",           // Plex
+        "org.jellyfin.androidtv",        // Jellyfin (TV)
+        "org.jellyfin.mobile",           // Jellyfin (mobile)
+        "com.archos.mediacenter.video"   // Archos Video Player
+    )
+
+    /**
+     * True when a probe match is a file manager rather than a video player.
+     *
+     * The blocklist is checked first and is not escapable - a package named
+     * here is not a player, whatever it is called. The label rule is applied
+     * to everything else, minus [KNOWN_VIDEO_PLAYERS], which is checked before
+     * it because a manager's own name can be anything.
+     *
+     * Pure, so the rule is pinned by a unit test instead of by a device with
+     * four file managers installed.
+     */
+    internal fun isFileManager(packageName: String, label: String): Boolean {
+        if (packageName in FILE_MANAGER_BLOCKLIST) return true
+        if (packageName in KNOWN_VIDEO_PLAYERS) return false
+        return FILE_MANAGER_LABEL_KEYWORDS.any { label.contains(it, ignoreCase = true) }
+    }
+
+    /**
      * A player that is reachable only through its own URL scheme.
      *
      * [probe] is the exact request URI from the player's own integration docs,
@@ -152,7 +226,14 @@ object ExternalPlayer {
             matches.forEach { resolve ->
                 val pkg = resolve.activityInfo?.packageName ?: return@forEach
                 if (pkg == context.packageName) return@forEach
-                remember(pkg, labelFor(resolve, pm), scheme = null)
+                val label = labelFor(resolve, pm)
+                // A file manager answers this probe for every file type it
+                // indexes (they all register `*/*`), which is how one came to
+                // be offered as a player. The scheme probe below is not filtered
+                // the same way: a private URL scheme is not something a file
+                // manager registers.
+                if (isFileManager(pkg, label)) return@forEach
+                remember(pkg, label, scheme = null)
             }
         }
 
@@ -169,7 +250,110 @@ object ExternalPlayer {
         return found.values.sortedBy { it.label.lowercase() }
     }
 
-    /** A resolved activity's own label, falling back to its package name. */
+    /**
+     * Every installed app the viewer could open, TV and phone alike: what the
+     * "choose custom app" picker lists.
+     *
+     * [installed] only finds apps that ANSWER a video request, which is exactly
+     * what a TV build of a player may not do. VidHub is the case that raised
+     * this: the phone APK declares the `ACTION_VIEW` video filter and was found,
+     * while the Play Store TV APK - same app, different manifest - declares
+     * none, so no probe of any width could ever see it and the viewer had no way
+     * to say "use this one". This is that way.
+     *
+     * "Has a launcher entry" is the honest definition of an app someone can
+     * pick, and it is also the cheap one: it needs no `QUERY_ALL_PACKAGES`
+     * (Play-restricted), only the LAUNCHER / LEANBACK_LAUNCHER declarations in
+     * the manifest, and a player nobody can open is not one anybody can use.
+     * Both categories are queried because a TV build usually registers only the
+     * leanback one.
+     *
+     * Ourselves and label-less stubs are dropped by the same rules the probe
+     * uses; unlike the probe, nothing here is filtered by [isFileManager] - this
+     * list is "any app", and a pick is the viewer's to make.
+     */
+    fun allApps(context: Context): List<Installed> {
+        val pm = context.packageManager
+        val found = LinkedHashMap<String, Installed>()
+        APP_CHOICE_CATEGORIES.forEach { category ->
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(category)
+            val matches = runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0L))
+                } else {
+                    @Suppress("DEPRECATION")
+                    pm.queryIntentActivities(intent, 0)
+                }
+            }.getOrNull().orEmpty()
+
+            matches.forEach { resolve ->
+                val info = resolve.activityInfo ?: return@forEach
+                val pkg = info.packageName
+                if (pkg == context.packageName) return@forEach
+                if (found.containsKey(pkg)) return@forEach
+                val label = appLabel(info.applicationInfo, pm, resolve, pkg)
+                if (isStubLabel(pkg, label)) return@forEach
+                found[pkg] = Installed(pkg, label)
+            }
+        }
+        return found.values.sortedBy { it.label.lowercase() }
+    }
+
+    /**
+     * The app the viewer picked by hand, or null when none is set or the pick is
+     * no longer installed.
+     *
+     * Stored separately from the probe's pick on purpose: clearing a custom
+     * choice has to fall back to detection, not forget both. A package that has
+     * since been uninstalled resolves to null, which is the whole rollback - the
+     * probe takes over again with no prompt and no dead entry in Settings.
+     */
+    private fun customPlayer(context: Context): Installed? {
+        val pkg = AppPreferences.getCustomExternalPlayerPackage(context) ?: return null
+        val pm = context.packageManager
+        // getApplicationInfo, not getLaunchIntentForPackage: the pick is the
+        // viewer's, and a chosen app with no launcher entry is still one they
+        // can expect to be used (getLaunchIntentForPackage answers null for it).
+        val info = runCatching { pm.getApplicationInfo(pkg, 0) }.getOrNull() ?: return null
+        val label = AppPreferences.getCustomExternalPlayerLabel(context)
+            ?: appLabel(info, pm, resolve = null, packageName = pkg)
+        return Installed(pkg, label)
+    }
+
+    /**
+     * The launcher categories [allApps] asks for: the phone one and the TV one.
+     * A TV build usually registers only the leanback category, so leaving that
+     * one out would lose exactly the app the picker exists for.
+     */
+    private val APP_CHOICE_CATEGORIES = arrayOf(
+        Intent.CATEGORY_LAUNCHER,
+        Intent.CATEGORY_LEANBACK_LAUNCHER
+    )
+
+    /**
+     * The name to show for an app: the app's own label first, then its resolved
+     * activity's, then the package name - never blank, so a row in the picker
+     * always reads as something.
+     */
+    private fun appLabel(
+        info: android.content.pm.ApplicationInfo?,
+        pm: PackageManager,
+        resolve: android.content.pm.ResolveInfo?,
+        packageName: String
+    ): String {
+        info?.let { app ->
+            runCatching { pm.getApplicationLabel(app).toString() }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { return it }
+        }
+        resolve?.let { matched -> return labelFor(matched, pm) }
+        return packageName
+    }
+
+    /**
+     * A resolved activity's own label, falling back to its package name.
+     */
     private fun labelFor(
         resolve: android.content.pm.ResolveInfo,
         pm: PackageManager
@@ -218,18 +402,30 @@ object ExternalPlayer {
         }.getOrNull().orEmpty()
     }
 
-    /** True when this box has at least one app the engine could hand a title to. */
-    fun isAvailable(context: Context): Boolean = installed(context).isNotEmpty()
+    /**
+     * True when this box has at least one app the engine could hand a title to:
+     * a probe match, or a pick the viewer made by hand.
+     *
+     * The custom pick counts, and has to: [PlayerEngine.selected] falls back to
+     * ExoPlayer when this is false, so a box whose detection found nothing - the
+     * case the custom pick exists for - would otherwise never reach the engine
+     * the viewer just configured.
+     */
+    fun isAvailable(context: Context): Boolean =
+        customPlayer(context) != null || installed(context).isNotEmpty()
 
     /**
      * The app to hand the next title to.
      *
-     * The remembered choice when it is still installed — a viewer who picked
-     * VLC means VLC — otherwise the first installed candidate, so a box that
-     * has exactly one player works with no setup at all. Null when nothing is
-     * installed.
+     * A custom pick wins outright: it is the viewer saying which app to use when
+     * the probe could not work it out, so it is the most specific answer there
+     * is. Otherwise the remembered choice when it is still installed - a viewer
+     * who picked VLC means VLC - and otherwise the first installed candidate, so
+     * a box that has exactly one player works with no setup at all. Null when
+     * there is nothing to hand a title to.
      */
     fun target(context: Context): Installed? {
+        customPlayer(context)?.let { return it }
         val candidates = installed(context)
         if (candidates.isEmpty()) return null
         val remembered = AppPreferences.getExternalPlayerPackage(context)
@@ -251,16 +447,43 @@ object ExternalPlayer {
      * candidate and no usable choice has been made yet.
      *
      * "Usable" matters: a stored pick for an app that has since been uninstalled
-     * is not a choice any more. The single-candidate case stays silent either
-     * way, because asking when there is exactly one player to pick is noise -
-     * [target] falls back to it.
+     * is not a choice any more, and neither is a custom pick whose app is gone.
+     * The single-candidate case stays silent either way, because asking when
+     * there is exactly one player to pick is noise - [target] falls back to it.
      */
     fun shouldPrompt(context: Context): Boolean {
         if (AppPreferences.getExternalPlayerAsk(context)) return true
+        // A custom pick IS a choice, so it is never "nothing picked yet": the
+        // viewer named the app they want, and a chooser would ignore that.
+        if (customPlayer(context) != null) return false
         val candidates = installed(context)
         val remembered = AppPreferences.getExternalPlayerPackage(context)
         if (remembered != null && candidates.any { it.packageName == remembered }) return false
         return candidates.size > 1
+    }
+
+    /**
+     * The launch that opens [packageName] itself, with no stream attached: the
+     * fallback for a custom pick whose manifest declares no video request at
+     * all.
+     *
+     * A TV build that cannot take a URL can still be opened, and a pick that
+     * ends in "Could not open …" is a dead press. Opening the app is not a
+     * hand-off of the stream - the viewer chooses the title there - but the
+     * session is unaffected: the playhead is measured while the app is in front
+     * (see ExternalPlayerActivity), so history, Continue Watching and
+     * scrobbling still land. Null when the app has no launcher entry, which is
+     * when there is genuinely nothing to open.
+     *
+     * FLAG_ACTIVITY_NEW_TASK is stripped: the platform sets it on this intent,
+     * and a new task drops the Activity Result the wrapper needs to see the
+     * viewer come back at all - the same rule the scheme hand-off follows.
+     */
+    fun appLaunchIntent(context: Context, packageName: String?): Intent? {
+        val pkg = packageName?.takeIf { it.isNotBlank() } ?: return null
+        return runCatching { context.packageManager.getLaunchIntentForPackage(pkg) }
+            .getOrNull()
+            ?.apply { flags = flags and Intent.FLAG_ACTIVITY_NEW_TASK.inv() }
     }
 
     /**

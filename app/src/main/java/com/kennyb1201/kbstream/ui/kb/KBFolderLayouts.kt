@@ -207,12 +207,17 @@ private fun TabChip(
 private fun ColumnScope.FolderStatus(
     message: String,
     loading: Boolean = false,
-    icon: String = "⚠️"
+    icon: String = "⚠️",
+    // A failed load offers RETRY, like every other browse screen's card: the
+    // folder is the one surface where a transient failure left the viewer with
+    // nothing but Back, and leaving the folder loses their place in it.
+    onRetry: (() -> Unit)? = null
 ) {
     KBStatusMessage(
         message = message,
         loading = loading,
         icon = icon,
+        onRetry = onRetry,
         modifier = Modifier
             .fillMaxWidth()
             .weight(1f)
@@ -376,7 +381,10 @@ private fun FolderItemCard(
                 title = item.title,
                 year = item.year,
                 rating = item.rating,
-                modifier = Modifier.padding(top = 2.dp, start = FolderRailGap / 2),
+                // 5dp, the beat the actor, collection and search rails use
+                // under their posters (the Library's is 6): the folder's own
+                // captions sat 2dp under the tile, which read as touching it.
+                modifier = Modifier.padding(top = 5.dp, start = FolderRailGap / 2),
                 focused = focused
             )
         }
@@ -667,7 +675,11 @@ private fun FollowHomeLayout(
     // Carries the key of the card that takes the pressed one's place when a
     // Hide removes it (null when it was the rail's last card), plus the record
     // the menu's own "Go to Details" raises.
-    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit
+    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit,
+    // Re-runs this folder's load, for the error card's own RETRY (see
+    // [FolderStatus]). Threaded from the screen because the grid layout has no
+    // ViewModel of its own to ask.
+    onRetryFolder: () -> Unit
 ) {
     val context = LocalContext.current
     val showLandscapeCards = remember {
@@ -766,7 +778,8 @@ private fun FollowHomeLayout(
                     horizontalPadding = FolderSafeHorizontal,
                     shape = posterEdgeShape()
                 )
-            state.error != null -> FolderStatus(state.error.orEmpty())
+            state.error != null ->
+                FolderStatus(state.error.orEmpty(), onRetry = onRetryFolder)
             visibleRails.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
@@ -841,7 +854,11 @@ private fun RowsLayout(
     // Carries the key of the card that takes the pressed one's place when a
     // Hide removes it (null when it was the rail's last card), plus the record
     // the menu's own "Go to Details" raises.
-    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit
+    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit,
+    // Re-runs this folder's load, for the error card's own RETRY (see
+    // [FolderStatus]). Threaded from the screen because the grid layout has no
+    // ViewModel of its own to ask.
+    onRetryFolder: () -> Unit
 ) {
     val context = LocalContext.current
     val showLandscapeCards = remember {
@@ -889,7 +906,8 @@ private fun RowsLayout(
                     horizontalPadding = FolderSafeHorizontal,
                     shape = posterEdgeShape()
                 )
-            state.error != null -> FolderStatus(state.error.orEmpty())
+            state.error != null ->
+                FolderStatus(state.error.orEmpty(), onRetry = onRetryFolder)
             visibleRails.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
@@ -1019,7 +1037,11 @@ private fun GridLayout(
     // Carries the key of the card that takes the pressed one's place when a
     // Hide removes it (null when it was the grid's last poster), plus the
     // record the menu's own "Go to Details" raises.
-    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit
+    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit,
+    // Re-runs this folder's load, for the error card's own RETRY (see
+    // [FolderStatus]). Threaded from the screen because the grid layout has no
+    // ViewModel of its own to ask.
+    onRetryFolder: () -> Unit
 ) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
@@ -1071,7 +1093,8 @@ private fun GridLayout(
                     horizontalPadding = FolderSafeHorizontal,
                     shape = posterEdgeShape()
                 )
-            state.error != null -> FolderStatus(state.error.orEmpty())
+            state.error != null ->
+                FolderStatus(state.error.orEmpty(), onRetry = onRetryFolder)
             gridItems.isEmpty() ->
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
@@ -1159,7 +1182,9 @@ private fun GridLayout(
                                 title = item.title,
                                 year = item.year,
                                 rating = item.rating,
-                                modifier = Modifier.padding(top = 2.dp)
+                                // Same 5dp as the rails' captions above, for
+                                // the same reason.
+                                modifier = Modifier.padding(top = 5.dp)
                             )
                         }
                     }
@@ -1191,7 +1216,11 @@ internal fun KBFolderBody(
     returnTarget: BrowseReturnTarget?,
     returnFocusRequester: FocusRequester,
     onOpenItem: (KBContentItem, BrowseReturnTarget) -> Unit,
-    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit
+    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit,
+    // Re-runs this folder's load, for the error card's own RETRY (see
+    // [FolderStatus]). Threaded from the screen because the grid layout has no
+    // ViewModel of its own to ask.
+    onRetryFolder: () -> Unit
 ) {
     when (layoutMode) {
         KBLayoutModes.Mode.FOLLOW_LAYOUT ->
@@ -1199,7 +1228,7 @@ internal fun KBFolderBody(
                 viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
                 partialWatchedKeys, onSelectSource, browseReturnKey, listState,
                 focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
-                onLongPressItem
+                onLongPressItem, onRetryFolder
             )
 
         KBLayoutModes.Mode.ROWS ->
@@ -1207,7 +1236,7 @@ internal fun KBFolderBody(
                 viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
                 partialWatchedKeys, onSelectSource, browseReturnKey, listState,
                 focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
-                onLongPressItem
+                onLongPressItem, onRetryFolder
             )
 
         KBLayoutModes.Mode.GRID ->
@@ -1215,7 +1244,7 @@ internal fun KBFolderBody(
                 state, resolvedIds, selectedSourceId, watchedKeys,
                 partialWatchedKeys, onSelectSource, browseReturnKey, gridState,
                 focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
-                onLongPressItem
+                onLongPressItem, onRetryFolder
             )
     }
 }

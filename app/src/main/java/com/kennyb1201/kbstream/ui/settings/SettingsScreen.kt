@@ -89,13 +89,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Surface
+import androidx.tv.material3.SurfaceDefaults
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.backup.BackupManager
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPasteChip
 import com.kennyb1201.kbstream.ui.components.KBSecretField
 import com.kennyb1201.kbstream.ui.components.KBTextField
@@ -111,8 +115,8 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBAccentPalette
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
+import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
-import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBShapePill
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -396,6 +400,15 @@ fun SettingsScreen(
             }
         )
     }
+    // An app the viewer named by hand, for the boxes where detection cannot find
+    // their player at all (a TV build whose manifest declares no video handler).
+    // Null - the default - means the probe decides.
+    var customExternalPackage by remember {
+        mutableStateOf(AppPreferences.getCustomExternalPlayerPackage(context))
+    }
+    var customExternalLabel by remember {
+        mutableStateOf(AppPreferences.getCustomExternalPlayerLabel(context))
+    }
     var externalAsk by remember { mutableStateOf(AppPreferences.getExternalPlayerAsk(context)) }
     var externalTrustReturn by remember {
         mutableStateOf(AppPreferences.getExternalTrustReturn(context))
@@ -403,6 +416,10 @@ fun SettingsScreen(
     // Set when the engine pill below is picked and there is more than one
     // installed player to hand a title to.
     var showExternalPlayerPicker by remember { mutableStateOf(false) }
+    // Set by the "choose custom app" row. The list behind it is a full package
+    // query, so it is read when that dialog opens rather than here, where this
+    // screen composes on every visit.
+    var showCustomPlayerPicker by remember { mutableStateOf(false) }
 
     // True when this device advertises no Dolby Vision decoder, so Profile 5
     // must be stripped and color-corrected on the GPU: the conversion (and its
@@ -1445,23 +1462,28 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall
                 )
                 if (playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL &&
-                    externalPlayers.isEmpty()
+                    externalPlayers.isEmpty() &&
+                    customExternalPackage == null
                 ) {
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "No video player app is installed on this device, so ExoPlayer " +
-                            "plays instead. Install VLC, MX Player or Kodi to use the external " +
-                            "engine.",
+                        text = "No video player app was detected on this device, so ExoPlayer " +
+                            "plays instead. Install VLC, MX Player or Kodi, or pick the app by " +
+                            "hand below if it is installed and simply not being found.",
                         color = KBDanger,
                         style = MaterialTheme.typography.labelSmall
                     )
                 }
 
-                // Only meaningful when this box has an app to hand a title to:
-                // with none installed the picker above never opens the external
-                // engine (see PlayerEngine.selected), so this would be a list of
-                // nothing.
-                if (externalPlayers.isNotEmpty()) {
+                // Drawn when there is a player to choose from, a hand-picked app
+                // to show the state of, or the engine above IS External - the
+                // last case because a box whose probe found nothing is exactly
+                // where the hand-picked app is the only way into this engine,
+                // and the subsection would otherwise be unreachable there.
+                if (externalPlayers.isNotEmpty() ||
+                    customExternalPackage != null ||
+                    playerEngine == AppPreferences.PLAYER_ENGINE_EXTERNAL
+                ) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = "External player",
@@ -1510,6 +1532,14 @@ fun SettingsScreen(
                         externalPlayers.forEach { player ->
                             KBCard(onClick = {
                                 externalPackage = player.packageName
+                                // A hand-picked app outranks the probe (see
+                                // ExternalPlayer.target), so touching a detected
+                                // chip has to drop it: a chip that stayed
+                                // unselected after the press would read as a dead
+                                // row.
+                                customExternalPackage = null
+                                customExternalLabel = null
+                                AppPreferences.setCustomExternalPlayer(context, null, null)
                                 // Tapping one app is an answer to "which app?", so
                                 // it turns asking off: the pick is remembered and
                                 // every title goes straight to it from now on.
@@ -1521,8 +1551,23 @@ fun SettingsScreen(
                                 )
                                 AppPreferences.setExternalPlayerAsk(context, false)
                             }) {
-                                PillChip(player.label, externalPackage == player.packageName)
+                                PillChip(
+                                    player.label,
+                                    customExternalPackage == null &&
+                                        externalPackage == player.packageName
+                                )
                             }
+                        }
+                        // The way to an app no probe can see, in the same row as
+                        // the detected players because it is the same choice -
+                        // "which app plays this" - and because a viewer who
+                        // cannot find their player among these chips has to be
+                        // able to see what to do about it.
+                        KBCard(onClick = { showCustomPlayerPicker = true }) {
+                            PillChip(
+                                label = customExternalLabel ?: "Choose custom app…",
+                                selected = customExternalPackage != null
+                            )
                         }
                     }
                     Spacer(modifier = Modifier.height(6.dp))
@@ -1530,12 +1575,18 @@ fun SettingsScreen(
                     // silent, asking every time, or nothing chosen yet.
                     val rememberedPlayer = externalPlayers
                         .firstOrNull { it.packageName == externalPackage }
+                    // What plays next, in the same one line: the hand-picked app
+                    // if there is one (it outranks the probe), else the
+                    // remembered probe match, else nothing picked yet.
+                    val rememberedName = customExternalPackage
+                        ?.let { customExternalLabel ?: it }
+                        ?: rememberedPlayer?.label
                     Text(
                         text = when {
                             externalAsk ->
                                 "Titles will ask which app to use, every time."
-                            rememberedPlayer != null ->
-                                "Remembered - titles play in ${rememberedPlayer.label} with no " +
+                            rememberedName != null ->
+                                "Remembered - titles play in $rememberedName with no " +
                                     "prompt."
                             else ->
                                 "Nothing picked yet: the first title opens the system chooser, " +
@@ -2775,7 +2826,40 @@ fun SettingsScreen(
                 AppPreferences.setExternalPlayerAsk(context, true)
                 showExternalPlayerPicker = false
             },
+            onChooseCustom = {
+                showExternalPlayerPicker = false
+                showCustomPlayerPicker = true
+            },
             onDismiss = { showExternalPlayerPicker = false }
+        )
+    }
+
+    if (showCustomPlayerPicker) {
+        // Read here, not at composition: this is a query for every launchable
+        // app on the box, and it is only ever wanted while this dialog is up.
+        val installedApps = remember { ExternalPlayer.allApps(context) }
+        SettingsCustomPlayerDialog(
+            apps = installedApps,
+            selectedPackage = customExternalPackage,
+            onPick = { app ->
+                customExternalPackage = app.packageName
+                customExternalLabel = app.label
+                // Naming one app is an answer to "which app?", exactly as tapping
+                // a detected chip is, so it turns asking off too.
+                externalAsk = false
+                AppPreferences.setCustomExternalPlayer(context, app.packageName, app.label)
+                AppPreferences.setExternalPlayerAsk(context, false)
+                showCustomPlayerPicker = false
+            },
+            onClear = {
+                // Back to detection: the probe's own pick is still stored, so
+                // clearing this hands the engine straight back to it.
+                customExternalPackage = null
+                customExternalLabel = null
+                AppPreferences.setCustomExternalPlayer(context, null, null)
+                showCustomPlayerPicker = false
+            },
+            onDismiss = { showCustomPlayerPicker = false }
         )
     }
 
@@ -3183,7 +3267,18 @@ private fun AboutSection(modifier: Modifier = Modifier) {
     // visible without waiting for an update to exist.
     val changelog by AppUpdater.latestChangelog.collectAsStateWithLifecycle()
     Column(modifier = modifier) {
-        KBCard(onClick = {}, modifier = Modifier.fillMaxWidth()) {
+        // A plain plate, not a card: this pane is read, never pressed. A
+        // KBCard with an empty onClick gave it a focus ring, a glow and a D-pad
+        // stop that answered OK with nothing - the same class of dead stop the
+        // stats tiles were.
+        Surface(
+            shape = KBShapeCard,
+            colors = SurfaceDefaults.colors(
+                containerColor = KBSurface,
+                contentColor = KBTextHi
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -3206,7 +3301,17 @@ private fun AboutSection(modifier: Modifier = Modifier) {
         UpdateRow()
         if (changelog.isNotBlank()) {
             Spacer(modifier = Modifier.height(10.dp))
-            KBCard(onClick = {}, modifier = Modifier.fillMaxWidth()) {
+            // Same non-focusable plate as the version line above: the
+            // changelog is long, and a focusable box around it made the D-pad
+            // walk into a wall of text that does nothing when pressed.
+            Surface(
+                shape = KBShapeCard,
+                colors = SurfaceDefaults.colors(
+                    containerColor = KBSurface,
+                    contentColor = KBTextHi
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -3605,53 +3710,34 @@ private fun SettingsClearHistoryDialog(
         }
     }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-            Column(
-                modifier = Modifier
-                    .width(560.dp)
-                    .background(KBSurface, KBShapePanel)
-                    .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
-                    .padding(horizontal = 22.dp, vertical = 20.dp)
+        // The app's one dialog plate (see KBDialogPanel), not a hand-rolled
+        // Column: this drew its own fill, its own 38% ring, 22x20 padding and a
+        // heading that was headlineSmall but NOT SemiBold, so the dialog sat
+        // 2dp tighter vertically and its heading lighter than every other
+        // dialog in the app.
+        KBDialogPanel(title = "Clear Continue Watching?") {
+            Text(
+                text = "This erases every resume position and watched marker " +
+                    "on this device. It cannot be undone.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 8.dp)
             ) {
-                Text(
-                    text = "CLEAR CONTINUE WATCHING?",
-                    color = KBAccent,
-                    style = MaterialTheme.typography.headlineSmall
+                // The app's one button, and the destructive one carries the
+                // danger tint: the CLEAR row was accent-on-accent with no
+                // affordance saying it wipes data that cannot come back.
+                KBButton(label = "CLEAR", danger = true, onClick = onConfirm)
+                KBButton(
+                    label = "CANCEL",
+                    modifier = Modifier.focusRequester(cancelFocusRequester),
+                    onClick = onDismiss
                 )
-                Text(
-                    text = "This erases every resume position and watched marker " +
-                        "on this device. It cannot be undone.",
-                    color = KBTextLo,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier.padding(top = 18.dp)
-                ) {
-                    KBCard(onClick = onConfirm) {
-                        Text(
-                            text = "CLEAR",
-                            color = KBAccent,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                        )
-                    }
-                    KBCard(
-                        onClick = onDismiss,
-                        modifier = Modifier.focusRequester(cancelFocusRequester)
-                    ) {
-                        Text(
-                            text = "CANCEL",
-                            color = KBTextLo,
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                        )
-                    }
-                }
             }
         }
+    }
 }
 
 // ── Helper composables ──────────────────────────────────────────
@@ -3669,6 +3755,10 @@ private fun SettingsClearHistoryDialog(
  * found first. Every player the device exposes is listed - this app can only
  * see the apps its manifest <queries> declares - plus the system's own chooser,
  * which is the honest answer for someone who uses more than one.
+ *
+ * [onChooseCustom] is the way out for the case the list itself cannot cover: an
+ * installed player that the probe cannot see at all, because its manifest
+ * declares no video handler.
  */
 @Composable
 private fun SettingsExternalPlayerDialog(
@@ -3677,21 +3767,14 @@ private fun SettingsExternalPlayerDialog(
     askEachTime: Boolean,
     onPick: (ExternalPlayer.Installed) -> Unit,
     onAskEachTime: () -> Unit,
+    onChooseCustom: () -> Unit,
     onDismiss: () -> Unit
 ) {
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .width(640.dp)
-                .background(KBSurface, KBShapePanel)
-                .border(1.dp, KBAccent.copy(alpha = 0.38f), KBShapePanel)
-                .padding(horizontal = 22.dp, vertical = 20.dp)
-        ) {
-            Text(
-                text = "PLAY TITLES IN WHICH APP?",
-                color = KBAccent,
-                style = MaterialTheme.typography.headlineSmall
-            )
+        // The shared dialog plate, at this dialog's own width: it was drawn by
+        // hand here too, which is where the 2dp-tighter vertical rhythm and the
+        // lighter heading came from.
+        KBDialogPanel(title = "Play titles in which app?", width = 640.dp) {
             Text(
                 text = "Every video player installed on this device. Your pick is remembered " +
                     "for every title - no prompt each time - and KBStream keeps the session " +
@@ -3699,8 +3782,7 @@ private fun SettingsExternalPlayerDialog(
                     "stay here. Change it any time under Playback, or pick Ask every time to " +
                     "be shown the system chooser instead.",
                 color = KBTextLo,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 8.dp)
+                style = MaterialTheme.typography.bodySmall
             )
             Column(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -3715,6 +3797,12 @@ private fun SettingsExternalPlayerDialog(
                     }
                 }
                 KBCard(
+                    onClick = onChooseCustom,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    PillChip("Choose custom app…", selected = false)
+                }
+                KBCard(
                     onClick = onAskEachTime,
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -3723,17 +3811,74 @@ private fun SettingsExternalPlayerDialog(
             }
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.padding(top = 18.dp)
+                modifier = Modifier.padding(top = 8.dp)
             ) {
-                KBCard(onClick = onDismiss) {
-                    Text(
-                        text = "DONE",
-                        color = KBAccent,
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
-                    )
+                KBButton(label = "DONE", onClick = onDismiss)
+            }
+        }
+    }
+}
+
+/**
+ * Every app installed on this device, for the engine's hand-picked choice.
+ *
+ * The picker above lists what the video probe found, which is every app that
+ * ANSWERS a video request - and that is not every app that can play one. A TV
+ * build of a player may declare no video request at all (VidHub's Play Store TV
+ * APK is the field case), so no probe of any width can see it; naming the app by
+ * hand is the only way in, and it is the only way to play through it.
+ *
+ * The list is long by nature - every launchable app on the box - so it scrolls
+ * inside a bounded height rather than growing past the panel, and the first row
+ * puts the probe's own pick back so the override is never a one-way door.
+ */
+@Composable
+private fun SettingsCustomPlayerDialog(
+    apps: List<ExternalPlayer.Installed>,
+    selectedPackage: String?,
+    onPick: (ExternalPlayer.Installed) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        KBDialogPanel(title = "Pick the app by hand", width = 640.dp) {
+            Text(
+                text = "Every app installed on this device, including the one the picker " +
+                    "above cannot see. KBStream hands titles to the app you pick; an app " +
+                    "that cannot take a video link just opens, and you choose the title " +
+                    "there - history, Continue Watching and scrobbling still run here.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodySmall
+            )
+            LazyColumn(
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .padding(top = 16.dp)
+                    .fillMaxWidth()
+                    // Bounded, because the panel is: a column of every app on a
+                    // box would run off the bottom of a 1080p screen, and the
+                    // DONE button under it has to stay reachable.
+                    .height(280.dp)
+            ) {
+                item(key = "detected") {
+                    KBCard(onClick = onClear, modifier = Modifier.fillMaxWidth()) {
+                        PillChip("Detected players only", selectedPackage == null)
+                    }
                 }
+                items(apps, key = { it.packageName }) { app ->
+                    KBCard(
+                        onClick = { onPick(app) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        PillChip(app.label, selectedPackage == app.packageName)
+                    }
+                }
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                KBButton(label = "DONE", onClick = onDismiss)
             }
         }
     }

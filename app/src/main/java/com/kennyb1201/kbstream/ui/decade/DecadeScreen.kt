@@ -640,7 +640,12 @@ private fun DecadeHeader(
                             .clip(KBShapeSmall)
                             .border(
                                 1.dp,
-                                Color.White.copy(alpha = 0.25f),
+                                // The app's hairline, not pure white: this was
+                                // one of the last two places drawing the edge
+                                // in Color.White, which reads brighter and
+                                // bluer than every other hairline in the app
+                                // (see the Collection header's own fan).
+                                KBTextLo.copy(alpha = 0.25f),
                                 KBShapeSmall
                             )
                             .width(widths[index])

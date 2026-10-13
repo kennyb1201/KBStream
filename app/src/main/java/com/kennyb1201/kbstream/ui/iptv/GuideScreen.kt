@@ -2427,9 +2427,13 @@ private fun ChannelRowCard(
                             imageVector = Icons.Filled.Star,
                             contentDescription = "Favorite channel",
                             tint = KBAccent,
+                            // 16dp, the same star as the channel rows' below
+                            // (and every other favourite mark in the app): at
+                            // 15dp this row's star sat a pixel smaller than the
+                            // one on the row beneath it.
                             modifier = Modifier
                                 .padding(start = 6.dp)
-                                .size(15.dp)
+                                .size(16.dp)
                         )
                     }
                 }
@@ -3145,6 +3149,18 @@ private fun ChannelSearchDialog(
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
             } else {
+                // Both halves of the hits list are titled now (see PROGRAMS
+                // below): only the second list was named, so a viewer reading
+                // down could not tell where the channels ended and the
+                // programmes began.
+                if (results.isNotEmpty()) {
+                    Text(
+                        text = "CHANNELS",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+                }
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()

@@ -319,8 +319,11 @@ fun StreamsScreen(
             season != null && episode != null &&
             EpisodeMatch.onlyOtherEpisodes(streams, season, episode)
         ) {
-            "None of these sources is S%02dE%02d - each says it holds a different "
-                .format(season, episode) + "episode of this season."
+            // "holds", not "is": the sentence is about what each source
+            // carries, and "None of these sources is S04E04" reads as the
+            // sources being the episode rather than holding it.
+            "None of these sources holds S%02dE%02d - each says it holds a "
+                .format(season, episode) + "different episode of this season."
         } else {
             null
         }

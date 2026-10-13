@@ -206,7 +206,11 @@ fun KBFolderScreen(
                 menuTarget = item
                 menuSuccessorKey = successorKey
                 menuReturnTarget = target
-            }
+            },
+            // The error card's RETRY, re-running the load by id: the folder may
+            // not have resolved at all, in which case only the route's own
+            // resolve can answer (see KBFolderViewModel.retry).
+            onRetryFolder = { viewModel.retry(folderId) }
         )
     }
 

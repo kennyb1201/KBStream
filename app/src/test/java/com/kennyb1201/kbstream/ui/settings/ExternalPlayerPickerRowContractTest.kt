@@ -19,6 +19,13 @@ import org.junit.Test
  *    video VIEW probe; with no human label it showed its raw component class
  *    name.
  *
+ * Field 2026-10-13: two more entries that were not a choice of player - a file
+ * manager (they answer every file type, so the video probe matches them) and an
+ * app the probe cannot see at all, which is now pickable by hand from the same
+ * row. The row's shape moved with them: the chips still are `KBCard`s wrapping
+ * `PillChip`s, and the label still decides the selection, so what this file
+ * guards is unchanged - only the lines it has to read are.
+ *
  * There is no device in CI and a Compose screen cannot be driven in a JVM test,
  * so the structure that fixes them is read out of the source the way this
  * tree's other contracts are.
@@ -71,7 +78,15 @@ class ExternalPlayerPickerRowContractTest {
         assertTrue(
             "each entry is a KBCard wrapping a PillChip",
             row.contains("KBCard(onClick = {") &&
-                row.contains("PillChip(player.label, externalPackage == player.packageName)")
+                row.contains("PillChip(") &&
+                row.contains("externalPackage == player.packageName")
+        )
+        // The row's last entry is the way to an app no probe can find, and it
+        // has to be a KBCard too: a plain Text there would be the one focus
+        // stop in the row the D-pad could not land on.
+        assertTrue(
+            "and the hand-picked entry is one more KBCard in the same row",
+            row.contains("KBCard(onClick = { showCustomPlayerPicker = true })")
         )
     }
 
@@ -79,7 +94,8 @@ class ExternalPlayerPickerRowContractTest {
     fun `selection, click and the remembered-player line are unchanged`() {
         assertTrue(
             "the selected chip is still the remembered package",
-            settings.contains("PillChip(player.label, externalPackage == player.packageName)")
+            settings.contains("PillChip(") &&
+                settings.contains("externalPackage == player.packageName")
         )
         assertTrue(
             "and tapping one still remembers it and turns asking off",
@@ -99,9 +115,11 @@ class ExternalPlayerPickerRowContractTest {
                 "up under its raw class name",
             externalPlayer.contains("if (isStubLabel(pkg, label)) return")
         )
+        // The match's label is read once now, because the file-manager filter
+        // needs it before remember() decides - the funnel itself is unchanged.
         assertTrue(
             "the MIME probes go through it",
-            externalPlayer.contains("remember(pkg, labelFor(resolve, pm), scheme = null)")
+            externalPlayer.contains("remember(pkg, label, scheme = null)")
         )
         assertTrue(
             "and so do the scheme-only players",

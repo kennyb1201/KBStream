@@ -2494,15 +2494,19 @@ private fun LeagueViewToggle(
 
 @Composable
 private fun LeagueViewChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    // The league TABS' own pill (see the league rail's tab): same screen, same
+    // shape, same job - but at labelSmall and 12x6 this pair read a size and a
+    // step smaller than the tabs directly above it, and its unselected label
+    // (KBTextLo) was dimmer than theirs.
     KBCard(onClick = onClick, focusedScale = KBFocusChip, shape = KBShapePill) {
         Text(
             text = label,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.SemiBold,
-            color = if (selected) KBVoid else KBTextLo,
+            color = if (selected) KBVoid else KBTextHi,
             modifier = Modifier
                 .background(if (selected) KBAccent else KBSurfaceRaised, KBShapePill)
-                .padding(horizontal = 12.dp, vertical = 6.dp)
+                .padding(horizontal = 14.dp, vertical = 8.dp)
         )
     }
 }

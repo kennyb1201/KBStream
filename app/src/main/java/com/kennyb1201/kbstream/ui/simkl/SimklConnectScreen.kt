@@ -26,7 +26,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.simkl.SimklWatchedCounts
-import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBRust
@@ -119,32 +119,23 @@ fun SimklConnectScreen(
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        KBCard(onClick = vm::refreshSimklNow) {
-                            Text(
-                                text = "REFRESH",
-                                color = KBTextHi,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
-                            )
-                        }
+                        // The app's one button (KBButton), not a hand-rolled
+                        // KBCard + titleMedium label: the same "REFRESH" was a
+                        // size bigger and a pixel taller here than in every
+                        // other panel.
+                        KBButton(label = "REFRESH", onClick = vm::refreshSimklNow)
 
-                        KBCard(onClick = onBackToHome) {
-                            Text(
-                                text = "BACK TO HOME",
-                                color = KBTextHi,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
-                            )
-                        }
+                        KBButton(label = "BACK TO HOME", onClick = onBackToHome)
 
-                        KBCard(onClick = vm::disconnect) {
-                            Text(
-                                text = "DISCONNECT",
-                                color = KBTextHi,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
-                            )
-                        }
+                        // The destructive one carries the danger tint: it was
+                        // drawn in the same bright label as REFRESH, so the row
+                        // that unlinks the account looked like the row that
+                        // refreshes it.
+                        KBButton(
+                            label = "DISCONNECT",
+                            danger = true,
+                            onClick = vm::disconnect
+                        )
                     }
                 } else {
                     SimklStatusPanel(
@@ -193,23 +184,12 @@ fun SimklConnectScreen(
                     }
 
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        KBCard(onClick = vm::generateCode) {
-                            Text(
-                                text = if (uiState.isLoading) "WORKING…" else "GENERATE CODE",
-                                color = KBTextHi,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
-                            )
-                        }
+                        KBButton(
+                            label = if (uiState.isLoading) "WORKING…" else "GENERATE CODE",
+                            onClick = vm::generateCode
+                        )
 
-                        KBCard(onClick = onBackToHome) {
-                            Text(
-                                text = "BACK TO HOME",
-                                color = KBTextHi,
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 11.dp)
-                            )
-                        }
+                        KBButton(label = "BACK TO HOME", onClick = onBackToHome)
                     }
                 }
             }

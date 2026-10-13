@@ -60,6 +60,8 @@ object AppPreferences {
     private const val KEY_EXTERNAL_PLAYER_PACKAGE = "external_player_package"
     private const val KEY_EXTERNAL_PLAYER_LABEL = "external_player_label"
     private const val KEY_EXTERNAL_PLAYER_ASK = "external_player_ask_each_time"
+    private const val KEY_CUSTOM_EXTERNAL_PLAYER_PACKAGE = "custom_external_player_package"
+    private const val KEY_CUSTOM_EXTERNAL_PLAYER_LABEL = "custom_external_player_label"
     private const val KEY_EXTERNAL_TRUST_RETURN = "external_player_trust_return"
     private const val KEY_DECODER_MODE = "decoder_mode" // legacy toggle, migrated below
     private const val KEY_DECODER_PRIORITY = "decoder_priority" // combined (one release), migrated below
@@ -644,6 +646,41 @@ object AppPreferences {
     fun getExternalPlayerLabel(context: Context): String? =
         prefs(context).getString(KEY_EXTERNAL_PLAYER_LABEL, null)
             ?.takeIf { it.isNotBlank() }
+
+    /**
+     * An app the viewer picked by hand for external playback, or null when the
+     * engine should go by what the probe found.
+     *
+     * Device-local like the pick beside it, and stored separately for a reason:
+     * this one exists for an app the probe CANNOT see - a TV build whose
+     * manifest declares no video request at all - so it is not a remembered
+     * probe match, it is an override of the probe. Clearing it has to fall back
+     * to detection rather than forget both, which is why it is not simply
+     * written through [setExternalPlayer].
+     */
+    fun getCustomExternalPlayerPackage(context: Context): String? =
+        prefs(context).getString(KEY_CUSTOM_EXTERNAL_PLAYER_PACKAGE, null)
+            ?.takeIf { it.isNotBlank() }
+
+    /** The hand-picked app's display name, or null when none is picked. */
+    fun getCustomExternalPlayerLabel(context: Context): String? =
+        prefs(context).getString(KEY_CUSTOM_EXTERNAL_PLAYER_LABEL, null)
+            ?.takeIf { it.isNotBlank() }
+
+    /**
+     * Remembers - or, with a null package, forgets - the hand-picked app.
+     *
+     * The label is kept beside the package for the same reason the probe's pick
+     * keeps one: the settings row has to name the choice, and it has to keep
+     * naming it after the app is uninstalled, when the package can no longer be
+     * resolved to anything.
+     */
+    fun setCustomExternalPlayer(context: Context, packageName: String?, label: String?) {
+        prefs(context).edit()
+            .putString(KEY_CUSTOM_EXTERNAL_PLAYER_PACKAGE, packageName)
+            .putString(KEY_CUSTOM_EXTERNAL_PLAYER_LABEL, label)
+            .apply()
+    }
 
     /**
      * Ask which app to use for every playback instead of going straight to the

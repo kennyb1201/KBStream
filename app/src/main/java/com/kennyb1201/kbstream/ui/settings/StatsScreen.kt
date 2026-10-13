@@ -35,11 +35,11 @@ import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.history.TopShow
 import com.kennyb1201.kbstream.data.history.ViewingStats
 import com.kennyb1201.kbstream.ui.components.KBButton
-import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
+import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -176,7 +176,18 @@ fun StatsScreen(
 /** One headline number, drawn in the theme's card plate. */
 @Composable
 private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
-    KBCard(onClick = {}, modifier = modifier) {
+    // A plain plate, not a card: a headline number is read, never pressed. A
+    // KBCard with an empty onClick gave each tile a focus ring, a glow and a
+    // full D-pad stop that answered OK with nothing - the same dead stop as the
+    // VERSION row in Settings.
+    Surface(
+        shape = KBShapeCard,
+        colors = SurfaceDefaults.colors(
+            containerColor = KBSurface,
+            contentColor = KBTextHi
+        ),
+        modifier = modifier
+    ) {
         Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp)) {
             Text(
                 text = value,
@@ -223,7 +234,15 @@ private fun StreakBadge(days: Int) {
 /** One top-show line: poster, name, finished runtime and episodes done. */
 @Composable
 private fun TopShowRow(show: TopShow) {
-    KBCard(onClick = {}) {
+    // Same non-focusable plate as [StatTile]: the row is a readout, so it takes
+    // no focus and skips no D-pad stop.
+    Surface(
+        shape = KBShapeCard,
+        colors = SurfaceDefaults.colors(
+            containerColor = KBSurface,
+            contentColor = KBTextHi
+        )
+    ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)

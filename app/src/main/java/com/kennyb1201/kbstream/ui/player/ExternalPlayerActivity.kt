@@ -646,8 +646,27 @@ class ExternalPlayerActivity : ComponentActivity() {
         )
 
         handoffAtMs = SystemClock.elapsedRealtime()
-        val launched = ErrorLog.runCatching {
+        var launched = ErrorLog.runCatching {
             handoffLauncher.launch(launch)
+        }
+        if (launched.isFailure) {
+            // For a hand-picked app this refusal is the expected case rather
+            // than a failure: an app whose manifest declares no video request
+            // at all is exactly the app the custom pick exists for (a TV build
+            // that only its launcher entry opens), so there is no VIEW to
+            // resolve. Opening the app itself is then the only hand-off there
+            // is - the stream is not attached, the card names the app and says
+            // BACK ends the session, and the playhead is still measured while it
+            // is in front. The label comes from the target, so the card and the
+            // log name what was actually launched. Null (an app with no launcher
+            // entry, or the uninstalled-between-query-and-launch case) leaves
+            // the original failure to be reported.
+            ExternalPlayer.appLaunchIntent(this, target?.packageName)?.let { fallback ->
+                Log.i(TAG, "handoff -> launcher entry of ${target?.packageName}")
+                launched = ErrorLog.runCatching {
+                    handoffLauncher.launch(fallback)
+                }
+            }
         }
         if (launched.isSuccess) {
             // The other app has the stream now, so both trackers are told the

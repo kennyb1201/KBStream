@@ -2050,7 +2050,11 @@ private fun UpcomingEpisodeCard(
                             color = KBPlum,
                             shape = KBShapeChip
                         )
-                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                        // 6x3, the inner padding every other badge on Home's
+                        // rails uses (see CompactUpNextCard): at 5x2 these two
+                        // read a touch tighter than the same-role badges on the
+                        // row beside them.
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
                 )
             } else {
                 Text(
@@ -2066,7 +2070,10 @@ private fun UpcomingEpisodeCard(
                             color = KBAccent,
                             shape = KBShapeChip
                         )
-                        .padding(horizontal = 5.dp, vertical = 2.dp)
+                        // Same 6x3 as the NEW SEASON badge above (and every
+                        // downstream rail badge): the pair sits on adjacent
+                        // rails, so a 1dp difference between them is visible.
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
                 )
             }
 

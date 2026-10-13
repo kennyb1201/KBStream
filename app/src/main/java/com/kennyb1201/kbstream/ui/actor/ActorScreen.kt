@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.actor
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -489,7 +490,24 @@ fun ActorScreen(
                             val biography = p.biography.orEmpty()
                             if (biography.isNotBlank()) {
                                 item(key = "biography") {
-                                    Column(modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 20.dp)) {
+                                    // animateContentSize so View more/less slides
+                                    // the block to its new height instead of
+                                    // snapping: the toggle swaps maxLines, and a
+                                    // layout that pops from four lines to
+                                    // fifteen reads as a redraw rather than as
+                                    // the same paragraph opening up. The rails
+                                    // below keep their own state - this only
+                                    // animates the bio's own box.
+                                    Column(
+                                        modifier = Modifier
+                                            .padding(
+                                                start = 24.dp,
+                                                end = 24.dp,
+                                                top = 4.dp,
+                                                bottom = 20.dp
+                                            )
+                                            .animateContentSize()
+                                    ) {
                                         var bioExpanded by remember { mutableStateOf(false) }
                                         var bioOverflows by remember { mutableStateOf(false) }
                                         Text(

@@ -16,10 +16,13 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  * rather than by two TVs.
  *
  * A resolved [Settings] is applied as mpv OPTIONS before `init()` (see
- * [MpvPlayerView.applyOptions]) and read back as a PROPERTY when a surface
- * re-attach has to put the video output back (see [MpvPlayerView.attachSurface])
- * — the same resolution both times, which is why it lives here and not inline in
- * either.
+ * [MpvPlayerView.applyOptions]) and is never re-applied afterwards. It used to
+ * be read back as a PROPERTY on every surface re-attach, to restore a `vo` that
+ * teardown had nulled - which re-initialized the video output after the surface
+ * had been attached to the old one, and black-screened the engine on every mode
+ * (see [MpvPlayerView.attachSurface]). The VO is now chosen once and the
+ * surface cycle touches only the surface, so this resolution has exactly one
+ * caller - which is why it lives here rather than inline in that one.
  */
 internal object MpvVideoOutput {
 

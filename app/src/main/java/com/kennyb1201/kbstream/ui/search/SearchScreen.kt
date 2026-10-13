@@ -429,7 +429,10 @@ fun SearchScreen(
                 item(key = "no_results") {
                     KBStatusMessage(
                         icon = KB_STATUS_ICON_EMPTY,
-                        message = "No matches found",
+                        // A full sentence, with the stop every other status
+                        // line on this screen ends on ("Nothing to show
+                        // here.", "All rails are hidden.").
+                        message = "No matches found.",
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 8.dp)
@@ -445,7 +448,11 @@ fun SearchScreen(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             contentPadding = PaddingValues(
                                 top = 2.dp,
-                                bottom = 2.dp,
+                                // 4dp, matching the suggestion and recent rows
+                                // above: the room a focused tile's ring needs
+                                // below it inside the row's own clip. Two
+                                // rails of the same posters sat 2dp and 4dp.
+                                bottom = 4.dp,
                                 start = KBFocusChipInset,
                                 end = KBFocusChipInset
                             ),

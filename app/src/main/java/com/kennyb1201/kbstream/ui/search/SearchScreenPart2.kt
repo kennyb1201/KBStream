@@ -307,7 +307,10 @@ internal fun SearchRail(
             horizontalArrangement = Arrangement.spacedBy(KBSpacing.md),
             contentPadding = PaddingValues(
                 top = 2.dp,
-                bottom = 2.dp,
+                // 4dp, the suggestion and recent rows' own inset: the room a
+                // focused tile's ring needs below it inside the row's clip.
+                // Two rails of the same posters sat 2dp and 4dp.
+                bottom = 4.dp,
                 start = KBFocusChipInset,
                 end = KBFocusChipInset
             ),

@@ -221,21 +221,31 @@ class MpvVideoOutputTest {
             view.contains("\"MPV vo mode=")
         )
         assertTrue(
-            "the resolution has to be shared with the surface restore, not re-derived",
+            "and the resolver must be the only place a vo is chosen from",
             view.contains("MpvVideoOutput.resolve(")
         )
     }
 
     @Test
-    fun `a surface re-attach restores the resolved output, not a fixed gpu`() {
-        assertFalse(
-            "restoring a hardcoded \"gpu\" would black-screen the exact box the " +
-                "MediaCodec mode exists for, on the first background/foreground",
-            view.contains("setPropertyString(\"vo\", \"gpu\")")
-        )
+    fun `the resolved output is applied once and never restored at runtime`() {
+        // This used to pin the opposite: the VO put back on a surface re-attach
+        // had to be the session's own rather than a hardcoded "gpu". The right
+        // answer turned out to be that nothing puts a VO back at all - a runtime
+        // `vo` change re-initializes mpv's video output, and the surface had just
+        // been attached to the one that was already open, so the replacement
+        // starts without a surface and every frame is thrown away (audio plays,
+        // the track list populates). That was the black screen on every VO, not
+        // just the GPU path, which is why the shared resolution is now read by
+        // applyOptions alone.
+        // The negative half of this rule - that no surface cycle restores a VO
+        // from the resolution - is MpvSurfaceCycleContractTest's, which reads the
+        // source with its comments stripped: the fix's own documentation quotes
+        // the removed `setPropertyString("vo", …)` call to explain it, so a raw
+        // `contains` here would match prose rather than code.
         assertTrue(
-            "the VO put back on re-attach must be the session's own",
-            view.contains("MPVLib.setPropertyString(\"vo\", videoOutput().vo)")
+            "the resolution is applied once, as the option applyOptions opens on",
+            view.contains("val vo = videoOutput()") &&
+                view.contains("MPVLib.setOptionString(\"vo\", vo.vo)")
         )
     }
 

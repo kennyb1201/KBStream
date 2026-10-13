@@ -516,7 +516,12 @@ private fun BrowseCategoryTab(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 13.dp, vertical = 8.dp)
+                // 12x7, the inset the search screen's own chips use (see
+                // SearchChip's label padding): these two chip families sit on
+                // the same screens, and a 1dp difference between them was the
+                // whole of it - the browse chips read 1dp roomier than the
+                // chips they hand off to.
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
             ) {
                 Icon(
                     imageVector = browseCategoryIcon(category.key),

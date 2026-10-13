@@ -270,8 +270,13 @@ fun CatalogGridScreen(
                         top = 4.dp,
                         bottom = 24.dp
                     ),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    // The Library grid's own rhythm (12/16), not the 10/14
+                    // this was drawn with: the two grids hold the same posters
+                    // in the same shape, so a row that sits 2dp tighter here
+                    // than there reads as a different design scale rather than
+                    // a different screen.
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     items(

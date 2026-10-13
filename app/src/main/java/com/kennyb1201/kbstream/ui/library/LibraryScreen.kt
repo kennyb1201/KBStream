@@ -388,7 +388,12 @@ fun LibraryScreen(
                         if (sources.isEmpty()) {
                             "Watchlist is empty."
                         } else {
-                            "Watchlist is empty. " + sources.joinToString(" · ")
+                            // An em dash, not the full stop this used: "Watchlist
+                            // is empty. Simkl not connected · MDBList key not
+                            // set" left the reasons stranded after a finished
+                            // sentence, so the line read as broken copy rather
+                            // than as one sentence saying why the list is empty.
+                            "Watchlist is empty — " + sources.joinToString(" · ")
                         }
                     },
                     loading = state.loading,
