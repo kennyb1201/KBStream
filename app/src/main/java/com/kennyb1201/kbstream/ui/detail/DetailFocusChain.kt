@@ -23,18 +23,19 @@ internal enum class DetailFocusDirection { UP, DOWN }
  *
  * The order is the PAINTED order, which is not the order the rails are listed
  * in the source: the people rail renders above the network rail, which renders
- * above the production companies, which render above the collection and More
- * Like This rails (see the `peoplerow`, `networkrow`, `productionrow`,
- * `collectionrow` and `recsrow` items). A chain that did not mirror the screen
- * would send UP into a row the viewer can see is below them.
+ * above the production companies, which render above the collection rail, the
+ * Media row and More Like This (see the `peoplerow`, `networkrow`,
+ * `productionrow`, `collectionrow`, `mediarow` and `recsrow` items). A chain
+ * that did not mirror the screen would send UP into a row the viewer can see is
+ * below them.
  *
  * Rows that carry no vertical handler of their own are deliberately absent:
  * the overview block, the ratings strip, the fact cards and the review rail are
  * leaf surfaces reached by the default search, and naming them here would
- * change behaviour the chain is not about. The collection and More Like This
- * rails ARE named - below the production companies, in the order they are
- * painted - because a viewer who scrolled into them had no chain entry for
- * where they were and the press stranded.
+ * change behaviour the chain is not about. The collection rail, the Media row
+ * and More Like This ARE named - below the production companies, in the order
+ * they are painted - because a viewer who scrolled into them had no chain entry
+ * for where they were and the press stranded.
  */
 internal enum class DetailRow {
     /** The fixed title/logo and PLAY row above the list - always composed. */
@@ -58,6 +59,18 @@ internal enum class DetailRow {
     /** The collection rail: this title's other parts. */
     COLLECTION,
 
+    /**
+     * The Media row: the title's videos and its other backdrops, as one row
+     * with a tab strip on top of it.
+     *
+     * The chain names it ONCE, because what it is for is the handoff between
+     * rows: DOWN reaches the More Like This rail and UP the collection rail,
+     * exactly as if the row held a single rail. Which of its two pages the
+     * viewer is looking at, and the LEFT/RIGHT presses that swap them, never
+     * leave the row and are the row's own business (see [DetailMediaRow]).
+     */
+    MEDIA,
+
     /** The More Like This recommendations rail. */
     MORE_LIKE_THIS
 }
@@ -77,6 +90,7 @@ internal data class DetailRowPresence(
     val hasNetworkRow: Boolean,
     val hasProductionRow: Boolean,
     val hasCollectionRow: Boolean,
+    val hasMediaRow: Boolean,
     val hasMoreLikeThisRow: Boolean
 )
 
@@ -106,6 +120,7 @@ internal object DetailFocusChain {
         DetailRow.NETWORK -> presence.hasNetworkRow
         DetailRow.PRODUCTION -> presence.hasProductionRow
         DetailRow.COLLECTION -> presence.hasCollectionRow
+        DetailRow.MEDIA -> presence.hasMediaRow
         DetailRow.MORE_LIKE_THIS -> presence.hasMoreLikeThisRow
     }
 

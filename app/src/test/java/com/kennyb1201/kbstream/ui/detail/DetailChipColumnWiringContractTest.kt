@@ -153,13 +153,23 @@ class DetailChipColumnWiringContractTest {
 
     @Test
     fun `every vertical press between the rails goes through the one rule`() {
-        // The definition, the chip lookup in the chain's focusRow, and the
-        // reveal helper's own single call. A fourth call site - a rail deciding
+        // The definition, the chip lookup in the chain's focusRow, the reveal
+        // helper's own single call, and the Media row's ask for its OWN first
+        // card - its tab strip's DOWN, which is not a neighbour decision at
+        // all: the rail it enters is the row it is already standing in, which
+        // is why it asks directly instead of scrolling the row it is in to the
+        // top (see focusFirstMediaCard). A fifth call site - a rail deciding
         // its own neighbour again - is a change someone has to make
         // deliberately, which is exactly what this counts.
         assertEquals(
-            3,
+            4,
             Regex("focusChipColumn\\(").findAll(source).count()
+        )
+        assertTrue(
+            "the one new site is the Media row entering its own rail, by the " +
+                "row's key and its first column",
+            source.contains("suspend fun focusFirstMediaCard() {") &&
+                source.contains("if (focusChipColumn(MEDIA_ROW_KEY, 0)) return")
         )
         assertTrue(
             source.contains("suspend fun revealAndFocusChipColumn(") &&

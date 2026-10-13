@@ -18,9 +18,9 @@ import org.junit.Test
  * also what makes every rail's UP and DOWN agree by construction.
  *
  * The order is the PAINTED order (header, tags, episodes, people, networks,
- * production, collection, More Like This), not the order the rails are written
- * in the source, because a chain that did not mirror the screen would send UP
- * into a row the viewer can see is below them.
+ * production, collection, Media, More Like This), not the order the rails are
+ * written in the source, because a chain that did not mirror the screen would
+ * send UP into a row the viewer can see is below them.
  */
 class DetailFocusChainTest {
 
@@ -32,6 +32,7 @@ class DetailFocusChainTest {
         network: Boolean = false,
         production: Boolean = false,
         collection: Boolean = false,
+        media: Boolean = false,
         moreLikeThis: Boolean = false
     ) = DetailRowPresence(
         hasKeywordsRow = keywords,
@@ -40,6 +41,7 @@ class DetailFocusChainTest {
         hasNetworkRow = network,
         hasProductionRow = production,
         hasCollectionRow = collection,
+        hasMediaRow = media,
         hasMoreLikeThisRow = moreLikeThis
     )
 
@@ -71,6 +73,7 @@ class DetailFocusChainTest {
             network = true,
             production = true,
             collection = true,
+            media = true,
             moreLikeThis = true
         )
         DetailRow.entries.forEach { row ->
@@ -152,6 +155,55 @@ class DetailFocusChainTest {
             DetailRow.PRODUCTION,
             DetailFocusChain.nextRow(DetailRow.COLLECTION, DetailFocusDirection.UP, movie)
         )
+    }
+
+    @Test
+    fun `the Media row sits between the collection and More Like This`() {
+        // The row is one entry of the chain however many rails it holds inside
+        // itself, which is the whole point of naming it here: DOWN out of it is
+        // the recommendations rail and UP out of it is the collection, and only
+        // the row's own tab strip knows there are two pages in between.
+        val movie = presence(production = true, collection = true, media = true, moreLikeThis = true)
+        assertEquals(
+            DetailRow.MEDIA,
+            DetailFocusChain.nextRow(DetailRow.COLLECTION, DetailFocusDirection.DOWN, movie)
+        )
+        assertEquals(
+            DetailRow.MORE_LIKE_THIS,
+            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.DOWN, movie)
+        )
+        assertEquals(
+            DetailRow.MEDIA,
+            DetailFocusChain.nextRow(DetailRow.MORE_LIKE_THIS, DetailFocusDirection.UP, movie)
+        )
+        assertEquals(
+            DetailRow.COLLECTION,
+            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.UP, movie)
+        )
+    }
+
+    @Test
+    fun `a title with only a Media row is still reachable from both sides`() {
+        // No collection and no cast: the row's neighbours are the production
+        // chips above it and the recommendations below.
+        val mediaOnly = presence(production = true, media = true, moreLikeThis = true)
+        assertEquals(
+            DetailRow.PRODUCTION,
+            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.UP, mediaOnly)
+        )
+        assertEquals(
+            DetailRow.MORE_LIKE_THIS,
+            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.DOWN, mediaOnly)
+        )
+        // A title with nothing but videos and stills: the row is the last one
+        // the chain names, and UP still lands on the header rather than
+        // stranding the press.
+        val only = presence(media = true)
+        assertEquals(
+            DetailRow.HEADER,
+            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.UP, only)
+        )
+        assertNull(DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.DOWN, only))
     }
 
     @Test
@@ -273,6 +325,7 @@ class DetailFocusChainTest {
                 network = row == DetailRow.NETWORK,
                 production = row == DetailRow.PRODUCTION,
                 collection = row == DetailRow.COLLECTION,
+                media = row == DetailRow.MEDIA,
                 moreLikeThis = row == DetailRow.MORE_LIKE_THIS
             )
             if (row == DetailRow.HEADER) {
@@ -296,6 +349,7 @@ class DetailFocusChainTest {
             network = true,
             production = true,
             collection = true,
+            media = true,
             moreLikeThis = true
         )
         DetailRow.entries.forEach { row ->

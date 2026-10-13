@@ -30,11 +30,15 @@ class DetailFocusChainWiringContractTest {
     @Test
     fun `every rail answers its vertical presses through the one handler`() {
         assertEquals(
-            "seven rails carry a vertical handler - the tag rail, the episode " +
-                "row, the people cards, the network chips, the production " +
-                "chips, the collection posters and the More Like This posters - " +
-                "and all seven go through the same one, so no row can disagree " +
-                "with another about what is above or below it",
+            "seven rails carry a vertical handler directly on themselves - the " +
+                "tag rail, the episode row, the people cards, the network chips, " +
+                "the production chips, the collection posters and the More Like " +
+                "This posters - and all seven go through the same one, so no row " +
+                "can disagree with another about what is above or below it. The " +
+                "Media row's cards compose that same handler inside a wrapper of " +
+                "their own (mediaCardFocus, which answers UP itself because UP " +
+                "there means the row's tab strip); the wrapper is pinned by " +
+                "DetailMediaRowWiringContractTest.",
             7,
             Regex("onPreviewKeyEvent\\( detailRowVerticalFocus\\(").findAll(detail).count()
         )
@@ -197,6 +201,12 @@ class DetailFocusChainWiringContractTest {
                 detail.contains("if (hasCollectionRow) {")
         )
         assertTrue(
+            "the Media row is on the page exactly when its strip has a page to " +
+                "offer, which is the same expression that renders it",
+            detail.contains("hasMediaRow = mediaTabs.isNotEmpty()") &&
+                detail.contains("if (hasMediaRow) {")
+        )
+        assertTrue(
             "and More Like This by the expression that renders it",
             detail.contains("hasMoreLikeThisRow = recommendations.isNotEmpty()") &&
                 detail.contains("if (hasMoreLikeThisRow) {")
@@ -217,13 +227,14 @@ class DetailFocusChainWiringContractTest {
             "NETWORK",
             "PRODUCTION",
             "COLLECTION",
+            "MEDIA",
             "MORE_LIKE_THIS"
         ).forEach { row ->
             val at = body.indexOf(row)
             assertTrue(
                 "the chain must declare $row, in the order it is painted - " +
                     "people above networks above production companies, and the " +
-                    "collection rail above More Like This",
+                    "collection rail above the Media row above More Like This",
                 at > lastIndex
             )
             lastIndex = at

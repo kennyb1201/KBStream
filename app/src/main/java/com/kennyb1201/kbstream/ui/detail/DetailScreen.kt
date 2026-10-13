@@ -103,6 +103,7 @@ import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbCastMember
 import com.kennyb1201.kbstream.data.tmdb.TmdbReview
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.tmdb.TmdbVideo
 import com.kennyb1201.kbstream.data.tmdb.TrailerPick
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.bestReleaseDate
@@ -247,6 +248,7 @@ private const val PEOPLE_ROW_KEY = "peoplerow"
 private const val NETWORK_ROW_KEY = "networkrow"
 private const val PRODUCTION_ROW_KEY = "productionrow"
 private const val COLLECTION_ROW_KEY = "collectionrow"
+private const val MEDIA_ROW_KEY = "mediarow"
 private const val RECS_ROW_KEY = "recsrow"
 
 /** How many times the rail reveal and the focus request are retried. */
@@ -658,6 +660,7 @@ fun DetailScreen(
     val networkRowState = rememberLazyListState()
     val productionRowState = rememberLazyListState()
     val collectionRowState = rememberLazyListState()
+    val mediaRowState = rememberLazyListState()
     val recsRowState = rememberLazyListState()
     val railFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
     val seasonFocusRequesters = remember { mutableMapOf<Int, FocusRequester>() }
@@ -1076,6 +1079,61 @@ fun DetailScreen(
                 )
             }
     }
+
+    // ── The Media row: one row, two pages (see DetailMediaRow) ──────────
+
+    /**
+     * The videos and the extra backdrops the row draws, straight off the detail
+     * payload.
+     *
+     * Both are already in hand: `videos` and `images` are two of the parts this
+     * screen's single `append_to_response` asks TMDB for, so the full list of
+     * either costs no extra call - the header's trailer button picks its one
+     * entry out of the first (see [TrailerPick.best]) and the hero draws one
+     * entry of the second, and this is the first surface to show the rest of
+     * them.
+     */
+    val mediaVideos = remember(tmdbDetail) {
+        tmdbDetail?.videos?.results.orEmpty()
+    }
+    val mediaBackdrops = remember(tmdbDetail) {
+        tmdbDetail?.images?.backdrops.orEmpty()
+    }
+
+    /**
+     * The row's pages, in the order its strip shows them, and the page the
+     * viewer is on.
+     *
+     * A page with nothing on it is not offered at all (see
+     * [DetailMediaRow.tabs]), which is also what keeps the strip's DOWN always
+     * landing on a card: the row is only painted when one of the two lists is
+     * non-empty, and each tab then has content under it.
+     */
+    val mediaTabs = remember(mediaVideos, mediaBackdrops) {
+        DetailMediaRow.tabs(mediaVideos.size, mediaBackdrops.size)
+    }
+    var mediaTabIndex by remember(mediaTabs) { mutableIntStateOf(0) }
+    val mediaTab = mediaTabs.getOrNull(mediaTabIndex) ?: mediaTabs.firstOrNull()
+
+    // The active page's cards, projected once per payload rather than per
+    // recomposition of a screen that recomposes constantly (position ticks,
+    // badge updates, focus moves): which URL a card shows, what its badge says
+    // and which video it plays are [DetailMediaRow]'s rules.
+    val mediaCards = remember(mediaTab, mediaVideos, mediaBackdrops) {
+        when (mediaTab) {
+            MediaTab.TRAILERS -> DetailMediaRow.trailers(mediaVideos)
+            MediaTab.BACKDROPS -> DetailMediaRow.backdrops(mediaBackdrops)
+            null -> emptyList()
+        }
+    }
+
+    // The tab strip is ONE focus node (see mediaStripFocus): the two tabs are
+    // the strip's own pages, not two nodes to be walked between, so a
+    // LEFT/RIGHT press can never leave the row sideways.
+    val mediaStripFocusRequester = remember { FocusRequester() }
+
+    // The backdrop a press opened fullscreen, or null (see BackdropOverlay).
+    var selectedBackdrop by remember { mutableStateOf<String?>(null) }
 
     val premiereDateFormatter = remember {
         DateFormats.longDate()
@@ -1634,6 +1692,7 @@ fun DetailScreen(
         DetailRow.NETWORK -> NETWORK_ROW_KEY
         DetailRow.PRODUCTION -> PRODUCTION_ROW_KEY
         DetailRow.COLLECTION -> COLLECTION_ROW_KEY
+        DetailRow.MEDIA -> MEDIA_ROW_KEY
         DetailRow.MORE_LIKE_THIS -> RECS_ROW_KEY
     }
 
@@ -1670,6 +1729,7 @@ fun DetailScreen(
         DetailRow.NETWORK,
         DetailRow.PRODUCTION,
         DetailRow.COLLECTION,
+        DetailRow.MEDIA,
         DetailRow.MORE_LIKE_THIS -> {
             val targetKey = detailRowKey(target)
             val anchorKey = detailRowKey(from)
@@ -1756,6 +1816,97 @@ fun DetailScreen(
     }
 
     /**
+     * DOWN out of the Media row's tab strip: the first card of the page that is
+     * active.
+     *
+     * Asked for directly first, because the cards are laid out immediately
+     * under the strip and column 0 is one request away - and then through the
+     * same reveal every other rail uses, for the case where the scroll has put
+     * the row out of composition (see [revealAndFocusChipColumn]).
+     */
+    suspend fun focusFirstMediaCard() {
+        if (focusChipColumn(MEDIA_ROW_KEY, 0)) return
+        revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_ROW_KEY, 0)
+    }
+
+    /**
+     * The Media row's tab strip: LEFT/RIGHT walk the pages of the row, DOWN
+     * steps into the cards of the page that is now active, and UP is the
+     * chain's press out of the row - the collection rail above it.
+     *
+     * A tab strip is a row inside a row, which is the one shape the page's
+     * chain does not model ([DetailRow.MEDIA] is a single row as far as the
+     * handoff between rows goes), so the two rails inside it are traded between
+     * here rather than by [DetailFocusChain]. That is also why the strip reads
+     * the chain for UP alone: a DOWN belongs to the cards under it, not to the
+     * row below.
+     *
+     * Every press is consumed, LEFT/RIGHT included: there is no second tab node
+     * for the default search to find, and a LEFT that fell through to it would
+     * walk the focus out of the row entirely.
+     */
+    fun mediaStripFocus(
+        tabs: List<MediaTab>,
+        activeIndex: () -> Int,
+        onActiveIndex: (Int) -> Unit,
+        onFocusContent: () -> Unit,
+        presence: DetailRowPresence
+    ): (KeyEvent) -> Boolean = { keyEvent ->
+        val step = when (keyEvent.key) {
+            Key.DirectionLeft -> -1
+            Key.DirectionRight -> 1
+            else -> 0
+        }
+        when {
+            keyEvent.type != KeyEventType.KeyDown -> false
+            step != 0 -> {
+                onActiveIndex(DetailMediaRow.switched(activeIndex(), step, tabs.size))
+                true
+            }
+            keyEvent.key == Key.DirectionDown -> {
+                onFocusContent()
+                true
+            }
+            else -> detailRowVerticalFocus(
+                DetailRow.MEDIA,
+                0,
+                presence,
+                setOf(DetailFocusDirection.UP)
+            )(keyEvent)
+        }
+    }
+
+    /**
+     * A card of the Media row: UP returns to the row's tab strip, and DOWN is
+     * the chain's press out of the row - the More Like This rail below it.
+     * LEFT/RIGHT are the lazy row's own and are left alone.
+     *
+     * UP belongs to the row rather than to the chain because it is about the
+     * strip, not about the row above: a viewer on a trailer who presses UP means
+     * the tabs, and the collection rail is one press further out (see
+     * [mediaStripFocus]). DOWN hands over the card's COLUMN like every other
+     * card rail here, so a return press lands on the card above the one it was
+     * aimed at rather than on whichever card the rail was last left on.
+     */
+    fun mediaCardFocus(
+        index: Int,
+        onFocusStrip: () -> Unit,
+        presence: DetailRowPresence
+    ): (KeyEvent) -> Boolean = { keyEvent ->
+        if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionUp) {
+            onFocusStrip()
+            true
+        } else {
+            detailRowVerticalFocus(
+                DetailRow.MEDIA,
+                index,
+                presence,
+                setOf(DetailFocusDirection.DOWN)
+            )(keyEvent)
+        }
+    }
+
+    /**
      * Opens a title's trailer in the fullscreen player.
      *
      * The resolve (InnerTube → NewPipe → Piped, with its caches) stays in
@@ -1799,8 +1950,13 @@ fun DetailScreen(
             putExtra("item_name", "Trailer")
         }
 
-    fun playTrailer(context: Context) {
-        val key = trailerVideo?.key?.takeIf { it.isNotBlank() } ?: return
+    /**
+     * Plays ONE of the title's videos, which is what the [DetailRow.MEDIA]
+     * row's cards ask for: a card plays the video it shows, and the header
+     * button plays its own pick through the same call (below).
+     */
+    fun playTrailer(context: Context, video: TmdbVideo?) {
+        val key = video?.key?.takeIf { it.isNotBlank() } ?: return
 
         scope.launch {
             val source =
@@ -1817,6 +1973,11 @@ fun DetailScreen(
 
             context.startActivity(trailerPlayerIntent(context, source))
         }
+    }
+
+    /** The header button's trailer: the one pick its label was built from. */
+    fun playTrailer(context: Context) {
+        playTrailer(context, trailerVideo)
     }
 
     val loadedMeta = meta
@@ -1898,6 +2059,7 @@ fun DetailScreen(
             val hasProductionRow = companies.isNotEmpty()
             val hasNetworkRow = normalizedType == "series" && networks.isNotEmpty()
             val hasCollectionRow = collectionParts.isNotEmpty()
+            val hasMediaRow = mediaTabs.isNotEmpty()
             val hasMoreLikeThisRow = recommendations.isNotEmpty()
             val detailRowPresence = DetailRowPresence(
                 hasKeywordsRow = keywords.isNotEmpty(),
@@ -1906,6 +2068,7 @@ fun DetailScreen(
                 hasNetworkRow = hasNetworkRow,
                 hasProductionRow = hasProductionRow,
                 hasCollectionRow = hasCollectionRow,
+                hasMediaRow = hasMediaRow,
                 hasMoreLikeThisRow = hasMoreLikeThisRow
             )
 
@@ -4332,6 +4495,125 @@ fun DetailScreen(
                             }
                         }
 
+                        if (hasMediaRow) {
+                            item(key = "mediaheader", contentType = "section-header") {
+                                KBSectionHeader(
+                                    title = "MEDIA",
+                                    modifier = Modifier.padding(
+                                        start = KBScreenEdge,
+                                        top = 14.dp
+                                    )
+                                )
+                            }
+
+                            // The strip, then the cards of the page it is on:
+                            // one row of the chain, two rails inside it (see
+                            // mediaStripFocus / mediaCardFocus).
+                            item(key = "mediastrip", contentType = "section-row") {
+                                MediaTabStrip(
+                                    tabs = mediaTabs,
+                                    activeIndex = mediaTabIndex,
+                                    focusRequester = mediaStripFocusRequester,
+                                    onKey = mediaStripFocus(
+                                        tabs = mediaTabs,
+                                        activeIndex = { mediaTabIndex },
+                                        onActiveIndex = { index ->
+                                            mediaTabIndex = index
+                                        },
+                                        onFocusContent = {
+                                            scope.launch { focusFirstMediaCard() }
+                                        },
+                                        presence = detailRowPresence
+                                    ),
+                                    modifier = Modifier.padding(
+                                        start = KBScreenEdge,
+                                        bottom = 10.dp
+                                    )
+                                )
+                            }
+
+                            item(key = MEDIA_ROW_KEY, contentType = "section-row") {
+                                // A fresh column map per page, parked under the
+                                // row's key as the row composes: a card of the
+                                // page the viewer just switched away from is
+                                // disposed, and a disposed card's requester
+                                // still sitting in the row's slots is exactly
+                                // the "rail that exists but cannot answer" the
+                                // vertical handoff would then have to guess
+                                // about (see focusChipColumn).
+                                val mediaRowColumns = remember(mediaTab) {
+                                    mutableListOf<FocusRequester?>()
+                                }
+                                chipColumnRequesters[MEDIA_ROW_KEY] = mediaRowColumns
+
+                                LazyRow(
+                                    state = mediaRowState,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    contentPadding = PaddingValues(
+                                        start = 24.dp,
+                                        end = 24.dp,
+                                        top = 10.dp,
+                                        bottom = 10.dp
+                                    ),
+                                    modifier = Modifier
+                                        .padding(bottom = 14.dp)
+                                        .focusGroup()
+                                        .focusRestorer()
+                                ) {
+                                    itemsIndexed(
+                                        mediaCards,
+                                        key = { _, card -> card.id }
+                                    ) { cardIndex, card ->
+                                        val requester = remember(card.id) {
+                                            FocusRequester()
+                                        }
+                                        // Filed by column like every other rail,
+                                        // so a press into this one from the
+                                        // collection above or More Like This
+                                        // below is aimed at the column it came
+                                        // from (see focusRow).
+                                        registerChipColumn(
+                                            MEDIA_ROW_KEY,
+                                            cardIndex,
+                                            requester
+                                        )
+
+                                        MediaThumbCard(
+                                            imageUrl = card.imageUrl,
+                                            badge = card.badge,
+                                            contentDescription = card.title,
+                                            onClick = {
+                                                val video = card.video
+                                                if (video != null) {
+                                                    playTrailer(context, video)
+                                                } else {
+                                                    selectedBackdrop =
+                                                        card.fullImageUrl
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .focusRequester(requester)
+                                                // The row's own handoff: UP is
+                                                // the tab strip, DOWN is the
+                                                // chain's next row.
+                                                .onPreviewKeyEvent(
+                                                    mediaCardFocus(
+                                                        cardIndex,
+                                                        onFocusStrip = {
+                                                            runCatching {
+                                                                mediaStripFocusRequester
+                                                                    .requestFocus()
+                                                            }
+                                                        },
+                                                        presence = detailRowPresence
+                                                    )
+                                                )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
                         if (hasMoreLikeThisRow) {
                             item(key = "recsheader", contentType = "section-header") {
                                 KBSectionHeader(
@@ -4495,6 +4777,16 @@ fun DetailScreen(
                             )
                         }
                     }
+                }
+
+                // The Media row's backdrop press: the still, fullscreen, over a
+                // scrim, and dismissed by Back or either vertical press. This
+                // page's only destination-less zoom (see BackdropOverlay).
+                selectedBackdrop?.let { backdrop ->
+                    BackdropOverlay(
+                        imageUrl = backdrop,
+                        onDismiss = { selectedBackdrop = null }
+                    )
                 }
 
                 selectedReview?.let { review ->
@@ -6505,5 +6797,204 @@ private fun seriesStatusTag(status: String?): String? {
         normalizedStatus.equals("Canceled", ignoreCase = true) -> "CANCELED"
         normalizedStatus.equals("Ended", ignoreCase = true) -> "ENDED"
         else -> null
+    }
+}
+
+/**
+ * The Media row's tab strip: the row's two pages as a pair of pills, the active
+ * one tinted.
+ *
+ * ONE focus node rather than one per tab, and that is the whole design: the tab
+ * a viewer is on is the strip's own selection, walked by LEFT/RIGHT (see
+ * mediaStripFocus), not a focus position. Two focusable tabs would put the two
+ * pages on opposite ends of a D-pad press the default search resolves
+ * geometrically, which is the same geometric guess the page's chip rails had to
+ * stop making; with one node there is nothing sideways to guess about.
+ *
+ * Focus is spoken by the ring around the ACTIVE pill and by nothing else - the
+ * labels do not change color on focus, the same call the poster cards make.
+ */
+@Composable
+private fun MediaTabStrip(
+    tabs: List<MediaTab>,
+    activeIndex: Int,
+    focusRequester: FocusRequester,
+    onKey: (KeyEvent) -> Boolean,
+    modifier: Modifier = Modifier
+) {
+    var isFocused by remember { mutableStateOf(false) }
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = modifier
+            .focusRequester(focusRequester)
+            .onFocusChanged { isFocused = it.isFocused }
+            .onPreviewKeyEvent(onKey)
+            .focusable()
+    ) {
+        tabs.forEachIndexed { index, tab ->
+            val active = index == activeIndex
+            Box(
+                modifier = Modifier
+                    .clip(KBShapePill)
+                    .background(
+                        if (active) KBAccent.copy(alpha = 0.22f) else KBSurface
+                    )
+                    .then(
+                        if (isFocused && active) {
+                            Modifier.border(2.dp, KBAccent, KBShapePill)
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = tab.label.uppercase(Locale.US),
+                    color = if (active) KBTextHi else KBTextLo,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * One card of the Media row: a 16:9 still with the video's type badged over its
+ * top-left corner.
+ *
+ * The badge is what tells a trailer from the teaser and the clips beside it -
+ * TMDB files a title's videos as a flat list, and on a rail of near-identical
+ * stills the type is the only thing distinguishing one card from the next.
+ */
+@Composable
+private fun MediaThumbCard(
+    imageUrl: String?,
+    badge: String?,
+    contentDescription: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    KBCard(
+        onClick = onClick,
+        // A 16:9 tile has no room to grow inside a rail of them without shoving
+        // its neighbours - the same call the cast rail makes - so focus is
+        // spoken by the ring and the glow here rather than by the lift (see
+        // KBCard).
+        focusedScale = KBFocusNone,
+        modifier = modifier.width(240.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(135.dp)
+        ) {
+            if (imageUrl != null) {
+                AsyncImage(
+                    // No ImageRequest and no crossfade: this rail paints a row
+                    // of stills at once, so it takes the loader's no-fade
+                    // default (see MainApplication.newImageLoader).
+                    model = imageUrl,
+                    contentDescription = contentDescription,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = contentDescription,
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(12.dp)
+                    )
+                }
+            }
+
+            badge?.takeIf { it.isNotBlank() }?.let { label ->
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(8.dp)
+                        .clip(KBShapeSmall)
+                        .background(KBVoid.copy(alpha = 0.78f))
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = label,
+                        color = KBTextHi,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A backdrop off the Media row, fullscreen over a scrim.
+ *
+ * A still has nowhere to go, so the press is answered with the thing itself
+ * rather than with a card that does nothing: the whole rail is a viewer asking
+ * to look at the title's art, and the card is a 240dp crop of it. Dismissed by
+ * Back or by either vertical press, and it holds the focus while it is up, so
+ * the D-pad cannot reach the page behind the scrim.
+ */
+@Composable
+private fun BackdropOverlay(
+    imageUrl: String,
+    onDismiss: () -> Unit
+) {
+    val dismissFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        dismissFocusRequester.requestFocus()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(KBVoid.copy(alpha = 0.94f))
+            .focusRequester(dismissFocusRequester)
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type != KeyEventType.KeyDown) {
+                    return@onKeyEvent false
+                }
+
+                when (keyEvent.key) {
+                    Key.Back,
+                    Key.Escape,
+                    Key.DirectionDown,
+                    Key.DirectionUp -> {
+                        onDismiss()
+                        true
+                    }
+
+                    else -> false
+                }
+            }
+            .focusable()
+    ) {
+        AsyncImage(
+            model = imageUrl,
+            contentDescription = "Backdrop",
+            // Fit, not Crop: the point of the press is to see the whole frame,
+            // and a crop would answer with the same framing the card already
+            // showed, only larger.
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(KBScreenEdge)
+        )
     }
 }

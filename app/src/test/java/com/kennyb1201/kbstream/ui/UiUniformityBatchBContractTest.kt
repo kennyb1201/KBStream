@@ -141,8 +141,10 @@ class UiUniformityBatchBContractTest {
         )
         val detail = source("ui/detail/DetailScreen.kt")
         assertEquals(
-            "Detail's rail headings are all the shared heading",
-            7,
+            "Detail's rail headings are all the shared heading - including the " +
+                "Media row's, whose tab strip sits UNDER the heading rather " +
+                "than replacing it",
+            8,
             count(detail, "KBSectionHeader(")
         )
         // The file-wide "no titleSmall in Detail" check this replaces was
@@ -151,7 +153,7 @@ class UiUniformityBatchBContractTest {
         // old treatment actually was is a heading drawn at its own 14sp
         // Medium, so pin the headings themselves - reintroducing a hand-rolled
         // one fails these, and the cards are free to name a title a title.
-        listOf("PEOPLE", "NETWORK", "PRODUCTION", "REVIEWS", "MORE LIKE THIS")
+        listOf("PEOPLE", "NETWORK", "PRODUCTION", "REVIEWS", "MEDIA", "MORE LIKE THIS")
             .forEach { label ->
                 assertTrue(
                     "Detail's \"$label\" heading is not the shared section header",
