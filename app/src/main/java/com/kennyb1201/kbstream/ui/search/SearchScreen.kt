@@ -179,6 +179,19 @@ fun SearchScreen(
         )
     }
 
+    // The chip a long-press menu was opened on, as that chip's focus requester:
+    // what lets the menu hand focus STRAIGHT back to the chip in the same
+    // callback that closes it (see the chip menu's actions below). The browser's
+    // own return arm cannot do this job on its own - it runs a frame later, and
+    // by then the framework has already filled the gap with the page's first
+    // focusable, the category strip at the very top of the browser, which is
+    // what scrolled the screen up and then back down to the chip.
+    var lastChipFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
     fun dismissTitleMenu() {
         menuResult = null
         lastPosterFocusRequester?.requestFocus()
@@ -343,7 +356,10 @@ fun SearchScreen(
                         onReturnChipNameConsumed = { browseChipMenuReturn = null },
                         returnCategoryKey = categoryTabMenuReturn,
                         onReturnCategoryKeyConsumed = { categoryTabMenuReturn = null },
-                        onChipLongPress = { categoryKey, entry ->
+                        onChipLongPress = { categoryKey, entry, chipRequester ->
+                            // Kept, not just used to open the menu: it is what
+                            // the menu hands focus back with.
+                            lastChipFocusRequester = chipRequester
                             hiddenChipMenu = categoryKey to entry
                         },
                         onCategoryLongPress = { category ->
@@ -707,14 +723,23 @@ fun SearchScreen(
                         },
                         isDestructive = onHome
                     ) {
+                        // Focus goes back to the chip FIRST, while the menu is
+                        // still in the tree to hand it over: neither action
+                        // moves the chip, so nothing about the page may move
+                        // either, and an emptied focus owner is what the
+                        // framework fills with the category strip - taking the
+                        // view with it (see lastChipFocusRequester).
+                        lastChipFocusRequester?.requestFocus()
                         if (onHome) {
                             viewModel.removeBrowseChipFromHome(categoryKey, entry)
                         } else {
                             viewModel.addBrowseChipToHome(categoryKey, entry)
                         }
-                        // Neither action moves the chip, so focus goes back to
-                        // the one the menu was opened on rather than to the top
-                        // of the browser.
+                        // Belt and braces for the hand-back: the browser
+                        // re-asks for the chip by name when the request above
+                        // could not land (a node that is not attached yet), and
+                        // a chip that is already on screen is revealed by no
+                        // scroll at all (see browseChipNeedsReveal).
                         browseChipMenuReturn = categoryKey to entry.name
                         hiddenChipMenu = null
                     },
@@ -732,7 +757,9 @@ fun SearchScreen(
                 ),
                 onDismiss = {
                     // Back out of the menu: the chip is still where it was, so
-                    // focus belongs on it exactly as after an action.
+                    // focus belongs on it exactly as after an action - handed
+                    // over the same way, for the same reason.
+                    lastChipFocusRequester?.requestFocus()
                     browseChipMenuReturn = categoryKey to entry.name
                     hiddenChipMenu = null
                 }

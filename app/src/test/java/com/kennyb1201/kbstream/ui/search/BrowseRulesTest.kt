@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.search
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -83,6 +84,40 @@ class BrowseRulesTest {
         assertEquals("1 entry", browseCountLabel(1, 1, "something-new"))
         assertEquals("entry", browseCategoryNoun("something-new"))
         assertEquals("entries", browseCategoryNounPlural("something-new"))
+    }
+
+    @Test
+    fun `a chip already on screen is revealed by no scroll`() {
+        // The reported bug: "Add to Home" on a chip the viewer was looking at
+        // still ran the grid's scroll-to-the-armed-chip, which jumped the rail
+        // so that chip became its first row. A press that does not move the
+        // chip may not move the view either.
+        assertFalse(
+            browseChipNeedsReveal(index = 4, showing = listOf(0, 1, 2, 3, 4, 5))
+        )
+        assertFalse(
+            "a partially scrolled rail still counts its edge cells as showing",
+            browseChipNeedsReveal(index = 19, showing = 10..25)
+        )
+    }
+
+    @Test
+    fun `a chip the rail has not laid out is revealed`() {
+        assertTrue(
+            "a lazy grid composes only what it shows, so a chip deep in a " +
+                "279-entry submenu has no node to focus until the rail is " +
+                "scrolled to it",
+            browseChipNeedsReveal(index = 240, showing = listOf(0, 1, 2, 3, 4))
+        )
+    }
+
+    @Test
+    fun `an index outside the rail is never revealed`() {
+        assertFalse(
+            "a negative index is what a failed lookup answers, and scrolling " +
+                "to it would be a jump to nowhere",
+            browseChipNeedsReveal(index = -1, showing = listOf(0, 1, 2))
+        )
     }
 
     @Test

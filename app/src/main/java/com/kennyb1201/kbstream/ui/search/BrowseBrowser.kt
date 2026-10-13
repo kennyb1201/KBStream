@@ -136,7 +136,12 @@ internal fun SearchBrowseBrowser(
      */
     returnCategoryKey: String? = null,
     onReturnCategoryKeyConsumed: () -> Unit = {},
-    onChipLongPress: ((String, BrowseEntry) -> Unit)? = null,
+    /**
+     * A chip was long-pressed. The chip's own [FocusRequester] comes with it,
+     * so the menu that opens can hand focus straight back to that chip when it
+     * closes - see [SearchChip.chipFocusRequester].
+     */
+    onChipLongPress: ((String, BrowseEntry, FocusRequester) -> Unit)? = null,
     onCategoryLongPress: ((BrowseCategory) -> Unit)? = null
 ) {
     // Selected category lives in the activity-scoped ViewModel, so backing
@@ -657,7 +662,7 @@ private fun SubmenuChipGrid(
     entries: List<BrowseEntry>,
     categoryKey: String,
     onEntryClicked: (String, BrowseEntry) -> Unit,
-    onEntryLongClick: ((String, BrowseEntry) -> Unit)? = null,
+    onEntryLongClick: ((String, BrowseEntry, FocusRequester) -> Unit)? = null,
     armedChipName: String?,
     onReturnChipConsumed: () -> Unit
 ) {
@@ -682,11 +687,19 @@ private fun SubmenuChipGrid(
     // A lazy grid composes only the cells it shows, so a returning chip deep
     // in a big submenu is NOT in the composition when the submenu re-opens:
     // its grabInitialFocus effect would never run and focus would fall back
-    // to the first chip instead of the one the viewer left. Scroll the grid
-    // to it first; the chip's own effect then places focus once it composes.
+    // to the first chip instead of the one the viewer left. Scroll the grid to
+    // it first; the chip's own effect then places focus once it composes.
+    //
+    // Only when it is NOT already showing, though: the chip a viewer just
+    // long-pressed is by definition on screen, and scrolling to it anyway put
+    // that chip in the rail's first row - the jump out of "Add to Home" and
+    // back (see browseChipNeedsReveal).
     LaunchedEffect(armedIndex) {
-        if (armedIndex != null && armedIndex in entries.indices) {
-            runCatching { gridState.scrollToItem(armedIndex) }
+        val index = armedIndex ?: return@LaunchedEffect
+        if (index !in entries.indices) return@LaunchedEffect
+        val showing = gridState.layoutInfo.visibleItemsInfo.map { it.index }
+        if (browseChipNeedsReveal(index, showing)) {
+            runCatching { gridState.scrollToItem(index) }
         }
     }
 
@@ -718,12 +731,21 @@ private fun SubmenuChipGrid(
             // and a chip keeps its identity across a re-resolve.
             key = { _, entry -> BrowseChipVisibility.key(categoryKey, entry.name) }
         ) { entryIndex, entry ->
+            // Owned here and handed BOTH to the chip and to the long-press
+            // handler: the menu that handler opens is drawn over the page and
+            // takes the focus with it, so a request from the menu's own action
+            // - naming this node - is the only thing that puts focus back
+            // without the focus system first falling back to the page's first
+            // focusable and scrolling the browser up to it.
+            val chipFocusRequester = remember(entry.name) { FocusRequester() }
+
             SearchChip(
                 label = entry.name,
                 onClick = { onEntryClicked(categoryKey, entry) },
                 onLongClick = onEntryLongClick?.let { handler ->
-                    { handler(categoryKey, entry) }
+                    { handler(categoryKey, entry, chipFocusRequester) }
                 },
+                chipFocusRequester = chipFocusRequester,
                 grabInitialFocus = armedIndex == entryIndex,
                 onInitialFocusConsumed = {
                     returnChipConsumed = true

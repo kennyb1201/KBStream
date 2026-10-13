@@ -320,14 +320,25 @@ internal fun SearchChip(
     // says so, and it is the difference between a chip that filters in place
     // and one that leaves the screen. Plain select chips (suggestions, recent
     // searches) leave it off.
-    showChevron: Boolean = false
+    showChevron: Boolean = false,
+    // The requester this chip's node is focused through, when the caller owns
+    // it. The browse submenu hands one in (see SubmenuChipGrid): a long-press
+    // menu drawn over the page takes the focus with it, and the only way to put
+    // focus back on this exact chip in the same callback that closes the menu -
+    // rather than a frame later, after the focus system has already fallen back
+    // to the page's first focusable - is for the menu to be holding the node's
+    // own requester. Callers with no such need let the chip make its own.
+    chipFocusRequester: FocusRequester? = null
 ) {
     var focused by remember { mutableStateOf(false) }
+    // Both are created unconditionally: a `?:` around the remember would make
+    // the call conditional, which Compose's slot table cannot survive.
+    val ownFocusRequester = remember { FocusRequester() }
     // Return-chip restore: when this chip is the one that opened the
     // discover screen we just backed out of, pull TV focus onto it (the
     // focus system also scrolls its row to make it visible), then tell the
     // caller so later recompositions don't re-grab.
-    val returnFocusRequester = remember { FocusRequester() }
+    val returnFocusRequester = chipFocusRequester ?: ownFocusRequester
     if (grabInitialFocus) {
         LaunchedEffect(returnFocusRequester) {
             runCatching { returnFocusRequester.requestFocus() }

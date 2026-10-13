@@ -47,6 +47,26 @@ internal fun filterBrowseEntries(
 }
 
 /**
+ * Whether a chip the browser is handing focus back to has to be scrolled into
+ * view first.
+ *
+ * A lazy grid composes only the cells it is showing, so a chip deep into a
+ * submenu of hundreds is not in the composition at all when the submenu opens
+ * again and cannot be focused: the rail has to be scrolled to it first. A chip
+ * that IS on screen must not be scrolled to, and that is the reported bug -
+ * "Add to Home" on a chip the viewer was looking at ran the scroll anyway,
+ * which jumped the grid so that chip became the rail's first row, and the focus
+ * system then brought the view back. The action does not move the chip, so
+ * nothing about the view may move either: reveal only what is not already
+ * showing.
+ *
+ * [showing] is the cell indices the grid has laid out right now, which is what
+ * makes "already on screen" answerable without guessing at geometry.
+ */
+internal fun browseChipNeedsReveal(index: Int, showing: Iterable<Int>): Boolean =
+    index >= 0 && index !in showing
+
+/**
  * The noun one chip of a category is counted in - "genre", "service",
  * "collection". Used for both the tab badge's tooltip-ish count and the
  * "12 of 279 collections" line above the grid, so those two can never
