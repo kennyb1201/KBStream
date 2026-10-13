@@ -10,10 +10,10 @@ import org.junit.Test
  * That the Media row is wired into the detail page the way its rules say.
  *
  * [DetailMediaRowTest] pins the rule; this pins that the page asks it - the
- * section is painted between the collection rail and More Like This, the row is
- * ONE entry of the vertical chain however many rails it holds inside it, the tab
- * strip walks the pages itself while the cards hand DOWN to the chain, and the
- * two lists it draws are the ones the detail call already carries.
+ * section is painted LAST, under More Like This, the row is ONE entry of the
+ * vertical chain however many rails it holds inside it, the tab strip walks the
+ * pages itself while the cards hand DOWN to the chain, and the two lists it
+ * draws are the ones the detail call already carries.
  *
  * Read from the source: these are Compose modifiers and a key handler, which
  * need a device and a remote to press.
@@ -27,7 +27,7 @@ class DetailMediaRowWiringContractTest {
     private val chain: String by lazy { normalized(stripComments(read(CHAIN_FILE))) }
 
     @Test
-    fun `the section is painted between the collection and More Like This`() {
+    fun `the section is painted last, under More Like This`() {
         val collection = screen.indexOf("if (hasCollectionRow) {")
         val media = screen.indexOf("if (hasMediaRow) {")
         val recs = screen.indexOf("if (hasMoreLikeThisRow) {")
@@ -36,11 +36,11 @@ class DetailMediaRowWiringContractTest {
         assertTrue("so is the Media row", media >= 0)
         assertTrue("and so is More Like This", recs >= 0)
         assertTrue(
-            "the Media row renders BESIDE the two rails it sits between in " +
-                "the chain, not after them: UP out of its tab strip is the " +
-                "collection above it and DOWN off its cards is the " +
-                "recommendations below, which is only true of this order",
-            collection < media && media < recs
+            "the Media row renders AFTER both rails painted above it, which is " +
+                "what makes UP out of its tab strip the recommendations and DOWN " +
+                "off its cards the bottom of the page - the order the chain " +
+                "walks",
+            collection < recs && recs < media
         )
         assertTrue(
             "and it carries a section header like every other row",
@@ -54,7 +54,7 @@ class DetailMediaRowWiringContractTest {
     @Test
     fun `the row is ONE entry of the vertical chain`() {
         assertTrue(
-            "the chain declares it, between the collection rail and the " +
+            "the chain declares it, below the collection rail and the " +
                 "recommendations, because that is the order they are painted in",
             chain.contains("DetailRow.MEDIA -> presence.hasMediaRow")
         )
@@ -64,9 +64,9 @@ class DetailMediaRowWiringContractTest {
             screen.contains("hasMediaRow = mediaTabs.isNotEmpty()")
         )
         assertTrue(
-            "so UP and DOWN out of the row resolve to the collection rail and " +
-                "More Like This, with no idea that two rails live inside it",
-            screen.contains("DetailRow.COLLECTION, DetailRow.MEDIA, DetailRow.MORE_LIKE_THIS -> {")
+            "so UP out of the row resolves to More Like This and DOWN to nothing " +
+                "at all, with no idea that two rails live inside it",
+            screen.contains("DetailRow.COLLECTION, DetailRow.MORE_LIKE_THIS, DetailRow.MEDIA -> {")
         )
         assertTrue(
             "and the chain's name for the row meets the list's key in one place",
@@ -99,7 +99,7 @@ class DetailMediaRowWiringContractTest {
             screen.contains("keyEvent.key == Key.DirectionDown -> { onFocusContent() true }")
         )
         assertTrue(
-            "and its UP is the chain's: the collection rail above, read with " +
+            "and its UP is the chain's: the More Like This rail above, read with " +
                 "the row's own directions because a DOWN of its own is spoken for",
             screen.contains(
                 "detailRowVerticalFocus( DetailRow.MEDIA, 0, presence, " +
@@ -111,8 +111,9 @@ class DetailMediaRowWiringContractTest {
     @Test
     fun `a card hands DOWN to the chain and UP back to the strip`() {
         assertTrue(
-            "DOWN is the chain's next row, keeping the card's column like " +
-                "every other card rail on the page",
+            "DOWN is the chain's press out of the row - the bottom of the page, " +
+                "which lands on the header - keeping the card's column like every " +
+                "other card rail on the page",
             screen.contains(
                 "detailRowVerticalFocus( DetailRow.MEDIA, index, presence, " +
                     "setOf(DetailFocusDirection.DOWN) )"

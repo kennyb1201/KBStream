@@ -733,13 +733,24 @@ fun DetailScreen(
      * for yet, answers false so the press falls through to the default search
      * rather than going nowhere. A rail SHORTER than the one the press came
      * from clamps to its last chip ([DetailChipColumns.columnFor]).
+     *
+     * The answer is the request's OWN report, not "the call did not throw". An
+     * unattached requester - which is exactly what a disposed rail's slot holds,
+     * because [registerChipColumn] files requesters as rails compose and nothing
+     * unfiles them - prints the focus warning and RETURNS false rather than
+     * throwing. `runCatching { ... }.isSuccess` was therefore true for every
+     * call ever made, and this answered true for a rail that was not on screen
+     * at all: the press was consumed with the focus left on the row it came
+     * from, and [revealAndFocusChipColumn] - the arm that puts the rail back -
+     * could never run. A miss is the caller's cue to retry, which is what the
+     * reveal does and what the retries in [focusTopOfPage] do.
      */
     fun focusChipColumn(rowKey: String, fromColumn: Int): Boolean {
         val slots =
             chipColumnRequesters[rowKey]?.takeIf { it.isNotEmpty() } ?: return false
         val column = DetailChipColumns.columnFor(fromColumn, slots.size) ?: return false
         val requester = slots[column] ?: return false
-        return runCatching { requester.requestFocus() }.isSuccess
+        return runCatching { requester.requestFocus() }.getOrDefault(false)
     }
 
     /**
@@ -749,7 +760,8 @@ fun DetailScreen(
      * [focusChipColumn]).
      *
      * A disposed rail answers false to [focusChipColumn] because it has no chip
-     * to take the focus, and nothing on the press side can tell that from the
+     * to take the focus - the requesters it filed as it composed are unattached
+     * once it is gone - and nothing on the press side can tell that from the
      * row genuinely not being there. Treating disposal as absence is what
      * skipped the NETWORK rail on the way up out of PRODUCTION, and what left
      * the press with nowhere to land on the way up out of NETWORK. [revealRail]
@@ -1161,14 +1173,21 @@ fun DetailScreen(
      * Answers whether the focus landed. The chain's last arm is the one caller
      * that needs to know: a header with nothing left to hand the focus to is the
      * only way this can answer false.
+     *
+     * Each ask reports its own answer, for the reason [focusChipColumn] spells
+     * out: the people rail's requester is unattached whenever that rail is below
+     * the fold, and "the call did not throw" read that as a landing on the first
+     * pass - so the loop exited before the page had composed what it was waiting
+     * for. The return value is what makes the retry real, and what keeps a
+     * request that took nothing from being counted as the landing.
      */
     suspend fun focusTopOfPage(): Boolean {
         runCatching { detailListState.scrollToItem(0) }
         var attempts = 0
         while (attempts < RETURN_FOCUS_STEPS) {
             val landed =
-                runCatching { movieDetailsFocusRequester.requestFocus() }.isSuccess ||
-                    runCatching { playButtonFocusRequester.requestFocus() }.isSuccess
+                runCatching { movieDetailsFocusRequester.requestFocus() }.getOrDefault(false) ||
+                    runCatching { playButtonFocusRequester.requestFocus() }.getOrDefault(false)
             if (landed) return true
             delay(RETURN_FOCUS_DELAY_MS)
             attempts += 1
@@ -1575,13 +1594,18 @@ fun DetailScreen(
 
         bringSeasonChipIntoView(index)
 
+        // The landing is the request's OWN report, not "the call did not
+        // throw": an unattached requester prints the focus warning and returns
+        // false, so `isSuccess` was true for every call ever made and this
+        // returned on the first attempt whether the chip was there or not (see
+        // [focusChipColumn]).
         repeat(10) {
             val requester = seasonFocusRequesters[season]
             if (
                 requester != null &&
                 runCatching {
                     requester.requestFocus()
-                }.isSuccess
+                }.getOrDefault(false)
             ) {
                 return
             }
@@ -1729,8 +1753,8 @@ fun DetailScreen(
         DetailRow.NETWORK,
         DetailRow.PRODUCTION,
         DetailRow.COLLECTION,
-        DetailRow.MEDIA,
-        DetailRow.MORE_LIKE_THIS -> {
+        DetailRow.MORE_LIKE_THIS,
+        DetailRow.MEDIA -> {
             val targetKey = detailRowKey(target)
             val anchorKey = detailRowKey(from)
             when {
@@ -1776,8 +1800,8 @@ fun DetailScreen(
      * remembers the item it was last left on - from moving the focus a second
      * time.
      *
-     * A DOWN the chain has no row for - the bottom of the page, where the
-     * collection and More Like This rails now sit - is consumed too, and lands
+     * A DOWN the chain has no row for - the bottom of the page, where the Media
+     * row now sits - is consumed too, and lands
      * on the header's PLAY row: the header lives above the list and is always
      * composed, so the press can never be left without a landing, and the
      * default search is never handed a key whose only nodes below it are the
@@ -1832,7 +1856,7 @@ fun DetailScreen(
     /**
      * The Media row's tab strip: LEFT/RIGHT walk the pages of the row, DOWN
      * steps into the cards of the page that is now active, and UP is the
-     * chain's press out of the row - the collection rail above it.
+     * chain's press out of the row - the More Like This rail above it.
      *
      * A tab strip is a row inside a row, which is the one shape the page's
      * chain does not model ([DetailRow.MEDIA] is a single row as far as the
@@ -1878,7 +1902,8 @@ fun DetailScreen(
 
     /**
      * A card of the Media row: UP returns to the row's tab strip, and DOWN is
-     * the chain's press out of the row - the More Like This rail below it.
+     * the chain's press out of the row - the bottom of the page, which the
+     * handler lands on the header PLAY (see [detailRowVerticalFocus]).
      * LEFT/RIGHT are the lazy row's own and are left alone.
      *
      * UP belongs to the row rather than to the chain because it is about the
@@ -2059,8 +2084,10 @@ fun DetailScreen(
             val hasProductionRow = companies.isNotEmpty()
             val hasNetworkRow = normalizedType == "series" && networks.isNotEmpty()
             val hasCollectionRow = collectionParts.isNotEmpty()
-            val hasMediaRow = mediaTabs.isNotEmpty()
             val hasMoreLikeThisRow = recommendations.isNotEmpty()
+            // The Media row is painted LAST, under More Like This (see the
+            // LazyColumn below and [DetailRow.MEDIA]).
+            val hasMediaRow = mediaTabs.isNotEmpty()
             val detailRowPresence = DetailRowPresence(
                 hasKeywordsRow = keywords.isNotEmpty(),
                 hasEpisodesRow = normalizedType == "series" && seasons.isNotEmpty(),
@@ -2068,8 +2095,8 @@ fun DetailScreen(
                 hasNetworkRow = hasNetworkRow,
                 hasProductionRow = hasProductionRow,
                 hasCollectionRow = hasCollectionRow,
-                hasMediaRow = hasMediaRow,
-                hasMoreLikeThisRow = hasMoreLikeThisRow
+                hasMoreLikeThisRow = hasMoreLikeThisRow,
+                hasMediaRow = hasMediaRow
             )
 
             // Add-on art first (fanart etc. from the meta provider), TMDB
@@ -2447,9 +2474,17 @@ fun DetailScreen(
                     var focused = false
                     while (!focused && attempts < RETURN_FOCUS_STEPS) {
                         val requester = railFocusRequesters[target.targetKey]
+                        // The landing is the request's own answer, not "the
+                        // call did not throw": a requester whose card the rail
+                        // has not composed returns false rather than throwing,
+                        // so `isSuccess` ended this loop on its first pass and
+                        // left the focus wherever the reopen had put it - the
+                        // stranding this record exists to undo (see
+                        // [focusChipColumn] and [BrowseReturnFocus]).
                         focused =
                             requester != null &&
-                                runCatching { requester.requestFocus() }.isSuccess
+                                runCatching { requester.requestFocus() }
+                                    .getOrDefault(false)
                         if (!focused) {
                             delay(RETURN_FOCUS_DELAY_MS)
                         }
@@ -4495,125 +4530,6 @@ fun DetailScreen(
                             }
                         }
 
-                        if (hasMediaRow) {
-                            item(key = "mediaheader", contentType = "section-header") {
-                                KBSectionHeader(
-                                    title = "MEDIA",
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        top = 14.dp
-                                    )
-                                )
-                            }
-
-                            // The strip, then the cards of the page it is on:
-                            // one row of the chain, two rails inside it (see
-                            // mediaStripFocus / mediaCardFocus).
-                            item(key = "mediastrip", contentType = "section-row") {
-                                MediaTabStrip(
-                                    tabs = mediaTabs,
-                                    activeIndex = mediaTabIndex,
-                                    focusRequester = mediaStripFocusRequester,
-                                    onKey = mediaStripFocus(
-                                        tabs = mediaTabs,
-                                        activeIndex = { mediaTabIndex },
-                                        onActiveIndex = { index ->
-                                            mediaTabIndex = index
-                                        },
-                                        onFocusContent = {
-                                            scope.launch { focusFirstMediaCard() }
-                                        },
-                                        presence = detailRowPresence
-                                    ),
-                                    modifier = Modifier.padding(
-                                        start = KBScreenEdge,
-                                        bottom = 10.dp
-                                    )
-                                )
-                            }
-
-                            item(key = MEDIA_ROW_KEY, contentType = "section-row") {
-                                // A fresh column map per page, parked under the
-                                // row's key as the row composes: a card of the
-                                // page the viewer just switched away from is
-                                // disposed, and a disposed card's requester
-                                // still sitting in the row's slots is exactly
-                                // the "rail that exists but cannot answer" the
-                                // vertical handoff would then have to guess
-                                // about (see focusChipColumn).
-                                val mediaRowColumns = remember(mediaTab) {
-                                    mutableListOf<FocusRequester?>()
-                                }
-                                chipColumnRequesters[MEDIA_ROW_KEY] = mediaRowColumns
-
-                                LazyRow(
-                                    state = mediaRowState,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                    contentPadding = PaddingValues(
-                                        start = 24.dp,
-                                        end = 24.dp,
-                                        top = 10.dp,
-                                        bottom = 10.dp
-                                    ),
-                                    modifier = Modifier
-                                        .padding(bottom = 14.dp)
-                                        .focusGroup()
-                                        .focusRestorer()
-                                ) {
-                                    itemsIndexed(
-                                        mediaCards,
-                                        key = { _, card -> card.id }
-                                    ) { cardIndex, card ->
-                                        val requester = remember(card.id) {
-                                            FocusRequester()
-                                        }
-                                        // Filed by column like every other rail,
-                                        // so a press into this one from the
-                                        // collection above or More Like This
-                                        // below is aimed at the column it came
-                                        // from (see focusRow).
-                                        registerChipColumn(
-                                            MEDIA_ROW_KEY,
-                                            cardIndex,
-                                            requester
-                                        )
-
-                                        MediaThumbCard(
-                                            imageUrl = card.imageUrl,
-                                            badge = card.badge,
-                                            contentDescription = card.title,
-                                            onClick = {
-                                                val video = card.video
-                                                if (video != null) {
-                                                    playTrailer(context, video)
-                                                } else {
-                                                    selectedBackdrop =
-                                                        card.fullImageUrl
-                                                }
-                                            },
-                                            modifier = Modifier
-                                                .focusRequester(requester)
-                                                // The row's own handoff: UP is
-                                                // the tab strip, DOWN is the
-                                                // chain's next row.
-                                                .onPreviewKeyEvent(
-                                                    mediaCardFocus(
-                                                        cardIndex,
-                                                        onFocusStrip = {
-                                                            runCatching {
-                                                                mediaStripFocusRequester
-                                                                    .requestFocus()
-                                                            }
-                                                        },
-                                                        presence = detailRowPresence
-                                                    )
-                                                )
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
                         if (hasMoreLikeThisRow) {
                             item(key = "recsheader", contentType = "section-header") {
                                 KBSectionHeader(
@@ -4756,13 +4672,135 @@ fun DetailScreen(
                                                 .focusRequester(requester)
                                                 // The same handoff as the rails
                                                 // above: UP reaches the
-                                                // collection, DOWN leaves the
-                                                // chain to the default search.
+                                                // collection, DOWN the Media row
+                                                // painted below this one.
                                                 .onPreviewKeyEvent(
                                                     detailRowVerticalFocus(
                                                         DetailRow.MORE_LIKE_THIS,
                                                         recIndex,
                                                         detailRowPresence
+                                                    )
+                                                )
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // The Media row - the title's videos and its other
+                        // backdrops - is painted LAST, under More Like This:
+                        // one row of the chain, two rails inside it.
+                        if (hasMediaRow) {
+                            item(key = "mediaheader", contentType = "section-header") {
+                                KBSectionHeader(
+                                    title = "MEDIA",
+                                    modifier = Modifier.padding(
+                                        start = KBScreenEdge,
+                                        top = 14.dp
+                                    )
+                                )
+                            }
+
+                            // The strip, then the cards of the page it is on:
+                            // one row of the chain, two rails inside it (see
+                            // mediaStripFocus / mediaCardFocus).
+                            item(key = "mediastrip", contentType = "section-row") {
+                                MediaTabStrip(
+                                    tabs = mediaTabs,
+                                    activeIndex = mediaTabIndex,
+                                    focusRequester = mediaStripFocusRequester,
+                                    onKey = mediaStripFocus(
+                                        tabs = mediaTabs,
+                                        activeIndex = { mediaTabIndex },
+                                        onActiveIndex = { index ->
+                                            mediaTabIndex = index
+                                        },
+                                        onFocusContent = {
+                                            scope.launch { focusFirstMediaCard() }
+                                        },
+                                        presence = detailRowPresence
+                                    ),
+                                    modifier = Modifier.padding(
+                                        start = KBScreenEdge,
+                                        bottom = 10.dp
+                                    )
+                                )
+                            }
+
+                            item(key = MEDIA_ROW_KEY, contentType = "section-row") {
+                                // A fresh column map per page, parked under the
+                                // row's key as the row composes: a card of the
+                                // page the viewer just switched away from is
+                                // disposed, and a disposed card's requester
+                                // still sitting in the row's slots is exactly
+                                // the "rail that exists but cannot answer" the
+                                // vertical handoff would then have to guess
+                                // about (see focusChipColumn).
+                                val mediaRowColumns = remember(mediaTab) {
+                                    mutableListOf<FocusRequester?>()
+                                }
+                                chipColumnRequesters[MEDIA_ROW_KEY] = mediaRowColumns
+
+                                LazyRow(
+                                    state = mediaRowState,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    contentPadding = PaddingValues(
+                                        start = 24.dp,
+                                        end = 24.dp,
+                                        top = 10.dp,
+                                        bottom = 10.dp
+                                    ),
+                                    modifier = Modifier
+                                        .padding(bottom = 14.dp)
+                                        .focusGroup()
+                                        .focusRestorer()
+                                ) {
+                                    itemsIndexed(
+                                        mediaCards,
+                                        key = { _, card -> card.id }
+                                    ) { cardIndex, card ->
+                                        val requester = remember(card.id) {
+                                            FocusRequester()
+                                        }
+                                        // Filed by column like every other rail,
+                                        // so a press into this one from the
+                                        // More Like This rail above it is aimed
+                                        // at the column it came from (see
+                                        // focusRow).
+                                        registerChipColumn(
+                                            MEDIA_ROW_KEY,
+                                            cardIndex,
+                                            requester
+                                        )
+
+                                        MediaThumbCard(
+                                            imageUrl = card.imageUrl,
+                                            badge = card.badge,
+                                            contentDescription = card.title,
+                                            onClick = {
+                                                val video = card.video
+                                                if (video != null) {
+                                                    playTrailer(context, video)
+                                                } else {
+                                                    selectedBackdrop =
+                                                        card.fullImageUrl
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .focusRequester(requester)
+                                                // The row's own handoff: UP is
+                                                // the tab strip, DOWN is the
+                                                // chain's press out of the page.
+                                                .onPreviewKeyEvent(
+                                                    mediaCardFocus(
+                                                        cardIndex,
+                                                        onFocusStrip = {
+                                                            runCatching {
+                                                                mediaStripFocusRequester
+                                                                    .requestFocus()
+                                                            }
+                                                        },
+                                                        presence = detailRowPresence
                                                     )
                                                 )
                                         )

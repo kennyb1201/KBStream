@@ -120,11 +120,38 @@ class DetailFocusChainTest {
 
         val recsLast = presence(production = true, collection = true, moreLikeThis = true)
         assertNull(
-            "and More Like This is the last row the page ever names",
+            "and More Like This is the bottom when the title has no videos or " +
+                "stills to show",
             DetailFocusChain.nextRow(
                 DetailRow.MORE_LIKE_THIS,
                 DetailFocusDirection.DOWN,
                 recsLast
+            )
+        )
+
+        val mediaLast = presence(
+            production = true,
+            collection = true,
+            moreLikeThis = true,
+            media = true
+        )
+        assertEquals(
+            "the Media row is painted LAST of all, so More Like This hands DOWN " +
+                "to it rather than off the page",
+            DetailRow.MEDIA,
+            DetailFocusChain.nextRow(
+                DetailRow.MORE_LIKE_THIS,
+                DetailFocusDirection.DOWN,
+                mediaLast
+            )
+        )
+        assertNull(
+            "and DOWN out of IT is the end of the chain: the press belongs to " +
+                "the header PLAY",
+            DetailFocusChain.nextRow(
+                DetailRow.MEDIA,
+                DetailFocusDirection.DOWN,
+                mediaLast
             )
         )
     }
@@ -158,41 +185,45 @@ class DetailFocusChainTest {
     }
 
     @Test
-    fun `the Media row sits between the collection and More Like This`() {
+    fun `the Media row is the last row, below More Like This`() {
         // The row is one entry of the chain however many rails it holds inside
-        // itself, which is the whole point of naming it here: DOWN out of it is
-        // the recommendations rail and UP out of it is the collection, and only
-        // the row's own tab strip knows there are two pages in between.
+        // itself, which is the whole point of naming it here: UP out of it is
+        // the recommendations rail painted above it and DOWN out of it is the
+        // bottom of the page, and only the row's own tab strip knows there are
+        // two pages in between.
         val movie = presence(production = true, collection = true, media = true, moreLikeThis = true)
         assertEquals(
-            DetailRow.MEDIA,
+            DetailRow.MORE_LIKE_THIS,
             DetailFocusChain.nextRow(DetailRow.COLLECTION, DetailFocusDirection.DOWN, movie)
         )
         assertEquals(
-            DetailRow.MORE_LIKE_THIS,
-            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.DOWN, movie)
+            DetailRow.MEDIA,
+            DetailFocusChain.nextRow(DetailRow.MORE_LIKE_THIS, DetailFocusDirection.DOWN, movie)
         )
         assertEquals(
-            DetailRow.MEDIA,
-            DetailFocusChain.nextRow(DetailRow.MORE_LIKE_THIS, DetailFocusDirection.UP, movie)
+            DetailRow.MORE_LIKE_THIS,
+            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.UP, movie)
         )
         assertEquals(
             DetailRow.COLLECTION,
-            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.UP, movie)
+            DetailFocusChain.nextRow(DetailRow.MORE_LIKE_THIS, DetailFocusDirection.UP, movie)
+        )
+        assertNull(
+            "nothing is below the Media row, so its DOWN is the header's",
+            DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.DOWN, movie)
         )
     }
 
     @Test
     fun `a title with only a Media row is still reachable from both sides`() {
-        // No collection and no cast: the row's neighbours are the production
-        // chips above it and the recommendations below.
+        // No collection and no cast: the row's neighbour above is the
+        // recommendations rail, and below it there is nothing at all.
         val mediaOnly = presence(production = true, media = true, moreLikeThis = true)
         assertEquals(
-            DetailRow.PRODUCTION,
+            DetailRow.MORE_LIKE_THIS,
             DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.UP, mediaOnly)
         )
-        assertEquals(
-            DetailRow.MORE_LIKE_THIS,
+        assertNull(
             DetailFocusChain.nextRow(DetailRow.MEDIA, DetailFocusDirection.DOWN, mediaOnly)
         )
         // A title with nothing but videos and stills: the row is the last one
@@ -354,8 +385,12 @@ class DetailFocusChainTest {
         )
         DetailRow.entries.forEach { row ->
             val target = DetailFocusChain.nextRow(row, DetailFocusDirection.DOWN, page)
-            if (row == DetailRow.MORE_LIKE_THIS) {
-                assertNull("the bottom row has nothing below it in the chain", target)
+            if (row == DetailRow.MEDIA) {
+                assertNull(
+                    "the Media row is painted last, so it is the bottom row and " +
+                        "has nothing below it in the chain",
+                    target
+                )
             } else {
                 assertTrue(
                     "DOWN out of $row must land on a row this page has",

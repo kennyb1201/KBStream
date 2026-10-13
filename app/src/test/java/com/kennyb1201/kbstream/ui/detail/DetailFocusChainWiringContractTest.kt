@@ -170,6 +170,86 @@ class DetailFocusChainWiringContractTest {
     }
 
     @Test
+    fun `the reveal waits for the rail to be composed before it asks for the focus`() {
+        val reveal = detail
+            .substringAfter("suspend fun revealAndFocusChipColumn(")
+            .substringBefore("var returnTarget by remember")
+        val scroll = reveal.indexOf("detailListState.revealRail(rowKey, hint)")
+        val composed = reveal.indexOf("visibleItemsInfo.any { it.key == rowKey }")
+        val ask = reveal.indexOf("focusChipColumn(rowKey, fromColumn)")
+        assertTrue(
+            "the rail is scrolled back in first, anchored on the row the press " +
+                "came from",
+            scroll >= 0
+        )
+        assertTrue(
+            "then the row has to be back among the COMPOSED items before the " +
+                "focus is asked for: a request against a card that is not composed " +
+                "fails silently, and that silent failure is the stranding",
+            composed in (scroll + 1) until ask
+        )
+        assertTrue(
+            "and the ask is retried for a bounded number of frames rather than " +
+                "made once, because the list composes the row a frame or more " +
+                "after the scroll",
+            reveal.contains("while (attempts < RETURN_FOCUS_STEPS)") &&
+                reveal.contains("delay(RETURN_FOCUS_DELAY_MS)")
+        )
+        assertTrue(
+            "the outcome is reported, which is what lets the caller fall back to " +
+                "the header rather than leaving the press unlanded",
+            reveal.contains("return true") && reveal.contains("return false")
+        )
+    }
+
+    @Test
+    fun `a landing is read from the request's own answer, not from whether the call threw`() {
+        // Checked against the Compose this project builds on (ui 1.12.1): an
+        // unattached requester prints the focus warning and RETURNS false - it
+        // does not throw - so `runCatching { ... }.isSuccess` is true for every
+        // call ever made, including one against a rail the scroll disposed,
+        // whose filed requesters are all unattached. focusChipColumn therefore
+        // answered true for a rail that was not on screen at all: the press was
+        // consumed with the focus still on the row it came from, and the reveal
+        // arm above - the one that puts the rail back - could never run.
+        assertTrue(
+            detail.contains(
+                "return runCatching { requester.requestFocus() }.getOrDefault(false)"
+            )
+        )
+        assertTrue(
+            detail.contains(
+                "runCatching { movieDetailsFocusRequester.requestFocus() }" +
+                    ".getOrDefault(false)"
+            )
+        )
+        assertTrue(
+            detail.contains(
+                "runCatching { playButtonFocusRequester.requestFocus() }" +
+                    ".getOrDefault(false)"
+            )
+        )
+        assertFalse(
+            "the swallowed-call spelling is what made the answer meaningless",
+            detail.contains("return runCatching { requester.requestFocus() }.isSuccess") ||
+                detail.contains(
+                    "runCatching { movieDetailsFocusRequester.requestFocus() }.isSuccess"
+                ) ||
+                detail.contains(
+                    "runCatching { playButtonFocusRequester.requestFocus() }.isSuccess"
+                )
+        )
+        assertTrue(
+            "and the reveal hangs off that answer, so an always-true " +
+                "focusChipColumn is exactly what leaves it unreachable",
+            detail.contains(
+                "focusChipColumn(targetKey, fromColumn) -> true anchorKey != null " +
+                    "&& revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true"
+            )
+        )
+    }
+
+    @Test
     fun `the presence the chain reads is the same expression that renders each row`() {
         assertTrue(
             "the tag rail exists exactly when it renders",
@@ -227,14 +307,15 @@ class DetailFocusChainWiringContractTest {
             "NETWORK",
             "PRODUCTION",
             "COLLECTION",
-            "MEDIA",
-            "MORE_LIKE_THIS"
+            "MORE_LIKE_THIS",
+            "MEDIA"
         ).forEach { row ->
             val at = body.indexOf(row)
             assertTrue(
                 "the chain must declare $row, in the order it is painted - " +
                     "people above networks above production companies, and the " +
-                    "collection rail above the Media row above More Like This",
+                    "collection rail above More Like This above the Media row, " +
+                    "which is painted last of all",
                 at > lastIndex
             )
             lastIndex = at
