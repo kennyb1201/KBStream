@@ -8,7 +8,7 @@ KBStream is a media streaming client for Android TV, Fire TV and phones. It has
 no advertising, no user tracking, and no analytics SDK. This policy says exactly
 what the app does with your data, which is what the code actually does.
 
-Contact for anything in this policy: **<FILL IN: a monitored email address>**,
+Contact for anything in this policy: **kennykenny1201@gmail.com**,
 or open an issue at <https://github.com/kennyb1201/KBStream/issues>.
 
 ---
@@ -162,5 +162,5 @@ release notes.
 
 ## 8. Contact
 
-**<FILL IN: operator name / email address>**
+**KB / kennykenny1201@gmail.com**
 <https://github.com/kennyb1201/KBStream/issues>
