@@ -2237,6 +2237,42 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * The Dolby Vision profile libdovi reads out of the first RPU (62) NAL in
+     * an Annex-B sample, or [DoviBridge.NOT_DOLBY_VISION] when this build has no
+     * libdovi or no RPU parses.
+     *
+     * [sampleHasDvNalsAnnexB] answers a different question — "is there a NAL
+     * whose header byte says 62?" — which is all the sniff needs to lock into
+     * stripping, and is deliberately left as it is. This asks libdovi, which
+     * actually parses the RBSP, so the field log can say WHICH profile a report's
+     * file really is: a "P7 -> 8.1 didn't render" report is a different bug when
+     * the RPU turns out to be 8.1 already, or to be profile 0 because the NAL is
+     * not an RPU at all. First sample of a track that is already being rewritten,
+     * so the one JNI call is off every hot path.
+     */
+    fun sampleDvProfileFromLibdovi(buf: ByteArray, length: Int): Int {
+        if (!DoviBridge.available || length < 3) return DoviBridge.NOT_DOLBY_VISION
+        var read = 0
+        while (read < length) {
+            val code = indexOfStartCode(buf, read, length)
+            if (code < 0) return DoviBridge.NOT_DOLBY_VISION
+            val codeLen =
+                if (code + 3 < length && buf[code + 2].toInt() == 0 && buf[code + 3].toInt() == 1) 4 else 3
+            val header = code + codeLen
+            var nalEnd = indexOfStartCode(buf, header, length)
+            if (nalEnd < 0) nalEnd = length
+            if (nalEnd - header >= 2) {
+                val nalType = ((buf[header].toInt() and 0xFF) ushr 1) and 0x3F
+                if (nalType == NAL_DV_RPU) {
+                    return DoviBridge.nativeDetectProfile(buf, header, nalEnd - header)
+                }
+            }
+            read = nalEnd
+        }
+        return DoviBridge.NOT_DOLBY_VISION
+    }
+
+    /**
      * True when an Annex-B sample contains Dolby Vision RPU (62) / EL (63) NAL
      * units — used to detect in-band DV on streams whose container carried no
      * dvcc marker (codecs reported as plain hvc1/hev1).
@@ -3013,6 +3049,16 @@ internal object DolbyVisionCompat {
      * when the RPU is not P5/P7 or cannot be converted.
      */
     fun rewriteRpuTo81(buf: ByteArray, from: Int, to: Int): ByteArray? {
+        // libdovi first, when this build carries it (see [DoviBridge]). The
+        // hand-rolled conversion below is what the field boxes stall on: the
+        // MediaTek decoder accepts libdovi's 8.1 RPU and refuses this one, and
+        // the difference is exactly the part of the RPU this parser "parses" by
+        // pattern. Same contract either way - the payload without its NAL header,
+        // or null when there is nothing convertible - so the callers cannot tell
+        // which one ran, and the Kotlin path stays the fallback for every build
+        // without the .so (local builds, and any CI run whose native step
+        // failed).
+        DoviBridge.convertRpuTo81(buf, from, to)?.let { return it }
         if (to - from < 4) return null
         val rbsp = removeEmulationPrevention(buf, from + 2, to)
         val converted = convertRpuPayloadTo81(rbsp) ?: return null

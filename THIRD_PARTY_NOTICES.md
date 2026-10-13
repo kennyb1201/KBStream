@@ -19,6 +19,10 @@ code shipped in the APK and the licenses its authors publish it under.
 | FriBidi | linked into `libassjni.so` by `scripts/build_libass.sh` | LGPL-2.1-or-later |
 | expat | linked into `libassjni.so` by `scripts/build_libass.sh` (fontconfig's XML parser) | MIT |
 
+There is no copyleft native component in the Dolby Vision path: libdovi is MIT
+(see the permissive list below), so `libdovi.so` and `libdovi_bridge.so` add no
+obligation beyond the attribution already recorded here.
+
 Because KBStream includes NewPipeExtractor, which is GPLv3, any distributed build
 that contains it must be licensed under terms compatible with the GPLv3 and made
 available with corresponding source. The project's top-level `LICENSE` is
@@ -39,6 +43,7 @@ apart from attribution, impose no distribution obligations:
 - OkHttp, Moshi — Apache-2.0
 - Coil 3 — Apache-2.0
 - Ktor client — Apache-2.0
+- libdovi (`dolby_vision`, the C API of [quietvoid/dovi_tool](https://github.com/quietvoid/dovi_tool), fetched from crates.io at `3.4.0` and built into `libdovi.so` by `scripts/build_dovi.sh`) — MIT. The `libdovi_bridge.so` next to it is this repo's own `app/src/main/cpp/dovi_bridge.c`, GPL-3.0-or-later like the rest of the app.
 - Sentry Android SDK — MIT
 - Supabase-kt — MIT
 - KSP — Apache-2.0
@@ -50,7 +55,9 @@ The authoritative list is the `dependencies` block of `app/build.gradle.kts`,
 plus the native components that are not dependencies at all: the mpvlibAndroid
 AAR fetched by `scripts/fetch_mpv_aar.sh` (its license follows the build recipe
 in that release, not the repo's own MIT wrapper), the FFmpeg AAR produced by
-`scripts/build_ffmpeg_video.sh`, and the libass/FreeType/HarfBuzz/fontconfig/
-FriBidi/expat set linked into `libassjni.so` by `scripts/build_libass.sh`.
+`scripts/build_ffmpeg_video.sh`, the libass/FreeType/HarfBuzz/fontconfig/
+FriBidi/expat set linked into `libassjni.so` by `scripts/build_libass.sh`, and
+the `dolby_vision` crate plus this repo's `dovi_bridge.c` built into
+`libdovi.so`/`libdovi_bridge.so` by `scripts/build_dovi.sh`.
 When a dependency is added or upgraded, update the tables above. Dependabot
 (`.github/dependabot.yml`) opens the upgrade PRs.

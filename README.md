@@ -175,6 +175,37 @@ the same reason `libffmpegJNI.so` does: a separate soname means a separate load
 scope, whereas shipping a second `libass.so` would put two files with one name
 in the APK.
 
+### Required for a release: libdovi (Dolby Vision RPU conversion)
+
+Dolby Vision Player 7 content on the ExoPlayer engine is rewritten to Profile
+8.1 before the decoder sees it. That rewrite used to be this app's own Kotlin
+parser, and the MediaTek decoder on the field boxes stalls on every variant of
+it — the picture goes black while audio keeps playing. The bytes now come from
+[libdovi](https://github.com/quietvoid/dovi_tool) (MIT), which parses the RPU
+and writes the conversion itself:
+
+```sh
+# needs Rust (rustup), `cargo install cargo-ndk`, and an Android NDK r28
+rustup target add aarch64-linux-android armv7-linux-androideabi
+scripts/build_dovi.sh
+# -> app/src/main/jniLibs/{arm64-v8a,armeabi-v7a}/libdovi.so
+#    app/src/main/jniLibs/{arm64-v8a,armeabi-v7a}/libdovi_bridge.so
+./gradlew assembleDebug
+```
+
+The crate is fetched from crates.io at the version in `DOVI_VERSION` (default
+`3.4.0`) and built with its C API; `app/src/main/cpp/dovi_bridge.c` is the JNI
+bridge and `DoviBridge.kt` its Kotlin surface. Both land in
+`app/src/main/jniLibs`, which is a default Gradle source set (and gitignored),
+so there is nothing to wire into `app/build.gradle.kts`.
+
+The `Build KBStream APK` workflow runs the script in a cached step and uploads
+the result as the `libdovi-jni` artifact — **download that from any green run
+and unzip it into `app/src/main/jniLibs/`** rather than compiling it yourself.
+Unlike libass, a miss here FAILS the release: without the libraries the Kotlin
+rewrite takes over, which is a working fallback on some hardware but leaves the
+P7 → 8.1 setting producing a black screen on the boxes it exists for.
+
 ## Running tests
 
 JVM unit tests cover the Kids Mode rating matrix, legacy value migration, the
@@ -362,6 +393,11 @@ docs/              # Supabase RLS + Realtime SQL reference
 - `scripts/build_ffmpeg_video.sh` builds the optional video-enabled FFmpeg
   decoder extension (see Building → Optional: software video decoding). It
   needs an NDK, which the normal Gradle build does not.
+- `scripts/build_libass.sh` and `scripts/build_dovi.sh` build the native
+  libraries the APK is expected to carry (ASS typesetting and Dolby Vision RPU
+  conversion). Both need an NDK; the libdovi one also needs Rust and
+  `cargo-ndk`. They are built by CI and published as artifacts, which is the
+  supported way to get them without a toolchain — see Building above.
 
 ## License
 
@@ -371,7 +407,7 @@ KBStream is licensed under the **GNU General Public License v3.0 or later**
 That is not a free choice here: the app bundles NewPipeExtractor, which is
 GPLv3, so any distributed build has to carry GPL-compatible terms and ship
 corresponding source. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists
-the other bundled components (mpv, FFmpeg, libass, and the permissive
+the other bundled components (mpv, FFmpeg, libass, libdovi, and the permissive
 libraries) with their licenses.
 
 ## Privacy

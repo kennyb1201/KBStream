@@ -803,9 +803,22 @@ private class VideoCompatTrackOutput(
                 mode = Mode.STRIPPING
                 strippingTo81 = convertTo81
                 val action = if (convertTo81) "converting to Profile 8.1" else "stripping to HDR10"
+                // What the RPU actually is, according to the library that will
+                // convert it. The sniff above only reads the NAL type byte, so a
+                // report of "P7 -> 8.1 didn't render" needs this line to say
+                // whether the file really is profile 7 (and so whether the
+                // conversion, rather than the detection, is what to look at).
+                // One JNI call, on the first sample of a track that is already
+                // being rewritten; every later sample reuses the locked mode.
+                val libdoviProfile = DolbyVisionCompat.sampleDvProfileFromLibdovi(pendingBuf, sampleEnd)
+                val libdoviNote = when {
+                    !DoviBridge.available -> "libdovi not in this build"
+                    libdoviProfile > 0 -> "libdovi reads P$libdoviProfile"
+                    else -> "libdovi parsed no RPU"
+                }
                 Log.i(
                     "PLAYER_DV",
-                    "In-band Dolby Vision RPU detected (no dvcc marker, codecs=${currentCodecs ?: "?"}) — $action"
+                    "In-band Dolby Vision RPU detected (no dvcc marker, codecs=${currentCodecs ?: "?"}, $libdoviNote) — $action"
                 )
                 // This track's codec config was emitted untouched (it looked
                 // like plain HEVC), so its VPS/SPS still declare the original

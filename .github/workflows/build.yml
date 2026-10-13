@@ -87,6 +87,10 @@ jobs:
       # with 4 KB page alignment and crash on 16 KB page-size devices.
       MEDIA3_TAG: "1.11.1"
       NDK_VERSION: "28.2.13676358"
+      # The dolby_vision (libdovi) crate the DV RPU bridge is built against. The
+      # version is pinned here as well as in scripts/build_dovi.sh so the cargo
+      # cache key below cannot be shared with a build of a different version.
+      DOVI_VERSION: "3.4.0"
       
     steps:
       - name: Checkout
@@ -446,6 +450,143 @@ jobs:
               missing=1
             fi
           fi
+          exit $missing
+
+      # --- libdovi Dolby Vision RPU conversion (hard-gated) -------------------
+      # Builds quietvoid/dovi_tool's `dolby_vision` crate with its C API, plus
+      # the JNI bridge in app/src/main/cpp/dovi_bridge.c, for the app's ABIs,
+      # and drops them at app/src/main/jniLibs/<abi>/{libdovi,libdovi_bridge}.so
+      # -- a default Gradle source set, so the APK packages them with no
+      # build-file wiring.
+      #
+      # Why it ships: the Kotlin RPU rewrite the ExoPlayer engine has been using
+      # produces a Profile 8.1 RPU that the MediaTek decoder on the field boxes
+      # refuses, so the Player 7 -> 8.1 path presents as audio over a black
+      # screen -- relabel, no-relabel and VPS-rewrite variants alike. libdovi
+      # parses the RPU and writes the conversion itself, which is what the
+      # reference player does on the same box with the same file. This is not a
+      # new capability so much as the one the DV settings already promise.
+      #
+      # Native libdovi is therefore treated exactly like native libass above:
+      # no continue-on-error, and the check below exits 1. A release built
+      # without these .so files is not degraded gracefully from the user's
+      # point of view -- DoviBridge.available is false, the Kotlin rewrite
+      # stays in charge, and the P7 -> 8.1 setting stops rendering on the
+      # hardware it exists for, with no error anywhere. There is deliberately
+      # no allow_missing_libdovi input.
+      #
+      # Prebuilding the .so files and checking them in (as libassjni.so once
+      # was) is not an option here: the crate is Rust with a C API shim, and a
+      # checked-in binary cannot be rebuilt or audited from this tree.
+      - name: Cache the libdovi build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            build/dovi
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+          # NDK_VERSION is in the key for the same reason it is in the libass
+          # key: these are objects produced by one toolchain. DOVI_VERSION is
+          # there so a crate bump never restores the previous version's build,
+          # and the hash covers the bridge plus the vendored header it is
+          # compiled against.
+          key: libdovi-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ env.DOVI_VERSION }}-${{ hashFiles('scripts/build_dovi.sh', 'app/src/main/cpp/dovi_bridge.c', 'app/src/main/cpp/libdovi-include/**') }}
+          restore-keys: |
+            libdovi-${{ runner.os }}-${{ env.NDK_VERSION }}-${{ env.DOVI_VERSION }}-
+
+      - name: Build libdovi JNI libraries
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$(command -v sdkmanager || echo "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "ndk;${NDK_VERSION}"
+          # Same trap as the FFmpeg and libass blocks: the runner exports
+          # ANDROID_NDK pointing at a preinstalled NDK, and the script prefers
+          # it over NDK_VERSION. Pin the whole build to the version installed
+          # here so the crate and the bridge are linked by one toolchain.
+          export ANDROID_NDK="${ANDROID_HOME}/ndk/${NDK_VERSION}"
+          if [[ ! -d "$ANDROID_NDK" ]]; then
+            echo "::error::NDK ${NDK_VERSION} missing at ${ANDROID_NDK}; refusing to silently build with a different toolchain"
+            exit 1
+          fi
+          # ubuntu-latest ships rustup but not cargo-ndk, and not the two
+          # Android targets. ~/.cargo/bin is cached above, so this install is
+          # paid once rather than on every release.
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          fi
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          bash scripts/build_dovi.sh
+
+      # Kept even when the build failed: the log is the only record of why, and
+      # a successful run's .so files are worth downloading for a device test of
+      # the P7 -> 8.1 path.
+      - name: Upload libdovi JNI libraries
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: libdovi-jni
+          path: app/src/main/jniLibs
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # A FAILURE, not a warning: see the block comment above. It covers both
+      # ABIs and both libraries, the link from the bridge to the crate, and the
+      # 16 KB alignment of the arm64-v8a pair -- the same three things
+      # scripts/build_dovi.sh gates on its own output, because a script that is
+      # skipped or silently not run must not pass this either.
+      #
+      # `-lW` (wide) here, unlike the build script: binutils WRAPS the long LOAD
+      # line, which pushes the alignment column onto a continuation line, so
+      # `$NF` on the LOAD line is a file offset and an aligned library reads as
+      # unaligned. (The script uses the NDK's llvm-readelf, which does not
+      # wrap.)
+      - name: Check whether libdovi was produced
+        if: always()
+        run: |
+          set -euo pipefail
+          missing=0
+          for abi in arm64-v8a armeabi-v7a; do
+            for lib in libdovi.so libdovi_bridge.so; do
+              so="app/src/main/jniLibs/${abi}/${lib}"
+              if [[ -s "$so" ]]; then
+                echo "${lib} (${abi}) built: $(wc -c < "$so") bytes"
+              else
+                echo "::error::${lib} (${abi}) was not produced, so this release's APK would ship without libdovi: the Dolby Vision RPU rewrite would fall back to the Kotlin parser the MediaTek decoder stalls on, and P7 -> 8.1 would render as audio over a black screen again. See the 'Build libdovi JNI libraries' step above."
+                missing=1
+              fi
+            done
+          done
+          # The bridge has to link the crate: a libdovi_bridge.so with an
+          # unresolved dovi_* symbol would dlopen on the device and fail there.
+          for abi in arm64-v8a armeabi-v7a; do
+            bridge="app/src/main/jniLibs/${abi}/libdovi_bridge.so"
+            if [[ -s "$bridge" ]]; then
+              if readelf -dW "$bridge" | grep -q 'NEEDED.*libdovi\.so'; then
+                echo "libdovi_bridge.so (${abi}) links libdovi.so"
+              else
+                echo "::error::libdovi_bridge.so (${abi}) does not link libdovi.so, so its RPU symbols would be unresolved on the device"
+                missing=1
+              fi
+            fi
+          done
+          # 16 KB page-size gate (Play requirement, Feb 1 2027): a library that
+          # is not aligned crashes on an Android 15+ device that runs with 16 KB
+          # pages. arm64-v8a alone, for the same reason the packaged-library
+          # gate below checks only 64-bit ABIs.
+          for lib in libdovi.so libdovi_bridge.so; do
+            so="app/src/main/jniLibs/arm64-v8a/${lib}"
+            if [[ -s "$so" ]]; then
+              if readelf -lW "$so" | awk '$1 == "LOAD" { if ($NF == "0x4000") found = 1 } END { exit(found ? 0 : 1) }'; then
+                echo "${lib} (arm64-v8a) is 16 KB page aligned"
+              else
+                echo "::error::${lib} (arm64-v8a) is not 16 KB page aligned, so it crashes on a 16 KB page-size device (Android 15+) and Play will reject it from Feb 1 2027; rebuild with NDK r28 (see the 'Build libdovi JNI libraries' step above)"
+                missing=1
+              fi
+            fi
+          done
           exit $missing
 
       - name: Restore release keystore
