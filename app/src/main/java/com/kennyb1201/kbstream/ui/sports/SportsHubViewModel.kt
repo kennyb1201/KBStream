@@ -308,11 +308,40 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
      * re-fetches JUST that tab's league(s) every 30 seconds; when nothing is in
      * play - a finished slate, or a league the poll was never for - there is no
      * job at all, so a hub left open on NFL does not ask ESPN a question a
-     * minute about the NHL. It lives in the ViewModel's own scope, so it is tied
-     * to the screen's lifetime: [onCleared] cancels it, and nothing polls once
-     * the hub is gone.
+     * minute about the NHL.
+     *
+     * NOT tied to the hub's own lifetime, which is what this comment used to
+     * claim: the hub's ViewModel is obtained with a bare `viewModel()` inside
+     * MainActivity's Screen.Sports branch, so it is ACTIVITY-scoped and
+     * [onCleared] fires only when the whole activity dies - while the player is
+     * a Screen in the same activity and merely disposes the hub's composable.
+     * ESPN was therefore re-polled every 30 seconds behind a film, with
+     * [refreshDetailSummary] and [resolveMatches] churn along with it. The
+     * screen stops it on the way out and re-arms it on the way back in (see
+     * [pauseLivePoll] / [resumeLivePoll]).
      */
     private var livePollJob: Job? = null
+
+    /**
+     * Whether the screen in front of the viewer is the hub. Set while the
+     * player (or anything else) has taken the screen, so a [syncLivePoll] the
+     * section's own state would otherwise re-arm cannot start a loop behind it.
+     */
+    private var pollPaused = false
+
+    /**
+     * Where the hub's card grid was left (see [rememberHubScroll]).
+     *
+     * Held here rather than in the screen because the screen does not survive
+     * the player: `Screen.Player` is a route in the same activity, so opening a
+     * game disposes the composable and a rememberLazyGridState inside it came
+     * back at the top. The ViewModel outlives that, exactly as it does for the
+     * tab and the loaded sections.
+     */
+    var hubScrollIndex: Int = 0
+        private set
+    var hubScrollOffset: Int = 0
+        private set
 
     /**
      * Whether the hub currently has a lineup to match against. See
@@ -404,6 +433,53 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
         if (SportsLeagues.byPath(path)?.hasStandings != true) _view.value = LeagueView.GAMES
         if (_view.value == LeagueView.STANDINGS) ensureStandings()
         syncLivePoll()
+    }
+
+    /**
+     * Stops the live tick while the hub is not the screen in front of the
+     * viewer - the player route disposes the hub's composable while this
+     * activity-scoped ViewModel (and its scope) stays alive, so [onCleared] is
+     * not the moment the tick ends. Called from the screen's dispose.
+     *
+     * Nothing but the tick stops: the loaded sections, the selection and the
+     * match results all stay, which is what makes a player return cheap.
+     */
+    fun pauseLivePoll() {
+        pollPaused = true
+        livePollJob?.cancel()
+        livePollJob = null
+    }
+
+    /**
+     * Re-arms the tick for the tab in front of the viewer when the hub comes
+     * back. Re-aimed from the sections already held, and from the current
+     * selection, because the live set may have moved while the player was up -
+     * a game that kicked off in the meantime is polled from the first beat.
+     */
+    fun resumeLivePoll() {
+        pollPaused = false
+        syncLivePoll()
+    }
+
+    /**
+     * Remembers where the hub's grid was left, so the player's Back lands on
+     * the slate the viewer was reading rather than its top. Written from the
+     * screen's dispose, which is exactly when the composition - and the state
+     * inside it - is about to go.
+     */
+    fun rememberHubScroll(index: Int, offset: Int) {
+        hubScrollIndex = index
+        hubScrollOffset = offset
+    }
+
+    /**
+     * Forgets the remembered place. A tab is a slate of its own and one list
+     * state is shared by all of them, so a switch must not inherit the league's
+     * before it - "NFL to NHL inherits NFL's scroll offset" was the report.
+     */
+    fun forgetHubScroll() {
+        hubScrollIndex = 0
+        hubScrollOffset = 0
     }
 
     /**
@@ -642,6 +718,8 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     private fun syncLivePoll() {
         livePollJob?.cancel()
         livePollJob = null
+        // Nothing polls while the hub is not the screen in front of the viewer.
+        if (pollPaused) return
         val paths = SportsLivePollRules.liveLeagues(
             sections = _sections.value,
             selectedPath = _selectedLeaguePath.value,

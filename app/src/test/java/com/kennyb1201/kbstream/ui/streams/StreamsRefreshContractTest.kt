@@ -95,8 +95,10 @@ class StreamsRefreshContractTest {
     fun `the refresh chip is an action, not a tab`() {
         val chip = body(screen, "private fun StreamRefreshChip(")
         assertTrue(
-            "it fires on the press",
-            chip.contains("KBCard(onClick = onRefresh)")
+            "it fires on the press - one card, whose own click IS the refresh (the entry-focus " +
+                "requester is passed alongside it, so this is matched by shape rather than by one " +
+                "line)",
+            Regex("KBCard\\(\\s*onClick = onRefresh,").containsMatchIn(chip)
         )
         assertFalse(
             "and NOT on focus - adopting on focus is what makes the tabs beside it a picker, " +

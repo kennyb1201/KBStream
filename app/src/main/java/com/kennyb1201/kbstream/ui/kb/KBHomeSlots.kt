@@ -588,6 +588,13 @@ fun KBHomeCollectionRail(
     collection: KBCollectionProfile,
     onOpenFolder: (String) -> Unit,
     onFolderFocused: ((KBFolder) -> Unit)? = null,
+    /**
+     * The tile D-pad focus has just landed on, reported with its own
+     * FocusRequester. Home keeps the requester of the card focus is ON (it is
+     * what a hold-Up restore and the top bar's dismiss come back to), and a
+     * tile's requester is made inside the row, where only this rail can see it.
+     */
+    onFocusedCardRequester: ((FocusRequester) -> Unit)? = null,
     // Non-null only for the rail Home draws first (see [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
@@ -657,7 +664,16 @@ fun KBHomeCollectionRail(
                     CollectionFolderTile(
                         folder = folder,
                         onClick = { onOpenFolder(folderId) },
-                        onFocus = onFolderFocused?.let { callback -> { callback(folder) } },
+                        onFocus = if (
+                            onFolderFocused == null && onFocusedCardRequester == null
+                        ) {
+                            null
+                        } else {
+                            {
+                                onFolderFocused?.invoke(folder)
+                                onFocusedCardRequester?.invoke(requester)
+                            }
+                        },
                         modifier = Modifier
                             .focusRequester(requester)
                             .homeTopRailUpHook(requester, onUpPressed)
@@ -896,6 +912,12 @@ fun KBHomeBrowseRail(
     artByKey: Map<String, BrowseShortcutArt> = emptyMap(),
     onOpenShortcut: (BrowseHomeShortcut) -> Unit,
     onShortcutFocused: ((BrowseHomeShortcut) -> Unit)? = null,
+    /**
+     * The tile D-pad focus has just landed on, with its own FocusRequester -
+     * the same contract [KBHomeCollectionRail] has, and for the same reason:
+     * the requester is made inside the row (see [onFocusedCardRequester]).
+     */
+    onFocusedCardRequester: ((FocusRequester) -> Unit)? = null,
     // Long-press on a tile, with that tile's own FocusRequester. Home raises
     // its "Remove from Home" menu from here, and the requester is what lets the
     // menu hand focus back to the tile it came from - the same contract the
@@ -943,8 +965,15 @@ fun KBHomeBrowseRail(
                     onLongClick = onShortcutLongPress?.let { callback ->
                         { callback(shortcut, requester) }
                     },
-                    onFocus = onShortcutFocused?.let { callback ->
-                        { callback(shortcut) }
+                    onFocus = if (
+                        onShortcutFocused == null && onFocusedCardRequester == null
+                    ) {
+                        null
+                    } else {
+                        {
+                            onShortcutFocused?.invoke(shortcut)
+                            onFocusedCardRequester?.invoke(requester)
+                        }
                     },
                     modifier = Modifier
                         .focusRequester(requester)

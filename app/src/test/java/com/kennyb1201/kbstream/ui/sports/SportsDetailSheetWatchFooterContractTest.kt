@@ -85,9 +85,11 @@ class SportsDetailSheetWatchFooterContractTest {
                 sheetCall.contains("SportsDetailRules.watchLabel(true)")
         )
         assertTrue(
-            "and it is focused on open, so one press watches",
+            "and it is focused on open, so one press watches - confirmed rather than assumed, since " +
+                "the pinned footer only composes a frame after the sheet opens",
             sheetCall.contains(".focusRequester(watchButton)") &&
-                sheetCall.contains("LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }")
+                sheetCall.contains("watchButton.requestFocus()") &&
+                sheetCall.contains("while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {")
         )
         assertEquals(
             "exactly one focus request in the whole sheet: the action's, and it is outside the scroll",

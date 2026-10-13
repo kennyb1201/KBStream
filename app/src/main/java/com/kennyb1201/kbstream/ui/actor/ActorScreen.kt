@@ -19,7 +19,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -40,6 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -68,6 +70,11 @@ import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -78,6 +85,23 @@ import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
+import kotlinx.coroutines.delay
+
+/**
+ * The rail keys of the two filmography rails, and of the outer items that hold
+ * them: [revealBrowseReturnRail] looks for a rail by the key its OUTER item
+ * carries, and the per-rail filter matches the same value (see
+ * [BrowseReturnFocus]).
+ */
+private const val ACTOR_MOVIES_RAIL = "moviesrow"
+private const val ACTOR_TV_RAIL = "tvrow"
+
+/**
+ * The Actor page's own key, the only place it is spelled out (see
+ * [BrowseReturnFocus]). One page per person: two actors' filmographies must not
+ * read each other's record.
+ */
+private fun actorBrowseScreenKey(actorId: Int): String = "actor:$actorId"
 
 @OptIn(ExperimentalFoundationApi::class)
 private class ActorBringIntoViewSpec(
@@ -114,6 +138,21 @@ fun ActorScreen(
 
     val posterSize = rememberPosterSize()
 
+    // Where this page's Detail page was opened from, read once when the credits
+    // land: the card the viewer pressed, its rail and its position, so backing
+    // out of Detail reopens the filmography where they left it instead of at
+    // the top (see [BrowseReturnFocus]).
+    val browseReturnKey = remember(actorId) { actorBrowseScreenKey(actorId) }
+    val browseListState = rememberLazyListState()
+    var returnTarget by remember {
+        mutableStateOf<BrowseReturnTarget?>(null)
+    }
+    // How many times this page has waited for the return's rail to land behind.
+    var returnAttempts by remember { mutableStateOf(0) }
+    var focusPlaced by remember { mutableStateOf(false) }
+    val returnFocusRequester = remember { FocusRequester() }
+    val firstCreditFocusRequester = remember { FocusRequester() }
+
     LaunchedEffect(actorId) {
         viewModel.load(actorId)
     }
@@ -121,6 +160,14 @@ fun ActorScreen(
     // Long-press context menu for credit posters.
     var menuCredit by remember {
         mutableStateOf<TmdbPersonCredit?>(
+            null
+        )
+    }
+
+    // The place the open menu's title was pressed from, so its "Go to Details"
+    // records the same return a card press would (see [BrowseReturnFocus]).
+    var menuReturnTarget by remember {
+        mutableStateOf<BrowseReturnTarget?>(
             null
         )
     }
@@ -133,6 +180,7 @@ fun ActorScreen(
 
     fun dismissCreditMenu() {
         menuCredit = null
+        menuReturnTarget = null
         lastCreditFocusRequester?.requestFocus()
     }
 
@@ -171,6 +219,77 @@ fun ActorScreen(
             }
             val tvShows = remember(sortedCredits) {
                 sortedCredits.filter { it.mediaType == "tv" }
+            }
+
+            // The outer item indices of the two rail rows, which is what
+            // [revealBrowseReturnRail] scrolls to: the biography, when the
+            // person has one, is the item before the first header.
+            val moviesRowIndex = if (p.biography.orEmpty().isNotBlank()) 2 else 1
+            val tvRowIndex = moviesRowIndex + 2
+
+            /**
+             * Puts the page back where the viewer left it: the rail on screen,
+             * its row scrolled to the card, and the focus on that card. Answers
+             * whether the focus landed; a record for a rail this page does not
+             * paint answers false, and the caller holds the record and asks
+             * again - the credits land before the rails always have.
+             */
+            suspend fun restoreBrowseReturn(recorded: BrowseReturnTarget): Boolean {
+                val railKey = recorded.railKey ?: return false
+                val railKeys = buildList {
+                    if (movies.isNotEmpty()) add(ACTOR_MOVIES_RAIL)
+                    if (tvShows.isNotEmpty()) add(ACTOR_TV_RAIL)
+                }
+                if (railKey !in railKeys) return false
+                browseListState.revealBrowseReturnRail(railKey, recorded.railIndex)
+                var landed = false
+                var attempts = 0
+                while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+                    delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+                    landed = runCatching { returnFocusRequester.requestFocus() }
+                        .getOrDefault(false)
+                    attempts++
+                }
+                return landed
+            }
+
+            /**
+             * Takes the page's own first card: where an ordinary open lands,
+             * and the last resort for a return this page could never put back.
+             * The D-pad was dead on a fresh Actor page until the viewer did
+             * something that happened to grab focus, so this is the landing an
+             * ordinary open was missing. Retried for the same reason as the
+             * other: the rail may not have composed its first card yet.
+             */
+            suspend fun focusFirstCard() {
+                var landed = false
+                var attempts = 0
+                while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+                    delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+                    landed = runCatching { firstCreditFocusRequester.requestFocus() }
+                        .getOrDefault(false)
+                    attempts++
+                }
+            }
+
+            // A page reopened from one of its own Detail pages comes back on the
+            // card the viewer pressed; an ordinary open, or a return this page
+            // could never put back, falls through to the first card. The record
+            // is HELD until honoured: the rail that holds the card can land
+            // after the first one does, and a record read and then dropped
+            // would lose the place it was raised for (see [BrowseReturnFocus]).
+            LaunchedEffect(movies, tvShows) {
+                if (!focusPlaced && (movies.isNotEmpty() || tvShows.isNotEmpty())) {
+                    val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)
+                    if (recorded != null && returnAttempts < BROWSE_RETURN_FOCUS_STEPS) {
+                        returnTarget = recorded
+                        returnAttempts++
+                        focusPlaced = restoreBrowseReturn(recorded)
+                        return@LaunchedEffect
+                    }
+                    focusPlaced = true
+                    focusFirstCard()
+                }
             }
 
             CompositionLocalProvider(LocalBringIntoViewSpec provides LocalActorBringIntoViewSpec) {
@@ -292,6 +411,10 @@ fun ActorScreen(
                         }
 
                         LazyColumn(
+                            // The screen's own state, so a return can scroll the
+                            // rail holding the pressed card back on screen (see
+                            // [BrowseReturnFocus]).
+                            state = browseListState,
                             modifier = Modifier
                                 .weight(1f, fill = true)
                                 .fillMaxWidth()
@@ -394,36 +517,29 @@ fun ActorScreen(
                                         modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
                                     )
                                 }
-                                item(key = "moviesrow") {
-                                    LazyRow(
-                                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
-                                        modifier = Modifier.padding(bottom = 16.dp).focusGroup().focusRestorer()
-                                    ) {
-                                        items(movies, key = { it.id }) { credit ->
-                                            val requester = remember(
-                                                credit.id
-                                            ) {
-                                                FocusRequester()
-                                            }
-
-                                            ActorCreditCard(
-                                                credit = credit,
-                                                isWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "movie")]
-                                                    ?.let { imdbId -> viewModel.watchedKey(imdbId, "movie") in watchedKeys } == true,
-                                                isPartiallyWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "movie")]
-                                                    ?.let { imdbId -> viewModel.watchedKey(imdbId, "movie") in partialWatchedKeys } == true,
-                                                onClick = {
-                                                    viewModel.resolveAndNavigate(credit.id, "movie", onNavigateDetail)
-                                                },
-                                                onLongClick = {
-                                                    lastCreditFocusRequester =
-                                                        requester
-                                                    menuCredit = credit
-                                                },
-                                                focusRequester = requester
-                                            )
+                                item(key = ACTOR_MOVIES_RAIL) {
+                                    ActorCreditRail(
+                                        credits = movies,
+                                        railKey = ACTOR_MOVIES_RAIL,
+                                        railIndex = moviesRowIndex,
+                                        normalizedMediaType = "movie",
+                                        isFirstRail = true,
+                                        bottomPadding = 16.dp,
+                                        browseReturnKey = browseReturnKey,
+                                        returnTarget = returnTarget?.takeIf { it.railKey == ACTOR_MOVIES_RAIL },
+                                        returnFocusRequester = returnFocusRequester,
+                                        firstCreditFocusRequester = firstCreditFocusRequester,
+                                        resolvedCreditIds = resolvedCreditIds,
+                                        watchedKeys = watchedKeys,
+                                        partialWatchedKeys = partialWatchedKeys,
+                                        viewModel = viewModel,
+                                        onNavigateDetail = onNavigateDetail,
+                                        onOpenPosterMenu = { credit, requester, target ->
+                                            lastCreditFocusRequester = requester
+                                            menuCredit = credit
+                                            menuReturnTarget = target
                                         }
-                                    }
+                                    )
                                 }
                             }
 
@@ -436,36 +552,32 @@ fun ActorScreen(
                                         modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 10.dp)
                                     )
                                 }
-                                item(key = "tvrow") {
-                                    LazyRow(
-                                        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
-                                        modifier = Modifier.padding(bottom = 32.dp).focusGroup().focusRestorer()
-                                    ) {
-                                        items(tvShows, key = { it.id }) { credit ->
-                                            val requester = remember(
-                                                credit.id
-                                            ) {
-                                                FocusRequester()
-                                            }
-
-                                            ActorCreditCard(
-                                                credit = credit,
-                                                isWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "series")]
-                                                    ?.let { imdbId -> viewModel.watchedKey(imdbId, "series") in watchedKeys } == true,
-                                                isPartiallyWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, "series")]
-                                                    ?.let { imdbId -> viewModel.watchedKey(imdbId, "series") in partialWatchedKeys } == true,
-                                                onClick = {
-                                                    viewModel.resolveAndNavigate(credit.id, "tv", onNavigateDetail)
-                                                },
-                                                onLongClick = {
-                                                    lastCreditFocusRequester =
-                                                        requester
-                                                    menuCredit = credit
-                                                },
-                                                focusRequester = requester
-                                            )
+                                item(key = ACTOR_TV_RAIL) {
+                                    ActorCreditRail(
+                                        credits = tvShows,
+                                        railKey = ACTOR_TV_RAIL,
+                                        railIndex = tvRowIndex,
+                                        normalizedMediaType = "series",
+                                        // The first rail the page draws takes the
+                                        // entry focus when the movie rail is
+                                        // absent.
+                                        isFirstRail = movies.isEmpty(),
+                                        bottomPadding = 32.dp,
+                                        browseReturnKey = browseReturnKey,
+                                        returnTarget = returnTarget?.takeIf { it.railKey == ACTOR_TV_RAIL },
+                                        returnFocusRequester = returnFocusRequester,
+                                        firstCreditFocusRequester = firstCreditFocusRequester,
+                                        resolvedCreditIds = resolvedCreditIds,
+                                        watchedKeys = watchedKeys,
+                                        partialWatchedKeys = partialWatchedKeys,
+                                        viewModel = viewModel,
+                                        onNavigateDetail = onNavigateDetail,
+                                        onOpenPosterMenu = { credit, requester, target ->
+                                            lastCreditFocusRequester = requester
+                                            menuCredit = credit
+                                            menuReturnTarget = target
                                         }
-                                    }
+                                    )
                                 }
                             }
                         }
@@ -552,7 +664,13 @@ fun ActorScreen(
                                     label = "Go to Details",
                                     description = "Open this title's detail page"
                                 ) {
+                                    // The same place a card press records: backing
+                                    // out of the Detail page this opens returns to
+                                    // the credit's own rail and position (see
+                                    // [BrowseReturnFocus]).
+                                    menuReturnTarget?.let { BrowseReturnFocus.record(it) }
                                     menuCredit = null
+                                    menuReturnTarget = null
                                     viewModel.resolveAndNavigate(
                                         credit.id,
                                         credit.mediaType
@@ -571,6 +689,7 @@ fun ActorScreen(
                                     )
                                 ) {
                                     menuCredit = null
+                                    menuReturnTarget = null
                                     if (isWatched) {
                                         viewModel.markUnwatched(
                                             credit.id,
@@ -598,6 +717,95 @@ fun ActorScreen(
     }
 }
 
+/**
+ * One filmography rail, keyed so a return from Detail can put it back: the
+ * outer page reveals the rail, this scrolls the row to the card, and the card
+ * the record names carries [returnFocusRequester] (see [BrowseReturnFocus]).
+ */
+@Composable
+private fun ActorCreditRail(
+    credits: List<TmdbPersonCredit>,
+    railKey: String,
+    railIndex: Int,
+    normalizedMediaType: String,
+    isFirstRail: Boolean,
+    bottomPadding: Dp,
+    browseReturnKey: String,
+    returnTarget: BrowseReturnTarget?,
+    returnFocusRequester: FocusRequester,
+    firstCreditFocusRequester: FocusRequester,
+    resolvedCreditIds: Map<String, String?>,
+    watchedKeys: Set<String>,
+    partialWatchedKeys: Set<String>,
+    viewModel: ActorViewModel,
+    onNavigateDetail: (String, String) -> Unit,
+    onOpenPosterMenu: (TmdbPersonCredit, FocusRequester, BrowseReturnTarget) -> Unit
+) {
+    val rowState = rememberLazyListState()
+
+    // Puts this rail ON the card a return is coming back for: a rail the viewer
+    // scrolled twenty cards into has not composed that card, so it has no focus
+    // node yet (see [BrowseReturnFocus]).
+    LaunchedEffect(returnTarget) {
+        returnTarget?.let { target ->
+            runCatching { rowState.scrollToItem(target.position) }
+        }
+    }
+
+    LazyRow(
+        state = rowState,
+        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
+        modifier = Modifier.padding(bottom = bottomPadding).focusGroup().focusRestorer()
+    ) {
+        itemsIndexed(
+            items = credits,
+            key = { _, credit -> credit.id }
+        ) { index, credit ->
+            val requester = remember(credit.id) { FocusRequester() }
+            val cardKey = credit.id.toString()
+            val target = BrowseReturnTarget(
+                screenKey = browseReturnKey,
+                itemId = cardKey,
+                position = index,
+                railKey = railKey,
+                railIndex = railIndex
+            )
+            // The card the record names, by the key this rail keys it with, so
+            // a rail that has re-ordered under the viewer comes back on the
+            // card that is still there rather than on whatever took its place.
+            val isReturnItem =
+                returnTarget != null &&
+                    index == returnTarget.position &&
+                    cardKey == returnTarget.itemId
+            val isFirstItem = isFirstRail && index == 0
+
+            ActorCreditCard(
+                credit = credit,
+                isWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, normalizedMediaType)]
+                    ?.let { imdbId -> viewModel.watchedKey(imdbId, normalizedMediaType) in watchedKeys } == true,
+                isPartiallyWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, normalizedMediaType)]
+                    ?.let { imdbId -> viewModel.watchedKey(imdbId, normalizedMediaType) in partialWatchedKeys } == true,
+                onClick = {
+                    // Remember this card, so backing out of its Detail page
+                    // reopens this rail ON it (see [BrowseReturnFocus]).
+                    BrowseReturnFocus.record(target)
+                    viewModel.resolveAndNavigate(
+                        credit.id,
+                        credit.mediaType ?: normalizedMediaType,
+                        onNavigateDetail
+                    )
+                },
+                onLongClick = { onOpenPosterMenu(credit, requester, target) },
+                focusRequester = requester,
+                // A return wins over the entry focus if both land on one card:
+                // the return is the viewer's own place.
+                extraFocusRequester = returnFocusRequester.takeIf { isReturnItem }
+                    ?: firstCreditFocusRequester.takeIf { isFirstItem }
+            )
+        }
+    }
+}
+
 @Composable
 private fun ActorCreditCard(
     credit: TmdbPersonCredit,
@@ -605,6 +813,10 @@ private fun ActorCreditCard(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
     focusRequester: FocusRequester? = null,
+    // A second requester for the same card: the entry focus on a fresh open, or
+    // the return focus on a card backed into from Detail (see
+    // [BrowseReturnFocus]).
+    extraFocusRequester: FocusRequester? = null,
     isPartiallyWatched: Boolean = false
 ) {
     val posterSize = rememberPosterSize()
@@ -636,6 +848,13 @@ private fun ActorCreditCard(
                 .then(
                     if (focusRequester != null) {
                         Modifier.focusRequester(focusRequester)
+                    } else {
+                        Modifier
+                    }
+                )
+                .then(
+                    if (extraFocusRequester != null) {
+                        Modifier.focusRequester(extraFocusRequester)
                     } else {
                         Modifier
                     }

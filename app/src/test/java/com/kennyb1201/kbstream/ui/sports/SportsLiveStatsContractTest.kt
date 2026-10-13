@@ -250,8 +250,12 @@ class SportsLiveStatsContractTest {
                 hub.contains("if (open == null) viewModel.closeDetail() else viewModel.openDetail(open)")
         )
         assertTrue(
-            "and closing it - or leaving the hub - clears the summary",
-            hub.contains("DisposableEffect(Unit) { onDispose { viewModel.closeDetail() } }")
+            "and closing it - or leaving the hub - clears the summary, with the " +
+                "live tick stopped alongside it: the hub's composable really is " +
+                "disposed by the player route while the activity-scoped ViewModel " +
+                "lives on, so onCleared is not what ends the tick",
+            hub.contains("onDispose { viewModel.closeDetail()") &&
+                hub.contains("viewModel.pauseLivePoll()")
         )
     }
 

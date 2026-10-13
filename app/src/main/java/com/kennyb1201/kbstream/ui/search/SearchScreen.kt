@@ -138,6 +138,15 @@ fun SearchScreen(
 
     // Long-press menus for the browse browser: a submenu chip offers "Hide",
     // the category strip offers "Unhide all" for the hidden chips under it.
+    // One FocusRequester per browse chip, keyed by BrowseChipVisibility.key(),
+    // owned HERE rather than inside the chip grid. The grid's own per-item
+    // `remember(entry.name)` node is unreachable from the Hide action below,
+    // which runs in this screen's scope - and Hide is the one action that has
+    // to name a chip the viewer is not looking at (the one taking the hidden
+    // chip's place) and hand it the focus. Same shape as the browser's own
+    // tabFocusRequesters.
+    val browseChipFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+
     var hiddenChipMenu by remember {
         mutableStateOf<Pair<String, BrowseEntry>?>(null)
     }
@@ -191,6 +200,13 @@ fun SearchScreen(
             null
         )
     }
+
+    // One requester per search-result tile, keyed by the identity its rail keys
+    // it with ("type:id"). Owned here for the same reason the browse chips'
+    // registry is: the menu's Hide runs in this screen's scope, and the tile
+    // that takes a hidden one's place has to be named from outside the lazy
+    // row. Without it the Hide handed focus to the tile that was leaving.
+    val titleTileFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
 
     fun dismissTitleMenu() {
         menuResult = null
@@ -351,6 +367,7 @@ fun SearchScreen(
                     SearchBrowseBrowser(
                         viewModel = viewModel,
                         categories = browseCategories,
+                        chipFocusRequesters = browseChipFocusRequesters,
                         submenuLoading = browseSubmenuLoading,
                         returnChipName = browseChipMenuReturn,
                         onReturnChipNameConsumed = { browseChipMenuReturn = null },
@@ -430,9 +447,12 @@ fun SearchScreen(
                                 // tiles fight over one slot.
                                 key = { result: SearchTitleResult -> "${result.type}:${result.id}" }
                             ) { result: SearchTitleResult ->
-                                val requester = remember(
-                                    result.type,
-                                    result.id
+                                // From the screen's registry rather than a
+                                // local remember, so the menu's Hide can reach
+                                // a tile it is not looking at (see
+                                // titleTileFocusRequesters).
+                                val requester = titleTileFocusRequesters.getOrPut(
+                                    "${result.type}:${result.id}"
                                 ) {
                                     FocusRequester()
                                 }
@@ -653,6 +673,32 @@ fun SearchScreen(
                     ),
                     year = result.year
                 ),
+                // Hide takes this tile off the rail, and the entry it pointed
+                // at has nowhere to hand focus. So the tile that takes its
+                // place is named and focused FIRST, while this one is still
+                // composed and the menu is still in the tree - the same
+                // hand-off the browse chips' Hide does (see
+                // successorIndexAfter). Left alone, the D-pad was handed a
+                // dying node and the rail shrank out from under it.
+                onBeforeHide = {
+                    val index = results.indexOfFirst {
+                        it.type == result.type && it.id == result.id
+                    }
+                    // No neighbour (the rail held only this title) names
+                    // nothing: the rail goes with it and the framework moves
+                    // focus to the nearest surface still on screen.
+                    successorIndexAfter(results.size, index)?.let { successor ->
+                        val next = results[successor]
+                        titleTileFocusRequesters["${next.type}:${next.id}"]
+                            ?.requestFocus()
+                    }
+                    // And the tile being hidden must not take the focus BACK:
+                    // it is still attached for this frame, so the dismiss that
+                    // follows would land its request on the dying node and
+                    // lose the focus with it - the report this fixes. Clearing
+                    // the target makes that dismiss a no-op.
+                    lastPosterFocusRequester = null
+                },
                 actions = listOf(
                     PosterContextAction(
                         label = "Go to Details",
@@ -748,9 +794,33 @@ fun SearchScreen(
                         description = "Remove this chip from the browse list",
                         isDestructive = true
                     ) {
+                        // The chip that takes this one's place gets the focus,
+                        // and gets it BEFORE the hidden chip leaves: the
+                        // request only lands while the menu is still in the
+                        // tree, and the hidden chip's own node is the one going
+                        // away. Doing nothing here let the framework fill the
+                        // emptied focus owner with the category strip - the
+                        // list scrolled up - and the ViewModel's armed neighbor
+                        // then pulled it back down a frame later, so the page
+                        // jumped twice before settling (see successorKey).
+                        val successor = BrowseChipVisibility.successorKey(
+                            categoryKey = categoryKey,
+                            names = browseCategories
+                                .firstOrNull { it.key == categoryKey }
+                                ?.entries
+                                .orEmpty()
+                                .map { it.name },
+                            name = entry.name
+                        )
+                        successor?.let { key ->
+                            browseChipFocusRequesters[key]?.requestFocus()
+                        }
                         viewModel.hideBrowseChip(categoryKey, entry)
-                        // Not this chip: it is the one leaving the list. The
-                        // ViewModel arms the chip that takes its place.
+                        // Nothing named for the menu's own hand-back: this chip
+                        // is the one leaving the list. The ViewModel still arms
+                        // the chip that took its place, which is the fallback
+                        // for a successor whose node was not composed yet (a
+                        // lazy grid composes only the cells on screen).
                         browseChipMenuReturn = null
                         hiddenChipMenu = null
                     }

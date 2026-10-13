@@ -984,8 +984,25 @@ LaunchedEffect(channelListState, groupedChannelIds) {
         }
     } else if (pending != null && target == null) {
         // Saved channel vanished (playlist changed) -- make sure something
-        // is focused instead of leaving the screen focusless.
-        runCatching { allTabFocusRequester.requestFocus() }
+        // is focused instead of leaving the screen focusless. The answer is
+        // the success test, retried across frames: a one-shot request against
+        // a node that is not attached yet silently does nothing (the All chip
+        // is fine to want, but wanting it is not having it), which is the very
+        // focusless screen this branch exists to prevent. If even the retry
+        // cannot land it, the channel LIST is asked instead - it outlives the
+        // chips row and is the one node this screen is guaranteed to have when
+        // it has channels at all.
+        var focused = false
+        var attempts = 0
+        while (!focused && attempts < 8) {
+            awaitFrame()
+            focused = runCatching { allTabFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+        if (!focused) {
+            runCatching { channelListFocusRequester.requestFocus() }
+        }
     }
   }
 
@@ -1058,7 +1075,19 @@ LaunchedEffect(channelListState, groupedChannelIds) {
     val restoringChannel = savedChannelKey
         ?.takeIf { key -> groupedChannels.any { channelKey(it) == key } } != null
     if (!pendingFocusChannel && !restoringChannel) {
-        runCatching { allTabFocusRequester.requestFocus() }
+        // The return value is the test, retried across frames: the chips row
+        // is composed by the frame after this one, and a request that loses
+        // that race answers false rather than throwing - so a one-shot read as
+        // "focused" left the first Down press to the platform's own default
+        // resolution, the exact non-determinism this effect exists to remove.
+        var focused = false
+        var attempts = 0
+        while (!focused && attempts < 8) {
+            awaitFrame()
+            focused = runCatching { allTabFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
     }
 }
 
@@ -1861,7 +1890,19 @@ private fun SetupPanel(
         // shares the screen with the header (Up must still reach it), and a
         // dialog opened from the panel owns focus until it closes.
         if (containFocus && !panelHasFocus) {
-            runCatching { recoveryFocusRequester.requestFocus() }
+            // The stored chapter is older than this frame: focus was handed
+            // back deliberately, and the panel's first field is what should
+            // have it. Requested once with the answer discarded, the restore
+            // silently did not happen whenever the field was a frame late,
+            // leaving the D-pad on nothing - so it is retried until it lands.
+            var landed = false
+            var attempts = 0
+            while (!landed && attempts < 8) {
+                awaitFrame()
+                landed = runCatching { recoveryFocusRequester.requestFocus() }
+                    .getOrDefault(false)
+                attempts++
+            }
         }
     }
 
@@ -3026,7 +3067,18 @@ private fun ChannelSearchDialog(
             }
             query.isBlank() -> {
                 awaitingSubmitFocus = false
-                runCatching { closeFocusRequester.requestFocus() }
+                // CLOSE is the answer to a blank query, but the row it lives on
+                // is composed with the hits: an unverified request here is a
+                // Done that leaves the D-pad on the field and no way out of
+                // the dialog but Back, so it is confirmed across frames.
+                var landed = false
+                var attempts = 0
+                while (!landed && attempts < 8) {
+                    awaitFrame()
+                    landed = runCatching { closeFocusRequester.requestFocus() }
+                        .getOrDefault(false)
+                    attempts++
+                }
             }
             else -> awaitingSubmitFocus = true
         }

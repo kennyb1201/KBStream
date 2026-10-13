@@ -67,6 +67,27 @@ internal fun browseChipNeedsReveal(index: Int, showing: Iterable<Int>): Boolean 
     index >= 0 && index !in showing
 
 /**
+ * The index that takes a removed item's place: the next one, or the one before
+ * it when the removed item was the last.
+ *
+ * Clamped, never wrapped - removing the last entry must land on the entry that
+ * is now last, not throw focus back to the first, which is the very jump this
+ * exists to prevent. Null when the index is not in the list, or the list holds
+ * nothing else: null is the caller's signal that there is no neighbour to name.
+ *
+ * The two rails that remove a focusable cell under the viewer's D-pad - the
+ * browse submenu's Hide and the search results rail's Hide - both have to name
+ * the replacement BEFORE the removed cell leaves the composition, because a
+ * request against a node in its last frame is the only request that lands.
+ * One rule so the two cannot disagree about which cell that is.
+ */
+internal fun successorIndexAfter(size: Int, index: Int): Int? {
+    if (index !in 0 until size) return null
+    if (index + 1 < size) return index + 1
+    return (index - 1).takeIf { it >= 0 }
+}
+
+/**
  * The noun one chip of a category is counted in - "genre", "service",
  * "collection". Used for both the tab badge's tooltip-ish count and the
  * "12 of 279 collections" line above the grid, so those two can never

@@ -84,11 +84,23 @@ class HomeTopBarHoldContractTest {
             header.contains("rememberHomeTopBarHoldUpHook(")
         )
 
-        // The bar has to hand focus back to the card the viewer left, so the
-        // restore target is the one Home already keeps for its poster menus.
+        // The bar has to hand focus back to the card the viewer left. That is
+        // the card focus is ON, tracked by every rail's own focus callback - the
+        // long-press target alone names whatever card was last long-pressed,
+        // which may be a rail away (or null on a session that has not
+        // long-pressed anything, in which case the dismiss was a silent no-op).
+        // The stored target stays as the fallback for a rail that reports no
+        // focused card at all.
+        val hook = home.indexOf("rememberHomeTopBarHoldUpHook(")
+        val target = home.indexOf(
+            "focusedCardRequester ?: lastPosterFocusRequester",
+            hook
+        )
         assertTrue(
-            "the hold must remember where the viewer was",
-            home.contains("restoreTargetAtPress = { lastPosterFocusRequester }")
+            "the hold must remember where the viewer is, and what the hook is " +
+                "handed is the focused-card target with the stored one as its " +
+                "fallback",
+            hook >= 0 && target > hook && target - hook < 400
         )
         assertTrue(
             "the restore target is only overwritten when there is one, so a " +

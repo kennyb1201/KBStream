@@ -34,7 +34,7 @@ class ContinueWatchingHeadLandingContractTest {
 
     /** The landing effect's own body, from its key list to the Column it heads. */
     private val landing by lazy {
-        rail.substringAfter("LaunchedEffect(headId, railHasFocus)")
+        rail.substringAfter("LaunchedEffect(headId, railHasFocus, landOnHeadSignal)")
             .substringBefore("Column(")
     }
 
@@ -98,9 +98,19 @@ class ContinueWatchingHeadLandingContractTest {
             rail.contains("val headId = cards.firstOrNull()?.id")
         )
         assertTrue(
-            "keyed on the head AND on focus being in the rail: the second is " +
-                "what corrects a load that landed while the viewer was elsewhere",
-            rail.contains("LaunchedEffect(headId, railHasFocus)")
+            "keyed on the head, on focus being in the rail - the second is what " +
+                "corrects a load that landed while the viewer was elsewhere - and " +
+                "on the remove signal, which is the one landing that is owed even " +
+                "though the viewer had walked the rail",
+            rail.contains("LaunchedEffect(headId, railHasFocus, landOnHeadSignal)")
+        )
+        assertTrue(
+            "a moved signal forces the landing and clears the walk latch: the " +
+                "card the viewer had chosen has been deleted, so the head is " +
+                "their new place rather than a load moving focus under them",
+            rail.contains("var answeredLandingSignal by remember { mutableStateOf(landOnHeadSignal) }") &&
+                landing.contains("if (landOnHeadSignal != answeredLandingSignal) {") &&
+                landing.contains("viewerWalkedRail = false")
         )
         assertFalse(
             "keyed on the card list, every re-emission of the same cards would " +

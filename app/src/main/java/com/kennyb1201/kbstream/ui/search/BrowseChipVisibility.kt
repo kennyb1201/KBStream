@@ -52,6 +52,26 @@ object BrowseChipVisibility {
         return updated
     }
 
+    /**
+     * The chip that takes a hidden chip's place, as its [key]: the chip after
+     * it in [names], or the one before it when the hidden chip was the last.
+     * Null when the hidden chip is not in the list, or is the only one in it.
+     *
+     * Pure, and separate from [hide], because the screen has to NAME that chip
+     * and hand the focus over BEFORE the hidden one leaves the composition.
+     * The hidden chip's own node cannot be asked (it is the one going), and
+     * once the focus owner empties the framework fills it with the category
+     * strip - the list scrolls up - which the ViewModel's own armed neighbor
+     * then answers a frame late, pulling it back down. Two jumps instead of
+     * none. Clamped rather than wrapped, the same rule the armed neighbor
+     * uses: hiding the last chip must land on the chip that is now last.
+     */
+    fun successorKey(categoryKey: String, names: List<String>, name: String): String? {
+        val index = names.indexOfFirst { it.trim() == name.trim() }
+        val successor = successorIndexAfter(names.size, index) ?: return null
+        return key(categoryKey, names[successor])
+    }
+
     /** How many chips of [categoryKey] are currently hidden. */
     fun countHidden(categoryKey: String, hidden: Set<String>): Int {
         val prefix = "$categoryKey$SEPARATOR"

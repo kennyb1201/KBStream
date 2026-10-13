@@ -104,9 +104,14 @@ class BrowseChipMenuFocusContractTest {
     @Test
     fun `the menu hands focus back to the chip it was opened on, before it closes`() {
         assertTrue(
-            "the grid owns each chip's requester and gives it to the chip and " +
-                "to the long-press handler together",
-            grid.contains("val chipFocusRequester = remember(entry.name) { FocusRequester() }") &&
+            "a chip's requester comes out of the registry the CALLER owns, " +
+                "keyed by the chip's own identity, and is given to the chip and " +
+                "to the long-press handler together. It cannot be a per-item " +
+                "remember: the Hide action runs in the screen's scope, outside " +
+                "this grid, and it is the action that has to hand focus to the " +
+                "chip taking a hidden one's place before that chip leaves",
+            grid.contains("val chipKey = BrowseChipVisibility.key(categoryKey, entry.name)") &&
+                grid.contains("val chipFocusRequester = chipFocusRequesters.getOrPut(chipKey)") &&
                 grid.contains("{ handler(categoryKey, entry, chipFocusRequester) }") &&
                 grid.contains("chipFocusRequester = chipFocusRequester,")
         )

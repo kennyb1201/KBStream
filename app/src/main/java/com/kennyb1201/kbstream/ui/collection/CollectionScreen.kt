@@ -397,6 +397,21 @@ fun CollectionScreen(
                     ) {
                         val selected = part
                         menuPart = null
+                        // Raise the record a card press would, from the place
+                        // this menu was opened: this action opens the SAME
+                        // Detail page, and with no record Back reopened the
+                        // rail at its top (see [BrowseReturnFocus]). The key
+                        // and the place come from the same release-ordered list
+                        // the rail paints, so the two agree by construction.
+                        BrowseReturnFocus.record(
+                            BrowseReturnTarget(
+                                screenKey = browseReturnKey,
+                                itemId = "collection_part:${selected.id}",
+                                position = parts
+                                    .indexOfFirst { it.id == selected.id }
+                                    .takeIf { it >= 0 } ?: 0
+                            )
+                        )
                         onNavigateDetail(
                             "movie",
                             selected.id.toString()

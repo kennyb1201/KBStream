@@ -44,6 +44,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import kotlinx.coroutines.android.awaitFrame
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
@@ -81,6 +82,15 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
  * HomeScreen.homeRailTitle. `type` is null for mixed rails (e.g. a standard
  * search endpoint that returns movies + series in one rail).
  */
+/**
+ * How many frames a chip's return focus is retried for before the caller's arm
+ * is left un-consumed for a later attempt (see [SearchChip]'s grab). Same
+ * budget the browser's own tab return uses: long enough for a lazy row to
+ * compose the chip a return is aimed at, short enough that a genuinely absent
+ * chip does not hold the arm indefinitely.
+ */
+private const val CHIP_RETURN_FOCUS_STEPS = 12
+
 internal fun searchRailTitle(
     addonName: String,
     railLabel: String,
@@ -341,8 +351,23 @@ internal fun SearchChip(
     val returnFocusRequester = chipFocusRequester ?: ownFocusRequester
     if (grabInitialFocus) {
         LaunchedEffect(returnFocusRequester) {
-            runCatching { returnFocusRequester.requestFocus() }
-            onInitialFocusConsumed?.invoke()
+            // The arm is retired ONLY once focus has actually landed. A request
+            // against a node that is not attached yet answers false rather than
+            // throwing, so the single `runCatching { ... }` this replaces was
+            // always "successful": it consumed the caller's arm (and with it
+            // the record of which chip the viewer was being returned to) while
+            // focus went nowhere, and nothing asked again. The answer is the
+            // request's own return value, retried across frames - the same loop
+            // the browser's tab return uses (see SearchBrowseBrowser).
+            var landed = false
+            var attempts = 0
+            while (!landed && attempts < CHIP_RETURN_FOCUS_STEPS) {
+                awaitFrame()
+                landed = runCatching { returnFocusRequester.requestFocus() }
+                    .getOrDefault(false)
+                attempts++
+            }
+            if (landed) onInitialFocusConsumed?.invoke()
         }
     }
     val borderColor = when {

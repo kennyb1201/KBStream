@@ -44,8 +44,14 @@ class SportsHubLayoutContractTest {
             flat.contains("private const val GRID_GUTTER_DP = 16")
         )
         assertTrue(
-            "rows are built by chunking a section's games to the column count",
-            flat.contains("games.chunked(columns)")
+            "the feed is a grid, so a game can be its own item",
+            flat.contains("LazyVerticalGrid(") &&
+                flat.contains("columns = GridCells.Fixed(columns)")
+        )
+        assertTrue(
+            "each game is keyed by its OWN id, not by the row it happened to be grouped in - a " +
+                "row key was rewritten by every poll's repartition, which dropped focus",
+            flat.contains("items = games,") && flat.contains("key = { it.id }")
         )
         assertTrue(
             "the cards of a row share the width between them",
@@ -55,19 +61,29 @@ class SportsHubLayoutContractTest {
 
     @Test
     fun `a short last row keeps its cards the same width`() {
-        // A lone final card stretched across the row reads as a different
-        // layout rather than as the last line of the same one.
+        // A grid cell is the column width whatever fills it, so a lone final
+        // card can no longer stretch across the row the way a weighted row let
+        // it - the leftover-space spacers the old chunked layout needed are
+        // gone with it.
         assertTrue(
-            "the leftover columns are filled with invisible spacers",
-            flat.contains("repeat(columns - row.size) { Spacer(modifier = Modifier.weight(1f)) }")
+            "no filler spacers pad a short row any more",
+            !flat.contains("repeat(columns - row.size)")
+        )
+        assertTrue(
+            "and each card fills its own cell",
+            flat.contains("modifier = Modifier.fillMaxWidth()")
         )
     }
 
     @Test
     fun `a live game keeps a row to itself`() {
         assertTrue(
-            "the LIVE section is drawn one card per row",
-            flat.contains("games = live, columns = 1,")
+            "the LIVE section asks for the full line for each of its cards",
+            flat.contains("games = live, fullWidth = true,")
+        )
+        assertTrue(
+            "which in the grid is a full-line span",
+            flat.contains("span = { GridItemSpan(maxLineSpan) }")
         )
     }
 
@@ -269,8 +285,8 @@ class SportsHubLayoutContractTest {
         // scrolls; every card after it, which the D-pad does have to scroll to,
         // did.
         assertTrue(
-            "the games list and the standings columns both land through the one wrapper",
-            flat.contains("HubList( listState = listState, modifier = Modifier.fillMaxSize() )") &&
+            "the games grid and the standings columns both land through a wrapper that installs it",
+            flat.contains("HubGrid( listState = listState, columns = gameColumns, modifier = Modifier.fillMaxSize() )") &&
                 flat.contains("HubList( listState = listState, modifier = modifier )")
         )
         assertTrue(

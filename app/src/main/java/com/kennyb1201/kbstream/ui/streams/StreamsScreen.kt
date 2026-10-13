@@ -23,7 +23,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
@@ -39,6 +39,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -79,6 +81,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.KBFocusChipInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
+import kotlinx.coroutines.android.awaitFrame
 
 /** The "All" tab's index; every real tab is an index into the add-on groups. */
 private const val ALL_ADDONS_TAB = -1
@@ -246,6 +249,12 @@ fun StreamsScreen(
             streams
         }
 
+    // One lazy-list key per source, built from the whole list so it is unique
+    // even when two sources share every field (two blank placeholders are the
+    // same key "||||" - see StreamItemKeys) and stable across recompositions,
+    // which is what keeps focus on a card through a rank reorder.
+    val streamKeys = remember(visibleStreams) { StreamItemKeys.of(visibleStreams) }
+
     // The list's own scroll position, owned here so a provider switch can put
     // the new list back at its first source. The chips are a filter over ONE
     // list, so a viewer who was part way down the old provider's sources would
@@ -256,6 +265,38 @@ fun StreamsScreen(
     val streamListState = rememberLazyListState()
     LaunchedEffect(selectedAddonTab, loadedKey) {
         streamListState.scrollToItem(0)
+    }
+
+    // Explicit entry focus. Nothing named the first stop before: the framework
+    // put focus wherever it liked on the first D-pad press, which in practice
+    // was the REFRESH chip - reachable, but by accident, and it is the one
+    // control here that is not why the screen exists. The first SOURCE is, so
+    // that is what the picker opens on; REFRESH is the landing only when the
+    // list settles with nothing to play, which is exactly when the viewer
+    // reaches for it. Claimed once (see the latch), so a tab switch or a
+    // refresh that replaces the list leaves the viewer where they are.
+    val firstStreamFocusRequester = remember { FocusRequester() }
+    val refreshFocusRequester = remember { FocusRequester() }
+    var entryFocusPlaced by remember { mutableStateOf(false) }
+    LaunchedEffect(isLoading, visibleStreams.size) {
+        if (entryFocusPlaced) return@LaunchedEffect
+        // Held while the first load is in flight: the list has no rows yet, and
+        // a request against a card that does not exist is a silent miss.
+        if (isLoading && visibleStreams.isEmpty()) return@LaunchedEffect
+        val target =
+            if (visibleStreams.isNotEmpty()) firstStreamFocusRequester else refreshFocusRequester
+        // The request's RETURN VALUE is the test - an unattached requester
+        // answers false rather than throwing, so runCatching's isSuccess would
+        // read a stranded focus as a landing (see KBStatusMessage) - and it is
+        // retried across frames until it actually lands.
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < 8) {
+            awaitFrame()
+            landed = runCatching { target.requestFocus() }.getOrDefault(false)
+            attempts++
+        }
+        entryFocusPlaced = landed
     }
 
     // The one case where auto-play deliberately starts nothing: every playable
@@ -364,7 +405,10 @@ fun StreamsScreen(
                     refreshed = true
                     viewModel.refresh()
                 },
-                onSelect = { selectedAddonTab = it }
+                onSelect = { selectedAddonTab = it },
+                // The entry-focus fallback: with no source to land on, this is
+                // the one actionable stop the picker has.
+                refreshFocusRequester = refreshFocusRequester
             )
 
             LazyColumn(
@@ -401,20 +445,20 @@ fun StreamsScreen(
                     }
 
                     else -> {
-                        items(
+                        itemsIndexed(
                             items = visibleStreams,
-                            key = { stream ->
-                                listOf(
-                                    stream.url.orEmpty(),
-                                    stream.title.orEmpty(),
-                                    stream.name.orEmpty(),
-                                    stream.infoHash.orEmpty(),
-                                    stream.fileIdx?.toString().orEmpty()
-                                ).joinToString("|")
-                            }
-                        ) { stream ->
+                            key = { index, _ -> streamKeys[index] }
+                        ) { index, stream ->
                             StreamCard(
                                 stream = stream,
+                                // Only the first row carries the entry requester:
+                                // it is the stop the picker opens on, and every
+                                // other card keeps the platform's own focus walk.
+                                focusRequester = if (index == 0) {
+                                    firstStreamFocusRequester
+                                } else {
+                                    null
+                                },
                                 // Chips above the file name by default; the
                                 // "Badges above the file name" setting (and the
                                 // player's source picker) shares this pref.
@@ -560,7 +604,10 @@ private fun StreamCard(
     stream: Stream,
     badgesAbove: Boolean,
     declaredLabel: String?,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // Handed to the picker's first row only, so the screen has something named
+    // to open on (see StreamsScreen's entry focus); null everywhere else.
+    focusRequester: FocusRequester? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
 
@@ -580,6 +627,13 @@ private fun StreamCard(
         onClick = onClick,
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (focusRequester != null) {
+                    Modifier.focusRequester(focusRequester)
+                } else {
+                    Modifier
+                }
+            )
             .graphicsLayer {
                 this.alpha = alpha
             }
@@ -708,7 +762,10 @@ private fun AddonTabs(
     selectedIndex: Int,
     refreshing: Boolean,
     onRefresh: () -> Unit,
-    onSelect: (Int) -> Unit
+    onSelect: (Int) -> Unit,
+    // The requester the screen names the refresh chip by when the picker has no
+    // source to open on (see StreamsScreen's entry focus).
+    refreshFocusRequester: FocusRequester? = null
 ) {
     Row(
         modifier = Modifier
@@ -719,7 +776,11 @@ private fun AddonTabs(
             .padding(horizontal = KBFocusChipInset),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        StreamRefreshChip(refreshing = refreshing, onRefresh = onRefresh)
+        StreamRefreshChip(
+            refreshing = refreshing,
+            onRefresh = onRefresh,
+            focusRequester = refreshFocusRequester
+        )
         if (addonNames.isNotEmpty()) {
             StreamTabChip(
                 label = "All",
@@ -762,7 +823,8 @@ private fun AddonTabs(
 @Composable
 private fun StreamRefreshChip(
     refreshing: Boolean,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    focusRequester: FocusRequester? = null
 ) {
     // Built only while a refresh is in flight, so the picker runs no frame loop
     // for a mark that is standing still. Read back INSIDE graphicsLayer below,
@@ -770,7 +832,14 @@ private fun StreamRefreshChip(
     // chip every frame (the same shape KBSkeleton's shimmer uses).
     val spin = if (refreshing) rememberRefreshSpin() else null
 
-    KBCard(onClick = onRefresh) {
+    KBCard(
+        onClick = onRefresh,
+        modifier = if (focusRequester != null) {
+            Modifier.focusRequester(focusRequester)
+        } else {
+            Modifier
+        }
+    ) {
         Box(
             modifier = Modifier
                 .background(KBSurface.copy(alpha = 0.82f), KBShapeCard)

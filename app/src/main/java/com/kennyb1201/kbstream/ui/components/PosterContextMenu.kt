@@ -399,7 +399,20 @@ fun PosterContextMenu(
      * rather than being about a title at all. Every menu about a title — any
      * poster, any rail, any search result — passes it.
      */
-    libraryTarget: LibraryAddTarget? = null
+    libraryTarget: LibraryAddTarget? = null,
+    /**
+     * Called when the viewer picks "Hide", BEFORE the title is actually taken
+     * off the screens (and before [onDismiss]).
+     *
+     * The subject of the menu is about to leave the composition, so it is not a
+     * place focus can be handed to - and the surrounding rail has to name what
+     * takes its place while the gone cell is still in the tree. Only a caller
+     * that can name a neighbour passes this (see the search results rail in
+     * SearchScreen); every other surface lets the framework move focus to the
+     * nearest remaining card, which is what the Hide row's own hand-back has
+     * always relied on.
+     */
+    onBeforeHide: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
 
@@ -610,6 +623,11 @@ fun PosterContextMenu(
                     description = "Remove this title from every screen",
                     isDestructive = true
                 ) {
+                    // The caller's hand-off runs FIRST: the subject is about to
+                    // leave the composition, so a rail that knows which cell
+                    // takes its place has to focus that cell while the gone one
+                    // is still attached to hand the focus over.
+                    onBeforeHide?.invoke()
                     // Capture the key forms BEFORE hiding: the stored entry
                     // keeps every spelling of the title, and the undo has to
                     // match one of them.

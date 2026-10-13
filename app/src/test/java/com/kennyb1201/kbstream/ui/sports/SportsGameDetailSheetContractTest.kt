@@ -323,8 +323,13 @@ class SportsGameDetailSheetContractTest {
                 hub.contains("SportsCardBringIntoViewSpec(")
         )
         assertTrue(
-            "and focus-on-open still lands on WATCH",
-            sheet.contains("LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }")
+            "and focus-on-open still lands on WATCH - and is CONFIRMED rather than assumed, as the " +
+                "hub's own entry focus is: the footer composes a frame after the sheet opens, so a " +
+                "single request whose answer is thrown away would leave the D-pad on the card " +
+                "behind the scrim whenever it lost that race",
+            sheet.contains("while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {") &&
+                sheet.contains("watchButton.requestFocus()") &&
+                sheet.contains("getOrDefault(false)")
         )
     }
 

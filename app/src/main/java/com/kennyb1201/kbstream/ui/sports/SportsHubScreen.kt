@@ -30,11 +30,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyGridScope
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -129,6 +133,7 @@ import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.ui.theme.OswaldFamily
 import kotlin.math.abs
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.launch
 
 /** The gap between the two cards of a grid row. */
@@ -162,6 +167,17 @@ private const val SEARCH_FIELD_WIDTH_DP = 360
  * the card it came from should still be findable under it.
  */
 private const val SHEET_SCRIM_ALPHA = 0.6f
+
+/**
+ * Frames the hub's initial focus claim will wait for its tab to be composed.
+ *
+ * A requester whose node is not attached yet answers false rather than
+ * throwing, so the claim is retried frame by frame until it lands (see the
+ * entry focus effect). Twelve is the app's usual budget for this - the same
+ * count KBStatusMessage and the guide use - and is far longer than the second
+ * frame the tab row actually needs.
+ */
+private const val HUB_ENTRY_FOCUS_ATTEMPTS = 12
 
 /**
  * The sports hub: every league the profile turned on, its games, and the
@@ -262,14 +278,22 @@ fun SportsHubScreen(
     // One list state for the league body, owned here rather than inside it, so
     // the D-pad fallback below can scroll the cards even when focus is still up
     // on the tab row.
-    val listState = rememberLazyListState()
+    //
+    // Seeded from the ViewModel's own memory of where it was left: the player
+    // is a Screen in this activity, so opening a game disposes this composable
+    // and a plain rememberLazyGridState came back at the top of the slate the
+    // viewer was halfway down (see SportsHubViewModel.hubScrollIndex).
+    val listState = rememberLazyGridState(
+        initialFirstVisibleItemIndex = viewModel.hubScrollIndex,
+        initialFirstVisibleItemScrollOffset = viewModel.hubScrollOffset
+    )
     val scrollScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
     // A game the playlist cannot carry is deliberately NOT focusable - a run of
     // dead cards should not cost the D-pad a stop - so focus alone cannot walk
     // past one, and a section of them has no focus target below it for the
-    // LazyColumn to scroll to. That is the "it won't scroll down into the
+    // list to scroll to. That is the "it won't scroll down into the
     // games" the viewer hits on a slate their playlist only half covers.
     //
     // So: Down/Up first gets the platform's own move - which is what a press
@@ -287,7 +311,7 @@ fun SportsHubScreen(
         if (!canScroll || viewport <= 0) {
             false
         } else {
-            val row = info.visibleItemsInfo.lastOrNull()?.size ?: viewport
+            val row = info.visibleItemsInfo.lastOrNull()?.size?.height ?: viewport
             val step = sportsScrollStep(rowHeight = row, viewportHeight = viewport)
             scrollScope.launch {
                 listState.animateScrollBy(
@@ -296,6 +320,48 @@ fun SportsHubScreen(
             }
             true
         }
+    }
+
+    // ── The initial D-pad landing ────────────────────────────────────
+    //
+    // Every other browse screen claims focus on entry, and this hub's own key
+    // handler answers a DOWN/UP press with moveFocus(direction) ||
+    // scrollByPage(direction): with NOTHING focused, the first press used to
+    // scroll the list with no focus cue at all, so the viewer's first act on
+    // the hub displaced the very slate they were trying to read, and which card
+    // ended up focused afterwards was whatever the platform happened to resolve.
+    //
+    // The selected tab takes it, as it does in the guide: it is the top of the
+    // screen, the thing the body below hangs from, and one press from both the
+    // search field and the cards.
+    //
+    // Gated twice. A return from the player that reopens a sheet (both ids
+    // non-null) is left alone - that sheet parks focus on its own WATCH button,
+    // and a claim here would yank it away a frame later - and the latch keeps
+    // this ONE-SHOT, so a league switched on from the panel later cannot pull
+    // the viewer off the card they are reading.
+    val selectedTabFocus = remember { FocusRequester() }
+    var entryFocusPlaced by remember { mutableStateOf(false) }
+    LaunchedEffect(leagues, selectedPath) {
+        if (entryFocusPlaced || leagues.isEmpty()) return@LaunchedEffect
+        if (initialDetailGameId != null || initialDetailTournamentId != null) {
+            entryFocusPlaced = true
+            return@LaunchedEffect
+        }
+        // The tab is only focusable once the row has composed it, so the
+        // request is retried across frames and the RETURN VALUE is the test: an
+        // unattached requester answers false rather than throwing, while
+        // runCatching's isSuccess only ever means "no exception was thrown" and
+        // would read a stranded focus as a landing (see KBStatusMessage).
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+            awaitFrame()
+            landed = runCatching { selectedTabFocus.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+        entryFocusPlaced = landed
     }
 
     var showLeagues by remember { mutableStateOf(false) }
@@ -367,7 +433,25 @@ fun SportsHubScreen(
     }
     // Leaving the hub leaves the sheet behind: without this the ViewModel would
     // keep re-reading the summary on every live tick for a sheet that is gone.
-    DisposableEffect(Unit) { onDispose { viewModel.closeDetail() } }
+    //
+    // The grid's place and the live tick go with it. This screen really is
+    // disposed by the player route, so Back out of a game has to hand its
+    // scroll position back through the (activity-scoped) ViewModel, and ESPN
+    // must stop being asked for a scoreboard every 30 seconds behind the film
+    // the viewer is now watching.
+    DisposableEffect(Unit) {
+        // Re-armed on entry, not only stopped on exit: a live game may have
+        // kicked off while the player was up.
+        viewModel.resumeLivePoll()
+        onDispose {
+            viewModel.closeDetail()
+            viewModel.rememberHubScroll(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset
+            )
+            viewModel.pauseLivePoll()
+        }
+    }
 
     // The game whose teams are being followed. A long press on a card raises
     // this: the card itself stays one focus stop, and the two teams - the
@@ -465,7 +549,17 @@ fun SportsHubScreen(
             LeagueTabRow(
                 leagues = tabs,
                 selectedPath = selectedPath,
-                onSelect = viewModel::selectLeague,
+                selectedFocusRequester = selectedTabFocus,
+                onSelect = { path ->
+                    // A tab is a slate of its own, and one list state is shared
+                    // by all of them: without this, switching NFL to NHL opened
+                    // the new league at the old one's offset.
+                    if (path != selectedPath) {
+                        viewModel.forgetHubScroll()
+                        scrollScope.launch { listState.scrollToItem(0) }
+                    }
+                    viewModel.selectLeague(path)
+                },
             )
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -779,6 +873,7 @@ private fun LeagueTabRow(
     leagues: List<SportsLeague>,
     selectedPath: String?,
     onSelect: (String) -> Unit,
+    selectedFocusRequester: FocusRequester? = null,
     modifier: Modifier = Modifier,
 ) {
     LazyRow(
@@ -790,10 +885,19 @@ private fun LeagueTabRow(
             .focusGroup()
     ) {
         itemsIndexed(leagues, key = { _, league -> league.path }) { _, league ->
+            val selected = league.path == selectedPath
             LeagueTab(
                 label = league.label,
-                selected = league.path == selectedPath,
+                selected = selected,
                 onClick = { onSelect(league.path) },
+                // The selected tab is the hub's initial D-pad landing (see
+                // SportsHubScreen), so it is the one that carries the
+                // requester. Exactly one tab is selected at a time.
+                modifier = if (selected && selectedFocusRequester != null) {
+                    Modifier.focusRequester(selectedFocusRequester)
+                } else {
+                    Modifier
+                },
             )
         }
     }
@@ -862,9 +966,11 @@ private fun LeagueTab(
     label: String,
     selected: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     KBCard(
         onClick = onClick,
+        modifier = modifier,
         focusedScale = KBFocusChip,
         shape = KBShapePill,
     ) {
@@ -886,10 +992,11 @@ private fun LeagueTab(
 // ── The card lists' focus landing ───────────────────────────────────────
 
 /**
- * A hub list of cards: the screen's one vertical scroll container, with the
- * focus landing its cards need and nothing else.
+ * A hub list of cards: the standings' one-column scroll container, with the
+ * focus landing its cards need and nothing else. (The league feed's [HubGrid]
+ * is the same wrapper with the feed's own column count.)
  *
- * The landing is the point. A LazyColumn clips its content to its own bounds,
+ * The landing is the point. A lazy list clips its content to its own bounds,
  * and Compose's default bring-into-view scrolls the focused node the least
  * distance that makes its LAYOUT rectangle visible - flush with the physical
  * edge of the viewport. A game card's focus cue is not inside that rectangle:
@@ -915,16 +1022,19 @@ private fun LeagueTab(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HubList(
-    listState: LazyListState,
+    listState: LazyGridState,
     modifier: Modifier = Modifier,
-    content: LazyListScope.() -> Unit
+    content: LazyGridScope.() -> Unit
 ) {
     val density = LocalDensity.current
     val bringIntoViewSpec = remember(density) {
         SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
     }
     CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
-        LazyColumn(
+        LazyVerticalGrid(
+            // One column: the standings rows are full-width items, exactly as
+            // they were in the lazy column this replaced.
+            columns = GridCells.Fixed(1),
             state = listState,
             modifier = modifier,
             verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
@@ -932,6 +1042,54 @@ private fun HubList(
             // written as the landing margin plus the breathing room on top of it
             // because the two are coupled: the spec can only bring the LAST row
             // to its margin if the list is able to scroll that far past it.
+            contentPadding = PaddingValues(bottom = KBFocusRowInset + 8.dp),
+            content = content
+        )
+    }
+}
+
+/**
+ * The league feed's grid: the same focus landing as [HubList], for a feed whose
+ * items must be the games themselves.
+ *
+ * The feed is a grid rather than a lazy column so each game can be its OWN
+ * item, keyed by the game's stable id. The old shape chunked a section's games
+ * into rows and keyed each row by its members ("row-" + the ids joined); a
+ * row's identity was therefore derived from which games happened to be grouped
+ * in it, and the 30s poll - which repartitions live/upcoming/final whenever a
+ * game changes state - rewrote the key of every row at and after the change.
+ * LazyColumn anchors its scroll and its focus to item keys, so a rewritten row
+ * key disposed the focused card's row and dropped focus with nothing to restore
+ * it to. One item per game ends that: a game that changes section moves, and
+ * keeps its key and the viewer's focus while it moves.
+ *
+ * Headers, tournaments and live games span the full line with a
+ * [GridItemSpan], so a heading still reads across the whole width, a
+ * leaderboard still gets the width it wants, and a live card still stands
+ * alone. This is what the old comment here claimed a grid "cannot" do; a
+ * full-span item is exactly how it does it without nesting two scrollers.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun HubGrid(
+    listState: LazyGridState,
+    columns: Int,
+    modifier: Modifier = Modifier,
+    content: LazyGridScope.() -> Unit
+) {
+    val density = LocalDensity.current
+    val bringIntoViewSpec = remember(density) {
+        SportsCardBringIntoViewSpec(insetPx = with(density) { KBFocusRowInset.toPx() })
+    }
+    CompositionLocalProvider(LocalBringIntoViewSpec provides bringIntoViewSpec) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(columns),
+            state = listState,
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(CARD_GAP_DP.dp),
+            horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp),
+            // The same slack past the last card the list keeps, for the same
+            // reason: the landing margin needs somewhere to land.
             contentPadding = PaddingValues(bottom = KBFocusRowInset + 8.dp),
             content = content
         )
@@ -1018,7 +1176,7 @@ private fun LeagueBody(
     pulseEnabled: Boolean = true,
     matches: Map<String, List<IptvChannel>>,
     favoriteKeys: Set<String>,
-    listState: LazyListState,
+    listState: LazyGridState,
     lineupMissing: Boolean,
     matchingDone: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
@@ -1053,7 +1211,7 @@ private fun LeagueBody(
     // worse than missing the live block.
     //
     // "Has not moved" cannot be asked of the list once the games have landed.
-    // LazyColumn anchors its scroll position to the first visible item's KEY,
+    // The grid anchors its scroll position to the first visible item's KEY,
     // so the rows that insert above push firstVisibleItemIndex up (0 -> n)
     // with no input from the viewer, and this effect - launched with the
     // arrival - already sees that anchored index. A guard of
@@ -1091,20 +1249,21 @@ private fun LeagueBody(
     // animation clocks, each recomposing its own card on its own frame.
     val livePulse = rememberLivePulse(pulseEnabled = pulseEnabled)
 
-    HubList(
+    HubGrid(
         listState = listState,
+        columns = gameColumns,
         modifier = Modifier.fillMaxSize()
     ) {
         if (live.isNotEmpty()) {
-            item(key = "header-live") {
+            item(key = "header-live", span = { GridItemSpan(maxLineSpan) }) {
                 SportsSectionHeader(title = "LIVE NOW", accent = true, count = live.size)
             }
             // Live games keep a row to themselves: the clock, the badge and the
             // score are why they are at the top, and half a row cannot carry
-            // them.
-            gameRows(
+            // them. In the grid that is a full-line span, not a column count.
+            gameItems(
                 games = live,
-                columns = 1,
+                fullWidth = true,
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
@@ -1117,16 +1276,20 @@ private fun LeagueBody(
 
         // Tournaments (golf, F1) are their own events, not head-to-head games,
         // and they sort with whatever is on now. A leaderboard wants the width,
-        // so they are one to a row whatever the display.
+        // so they span the whole line whatever the display.
         if (section.tournaments.isNotEmpty()) {
-            item(key = "header-tournaments") {
+            item(key = "header-tournaments", span = { GridItemSpan(maxLineSpan) }) {
                 SportsSectionHeader(
                     title = "TOURNAMENTS",
                     accent = section.tournaments.any { it.state == GameState.LIVE },
                     count = section.tournaments.size
                 )
             }
-            items(section.tournaments, key = { it.id }) { event ->
+            items(
+                items = section.tournaments,
+                key = { it.id },
+                span = { GridItemSpan(maxLineSpan) }
+            ) { event ->
                 TournamentCard(
                     event = event,
                     channels = matches[event.id].orEmpty(),
@@ -1140,12 +1303,11 @@ private fun LeagueBody(
         }
 
         if (upcoming.isNotEmpty()) {
-            item(key = "header-upcoming") {
+            item(key = "header-upcoming", span = { GridItemSpan(maxLineSpan) }) {
                 SportsSectionHeader(title = "UPCOMING", count = upcoming.size)
             }
-            gameRows(
+            gameItems(
                 games = upcoming,
-                columns = gameColumns,
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
@@ -1157,12 +1319,11 @@ private fun LeagueBody(
         }
 
         if (final.isNotEmpty()) {
-            item(key = "header-final") {
+            item(key = "header-final", span = { GridItemSpan(maxLineSpan) }) {
                 SportsSectionHeader(title = "FINAL", count = final.size)
             }
-            gameRows(
+            gameItems(
                 games = final,
-                columns = gameColumns,
                 matches = matches,
                 livePulse = livePulse,
                 favoriteKeys = favoriteKeys,
@@ -1176,23 +1337,25 @@ private fun LeagueBody(
 }
 
 /**
- * The game cards of one section, laid out [columns] to a row with a
- * [GRID_GUTTER_DP] gutter and one [CARD_GAP_DP] gap between rows.
+ * One game card per grid item, keyed by the GAME's own id.
  *
- * Rows are built here rather than through a lazy grid because the list is a
- * single lazy column of SECTIONS - headers, games, tournaments, headers - and a
- * LazyVerticalGrid cannot carry the headers that way without nesting two
- * scrollers. Chunking a section's games keeps one scroll container and one
- * focus walk, which is what the D-pad order depends on: rows in order, left to
- * right inside a row.
+ * The key is the whole fix. A game's identity no longer depends on which
+ * section it is in or which cards sit beside it, so the 30s poll that moves it
+ * between live, upcoming and final - or inserts a new game ahead of it in the
+ * date sort - changes only where the item appears, never its key. LazyColumn /
+ * LazyVerticalGrid anchor focus and scroll to item keys, so the focused card
+ * stays composed and keeps focus through the move; the old row keys, built from
+ * the row's members, were rewritten by exactly that repartition.
  *
- * A short last row keeps its cards the same width as a full one. Stretching a
- * lone final card across the whole row would read a different layout rather
- * than the last line of the same one.
+ * [fullWidth] spans the item across the whole line, for the LIVE section's
+ * cards and nothing else: the clock, the badge and the score want the width.
+ * Upcoming and final cards take a cell each, so a short last row still holds
+ * cards the same width as a full one - a grid cell never stretches to fill the
+ * leftover space the way a weighted row did.
  */
-private fun LazyListScope.gameRows(
+private fun LazyGridScope.gameItems(
     games: List<SportsGame>,
-    columns: Int,
+    fullWidth: Boolean = false,
     matches: Map<String, List<IptvChannel>>,
     livePulse: State<Float>,
     favoriteKeys: Set<String>,
@@ -1201,30 +1364,26 @@ private fun LazyListScope.gameRows(
     onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
 ) {
-    games.chunked(columns).forEach { row ->
-        item(key = "row-" + row.joinToString("-") { it.id }) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp)
-            ) {
-                row.forEach { game ->
-                    GameCard(
-                        game = game,
-                        channel = matches.primaryChannel(game.id),
-                        livePulse = livePulse,
-                        favoriteKeys = favoriteKeys,
-                        lineupMissing = lineupMissing,
-                        matchingDone = matchingDone,
-                        onOpenDetail = onOpenDetail,
-                        onEditFavorites = { onEditFavorites(game) },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                repeat(columns - row.size) {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
-            }
+    items(
+        items = games,
+        key = { it.id },
+        span = if (fullWidth) {
+            { GridItemSpan(maxLineSpan) }
+        } else {
+            null
         }
+    ) { game ->
+        GameCard(
+            game = game,
+            channel = matches.primaryChannel(game.id),
+            livePulse = livePulse,
+            favoriteKeys = favoriteKeys,
+            lineupMissing = lineupMissing,
+            matchingDone = matchingDone,
+            onOpenDetail = onOpenDetail,
+            onEditFavorites = { onEditFavorites(game) },
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -2186,8 +2345,21 @@ private fun FavoriteTeamsDialog(
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onClose) {
         KBDialogPanel(title = "Follow teams", width = 460.dp) {
+            // The first row is only focusable once the dialog has laid it out,
+            // which is a frame or more after this effect starts: the return
+            // value is the success test (an unattached requester answers false
+            // rather than throwing) and the request is retried across frames
+            // until it lands. Read as a one-shot, a lost race left the D-pad
+            // on whatever raised the dialog - see the hub entry focus below.
             LaunchedEffect(Unit) {
-                runCatching { firstRow.requestFocus() }
+                var landed = false
+                var attempts = 0
+                while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+                    awaitFrame()
+                    landed = runCatching { firstRow.requestFocus() }
+                        .getOrDefault(false)
+                    attempts++
+                }
             }
 
             Text(
@@ -2323,7 +2495,7 @@ private fun StandingsBody(
     groups: List<StandingGroup>?,
     loading: Boolean,
     failed: Boolean,
-    listState: LazyListState,
+    listState: LazyGridState,
     onRetry: () -> Unit,
 ) {
     when {
@@ -2364,7 +2536,7 @@ private fun StandingsBody(
                     columns.forEach { columnGroups ->
                         StandingsColumn(
                             groups = columnGroups,
-                            listState = rememberLazyListState(),
+                            listState = rememberLazyGridState(),
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -2394,7 +2566,7 @@ private fun StandingsBody(
 @Composable
 private fun StandingsColumn(
     groups: List<StandingGroup>,
-    listState: LazyListState,
+    listState: LazyGridState,
     modifier: Modifier = Modifier,
 ) {
     HubList(
@@ -2739,7 +2911,22 @@ private fun TournamentDetailSheet(
                                 enabled = true
                             )
                         }
-                        LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
+                        // WATCH is the sheet's default stop, and the plate it
+                        // sits on composes the footer a frame after the sheet
+                        // opens: the request is retried until the node is
+                        // attached and the ANSWER is what ends it, so a lost
+                        // race cannot leave the D-pad on the card behind the
+                        // scrim (see the hub entry focus).
+                        LaunchedEffect(Unit) {
+                            var landed = false
+                            var attempts = 0
+                            while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+                                awaitFrame()
+                                landed = runCatching { watchButton.requestFocus() }
+                                    .getOrDefault(false)
+                                attempts++
+                            }
+                        }
                     } else {
                         // Not focusable: a disabled action must not be a D-pad
                         // stop. It carries the reason instead of the action's
@@ -3015,7 +3202,19 @@ private fun GameDetailSheet(
                             enabled = true
                         )
                     }
-                    LaunchedEffect(Unit) { runCatching { watchButton.requestFocus() } }
+                    // Same verified retry as the game sheet's footer: the
+                    // tournament sheet's WATCH is its default stop, and the
+                    // request has to be confirmed rather than assumed.
+                    LaunchedEffect(Unit) {
+                        var landed = false
+                        var attempts = 0
+                        while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+                            awaitFrame()
+                            landed = runCatching { watchButton.requestFocus() }
+                                .getOrDefault(false)
+                            attempts++
+                        }
+                    }
                 } else {
                     // Not focusable: a disabled action must not be a D-pad stop.
                     Surface(
@@ -3577,8 +3776,21 @@ private fun LeagueTogglesPanel(
             width = 620.dp,
             modifier = Modifier.fillMaxHeight(0.88f)
         ) {
+            // The first row is only focusable once the dialog has laid it out,
+            // which is a frame or more after this effect starts: the return
+            // value is the success test (an unattached requester answers false
+            // rather than throwing) and the request is retried across frames
+            // until it lands. Read as a one-shot, a lost race left the D-pad
+            // on whatever raised the dialog - see the hub entry focus below.
             LaunchedEffect(Unit) {
-                runCatching { firstRow.requestFocus() }
+                var landed = false
+                var attempts = 0
+                while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+                    awaitFrame()
+                    landed = runCatching { firstRow.requestFocus() }
+                        .getOrDefault(false)
+                    attempts++
+                }
             }
 
             // Restore after a reorder: the order changed, so the arrow the
@@ -3598,7 +3810,19 @@ private fun LeagueTogglesPanel(
                     index == 0 -> firstRow
                     else -> focus.toggle
                 }
-                runCatching { requester.requestFocus() }
+                // This effect exists to catch a focus drop, and the rebuilt row
+                // it aims at is not necessarily attached yet: requesting once
+                // and discarding the answer meant the fix silently did not run
+                // when it was needed most. Retried across frames, and the
+                // return value is what says the D-pad actually arrived.
+                var landed = false
+                var attempts = 0
+                while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+                    awaitFrame()
+                    landed = runCatching { requester.requestFocus() }
+                        .getOrDefault(false)
+                    attempts++
+                }
                 // Consume the target: the next press sets it again before its
                 // move, and an unrelated order change (a sync pull) must not
                 // yank focus back to the last league that was moved.

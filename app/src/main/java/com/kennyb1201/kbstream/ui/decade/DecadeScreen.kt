@@ -165,8 +165,19 @@ fun DecadeScreen(
         )
     }
 
+    // Where the open menu's "Go to Details" is being opened FROM: the card that
+    // raised the menu, its rail and its position, kept while the menu is up so
+    // that action can raise the record a card press would (see
+    // [BrowseReturnFocus]).
+    var menuReturnTarget by remember {
+        mutableStateOf<BrowseReturnTarget?>(
+            null
+        )
+    }
+
     fun dismissRailMenu() {
         menuItem = null
+        menuReturnTarget = null
         lastRailFocusRequester?.requestFocus()
     }
 
@@ -200,11 +211,26 @@ fun DecadeScreen(
 
     /**
      * Takes the page's own first card: where an ordinary open lands, and the
-     * last resort for a return this page could never put back.
+     * last resort for a return this page could never put back. Answers whether
+     * the focus actually landed.
+     *
+     * Retried across frames rather than requested once: the request can land
+     * before the rail has composed its first card, and it is then silently
+     * missed. requestFocus() returns false rather than throwing for a node that
+     * is not attached yet, so the RETURN VALUE is the success test - runCatching's
+     * isSuccess only ever means "no exception was thrown", which is always true
+     * (see [KBStatusMessage], which documents the same trap).
      */
-    suspend fun focusFirstCard() {
-        delay(100)
-        runCatching { firstItemFocusRequester.requestFocus() }
+    suspend fun focusFirstCard(): Boolean {
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+            landed = runCatching { firstItemFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+        return landed
     }
 
     LaunchedEffect(decadeStart) {
@@ -242,8 +268,14 @@ fun DecadeScreen(
                 focusPlaced = restoreBrowseReturn(recorded)
                 return@LaunchedEffect
             }
-            focusPlaced = true
-            focusFirstCard()
+            // The landing is what marks the page focused, exactly as the
+            // return path does. A flag set BEFORE the suspend request was the
+            // trap: this effect restarts whenever another rail streams in, so
+            // an attempt cancelled inside its delay left the flag true and the
+            // restarted effect skipped the branch - an ordinary first open with
+            // nothing focused and the D-pad dead. A false landing now leaves
+            // the retry to the next rail that arrives.
+            focusPlaced = focusFirstCard()
         }
     }
 
@@ -369,7 +401,19 @@ fun DecadeScreen(
                             )
                         },
                         viewModel = viewModel,
-                        onOpenPosterMenu = { item, requester ->
+                        onOpenPosterMenu = { item, requester, cardKey, index ->
+                            // The menu's "Go to Details" opens the same Detail
+                            // page this card's own press does, so it has to
+                            // raise the same record - without one, Back from
+                            // there reopens this rail at the top (see
+                            // [BrowseReturnFocus]).
+                            menuReturnTarget = BrowseReturnTarget(
+                                screenKey = browseReturnKey,
+                                itemId = cardKey,
+                                position = index,
+                                railKey = section.title,
+                                railIndex = railIndex
+                            )
                             lastRailFocusRequester =
                                 requester
                             menuItem = item
@@ -461,6 +505,12 @@ fun DecadeScreen(
                         label = "Go to Details",
                         description = "Open this title's detail page"
                     ) {
+                        // Raise the record a card press would, from the place
+                        // this menu was opened: this action opens the SAME
+                        // Detail page, and with no record Back reopened the
+                        // page at its top (see [BrowseReturnFocus]).
+                        menuReturnTarget?.let { BrowseReturnFocus.record(it) }
+                        menuReturnTarget = null
                         menuItem = null
                         viewModel.resolveAndNavigate(
                             tmdbId = studioItem.item.id,
@@ -602,16 +652,33 @@ private fun DecadeRailRow(
     returnFocusRequester: FocusRequester,
     onBeforeOpenDetail: (cardKey: String, index: Int) -> Unit,
     viewModel: DecadeViewModel,
-    onOpenPosterMenu: (StudioItem, FocusRequester) -> Unit
+    // The long-press menu's own action needs the same pair the card press would
+    // record: which card it was raised on, and where that card sits, so "Go to
+    // Details" can raise the record too (see [BrowseReturnFocus]).
+    onOpenPosterMenu: (StudioItem, FocusRequester, cardKey: String, index: Int) -> Unit
 ) {
     val rowState = rememberLazyListState()
 
-    // Puts this rail ON the card a return is coming back for: a rail the viewer
-    // scrolled twenty cards into has not composed that card, so it has no focus
-    // node yet (see [BrowseReturnFocus]).
-    LaunchedEffect(returnTarget) {
-        returnTarget?.let { target ->
-            runCatching { rowState.scrollToItem(target.position) }
+    // Where this rail's return lands, resolved by the card's OWN key rather
+    // than by the recorded position: a rail that has re-ordered under the
+    // viewer (a hidden title, a new release) still holds the card, and testing
+    // the position first meant NOTHING matched once the card had moved - the
+    // return requester attached to no card, its retry missed the budget, and
+    // the page fell through to its first-card path. The recorded position is
+    // only the fallback, for a card the record cannot name.
+    val returnIndex = returnTarget?.let { target ->
+        section.items
+            .indexOfFirst { "${it.mediaType}:${it.item.id}" == target.itemId }
+            .takeIf { it >= 0 }
+            ?: target.position.takeIf { it in section.items.indices }
+    }
+
+    // Puts this rail ON that card: a rail the viewer scrolled twenty cards into
+    // has not composed it, so it has no focus node yet (see
+    // [BrowseReturnFocus]).
+    LaunchedEffect(returnIndex) {
+        returnIndex?.let { index ->
+            runCatching { rowState.scrollToItem(index) }
         }
     }
 
@@ -658,14 +725,11 @@ private fun DecadeRailRow(
 
                 val cardKey = "${studioItem.mediaType}:${studioItem.item.id}"
 
-                // The record names the card by the key ITS rail keys it with,
-                // so a rail that has re-ordered under the viewer (a hidden
-                // title, a new release) comes back on the card that is still
-                // there rather than on whatever took its position.
-                val isReturnItem =
-                    returnTarget != null &&
-                        itemIndex == returnTarget.position &&
-                        cardKey == returnTarget.itemId
+                // Matched on the key alone (see [returnIndex]), which is what
+                // makes the promise true: a rail that has re-ordered under the
+                // viewer comes back on the card that is still there rather
+                // than on whatever took its position.
+                val isReturnItem = itemIndex == returnIndex
 
                 val tmdbId = studioItem.item.id
                 val rawMediaType = studioItem.mediaType
@@ -724,7 +788,7 @@ private fun DecadeRailRow(
                             )
                         },
                         onLongClick = {
-                            onOpenPosterMenu(studioItem, requester)
+                            onOpenPosterMenu(studioItem, requester, cardKey, itemIndex)
                         },
                         posterWidth = posterSize.width,
                         posterHeight = posterSize.height,

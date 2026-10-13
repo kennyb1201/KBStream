@@ -50,8 +50,15 @@ class SportsHubScrollContractTest {
         // The tab row is a sibling of the list, so a fallback that only knew
         // about the list would never see a press made from the tabs.
         assertTrue(
-            "the screen owns the state",
-            flat.contains("val listState = rememberLazyListState()")
+            "the screen owns the state, seeded from where it was left: the " +
+                "player is a Screen in this activity, so opening a game disposes " +
+                "the hub's composable and a plain rememberLazyGridState came " +
+                "back at the top of a slate the viewer was halfway down",
+            flat.contains(
+                "val listState = rememberLazyGridState( initialFirstVisibleItemIndex = " +
+                    "viewModel.hubScrollIndex, initialFirstVisibleItemScrollOffset = " +
+                    "viewModel.hubScrollOffset )"
+            )
         )
         assertTrue(
             "and the body draws the list with it",
@@ -59,7 +66,7 @@ class SportsHubScrollContractTest {
         )
         assertTrue(
             "it is handed down, not re-created per section",
-            flat.contains("listState: LazyListState,")
+            flat.contains("listState: LazyGridState,")
         )
     }
 

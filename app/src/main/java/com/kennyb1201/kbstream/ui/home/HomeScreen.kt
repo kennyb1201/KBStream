@@ -188,6 +188,18 @@ private val HomeRailGap = 12.dp
  */
 private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
 
+/**
+ * Frames Home will keep asking for focus before it gives up.
+ *
+ * The bar's and the menus' hand-backs name a node that may not be attached yet
+ * - the bar animates in, a menu's overlay is leaving the tree - and an
+ * unattached request answers false rather than throwing, so one ask is not
+ * evidence of anything (see [restoreFocus]). Twelve frames is the same budget
+ * the app's other landings use (KBStatusMessage, the CW rail, the browse
+ * pages), and is far longer than either surface actually needs.
+ */
+private const val HOME_FOCUS_RETRY_FRAMES = 12
+
 private val HomeHeroHeight = 300.dp
 
 private val RailTopContentPadding = 0.dp
@@ -2288,9 +2300,21 @@ private fun BuiltinContinueWatchingRail(
     bringIntoViewSpec: BringIntoViewSpec,
     onTitleHeight: (Int) -> Unit,
     onCardFocusRequester: (FocusRequester) -> Unit,
+    /**
+     * The card D-pad focus has just landed on, reported on every focus change.
+     * This is what keeps Home's [focusedCardRequester] current, so a hold-Up
+     * from anywhere in this rail comes back to where the viewer was.
+     */
+    onFocusedCardRequester: (FocusRequester) -> Unit,
     onOpenUpNext: (UpNextItem) -> Unit,
     onLongPress: (UpNextItem) -> Unit,
     onSelectHero: (MetaPreview, UpNextItem) -> Unit,
+    /**
+     * Bumped by the screen when an action removed the card focus was on, so
+     * this rail lands on its new head whether or not the viewer had walked it
+     * by hand (see the landing below).
+     */
+    landOnHeadSignal: Int = 0,
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
@@ -2324,14 +2348,30 @@ private fun BuiltinContinueWatchingRail(
     // pass, whose head is the final one.
     val headId = cards.firstOrNull()?.id
 
+    // The value of [landOnHeadSignal] the landing last answered. A value that
+    // has moved means an ACTION removed the card the viewer was on - their
+    // place is gone, so the head is owed the focus even though they had walked
+    // the rail themselves.
+    var answeredLandingSignal by remember { mutableStateOf(landOnHeadSignal) }
+
     // Continue Watching lands on its head (the reported bug: the rail finished
     // loading with focus on the card that WAS first, and the new first card off
     // to the left). Also keyed on [railHasFocus] so a load that arrives while
     // the viewer is elsewhere is corrected the moment they enter the rail,
     // instead of leaving them on a rail anchored away from its own first card.
-    LaunchedEffect(headId, railHasFocus) {
+    LaunchedEffect(headId, railHasFocus, landOnHeadSignal) {
+        // No cards left at all: there is nothing in this row to land on, and
+        // asking a detached requester only burns the budget. The framework's
+        // own relocation picks up the row below, which is the same place the
+        // viewer would press Down to reach.
         if (headId == null) return@LaunchedEffect
-        if (!continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)) {
+        if (landOnHeadSignal != answeredLandingSignal) {
+            answeredLandingSignal = landOnHeadSignal
+            // The walk latch is cleared with it: the card the viewer had chosen
+            // has been deleted, so this landing is their new place rather than
+            // a load moving focus out from under them.
+            viewerWalkedRail = false
+        } else if (!continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)) {
             return@LaunchedEffect
         }
         // Put the head card on screen first: until it is laid out there is no
@@ -2418,6 +2458,10 @@ private fun BuiltinContinueWatchingRail(
                             onLongPress(item)
                         },
                         onFocus = {
+                            // Where the viewer actually is: hold-Up from this
+                            // card, and the bar's dismiss, come back HERE (see
+                            // focusedCardRequester).
+                            onFocusedCardRequester(requester)
                             if (continueWatchingWalkedByFocus(index)) {
                                 // The viewer's own place in the rail, not the
                                 // landing's (which asks for index 0): from here
@@ -2459,6 +2503,11 @@ private fun BuiltinUpcomingRail(
     onTitleHeight: (Int) -> Unit,
     onOpenDetails: (UpNextItem) -> Unit,
     onSelectHero: (MetaPreview, UpNextItem) -> Unit,
+    /**
+     * The card D-pad focus has just landed on (see
+     * [BuiltinContinueWatchingRail.onFocusedCardRequester]).
+     */
+    onFocusedCardRequester: (FocusRequester) -> Unit,
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
@@ -2518,6 +2567,9 @@ private fun BuiltinUpcomingRail(
                             focusRequester = requester,
                             onUpPressed = onUpPressed,
                             onFocus = {
+                                // Where the viewer actually is (see
+                                // focusedCardRequester).
+                                onFocusedCardRequester(requester)
                                 onSelectHero(
                                     MetaPreview(
                                         id = upcoming.parentId,
@@ -3052,6 +3104,34 @@ fun HomeScreen(
         mutableStateOf<FocusRequester?>(null)
     }
 
+    // The card D-pad focus is ON, kept current by every rail's own focus
+    // callback. Its own var, and deliberately not [lastPosterFocusRequester]:
+    //
+    // That one is written only where a target is CAPTURED - a long press, or a
+    // short-press Up on the top rail - so plain traversal left it naming
+    // whatever card was last long-pressed, possibly a rail away. Holding Up
+    // from a poster five rows down and dismissing the bar therefore put focus
+    // back on that older card; and on a session that had not long-pressed
+    // anything yet the var was still null, so the dismiss was a silent no-op
+    // while the bar's own chip was disposed by AnimatedVisibility - focus fell
+    // to nothing and the D-pad was dead until something else grabbed it.
+    //
+    // [lastPosterFocusRequester] keeps the menu restores it was written for; the
+    // hold-Up shortcut and [dismissTopBar] read THIS, and fall back to it.
+    var focusedCardRequester by remember {
+        mutableStateOf<FocusRequester?>(null)
+    }
+
+    // Bumped when a Continue Watching action removed the card the viewer was
+    // on. The rail's own landing effect watches it and puts focus on the row's
+    // NEW head, with a verified request - the deleted card's requester has
+    // nothing to attach to, so asking it (which is all this used to do) was
+    // guaranteed to fail and left the D-pad stranded (see
+    // BuiltinContinueWatchingRail).
+    var continueWatchingLandOnHeadSignal by remember {
+        mutableStateOf(0)
+    }
+
     var lastFocusedItemKey by remember {
         mutableStateOf<String?>(null)
     }
@@ -3154,9 +3234,43 @@ fun HomeScreen(
         showTopBar = true
     }
 
+    // The scope the focus hand-backs below run in: they have to survive the
+    // frame the surface they are leaving is disposed on, so they cannot be a
+    // bare request from the click callback.
+    val focusScope = rememberCoroutineScope()
+
+    /**
+     * Hands focus back to [requester] and makes sure it really landed.
+     *
+     * The top bar is inside an `AnimatedVisibility` and the poster menus are
+     * overlays, so the ask can race the frame that attaches (or re-attaches)
+     * the node it names. requestFocus() answers FALSE for a node that is not
+     * attached rather than throwing, so a bare `?.requestFocus()` discarded the
+     * only signal there was and left the D-pad with nothing focused - the bar
+     * closed onto no card at all, which is exactly the "dismiss does nothing"
+     * report. Retried across frames here, with the request's own answer as the
+     * success test (see KBStatusMessage, which documents the trap).
+     */
+    fun restoreFocus(requester: FocusRequester?) {
+        if (requester == null) return
+        focusScope.launch {
+            var landed = false
+            var attempts = 0
+            while (!landed && attempts < HOME_FOCUS_RETRY_FRAMES) {
+                awaitFrame()
+                landed = runCatching { requester.requestFocus() }
+                    .getOrDefault(false)
+                attempts++
+            }
+        }
+    }
+
     fun dismissTopBar() {
         showTopBar = false
-        lastPosterFocusRequester?.requestFocus()
+        // Where focus IS, not where the last long press happened to leave the
+        // stored target (see [focusedCardRequester]). The stored target is the
+        // fallback for a rail kind that reports no focused card at all.
+        restoreFocus(focusedCardRequester ?: lastPosterFocusRequester)
     }
 
     // Long-press menu on Continue Watching cards.
@@ -3166,7 +3280,7 @@ fun HomeScreen(
 
     fun dismissContinueWatchingMenu() {
         continueWatchingMenu = null
-        lastPosterFocusRequester?.requestFocus()
+        restoreFocus(lastPosterFocusRequester)
     }
 
     fun openContinueWatchingMenu(item: UpNextItem) {
@@ -3180,7 +3294,7 @@ fun HomeScreen(
 
     fun dismissPosterMenu() {
         posterMenu = null
-        lastPosterFocusRequester?.requestFocus()
+        restoreFocus(lastPosterFocusRequester)
     }
 
     // Long-press menu on a tile of a Browse rail - a chip mirrored to Home
@@ -3191,7 +3305,7 @@ fun HomeScreen(
 
     fun dismissBrowseShortcutMenu() {
         browseShortcutMenu = null
-        lastPosterFocusRequester?.requestFocus()
+        restoreFocus(lastPosterFocusRequester)
     }
 
     // KB-style focus landing (ported from KBTV's ModernHomeContent /
@@ -3332,9 +3446,20 @@ fun HomeScreen(
         kbViewModel.load()
     }
 
+    // The bar comes up inside an AnimatedVisibility, so the ask can race the
+    // frame that attaches its first chip: retried across frames and read from
+    // the request's own answer, the same way every other landing in this app is
+    // (see [restoreFocus]).
     LaunchedEffect(showTopBar) {
         if (showTopBar) {
-            topBarFocusRequester.requestFocus()
+            var landed = false
+            var attempts = 0
+            while (!landed && attempts < HOME_FOCUS_RETRY_FRAMES) {
+                awaitFrame()
+                landed = runCatching { topBarFocusRequester.requestFocus() }
+                    .getOrDefault(false)
+                attempts++
+            }
         }
     }
 
@@ -3524,11 +3649,15 @@ fun HomeScreen(
                     onCardFocusRequester = { requester ->
                         lastPosterFocusRequester = requester
                     },
+                    onFocusedCardRequester = { requester ->
+                        focusedCardRequester = requester
+                    },
                     onOpenUpNext = { item -> openUpNext(item) },
                     onLongPress = { item -> openContinueWatchingMenu(item) },
                     onSelectHero = { hero, item ->
                         selectContinueWatchingHero(hero, item)
                     },
+                    landOnHeadSignal = continueWatchingLandOnHeadSignal,
                     onUpPressed = upHook
                 )
             } else if (
@@ -3546,6 +3675,9 @@ fun HomeScreen(
                     },
                     onSelectHero = { meta, item ->
                         selectContinueWatchingHero(meta, item)
+                    },
+                    onFocusedCardRequester = { requester ->
+                        focusedCardRequester = requester
                     },
                     onUpPressed = upHook
                 )
@@ -3637,7 +3769,12 @@ fun HomeScreen(
                         .weight(1f)
                         .then(
                             rememberHomeTopBarHoldUpHook(
-                                restoreTargetAtPress = { lastPosterFocusRequester },
+                                // The card the hold began on - the one focus is
+                                // actually on - rather than the last card that
+                                // was long-pressed (see [focusedCardRequester]).
+                                restoreTargetAtPress = {
+                                    focusedCardRequester ?: lastPosterFocusRequester
+                                },
                                 onOpenTopBar = { target ->
                                     openTopBarFromHold(target)
                                 }
@@ -3856,6 +3993,9 @@ fun HomeScreen(
                                                 focusedContinueWatchingItem = null
                                                 focusedBrowseShortcut = shortcut
                                             },
+                                            onFocusedCardRequester = { requester ->
+                                                focusedCardRequester = requester
+                                            },
                                             onUpPressed = topRailUpHook(entryIndex)
                                         )
                                     is com.kennyb1201.kbstream.ui.kb.HomeEntry.Collection ->
@@ -3867,6 +4007,9 @@ fun HomeScreen(
                                                 focusedFolder = folder
                                                 focusedContinueWatchingItem = null
                                                 focusedBrowseShortcut = null
+                                            },
+                                            onFocusedCardRequester = { requester ->
+                                                focusedCardRequester = requester
                                             },
                                             onUpPressed = topRailUpHook(entryIndex)
                                         )
@@ -3987,6 +4130,10 @@ fun HomeScreen(
                                                     .onFocusChanged { focusState ->
                                                         if (focusState.isFocused) {
                                                             lastFocusedItemKey = "${meta.type}:${meta.id}"
+                                                            // The card focus is
+                                                            // on (see
+                                                            // focusedCardRequester).
+                                                            focusedCardRequester = requester
                                                             selectHero(meta)
                                                         }
                                                     }
@@ -4286,7 +4433,12 @@ fun HomeScreen(
                         viewModel.markContinueWatchingAsWatched(
                             selectedItem
                         )
-                        lastPosterFocusRequester?.requestFocus()
+                        // NOT the card's requester: this action deletes the row
+                        // it points at, and a request against a detached node
+                        // returns false (discarded) and leaves the D-pad with
+                        // nothing. The rail lands on its new head instead, with
+                        // a verified request of its own.
+                        continueWatchingLandOnHeadSignal++
                     },
                     PosterContextAction(
                         label = "Remove",
@@ -4298,7 +4450,10 @@ fun HomeScreen(
                         viewModel.removeFromContinueWatching(
                             selectedItem
                         )
-                        lastPosterFocusRequester?.requestFocus()
+                        // Same as "Mark as Watched" above: the row this card
+                        // named is going, so the rail's new head is the landing
+                        // - a request against the deleted card lands nowhere.
+                        continueWatchingLandOnHeadSignal++
                     }
                 ),
                 onDismiss = {

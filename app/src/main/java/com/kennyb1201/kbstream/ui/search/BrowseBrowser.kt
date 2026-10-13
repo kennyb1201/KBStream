@@ -142,7 +142,14 @@ internal fun SearchBrowseBrowser(
      * closes - see [SearchChip.chipFocusRequester].
      */
     onChipLongPress: ((String, BrowseEntry, FocusRequester) -> Unit)? = null,
-    onCategoryLongPress: ((BrowseCategory) -> Unit)? = null
+    onCategoryLongPress: ((BrowseCategory) -> Unit)? = null,
+    /**
+     * One requester per chip, keyed by [BrowseChipVisibility.key]. Owned by the
+     * CALLER (SearchScreen) rather than made here, because the Hide action runs
+     * outside this browser and has to reach the chip that takes a hidden one's
+     * place - a node this grid never names outside its own composition.
+     */
+    chipFocusRequesters: MutableMap<String, FocusRequester> = mutableMapOf()
 ) {
     // Selected category lives in the activity-scoped ViewModel, so backing
     // out of a discover screen re-opens the same submenu instead of the
@@ -391,6 +398,7 @@ internal fun SearchBrowseBrowser(
                 SubmenuChipGrid(
                     entries = visibleEntries,
                     categoryKey = category.key,
+                    chipFocusRequesters = chipFocusRequesters,
                     onEntryClicked = viewModel::onBrowseEntryClicked,
                     onEntryLongClick = onChipLongPress,
                     armedChipName = armedChipName,
@@ -664,7 +672,13 @@ private fun SubmenuChipGrid(
     onEntryClicked: (String, BrowseEntry) -> Unit,
     onEntryLongClick: ((String, BrowseEntry, FocusRequester) -> Unit)? = null,
     armedChipName: String?,
-    onReturnChipConsumed: () -> Unit
+    onReturnChipConsumed: () -> Unit,
+    /**
+     * The caller's chip requesters, keyed by [BrowseChipVisibility.key] - the
+     * one registry both this grid and the Hide action (which runs outside it)
+     * can name a chip by.
+     */
+    chipFocusRequesters: MutableMap<String, FocusRequester> = mutableMapOf()
 ) {
     // Keyed on the armed chip, not a plain `remember`: consuming one arm used
     // to latch this flag for the rest of the composition, so the NEXT arm -
@@ -731,13 +745,22 @@ private fun SubmenuChipGrid(
             // and a chip keeps its identity across a re-resolve.
             key = { _, entry -> BrowseChipVisibility.key(categoryKey, entry.name) }
         ) { entryIndex, entry ->
-            // Owned here and handed BOTH to the chip and to the long-press
-            // handler: the menu that handler opens is drawn over the page and
-            // takes the focus with it, so a request from the menu's own action
-            // - naming this node - is the only thing that puts focus back
-            // without the focus system first falling back to the page's first
-            // focusable and scrolling the browser up to it.
-            val chipFocusRequester = remember(entry.name) { FocusRequester() }
+            // Handed BOTH to the chip and to the long-press handler: the menu
+            // that handler opens is drawn over the page and takes the focus
+            // with it, so a request from the menu's own action - naming this
+            // node - is the only thing that puts focus back without the focus
+            // system first falling back to the page's first focusable and
+            // scrolling the browser up to it.
+            //
+            // Taken from the caller's registry rather than a local remember, so
+            // the Hide action - which runs in SearchScreen's scope and cannot
+            // see inside this lazy grid - can hand focus to the chip that takes
+            // a hidden one's place before that chip leaves (see
+            // BrowseChipVisibility.successorKey).
+            val chipKey = BrowseChipVisibility.key(categoryKey, entry.name)
+            val chipFocusRequester = chipFocusRequesters.getOrPut(chipKey) {
+                FocusRequester()
+            }
 
             SearchChip(
                 label = entry.name,

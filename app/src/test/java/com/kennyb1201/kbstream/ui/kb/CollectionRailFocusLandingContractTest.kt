@@ -172,7 +172,13 @@ class CollectionRailFocusLandingContractTest {
         )
         assertTrue(
             "the screen's focus callback still reaches the tile",
-            rail.contains("onFocus = onFolderFocused?.let { callback -> { callback(folder) } }")
+            rail.contains("onFolderFocused?.invoke(folder)")
+        )
+        assertTrue(
+            "and the tile's own requester is reported with it: Home keeps the " +
+                "requester of the card focus is ON, and a tile's requester is " +
+                "made inside this row, where only the rail can see it",
+            rail.contains("onFocusedCardRequester?.invoke(requester)")
         )
         assertTrue(
             "and the first-rail up hook goes with it",

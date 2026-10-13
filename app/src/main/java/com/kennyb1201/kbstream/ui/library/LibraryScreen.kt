@@ -18,8 +18,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -55,6 +56,10 @@ import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -76,6 +81,15 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.delay
+
+/**
+ * The Library's own page key, the only place it is spelled out (see
+ * [BrowseReturnFocus]). One Library screen whatever filter it shows: the filter
+ * is ViewModel state, so backing out of Detail comes back to the filter the
+ * viewer left, and the recorded position is a position in that filter's grid.
+ */
+private const val LIBRARY_BROWSE_SCREEN_KEY = "library"
 
 /**
  * Library tab: the user's personal lists and watchlists in one screen —
@@ -117,19 +131,51 @@ fun LibraryScreen(
 
     val topFocusRequester = remember { FocusRequester() }
 
+    // The grid state and the return record, both owned here rather than inside
+    // the grid: a Back out of Detail disposes THIS composable and everything in
+    // it, so the state a return has to land in cannot live below this point.
+    // (See [BrowseReturnFocus].)
+    // Keyed on the filter: switching filters is a new list, and a scroll
+    // offset from the one before it means nothing in this one, so the strip
+    // still starts the new list at the top. A return reads the same filter it
+    // recorded under, so its own state is the one it scrolls (see
+    // [BrowseReturnFocus]).
+    val gridState = remember(state.filter) { LazyGridState() }
+    var returnTarget by remember {
+        mutableStateOf<BrowseReturnTarget?>(null)
+    }
+    val returnFocusRequester = remember { FocusRequester() }
+    // What the grid reports when it has finished with the record: the place is
+    // spent either way, and a return this page could not put back (the poster
+    // was removed while Detail was open) still owes the viewer a focus target,
+    // which is the strip's first chip the ordinary open uses.
+    val onReturnHandled: (Boolean) -> Unit = { landed ->
+        returnTarget = null
+        if (!landed) topFocusRequester.requestFocus()
+    }
+
     // The row whose long-press menu is open (null = no menu). A long press
     // opens this menu instead of removing straight away, so removal is an
     // explicit choice rather than an accidental one.
     var menuItem by remember { mutableStateOf<LibraryItem?>(null) }
 
     LaunchedEffect(Unit) {
-        topFocusRequester.requestFocus()
         // Re-read the list every time this tab is opened. The ViewModel is
         // activity-scoped, so without this the tab kept showing whatever
         // snapshot it took the first time it was visited — a title added from
         // a detail page (or removed here) never appeared, which made
         // "Add to Library" look like it had silently failed.
         viewModel.refresh()
+        // Then read back where this page's Detail page was opened from, if it
+        // was opened from here: the poster the viewer pressed is where the
+        // grid comes back to, instead of the top with the first filter chip
+        // focused losing their place.
+        val recorded = BrowseReturnFocus.consume(LIBRARY_BROWSE_SCREEN_KEY)
+        if (recorded != null) {
+            returnTarget = recorded
+        } else {
+            topFocusRequester.requestFocus()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -249,7 +295,11 @@ fun LibraryScreen(
                     onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys,
-                    partiallyWatchedKeys = state.partiallyWatchedKeys
+                    partiallyWatchedKeys = state.partiallyWatchedKeys,
+                    gridState = gridState,
+                    returnTarget = returnTarget,
+                    returnFocusRequester = returnFocusRequester,
+                    onReturnHandled = onReturnHandled
                 )
             }
 
@@ -268,7 +318,11 @@ fun LibraryScreen(
                     onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys,
-                    partiallyWatchedKeys = state.partiallyWatchedKeys
+                    partiallyWatchedKeys = state.partiallyWatchedKeys,
+                    gridState = gridState,
+                    returnTarget = returnTarget,
+                    returnFocusRequester = returnFocusRequester,
+                    onReturnHandled = onReturnHandled
                 )
             }
 
@@ -293,7 +347,11 @@ fun LibraryScreen(
                     onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys,
-                    partiallyWatchedKeys = state.partiallyWatchedKeys
+                    partiallyWatchedKeys = state.partiallyWatchedKeys,
+                    gridState = gridState,
+                    returnTarget = returnTarget,
+                    returnFocusRequester = returnFocusRequester,
+                    onReturnHandled = onReturnHandled
                 )
             }
 
@@ -316,7 +374,11 @@ fun LibraryScreen(
                     onItemLongClick = { item -> menuItem = item },
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys,
-                    partiallyWatchedKeys = state.partiallyWatchedKeys
+                    partiallyWatchedKeys = state.partiallyWatchedKeys,
+                    gridState = gridState,
+                    returnTarget = returnTarget,
+                    returnFocusRequester = returnFocusRequester,
+                    onReturnHandled = onReturnHandled
                 )
             }
         }
@@ -547,7 +609,13 @@ private fun ItemGrid(
     // ViewModel did NOT also mark watched, so the checkmark keeps the corner
     // on a title that was finished after being started.
     partiallyWatchedKeys: Set<String> = emptySet(),
-    modifier: Modifier = Modifier.fillMaxSize()
+    modifier: Modifier = Modifier.fillMaxSize(),
+    // The screen's grid state and its record of the poster a Detail page was
+    // opened from (see [BrowseReturnFocus]).
+    gridState: LazyGridState,
+    returnTarget: BrowseReturnTarget?,
+    returnFocusRequester: FocusRequester,
+    onReturnHandled: (Boolean) -> Unit
 ) {
     // The app-wide transient-message channel (see KBFeedback): a card with no
     // detail page says why instead of swallowing the press.
@@ -584,8 +652,36 @@ private fun ItemGrid(
     // wider than the pane (clipping the last poster) and the tile count never
     // adapted to the screen or the setting. Adaptive cells always fill the
     // pane, so every poster is fully visible and nothing is left half cut.
+    // Puts the grid back where the viewer left it: the poster they pressed,
+    // its place, and the focus on it. The rows can land after this grid
+    // composes (the screen's refresh is in flight), so the record is held until
+    // they do; and a card that is not composed yet has no focus node, so a
+    // request against it fails silently and is retried (see [BrowseReturnFocus]).
+    LaunchedEffect(returnTarget, items) {
+        val target = returnTarget ?: return@LaunchedEffect
+        val index = items.indexOfFirst {
+            LocalLibraryStore.dedupeKey(it) == target.itemId
+        }.takeIf { it >= 0 }
+            ?: target.position.takeIf { it in items.indices }
+            ?: return@LaunchedEffect
+        runCatching { gridState.scrollToItem(index) }
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+            landed = runCatching { returnFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+        onReturnHandled(landed)
+    }
+
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = tileWidth),
+        // The screen's own state, not one re-created here: a Back out of Detail
+        // disposes this grid, so a return has a state to scroll (see
+        // [BrowseReturnFocus]).
+        state = gridState,
         // The top gap is not decoration: a focused KBCard scales to 1.03 and
         // throws a 12.dp glow, and a lazy grid clips its viewport — with
         // bottom-only padding the FIRST row was sliced flat along its top edge
@@ -597,10 +693,18 @@ private fun ItemGrid(
         verticalArrangement = Arrangement.spacedBy(16.dp),
         modifier = modifier
     ) {
-        items(
+        itemsIndexed(
             items = items,
-            key = { item -> LocalLibraryStore.dedupeKey(item) }
-        ) { item ->
+            // The same key [BrowseReturnFocus] records a card under, so a grid
+            // that has re-ordered under the viewer comes back on the poster
+            // that is still there rather than on whatever took its place.
+            key = { _, item -> LocalLibraryStore.dedupeKey(item) }
+        ) { index, item ->
+            val cardKey = LocalLibraryStore.dedupeKey(item)
+            val isReturnItem =
+                returnTarget != null &&
+                    index == returnTarget.position &&
+                    cardKey == returnTarget.itemId
             LibraryPosterCard(
                 item = item,
                 sourceLabel = sourceLabel(item),
@@ -610,6 +714,15 @@ private fun ItemGrid(
                 onClick = {
                     val navigationId = item.navigationId
                     if (navigationId != null) {
+                        // Remember this poster, so backing out of its Detail
+                        // page reopens the grid ON it (see [BrowseReturnFocus]).
+                        BrowseReturnFocus.record(
+                            BrowseReturnTarget(
+                                screenKey = LIBRARY_BROWSE_SCREEN_KEY,
+                                itemId = cardKey,
+                                position = index
+                            )
+                        )
                         onItemClick(item.mediaType, navigationId)
                     } else {
                         // A tracker row can carry only a title and a poster —
@@ -623,7 +736,14 @@ private fun ItemGrid(
                 },
                 onLongClick = onItemLongClick?.let { handler ->
                     { handler(item) }
-                }
+                },
+                modifier = Modifier.then(
+                    if (isReturnItem) {
+                        Modifier.focusRequester(returnFocusRequester)
+                    } else {
+                        Modifier
+                    }
+                )
             )
         }
     }
@@ -646,7 +766,11 @@ private fun ListsPane(
     onItemLongClick: (LibraryItem) -> Unit,
     ratings: Map<String, Double>,
     watchedKeys: Set<String>,
-    partiallyWatchedKeys: Set<String>
+    partiallyWatchedKeys: Set<String>,
+    gridState: LazyGridState,
+    returnTarget: BrowseReturnTarget?,
+    returnFocusRequester: FocusRequester,
+    onReturnHandled: (Boolean) -> Unit
 ) {
     var showCreateField by remember { mutableStateOf(false) }
     var newListName by remember { mutableStateOf("") }
@@ -783,6 +907,10 @@ private fun ListsPane(
             ratings = ratings,
             watchedKeys = watchedKeys,
             partiallyWatchedKeys = partiallyWatchedKeys,
+            gridState = gridState,
+            returnTarget = returnTarget,
+            returnFocusRequester = returnFocusRequester,
+            onReturnHandled = onReturnHandled,
             // Takes the remaining width beside the list rail; fillMaxSize
             // inside a Row measured against the whole row.
             modifier = Modifier.weight(1f)
@@ -798,7 +926,11 @@ private fun LibraryPosterCard(
     isWatched: Boolean,
     isPartiallyWatched: Boolean = false,
     onClick: () -> Unit,
-    onLongClick: (() -> Unit)?
+    onLongClick: (() -> Unit)?,
+    // Carries the return focus requester on the card a Back out of Detail is
+    // coming back for (see [BrowseReturnFocus]); it wraps the focusable card,
+    // which is where requestFocus() resolves to.
+    modifier: Modifier = Modifier
 ) {
     val posterSize = rememberPosterSize()
     // The tile's own focus drives the caption marquee below.
@@ -811,6 +943,7 @@ private fun LibraryPosterCard(
         modifier = Modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.hasFocus }
+            .then(modifier)
     ) {
         GlobalPosterCard(
             posterUrl = item.posterUrl,

@@ -212,18 +212,28 @@ class BrowseReturnFocusWiringContractTest {
             .forEach { (dir, file) ->
                 val source = normalized(stripComments(read(dir, file)))
                 assertTrue(
-                    "$file scrolls the rail holding the card to the recorded " +
-                        "position, which is what puts the card in the composition " +
-                        "so it can be focused at all",
-                    source.contains("rowState.scrollToItem(target.position)")
+                    "$file finds the recorded card by the KEY its own rail keys it " +
+                        "with, and keeps the recorded position only as the fallback " +
+                        "for a card the record cannot name",
+                    source.contains(".indexOfFirst {") &&
+                        source.contains("== target.itemId }") &&
+                        source.contains("?: target.position.takeIf { it in section.items.indices }")
                 )
                 assertTrue(
-                    "$file only marks the card the record names, so the focus " +
+                    "$file scrolls to the MATCHED index - not to the recorded " +
+                        "position, which the card may have moved off. Testing the " +
+                        "position as well as the key meant that once a rail " +
+                        "re-ordered NO item matched, the requester attached to " +
+                        "nothing, its retry missed the budget, and the page fell " +
+                        "through to the broken first-card path",
+                    source.contains("LaunchedEffect(returnIndex) {") &&
+                        source.contains("rowState.scrollToItem(index)") &&
+                        !source.contains("rowState.scrollToItem(target.position)")
+                )
+                assertTrue(
+                    "$file marks the card at that one resolved index, so the focus " +
                         "requester is attached to exactly one card",
-                    source.contains(
-                        "val isReturnItem = returnTarget != null && " +
-                            "itemIndex == returnTarget.position && cardKey == returnTarget.itemId"
-                    )
+                    source.contains("val isReturnItem = itemIndex == returnIndex")
                 )
                 assertTrue(
                     "$file hands the focus back through that card's own requester",
@@ -266,10 +276,16 @@ class BrowseReturnFocusWiringContractTest {
         // throwing, so `runCatching { ... }.isSuccess` is true for every call
         // ever made and the fall-through it guards is unreachable.
         screens.forEach { browseScreen ->
-            val source = screen(browseScreen)
+            // The pages' own doc comments name this trap deliberately (it is why
+            // the landing reads the boolean), so the check is made against their
+            // CODE: the block comments' `*` lines are dropped before the search.
+            val code = read(browseScreen.dir, browseScreen.file)
+                .lineSequence()
+                .filterNot { it.trimStart().startsWith("*") }
+                .joinToString("\n")
             assertFalse(
                 "${browseScreen.label} must not read the landing off a swallowed call",
-                source.contains("isSuccess")
+                code.contains("isSuccess")
             )
         }
         assertTrue(
