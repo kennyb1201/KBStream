@@ -752,7 +752,8 @@ fun DetailScreen(
      * the press with nowhere to land on the way up out of NETWORK. [revealRail]
      * scrolls the rail back in, anchored on [fromRowKey] - the rail a vertical
      * press came from is that rail's neighbour, so its index is the closest
-     * hint there is - and the focus request is retried while the chips compose.
+     * hint there is - and the focus request is then held back until the row is
+     * composed again and retried while its cards register.
      *
      * Answers whether the focus landed, but the caller consumes the press
      * either way (see [focusTopOfPage]): a key handed to an async scroll must
@@ -763,15 +764,19 @@ fun DetailScreen(
         fromRowKey: String,
         fromColumn: Int
     ): Boolean {
-        val slots =
-            chipColumnRequesters[rowKey]?.takeIf { it.isNotEmpty() } ?: return false
-        DetailChipColumns.columnFor(fromColumn, slots.size) ?: return false
         val hint = detailListState.layoutInfo.visibleItemsInfo
             .firstOrNull { it.key == fromRowKey }?.index ?: 0
         detailListState.revealRail(rowKey, hint)
         var attempts = 0
         while (attempts < RETURN_FOCUS_STEPS) {
-            if (focusChipColumn(rowKey, fromColumn)) return true
+            // The rail has to be back in composition before its card can take
+            // the focus, and a lazy list composes it a frame or more after the
+            // scroll that brings it back: the row's own key among the visible
+            // items is the proof that asking is worth doing. Firing at a card
+            // that is not composed yet fails silently, which is the stranding.
+            val composed =
+                detailListState.layoutInfo.visibleItemsInfo.any { it.key == rowKey }
+            if (composed && focusChipColumn(rowKey, fromColumn)) return true
             delay(RETURN_FOCUS_DELAY_MS)
             attempts++
         }
@@ -1628,6 +1633,8 @@ fun DetailScreen(
         DetailRow.PEOPLE -> PEOPLE_ROW_KEY
         DetailRow.NETWORK -> NETWORK_ROW_KEY
         DetailRow.PRODUCTION -> PRODUCTION_ROW_KEY
+        DetailRow.COLLECTION -> COLLECTION_ROW_KEY
+        DetailRow.MORE_LIKE_THIS -> RECS_ROW_KEY
     }
 
     /**
@@ -1647,8 +1654,9 @@ fun DetailScreen(
      *  - EPISODES is two rails, not one, and its own rule already knows which of
      *    them a press belongs on - the target episode, or the chip for the
      *    season on screen ([focusSeasonOrEpisode]).
-     *  - a chip rail keeps its column, is revealed when it exists but the scroll
-     *    disposed it, and falls back to the header when it cannot answer at all.
+     *  - a card rail - the chip rails and the poster rails alike - keeps its
+     *    column, is revealed when it exists but the scroll disposed it, and
+     *    falls back to the header when it cannot answer at all.
      */
     suspend fun focusRow(
         target: DetailRow,
@@ -1660,7 +1668,9 @@ fun DetailScreen(
         DetailRow.KEYWORDS,
         DetailRow.PEOPLE,
         DetailRow.NETWORK,
-        DetailRow.PRODUCTION -> {
+        DetailRow.PRODUCTION,
+        DetailRow.COLLECTION,
+        DetailRow.MORE_LIKE_THIS -> {
             val targetKey = detailRowKey(target)
             val anchorKey = detailRowKey(from)
             when {
@@ -1682,8 +1692,9 @@ fun DetailScreen(
      * and below. A row that exists but the scroll has disposed is revealed
      * rather than mistaken for a row that is not there, and a row that is not
      * there is stepped over. Null - nothing in that direction - is only possible
-     * going DOWN out of the bottom row, and answers false so the caller can let
-     * the default search have the press.
+     * going DOWN out of the bottom row, and answers false without moving: the
+     * handler is what turns that into a landing on the header rather than a
+     * press handed to the default search (see [detailRowVerticalFocus]).
      */
     suspend fun moveFocusVertical(
         from: DetailRow,
@@ -1705,10 +1716,13 @@ fun DetailScreen(
      * remembers the item it was last left on - from moving the focus a second
      * time.
      *
-     * A press the chain cannot act on answers false instead. That is only DOWN
-     * off the bottom row of the chain, and it is deliberate: consuming it would
-     * trap the viewer on that rail, when the rows below (reviews, collections,
-     * recommendations) are what the default search is there to reach.
+     * A DOWN the chain has no row for - the bottom of the page, where the
+     * collection and More Like This rails now sit - is consumed too, and lands
+     * on the header's PLAY row: the header lives above the list and is always
+     * composed, so the press can never be left without a landing, and the
+     * default search is never handed a key whose only nodes below it are the
+     * bottom spacer. UP never reaches that arm - [DetailRow.HEADER] always
+     * exists and sits at the top, so an upward walk always ends on it.
      *
      * [directions] is the set of presses this row answers. The episodes row
      * takes only DOWN; its UP belongs to the episode card, which owns the season
@@ -1730,7 +1744,11 @@ fun DetailScreen(
         if (direction == null || direction !in directions) {
             false
         } else if (DetailFocusChain.nextRow(row, direction, presence) == null) {
-            false
+            // The bottom of the chain: consumed by construction, like every
+            // other press this handler owns, so the key is never handed to the
+            // default search and the focus lands on the header PLAY.
+            scope.launch { focusTopOfPage() }
+            true
         } else {
             scope.launch { moveFocusVertical(row, direction, column, presence) }
             true
@@ -1879,12 +1897,16 @@ fun DetailScreen(
             val companies = tmdbDetail?.productionCompanies.orEmpty()
             val hasProductionRow = companies.isNotEmpty()
             val hasNetworkRow = normalizedType == "series" && networks.isNotEmpty()
+            val hasCollectionRow = collectionParts.isNotEmpty()
+            val hasMoreLikeThisRow = recommendations.isNotEmpty()
             val detailRowPresence = DetailRowPresence(
                 hasKeywordsRow = keywords.isNotEmpty(),
                 hasEpisodesRow = normalizedType == "series" && seasons.isNotEmpty(),
                 hasPeopleRow = hasPeopleRow,
                 hasNetworkRow = hasNetworkRow,
-                hasProductionRow = hasProductionRow
+                hasProductionRow = hasProductionRow,
+                hasCollectionRow = hasCollectionRow,
+                hasMoreLikeThisRow = hasMoreLikeThisRow
             )
 
             // Add-on art first (fanart etc. from the meta provider), TMDB
@@ -2748,6 +2770,7 @@ fun DetailScreen(
 
                         if (tmdbGenres.isNotEmpty()) {
                             LazyRow(
+                                state = genreRowState,
                                 // Start/end insets live INSIDE the row's clip
                                 // bounds so the focused chip's 2dp border +
                                 // glow (which paint outside the chip bounds)
@@ -3084,6 +3107,7 @@ fun DetailScreen(
                         if (keywords.isNotEmpty()) {
                             item(key = "keywordsrow", contentType = "section-row") {
                                 LazyRow(
+                                    state = keywordsRowState,
                                     contentPadding =
                                         PaddingValues(
                                             start = 24.dp,
@@ -3757,6 +3781,7 @@ fun DetailScreen(
 
                             item(key = "peoplerow", contentType = "section-row") {
                                 LazyRow(
+                                    state = peopleRowState,
                                     contentPadding =
                                         PaddingValues(
                                             start = 24.dp,
@@ -3901,6 +3926,7 @@ fun DetailScreen(
 
                             item(key = "networkrow", contentType = "section-row") {
                                 LazyRow(
+                                    state = networkRowState,
                                     contentPadding =
                                         PaddingValues(
                                             start = 24.dp,
@@ -4015,6 +4041,7 @@ fun DetailScreen(
 
                             item(key = "productionrow", contentType = "section-row") {
                                 LazyRow(
+                                    state = productionRowState,
                                     contentPadding =
                                         PaddingValues(
                                             start = 24.dp,
@@ -4149,7 +4176,7 @@ fun DetailScreen(
                         }
 
 
-                        if (collectionParts.isNotEmpty()) {
+                        if (hasCollectionRow) {
                             item(key = "collectionheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = collection?.name?.uppercase()
@@ -4163,6 +4190,7 @@ fun DetailScreen(
 
                             item(key = "collectionrow", contentType = "section-row") {
                                 LazyRow(
+                                    state = collectionRowState,
                                     // Poster rails need an explicit gap: without
                                     // one the 124dp tiles sit flush and captions
                                     // run into the neighboring poster.
@@ -4194,6 +4222,15 @@ fun DetailScreen(
                                         }
                                         val partKey = "collection:${part.id}"
                                         railFocusRequesters[partKey] = requester
+                                        // Filed by index like the chip rails, so
+                                        // a vertical press INTO this rail can be
+                                        // aimed at the column it came from (see
+                                        // focusRow).
+                                        registerChipColumn(
+                                            COLLECTION_ROW_KEY,
+                                            partIndex,
+                                            requester
+                                        )
 
                                         PosterGridCard(
                                             posterPath =
@@ -4276,15 +4313,26 @@ fun DetailScreen(
                                             },
                                             modifier = Modifier
                                                 .focusRequester(requester)
+                                                // The page's one vertical
+                                                // handoff, so UP out of a
+                                                // collection poster reaches the
+                                                // production row above it and
+                                                // DOWN reaches More Like This
+                                                // (see DetailFocusChain).
+                                                .onPreviewKeyEvent(
+                                                    detailRowVerticalFocus(
+                                                        DetailRow.COLLECTION,
+                                                        partIndex,
+                                                        detailRowPresence
+                                                    )
+                                                )
                                         )
                                     }
                                 }
                             }
                         }
 
-                        val recs = recommendations
-
-                        if (recs.isNotEmpty()) {
+                        if (hasMoreLikeThisRow) {
                             item(key = "recsheader", contentType = "section-header") {
                                 KBSectionHeader(
                                     title = "MORE LIKE THIS",
@@ -4297,6 +4345,7 @@ fun DetailScreen(
 
                             item(key = "recsrow", contentType = "section-row") {
                                 LazyRow(
+                                    state = recsRowState,
                                     // Poster rails need an explicit gap: without
                                     // one the 124dp tiles sit flush and captions
                                     // run into the neighboring poster.
@@ -4316,7 +4365,7 @@ fun DetailScreen(
                                         .focusRestorer()
                                 ) {
                                     itemsIndexed(
-                                        recs.take(30),
+                                        recommendations.take(30),
                                         key = { _, rec -> rec.id }
                                     ) { recIndex, rec ->
                                         // Focus requester for restoring focus
@@ -4328,6 +4377,14 @@ fun DetailScreen(
                                         }
                                         val recKey = "rec:${rec.id}"
                                         railFocusRequesters[recKey] = requester
+                                        // Same as the collection rail: the
+                                        // poster's index is the column a
+                                        // vertical press keeps.
+                                        registerChipColumn(
+                                            RECS_ROW_KEY,
+                                            recIndex,
+                                            requester
+                                        )
 
                                         PosterGridCard(
                                             posterPath =
@@ -4415,6 +4472,17 @@ fun DetailScreen(
                                             },
                                             modifier = Modifier
                                                 .focusRequester(requester)
+                                                // The same handoff as the rails
+                                                // above: UP reaches the
+                                                // collection, DOWN leaves the
+                                                // chain to the default search.
+                                                .onPreviewKeyEvent(
+                                                    detailRowVerticalFocus(
+                                                        DetailRow.MORE_LIKE_THIS,
+                                                        recIndex,
+                                                        detailRowPresence
+                                                    )
+                                                )
                                         )
                                     }
                                 }

@@ -119,9 +119,11 @@ class DetailNetworkChipUpTrapContractTest {
             )
         )
         assertTrue(
-            "and the only press that is NOT consumed is one the chain has no " +
-                "row for - UP never is, because the header always exists",
-            source.contains("DetailFocusChain.nextRow(row, direction, presence) == null")
+            "and the bottom of the chain - reached only by DOWN, never by UP, " +
+                "because the header always exists - is consumed too: the press " +
+                "lands on the header PLAY rather than on the default search",
+            source.contains("DetailFocusChain.nextRow(row, direction, presence) == null") &&
+                source.contains("scope.launch { focusTopOfPage() } true")
         )
     }
 

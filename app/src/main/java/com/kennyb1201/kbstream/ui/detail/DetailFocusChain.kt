@@ -23,14 +23,18 @@ internal enum class DetailFocusDirection { UP, DOWN }
  *
  * The order is the PAINTED order, which is not the order the rails are listed
  * in the source: the people rail renders above the network rail, which renders
- * above the production companies (see the `peoplerow`, `networkrow` and
- * `productionrow` items). A chain that did not mirror the screen would send
- * UP into a row the viewer can see is below them.
+ * above the production companies, which render above the collection and More
+ * Like This rails (see the `peoplerow`, `networkrow`, `productionrow`,
+ * `collectionrow` and `recsrow` items). A chain that did not mirror the screen
+ * would send UP into a row the viewer can see is below them.
  *
  * Rows that carry no vertical handler of their own are deliberately absent:
- * the overview block, the ratings strip, the fact cards and the review /
- * collection / recommendation rails are leaf surfaces reached by the default
- * search, and naming them here would change behaviour the chain is not about.
+ * the overview block, the ratings strip, the fact cards and the review rail are
+ * leaf surfaces reached by the default search, and naming them here would
+ * change behaviour the chain is not about. The collection and More Like This
+ * rails ARE named - below the production companies, in the order they are
+ * painted - because a viewer who scrolled into them had no chain entry for
+ * where they were and the press stranded.
  */
 internal enum class DetailRow {
     /** The fixed title/logo and PLAY row above the list - always composed. */
@@ -49,7 +53,13 @@ internal enum class DetailRow {
     NETWORK,
 
     /** The production-company chips. */
-    PRODUCTION
+    PRODUCTION,
+
+    /** The collection rail: this title's other parts. */
+    COLLECTION,
+
+    /** The More Like This recommendations rail. */
+    MORE_LIKE_THIS
 }
 
 /**
@@ -65,7 +75,9 @@ internal data class DetailRowPresence(
     val hasEpisodesRow: Boolean,
     val hasPeopleRow: Boolean,
     val hasNetworkRow: Boolean,
-    val hasProductionRow: Boolean
+    val hasProductionRow: Boolean,
+    val hasCollectionRow: Boolean,
+    val hasMoreLikeThisRow: Boolean
 )
 
 /**
@@ -93,6 +105,8 @@ internal object DetailFocusChain {
         DetailRow.PEOPLE -> presence.hasPeopleRow
         DetailRow.NETWORK -> presence.hasNetworkRow
         DetailRow.PRODUCTION -> presence.hasProductionRow
+        DetailRow.COLLECTION -> presence.hasCollectionRow
+        DetailRow.MORE_LIKE_THIS -> presence.hasMoreLikeThisRow
     }
 
     /**
@@ -106,8 +120,9 @@ internal object DetailFocusChain {
      *
      * Null is only ever reached going DOWN out of the bottom row of the page -
      * [DetailRow.HEADER] always exists and sits at the top, so an upward walk
-     * always ends on it. The caller reads null as "the default search may have
-     * this press" rather than as a move (see the screen's handler).
+     * always ends on it. The caller reads null as the end of the page and lands
+     * the press on the header rather than handing it to the default search (see
+     * the screen's handler).
      */
     fun nextRow(
         from: DetailRow,

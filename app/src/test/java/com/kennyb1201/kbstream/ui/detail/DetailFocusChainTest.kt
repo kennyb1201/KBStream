@@ -18,9 +18,9 @@ import org.junit.Test
  * also what makes every rail's UP and DOWN agree by construction.
  *
  * The order is the PAINTED order (header, tags, episodes, people, networks,
- * production), not the order the rails are written in the source, because a
- * chain that did not mirror the screen would send UP into a row the viewer can
- * see is below them.
+ * production, collection, More Like This), not the order the rails are written
+ * in the source, because a chain that did not mirror the screen would send UP
+ * into a row the viewer can see is below them.
  */
 class DetailFocusChainTest {
 
@@ -30,13 +30,17 @@ class DetailFocusChainTest {
         episodes: Boolean = false,
         people: Boolean = false,
         network: Boolean = false,
-        production: Boolean = false
+        production: Boolean = false,
+        collection: Boolean = false,
+        moreLikeThis: Boolean = false
     ) = DetailRowPresence(
         hasKeywordsRow = keywords,
         hasEpisodesRow = episodes,
         hasPeopleRow = people,
         hasNetworkRow = network,
-        hasProductionRow = production
+        hasProductionRow = production,
+        hasCollectionRow = collection,
+        hasMoreLikeThisRow = moreLikeThis
     )
 
     @Test
@@ -65,7 +69,9 @@ class DetailFocusChainTest {
             episodes = true,
             people = true,
             network = true,
-            production = true
+            production = true,
+            collection = true,
+            moreLikeThis = true
         )
         DetailRow.entries.forEach { row ->
             assertTrue("$row is on this page", DetailFocusChain.exists(row, all))
@@ -95,11 +101,66 @@ class DetailFocusChainTest {
 
     @Test
     fun `down out of the bottom row leaves the chain`() {
-        val page = presence(people = true, network = true, production = true)
+        // A page with a collection but no recommendations: the collection is
+        // then the last row the chain names.
+        val collectionLast = presence(people = true, production = true, collection = true)
         assertNull(
-            "the production rail is the last row the chain names - the rails " +
-                "below it (reviews, collections) are the default search's",
-            DetailFocusChain.nextRow(DetailRow.PRODUCTION, DetailFocusDirection.DOWN, page)
+            "the collection rail is the bottom of the chain when no More Like " +
+                "This is painted - the review rail above it and the bottom " +
+                "spacer below are not rows the chain names",
+            DetailFocusChain.nextRow(
+                DetailRow.COLLECTION,
+                DetailFocusDirection.DOWN,
+                collectionLast
+            )
+        )
+
+        val recsLast = presence(production = true, collection = true, moreLikeThis = true)
+        assertNull(
+            "and More Like This is the last row the page ever names",
+            DetailFocusChain.nextRow(
+                DetailRow.MORE_LIKE_THIS,
+                DetailFocusDirection.DOWN,
+                recsLast
+            )
+        )
+    }
+
+    @Test
+    fun `the collection and recommendations rails sit below the production companies`() {
+        val movie = presence(
+            people = true,
+            production = true,
+            collection = true,
+            moreLikeThis = true
+        )
+        assertEquals(
+            "DOWN out of the production chips reaches the collection rail",
+            DetailRow.COLLECTION,
+            DetailFocusChain.nextRow(DetailRow.PRODUCTION, DetailFocusDirection.DOWN, movie)
+        )
+        assertEquals(
+            DetailRow.MORE_LIKE_THIS,
+            DetailFocusChain.nextRow(DetailRow.COLLECTION, DetailFocusDirection.DOWN, movie)
+        )
+        assertEquals(
+            "and UP walks back the same way",
+            DetailRow.COLLECTION,
+            DetailFocusChain.nextRow(DetailRow.MORE_LIKE_THIS, DetailFocusDirection.UP, movie)
+        )
+        assertEquals(
+            DetailRow.PRODUCTION,
+            DetailFocusChain.nextRow(DetailRow.COLLECTION, DetailFocusDirection.UP, movie)
+        )
+    }
+
+    @Test
+    fun `a page with no collection or recommendations steps over both`() {
+        val movie = presence(people = true, production = true)
+        assertNull(
+            "with neither rail painted, DOWN out of the production chips is the " +
+                "end of the chain",
+            DetailFocusChain.nextRow(DetailRow.PRODUCTION, DetailFocusDirection.DOWN, movie)
         )
     }
 
@@ -210,7 +271,9 @@ class DetailFocusChainTest {
                 episodes = row == DetailRow.EPISODES,
                 people = row == DetailRow.PEOPLE,
                 network = row == DetailRow.NETWORK,
-                production = row == DetailRow.PRODUCTION
+                production = row == DetailRow.PRODUCTION,
+                collection = row == DetailRow.COLLECTION,
+                moreLikeThis = row == DetailRow.MORE_LIKE_THIS
             )
             if (row == DetailRow.HEADER) {
                 assertNull(DetailFocusChain.nextRow(row, DetailFocusDirection.UP, only))
@@ -231,11 +294,13 @@ class DetailFocusChainTest {
             episodes = true,
             people = true,
             network = true,
-            production = true
+            production = true,
+            collection = true,
+            moreLikeThis = true
         )
         DetailRow.entries.forEach { row ->
             val target = DetailFocusChain.nextRow(row, DetailFocusDirection.DOWN, page)
-            if (row == DetailRow.PRODUCTION) {
+            if (row == DetailRow.MORE_LIKE_THIS) {
                 assertNull("the bottom row has nothing below it in the chain", target)
             } else {
                 assertTrue(

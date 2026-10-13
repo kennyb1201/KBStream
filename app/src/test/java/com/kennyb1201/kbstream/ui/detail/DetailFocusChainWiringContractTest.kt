@@ -30,11 +30,12 @@ class DetailFocusChainWiringContractTest {
     @Test
     fun `every rail answers its vertical presses through the one handler`() {
         assertEquals(
-            "five rails carry a vertical handler - the tag rail, the episode " +
-                "row, the people cards, the network chips and the production " +
-                "chips - and all five go through the same one, so no row can " +
-                "disagree with another about what is above or below it",
-            5,
+            "seven rails carry a vertical handler - the tag rail, the episode " +
+                "row, the people cards, the network chips, the production " +
+                "chips, the collection posters and the More Like This posters - " +
+                "and all seven go through the same one, so no row can disagree " +
+                "with another about what is above or below it",
+            7,
             Regex("onPreviewKeyEvent\\( detailRowVerticalFocus\\(").findAll(detail).count()
         )
     }
@@ -69,6 +70,19 @@ class DetailFocusChainWiringContractTest {
             detail.contains(
                 "detailRowVerticalFocus( DetailRow.EPISODES, 0, detailRowPresence, " +
                     "setOf(DetailFocusDirection.DOWN) )"
+            )
+        )
+        assertTrue(
+            "the collection posters keep their column too, which is what a " +
+                "press out of the rows above and below is aimed by",
+            detail.contains(
+                "detailRowVerticalFocus( DetailRow.COLLECTION, partIndex, detailRowPresence )"
+            )
+        )
+        assertTrue(
+            detail.contains(
+                "detailRowVerticalFocus( DetailRow.MORE_LIKE_THIS, recIndex, " +
+                    "detailRowPresence )"
             )
         )
     }
@@ -113,6 +127,12 @@ class DetailFocusChainWiringContractTest {
             "a press this row's own set does not cover is not consumed: the " +
                 "episode row's UP is the case",
             detail.contains("direction !in directions")
+        )
+        assertTrue(
+            "and the bottom of the page is consumed too, landing on the header " +
+                "PLAY rather than being handed to the default search with only " +
+                "the bottom spacer below it",
+            detail.contains("scope.launch { focusTopOfPage() } true")
         )
     }
 
@@ -171,6 +191,16 @@ class DetailFocusChainWiringContractTest {
             "and the people and network render guards read the same names",
             detail.contains("if (hasPeopleRow) {") && detail.contains("if (hasNetworkRow) {")
         )
+        assertTrue(
+            "the collection rail exists exactly when it renders",
+            detail.contains("hasCollectionRow = collectionParts.isNotEmpty()") &&
+                detail.contains("if (hasCollectionRow) {")
+        )
+        assertTrue(
+            "and More Like This by the expression that renders it",
+            detail.contains("hasMoreLikeThisRow = recommendations.isNotEmpty()") &&
+                detail.contains("if (hasMoreLikeThisRow) {")
+        )
     }
 
     @Test
@@ -185,13 +215,15 @@ class DetailFocusChainWiringContractTest {
             "EPISODES",
             "PEOPLE",
             "NETWORK",
-            "PRODUCTION"
+            "PRODUCTION",
+            "COLLECTION",
+            "MORE_LIKE_THIS"
         ).forEach { row ->
             val at = body.indexOf(row)
             assertTrue(
                 "the chain must declare $row, in the order it is painted - " +
-                    "the people rail is above the network rail, which is above " +
-                    "the production companies",
+                    "people above networks above production companies, and the " +
+                    "collection rail above More Like This",
                 at > lastIndex
             )
             lastIndex = at
