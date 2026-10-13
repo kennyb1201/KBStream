@@ -22,24 +22,37 @@ internal enum class DetailFocusDirection { UP, DOWN }
  * below this row".
  *
  * The order is the PAINTED order, which is not the order the rails are listed
- * in the source: the people rail renders above the network rail, which renders
- * above the production companies, which render above the collection rail,
- * More Like This and finally the Media row (see the `peoplerow`, `networkrow`,
- * `productionrow`, `collectionrow`, `recsrow` and `mediarow` items). A chain
- * that did not mirror the screen would send UP into a row the viewer can see is
- * below them.
+ * in the source: under the fixed header's title/PLAY row the genre chips, then
+ * the tag rail, then the episode section, the people rail, the network rail,
+ * the production companies, the review rail, the collection rail, More Like
+ * This and finally the Media row (see the `genrerow`, `keywordsrow`,
+ * `peoplerow`, `networkrow`, `productionrow`, `reviewsrow`, `collectionrow`,
+ * `recsrow` and `mediarow` items). A chain that did not mirror the screen would
+ * send UP into a row the viewer can see is below them.
  *
  * Rows that carry no vertical handler of their own are deliberately absent:
- * the overview block, the ratings strip, the fact cards and the review rail are
- * leaf surfaces reached by the default search, and naming them here would
- * change behaviour the chain is not about. The collection rail, More Like This
- * and the Media row ARE named - below the production companies, in the order
- * they are painted - because a viewer who scrolled into them had no chain entry
- * for where they were and the press stranded.
+ * the overview block, the ratings strip and the fact cards are leaf surfaces
+ * reached by the default search, and naming them here would change behaviour
+ * the chain is not about. The genre rail, the review rail, the collection rail,
+ * More Like This and the Media row ARE named - the genre chips because they
+ * live in the fixed header and a press out of the tag rail used to skip them,
+ * the review rail because a card reached by touch had no chain entry for where
+ * it was, and the last three because a viewer who scrolled into them had no
+ * chain entry either - all in the order they are painted.
  */
 internal enum class DetailRow {
     /** The fixed title/logo and PLAY row above the list - always composed. */
     HEADER,
+
+    /**
+     * The genre chips, painted in the fixed header just under the PLAY row and
+     * above the list.
+     *
+     * A named row rather than a header detail because a press out of the tag
+     * rail below it must land on the genre chip in the same column, not jump
+     * straight to the PLAY button over a rail the viewer can see in between.
+     */
+    GENRE,
 
     /** The tag rail, the first focusable row inside the list. */
     KEYWORDS,
@@ -55,6 +68,16 @@ internal enum class DetailRow {
 
     /** The production-company chips. */
     PRODUCTION,
+
+    /**
+     * The review rail, painted between the production chips and the collection.
+     *
+     * It is a focusable rail of cards like any other, so the chain has to name
+     * it: left out, a UP or DOWN press on a review card fell to the default
+     * search and landed anywhere the geometry suggested, and the rail could not
+     * be reached by D-pad at all.
+     */
+    REVIEWS,
 
     /** The collection rail: this title's other parts. */
     COLLECTION,
@@ -87,11 +110,13 @@ internal enum class DetailRow {
  * was not there, and the press then skipped it.
  */
 internal data class DetailRowPresence(
+    val hasGenreRow: Boolean,
     val hasKeywordsRow: Boolean,
     val hasEpisodesRow: Boolean,
     val hasPeopleRow: Boolean,
     val hasNetworkRow: Boolean,
     val hasProductionRow: Boolean,
+    val hasReviewsRow: Boolean,
     val hasCollectionRow: Boolean,
     val hasMoreLikeThisRow: Boolean,
     val hasMediaRow: Boolean
@@ -117,11 +142,13 @@ internal object DetailFocusChain {
      */
     fun exists(row: DetailRow, presence: DetailRowPresence): Boolean = when (row) {
         DetailRow.HEADER -> true
+        DetailRow.GENRE -> presence.hasGenreRow
         DetailRow.KEYWORDS -> presence.hasKeywordsRow
         DetailRow.EPISODES -> presence.hasEpisodesRow
         DetailRow.PEOPLE -> presence.hasPeopleRow
         DetailRow.NETWORK -> presence.hasNetworkRow
         DetailRow.PRODUCTION -> presence.hasProductionRow
+        DetailRow.REVIEWS -> presence.hasReviewsRow
         DetailRow.COLLECTION -> presence.hasCollectionRow
         DetailRow.MEDIA -> presence.hasMediaRow
         DetailRow.MORE_LIKE_THIS -> presence.hasMoreLikeThisRow

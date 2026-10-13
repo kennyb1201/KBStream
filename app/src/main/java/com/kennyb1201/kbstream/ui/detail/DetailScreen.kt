@@ -250,7 +250,9 @@ private const val KEYWORDS_ROW_KEY = "keywordsrow"
 private const val PEOPLE_ROW_KEY = "peoplerow"
 private const val NETWORK_ROW_KEY = "networkrow"
 private const val PRODUCTION_ROW_KEY = "productionrow"
+private const val REVIEWS_ROW_KEY = "reviewsrow"
 private const val COLLECTION_ROW_KEY = "collectionrow"
+private const val MEDIA_STRIP_KEY = "mediastrip"
 private const val MEDIA_ROW_KEY = "mediarow"
 private const val RECS_ROW_KEY = "recsrow"
 
@@ -1134,7 +1136,12 @@ fun DetailScreen(
             mediaPosters.size
         )
     }
-    var mediaTabIndex by remember(mediaTabs) { mutableIntStateOf(0) }
+    // Remembered for the LIFE of the page, not keyed on the tab list: the list
+    // instance is rebuilt whenever the detail payload re-emits (a rating or
+    // runtime landing, a TMDB cache refresh), and keying the state on it snapped
+    // the viewer back to the first tab mid-browse. The `getOrNull` clamp below
+    // already handles a list that shrank.
+    var mediaTabIndex by remember { mutableIntStateOf(0) }
     val mediaTab = mediaTabs.getOrNull(mediaTabIndex) ?: mediaTabs.firstOrNull()
 
     // The active page's cards, projected once per payload rather than per
@@ -1654,7 +1661,21 @@ fun DetailScreen(
         bringSeasonChipIntoView(seasonChipIndex(effectiveSeason))
     }
 
-    fun focusSeasonOrEpisode(): Boolean {
+    /**
+     * Puts focus on the episode card the page is aimed at - or, with no target
+     * episode, on the season chip the viewer is inside - and reports whether
+     * the focus actually landed.
+     *
+     * Both branches keep the same two-step shape [focusSeasonChip] was fixed
+     * to use: the request is retried while the lazy rail composes the card, and
+     * the answer is the request's OWN report rather than "the call did not
+     * throw". The old code fired the request inside `scope.launch` and returned
+     * true regardless, so an off-screen card whose requester was not attached
+     * yet swallowed the press: the key was consumed with the focus still on the
+     * row it came from, and the caller's `|| focusTopOfPage()` fallback could
+     * never run because the left side was always true.
+     */
+    suspend fun focusSeasonOrEpisode(): Boolean {
         val season = effectiveSeason
         val episodeNum = targetEpisodeNumber
 
@@ -1667,19 +1688,27 @@ fun DetailScreen(
 
         if (episodeRequester != null) {
             // The episode row is lazy, so an off-screen target card isn't
-            // composed yet and requestFocus() would silently no-op. Scroll
-            // it into view first, then focus after a brief pause.
+            // composed yet and requestFocus() would silently no-op. Scroll it
+            // into view first, then retry the focus while the row composes.
             val targetIndex = targetEpisodeIndex
-            scope.launch {
-                if (targetIndex >= 0) {
-                    episodesRowState.scrollToItem(targetIndex)
-                    delay(90)
-                }
-                runCatching {
-                    episodeRequester.requestFocus()
-                }
+            if (targetIndex >= 0) {
+                runCatching { episodesRowState.scrollToItem(targetIndex) }
+                delay(90)
             }
-            return true
+
+            var attempts = 0
+            while (attempts < RETURN_FOCUS_STEPS) {
+                if (
+                    runCatching {
+                        episodeRequester.requestFocus()
+                    }.getOrDefault(false)
+                ) {
+                    return true
+                }
+                delay(RETURN_FOCUS_DELAY_MS)
+                attempts++
+            }
+            return false
         }
 
         val seasonRequester = season?.let {
@@ -1687,10 +1716,18 @@ fun DetailScreen(
         }
 
         if (seasonRequester != null) {
-            runCatching {
-                seasonRequester.requestFocus()
+            var attempts = 0
+            while (attempts < RETURN_FOCUS_STEPS) {
+                if (
+                    runCatching {
+                        seasonRequester.requestFocus()
+                    }.getOrDefault(false)
+                ) {
+                    return true
+                }
+                delay(RETURN_FOCUS_DELAY_MS)
+                attempts++
             }
-            return true
         }
 
         return false
@@ -1739,11 +1776,13 @@ fun DetailScreen(
      */
     fun detailRowKey(row: DetailRow): String? = when (row) {
         DetailRow.HEADER -> null
+        DetailRow.GENRE -> GENRE_ROW_KEY
         DetailRow.KEYWORDS -> KEYWORDS_ROW_KEY
         DetailRow.EPISODES -> null
         DetailRow.PEOPLE -> PEOPLE_ROW_KEY
         DetailRow.NETWORK -> NETWORK_ROW_KEY
         DetailRow.PRODUCTION -> PRODUCTION_ROW_KEY
+        DetailRow.REVIEWS -> REVIEWS_ROW_KEY
         DetailRow.COLLECTION -> COLLECTION_ROW_KEY
         DetailRow.MEDIA -> MEDIA_ROW_KEY
         DetailRow.MORE_LIKE_THIS -> RECS_ROW_KEY
@@ -1777,10 +1816,12 @@ fun DetailScreen(
     ): Boolean = when (target) {
         DetailRow.HEADER -> focusTopOfPage()
         DetailRow.EPISODES -> focusSeasonOrEpisode() || focusTopOfPage()
+        DetailRow.GENRE,
         DetailRow.KEYWORDS,
         DetailRow.PEOPLE,
         DetailRow.NETWORK,
         DetailRow.PRODUCTION,
+        DetailRow.REVIEWS,
         DetailRow.COLLECTION,
         DetailRow.MORE_LIKE_THIS,
         DetailRow.MEDIA -> {
@@ -1880,6 +1921,48 @@ fun DetailScreen(
     suspend fun focusFirstMediaCard() {
         if (focusChipColumn(MEDIA_ROW_KEY, 0)) return
         revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_ROW_KEY, 0)
+    }
+
+    /**
+     * UP out of a Media card: back to the row's tab strip.
+     *
+     * The strip and the cards are SEPARATE LazyColumn items, and scrolling the
+     * card row in can push the strip off screen; a disposed strip's
+     * FocusRequester is unattached, so `requestFocus()` prints the focus warning
+     * and returns false rather than throwing. That false used to be swallowed,
+     * which left the press consumed with the focus still on the card - the
+     * "sometimes UP does nothing" the viewer saw. The report is read here
+     * instead: the strip is scrolled back in, anchored on the card row (its
+     * neighbour in the list), and the focus is retried while it recomposes,
+     * exactly as [revealAndFocusChipColumn] does for the rails.
+     *
+     * Answers whether the focus landed, so the caller is never left guessing.
+     */
+    suspend fun focusMediaStrip(): Boolean {
+        if (
+            runCatching { mediaStripFocusRequester.requestFocus() }.getOrDefault(false)
+        ) {
+            return true
+        }
+
+        val hint = detailListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == MEDIA_ROW_KEY }?.index ?: 0
+        detailListState.revealRail(MEDIA_STRIP_KEY, hint)
+
+        var attempts = 0
+        while (attempts < RETURN_FOCUS_STEPS) {
+            val composed =
+                detailListState.layoutInfo.visibleItemsInfo.any { it.key == MEDIA_STRIP_KEY }
+            if (
+                composed &&
+                runCatching { mediaStripFocusRequester.requestFocus() }.getOrDefault(false)
+            ) {
+                return true
+            }
+            delay(RETURN_FOCUS_DELAY_MS)
+            attempts++
+        }
+        return false
     }
 
     /**
@@ -2113,6 +2196,13 @@ fun DetailScreen(
             // exists" and "the row is on screen" cannot drift apart.
             val networks = tmdbDetail?.networks.orEmpty()
             val companies = tmdbDetail?.productionCompanies.orEmpty()
+            // The genre chips live in the fixed header above the list and the
+            // review rail is the section between the production chips and the
+            // collection; both are read here - with the same expression that
+            // renders them - so their presence in the chain means "on screen",
+            // exactly like every other row's.
+            val tmdbGenres = tmdbDetail?.genres.orEmpty()
+            val reviews = allReviews.ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
             val hasProductionRow = companies.isNotEmpty()
             val hasNetworkRow = normalizedType == "series" && networks.isNotEmpty()
             val hasCollectionRow = collectionParts.isNotEmpty()
@@ -2121,11 +2211,13 @@ fun DetailScreen(
             // LazyColumn below and [DetailRow.MEDIA]).
             val hasMediaRow = mediaTabs.isNotEmpty()
             val detailRowPresence = DetailRowPresence(
+                hasGenreRow = tmdbGenres.isNotEmpty(),
                 hasKeywordsRow = keywords.isNotEmpty(),
                 hasEpisodesRow = normalizedType == "series" && seasons.isNotEmpty(),
                 hasPeopleRow = hasPeopleRow,
                 hasNetworkRow = hasNetworkRow,
                 hasProductionRow = hasProductionRow,
+                hasReviewsRow = reviews.isNotEmpty(),
                 hasCollectionRow = hasCollectionRow,
                 hasMoreLikeThisRow = hasMoreLikeThisRow,
                 hasMediaRow = hasMediaRow
@@ -3009,9 +3101,6 @@ fun DetailScreen(
                             )
                         }
 
-                        val tmdbGenres =
-                            tmdbDetail?.genres.orEmpty()
-
                         if (tmdbGenres.isNotEmpty()) {
                             LazyRow(
                                 state = genreRowState,
@@ -3026,24 +3115,17 @@ fun DetailScreen(
                                     top = 6.dp,
                                     bottom = 6.dp
                                 ),
+                                // No row-level handler: UP and DOWN are decided
+                                // by the chip itself (see its own handler
+                                // below), exactly as the network and production
+                                // rails do. The row's focusRestorer would answer
+                                // a vertical press with whichever chip it was
+                                // LAST left on, and its old single-case DOWN
+                                // (a series with no tags) is now the chain's own
+                                // job (see DetailFocusChain).
                                 modifier = Modifier
                                     .focusGroup()
                                     .focusRestorer()
-                                    .onPreviewKeyEvent {
-                                        keyEvent: KeyEvent ->
-                                        if (
-                                            normalizedType == "series" &&
-                                            keywords.isEmpty() &&
-                                            keyEvent.type ==
-                                                KeyEventType.KeyDown &&
-                                            keyEvent.key ==
-                                                Key.DirectionDown
-                                        ) {
-                                            focusSeasonOrEpisode()
-                                        } else {
-                                            false
-                                        }
-                                    }
                             ) {
                                 itemsIndexed(
                                     tmdbGenres,
@@ -3056,6 +3138,15 @@ fun DetailScreen(
                                         }
                                     railFocusRequesters[chipKey] =
                                         chipFocusRequester
+                                    // Filed by column like every rail inside the
+                                    // list, so a press INTO this header rail from
+                                    // the tag rail below is aimed at the chip in
+                                    // the column it came from (see focusRow).
+                                    registerChipColumn(
+                                        GENRE_ROW_KEY,
+                                        genreIndex,
+                                        chipFocusRequester
+                                    )
 
                                     GenreChip(
                                         name = genre.name,
@@ -3075,6 +3166,21 @@ fun DetailScreen(
                                         modifier = Modifier
                                             .focusRequester(
                                                 chipFocusRequester
+                                            )
+                                            // The page's one vertical handoff,
+                                            // answered by the chip because this
+                                            // rail sits in the fixed header: UP
+                                            // is the PLAY row above it and DOWN is
+                                            // the tag rail below (or the episode
+                                            // section on a series with no tags),
+                                            // both decided by the chain (see
+                                            // DetailFocusChain).
+                                            .onPreviewKeyEvent(
+                                                detailRowVerticalFocus(
+                                                    DetailRow.GENRE,
+                                                    genreIndex,
+                                                    detailRowPresence
+                                                )
                                             )
                                             .padding(
                                                 end = 8.dp
@@ -4372,10 +4478,9 @@ fun DetailScreen(
 
                         // Bundled page-1 reviews plus extra pages fetched in
                         // the background (allReviews) - more reviews appear as
-                        // the additional pages land.
-                        val reviews = allReviews
-                            .ifEmpty { tmdbDetail?.reviews?.results.orEmpty() }
-
+                        // the additional pages land. `reviews` itself is read
+                        // once above, so the chain's presence and this guard are
+                        // the same value.
                         if (reviews.isNotEmpty()) {
                             item(key = "reviewsheader", contentType = "section-header") {
                                 KBSectionHeader(
@@ -4388,7 +4493,7 @@ fun DetailScreen(
                             }
 
 
-                            item(key = "reviewsrow", contentType = "section-row") {
+                            item(key = REVIEWS_ROW_KEY, contentType = "section-row") {
                                 LazyRow(
                                     contentPadding =
                                         PaddingValues(
@@ -4404,15 +4509,49 @@ fun DetailScreen(
                                         .focusGroup()
                                         .focusRestorer()
                                 ) {
-                                    items(
+                                    itemsIndexed(
                                         reviews.take(60),
-                                        key = { it.id }
-                                    ) { review ->
+                                        key = { _, review -> review.id }
+                                    ) { reviewIndex, review ->
+                                        val reviewFocusRequester =
+                                            remember(review.id) {
+                                                FocusRequester()
+                                            }
+                                        // Filed by column like every rail in the
+                                        // list, so a press into the review rail
+                                        // from the production chips above (or
+                                        // the collection below) is aimed at the
+                                        // review in the column it came from (see
+                                        // focusRow).
+                                        registerChipColumn(
+                                            REVIEWS_ROW_KEY,
+                                            reviewIndex,
+                                            reviewFocusRequester
+                                        )
+
                                         ReviewCard(
                                             review = review,
                                             onClick = {
                                                 selectedReview = it
-                                            }
+                                            },
+                                            modifier = Modifier
+                                                .focusRequester(
+                                                    reviewFocusRequester
+                                                )
+                                                // The review rail is a chain row
+                                                // of its own now, so its cards
+                                                // answer UP and DOWN through the
+                                                // page's one handoff: UP reaches
+                                                // the production chips, DOWN the
+                                                // collection (see
+                                                // DetailFocusChain).
+                                                .onPreviewKeyEvent(
+                                                    detailRowVerticalFocus(
+                                                        DetailRow.REVIEWS,
+                                                        reviewIndex,
+                                                        detailRowPresence
+                                                    )
+                                                )
                                         )
                                     }
                                 }
@@ -4751,7 +4890,7 @@ fun DetailScreen(
                             // The strip, then the cards of the page it is on:
                             // one row of the chain, several rails inside it
                             // (see mediaStripFocus / mediaCardFocus).
-                            item(key = "mediastrip", contentType = "section-row") {
+                            item(key = MEDIA_STRIP_KEY, contentType = "section-row") {
                                 MediaTabStrip(
                                     tabs = mediaTabs,
                                     activeIndex = mediaTabIndex,
@@ -4845,9 +4984,8 @@ fun DetailScreen(
                                                     mediaCardFocus(
                                                         cardIndex,
                                                         onFocusStrip = {
-                                                            runCatching {
-                                                                mediaStripFocusRequester
-                                                                    .requestFocus()
+                                                            scope.launch {
+                                                                focusMediaStrip()
                                                             }
                                                         },
                                                         presence = detailRowPresence
@@ -6557,16 +6695,22 @@ private fun Modifier.scrollToTopOnFocus(
     }
 }
 
+/**
+ * One review tile. [modifier] is where the rail hangs its focus requester and
+ * the page's vertical key handler (see DetailScreen's review rail), so the
+ * card is reachable by D-pad like every other row.
+ */
 @Composable
 private fun ReviewCard(
     review: TmdbReview,
-    onClick: (TmdbReview) -> Unit
+    onClick: (TmdbReview) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     KBCard(
         onClick = {
             onClick(review)
         },
-        modifier = Modifier
+        modifier = modifier
             .width(240.dp)
             .padding(end = 10.dp)
     ) {

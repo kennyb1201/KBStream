@@ -17,29 +17,33 @@ import org.junit.Test
  * same way by every rail - so what is pinned here is the rule itself, which is
  * also what makes every rail's UP and DOWN agree by construction.
  *
- * The order is the PAINTED order (header, tags, episodes, people, networks,
- * production, collection, Media, More Like This), not the order the rails are
- * written in the source, because a chain that did not mirror the screen would
- * send UP into a row the viewer can see is below them.
+ * The order is the PAINTED order (header, genre chips, tags, episodes, people,
+ * networks, production, reviews, collection, More Like This, Media), not the
+ * order the rails are written in the source, because a chain that did not
+ * mirror the screen would send UP into a row the viewer can see is below them.
  */
 class DetailFocusChainTest {
 
     /** The rows a page has, by the name used in each case below. */
     private fun presence(
+        genre: Boolean = false,
         keywords: Boolean = false,
         episodes: Boolean = false,
         people: Boolean = false,
         network: Boolean = false,
         production: Boolean = false,
+        reviews: Boolean = false,
         collection: Boolean = false,
         media: Boolean = false,
         moreLikeThis: Boolean = false
     ) = DetailRowPresence(
+        hasGenreRow = genre,
         hasKeywordsRow = keywords,
         hasEpisodesRow = episodes,
         hasPeopleRow = people,
         hasNetworkRow = network,
         hasProductionRow = production,
+        hasReviewsRow = reviews,
         hasCollectionRow = collection,
         hasMediaRow = media,
         hasMoreLikeThisRow = moreLikeThis
@@ -67,11 +71,13 @@ class DetailFocusChainTest {
     @Test
     fun `a row exists exactly when the page paints it`() {
         val all = presence(
+            genre = true,
             keywords = true,
             episodes = true,
             people = true,
             network = true,
             production = true,
+            reviews = true,
             collection = true,
             media = true,
             moreLikeThis = true
@@ -303,6 +309,67 @@ class DetailFocusChainTest {
     }
 
     @Test
+    fun `the genre chips are a row of their own above the tag rail`() {
+        val page = presence(genre = true, keywords = true)
+        assertEquals(
+            "UP out of the tag rail reaches the genre chips painted above it, " +
+                "rather than jumping over a rail the viewer can see to the PLAY row",
+            DetailRow.GENRE,
+            DetailFocusChain.nextRow(DetailRow.KEYWORDS, DetailFocusDirection.UP, page)
+        )
+        assertEquals(
+            "and DOWN from the chips drops into the tag rail",
+            DetailRow.KEYWORDS,
+            DetailFocusChain.nextRow(DetailRow.GENRE, DetailFocusDirection.DOWN, page)
+        )
+        assertEquals(
+            "UP out of the chips is the header, which always exists",
+            DetailRow.HEADER,
+            DetailFocusChain.nextRow(DetailRow.GENRE, DetailFocusDirection.UP, page)
+        )
+        assertEquals(
+            "with no tag rail the chips step DOWN to the first row the page does have",
+            DetailRow.EPISODES,
+            DetailFocusChain.nextRow(
+                DetailRow.GENRE,
+                DetailFocusDirection.DOWN,
+                presence(genre = true, episodes = true)
+            )
+        )
+    }
+
+    @Test
+    fun `the review rail is a row of its own between production and collection`() {
+        val page = presence(production = true, reviews = true, collection = true)
+        assertEquals(
+            DetailRow.REVIEWS,
+            DetailFocusChain.nextRow(DetailRow.PRODUCTION, DetailFocusDirection.DOWN, page)
+        )
+        assertEquals(
+            DetailRow.COLLECTION,
+            DetailFocusChain.nextRow(DetailRow.REVIEWS, DetailFocusDirection.DOWN, page)
+        )
+        assertEquals(
+            DetailRow.PRODUCTION,
+            DetailFocusChain.nextRow(DetailRow.REVIEWS, DetailFocusDirection.UP, page)
+        )
+        assertEquals(
+            DetailRow.REVIEWS,
+            DetailFocusChain.nextRow(DetailRow.COLLECTION, DetailFocusDirection.UP, page)
+        )
+        assertEquals(
+            "a title with no reviews steps straight from production to collection, " +
+                "exactly as before the rail was named",
+            DetailRow.COLLECTION,
+            DetailFocusChain.nextRow(
+                DetailRow.PRODUCTION,
+                DetailFocusDirection.DOWN,
+                presence(production = true, collection = true)
+            )
+        )
+    }
+
+    @Test
     fun `up out of a network chip with nothing above it ends on the header`() {
         // The trap this chain exists to make impossible: networks, and nothing
         // else on the page above them.
@@ -350,11 +417,13 @@ class DetailFocusChainTest {
         DetailRow.entries.forEach { row ->
             // A page whose only row is this one.
             val only = presence(
+                genre = row == DetailRow.GENRE,
                 keywords = row == DetailRow.KEYWORDS,
                 episodes = row == DetailRow.EPISODES,
                 people = row == DetailRow.PEOPLE,
                 network = row == DetailRow.NETWORK,
                 production = row == DetailRow.PRODUCTION,
+                reviews = row == DetailRow.REVIEWS,
                 collection = row == DetailRow.COLLECTION,
                 media = row == DetailRow.MEDIA,
                 moreLikeThis = row == DetailRow.MORE_LIKE_THIS
@@ -374,11 +443,13 @@ class DetailFocusChainTest {
     @Test
     fun `down from every row is a row that exists or the end of the chain`() {
         val page = presence(
+            genre = true,
             keywords = true,
             episodes = true,
             people = true,
             network = true,
             production = true,
+            reviews = true,
             collection = true,
             media = true,
             moreLikeThis = true

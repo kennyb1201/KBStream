@@ -75,6 +75,20 @@ class DetailChipColumnWiringContractTest {
             )
         )
         assertTrue(
+            "the genre chips in the fixed header too, so a press out of the tag " +
+                "rail can be aimed at the chip in the column it came from",
+            source.contains(
+                "registerChipColumn( GENRE_ROW_KEY, genreIndex, chipFocusRequester )"
+            )
+        )
+        assertTrue(
+            "and the review cards, so the rail the chain now names is reachable " +
+                "by column from either side",
+            source.contains(
+                "registerChipColumn( REVIEWS_ROW_KEY, reviewIndex, reviewFocusRequester )"
+            )
+        )
+        assertTrue(
             "the column a card has comes from the people list itself",
             source.contains("val peopleColumns = remember(peopleItems) {")
         )

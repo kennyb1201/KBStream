@@ -30,16 +30,16 @@ class DetailFocusChainWiringContractTest {
     @Test
     fun `every rail answers its vertical presses through the one handler`() {
         assertEquals(
-            "seven rails carry a vertical handler directly on themselves - the " +
-                "tag rail, the episode row, the people cards, the network chips, " +
-                "the production chips, the collection posters and the More Like " +
-                "This posters - and all seven go through the same one, so no row " +
-                "can disagree with another about what is above or below it. The " +
-                "Media row's cards compose that same handler inside a wrapper of " +
-                "their own (mediaCardFocus, which answers UP itself because UP " +
-                "there means the row's tab strip); the wrapper is pinned by " +
-                "DetailMediaRowWiringContractTest.",
-            7,
+            "nine rails carry a vertical handler directly on themselves - the " +
+                "genre chips, the tag rail, the episode row, the people cards, " +
+                "the network chips, the production chips, the review cards, the " +
+                "collection posters and the More Like This posters - and all nine " +
+                "go through the same one, so no row can disagree with another " +
+                "about what is above or below it. The Media row's cards compose " +
+                "that same handler inside a wrapper of their own (mediaCardFocus, " +
+                "which answers UP itself because UP there means the row's tab " +
+                "strip); the wrapper is pinned by DetailMediaRowWiringContractTest.",
+            9,
             Regex("onPreviewKeyEvent\\( detailRowVerticalFocus\\(").findAll(detail).count()
         )
     }
@@ -49,6 +49,13 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             detail.contains(
                 "detailRowVerticalFocus( DetailRow.KEYWORDS, 0, detailRowPresence )"
+            )
+        )
+        assertTrue(
+            "the genre chips keep their column, which is what a press out of the " +
+                "tag rail below them is aimed by",
+            detail.contains(
+                "detailRowVerticalFocus( DetailRow.GENRE, genreIndex, detailRowPresence )"
             )
         )
         assertTrue(
@@ -86,6 +93,14 @@ class DetailFocusChainWiringContractTest {
         assertTrue(
             detail.contains(
                 "detailRowVerticalFocus( DetailRow.MORE_LIKE_THIS, recIndex, " +
+                    "detailRowPresence )"
+            )
+        )
+        assertTrue(
+            "the review cards keep their column too, so the rail is reachable " +
+                "from the production chips above and the collection below",
+            detail.contains(
+                "detailRowVerticalFocus( DetailRow.REVIEWS, reviewIndex, " +
                     "detailRowPresence )"
             )
         )
@@ -291,6 +306,17 @@ class DetailFocusChainWiringContractTest {
             detail.contains("hasMoreLikeThisRow = recommendations.isNotEmpty()") &&
                 detail.contains("if (hasMoreLikeThisRow) {")
         )
+        assertTrue(
+            "the genre rail exists exactly when it renders - it is the header's " +
+                "own chips, and the chain must not name it on a title with none",
+            detail.contains("hasGenreRow = tmdbGenres.isNotEmpty()") &&
+                detail.contains("if (tmdbGenres.isNotEmpty()) {")
+        )
+        assertTrue(
+            "and the review rail by the expression that renders it",
+            detail.contains("hasReviewsRow = reviews.isNotEmpty()") &&
+                detail.contains("if (reviews.isNotEmpty()) {")
+        )
     }
 
     @Test
@@ -301,11 +327,13 @@ class DetailFocusChainWiringContractTest {
         var lastIndex = -1
         listOf(
             "HEADER",
+            "GENRE",
             "KEYWORDS",
             "EPISODES",
             "PEOPLE",
             "NETWORK",
             "PRODUCTION",
+            "REVIEWS",
             "COLLECTION",
             "MORE_LIKE_THIS",
             "MEDIA"
@@ -324,6 +352,36 @@ class DetailFocusChainWiringContractTest {
             "and the walk is over that one list",
             chain.contains("val rows = DetailRow.entries") &&
                 chain.contains("while (index in rows.indices)")
+        )
+    }
+
+    @Test
+    fun `the episode-or-season landing is verified, never assumed`() {
+        val fn = detail
+            .substringAfter("suspend fun focusSeasonOrEpisode(): Boolean {")
+            .substringBefore("LaunchedEffect( effectiveSeason, episodesLoading")
+        assertTrue(
+            "the move is asynchronous - it scrolls a lazy rail into view first - " +
+                "so it is a suspend function its caller awaits",
+            detail.contains("suspend fun focusSeasonOrEpisode(): Boolean")
+        )
+        assertTrue(
+            "the episode branch retries the focus while the rail composes and " +
+                "reads the request's OWN answer",
+            fn.contains("while (attempts < RETURN_FOCUS_STEPS)") &&
+                fn.contains("}.getOrDefault(false)")
+        )
+        assertTrue(
+            "the season branch does the same rather than returning true whatever " +
+                "happened, and the function can answer false at all",
+            fn.contains("seasonRequester") &&
+                fn.contains("return true") &&
+                fn.contains("return false")
+        )
+        assertTrue(
+            "which is what lets the caller's fallback to the header actually run: " +
+                "with an always-true left side it never did",
+            detail.contains("DetailRow.EPISODES -> focusSeasonOrEpisode() || focusTopOfPage()")
         )
     }
 

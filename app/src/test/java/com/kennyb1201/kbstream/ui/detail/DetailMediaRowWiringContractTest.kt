@@ -230,6 +230,62 @@ class DetailMediaRowWiringContractTest {
         )
     }
 
+    @Test
+    fun `UP out of a card puts the tab strip back before giving up`() {
+        assertTrue(
+            "the strip and the cards are separate lazy items, so scrolling the " +
+                "cards in can push the strip out of composition - its requester " +
+                "then reports false, and that report has to be read rather than " +
+                "swallowed",
+            screen.contains("suspend fun focusMediaStrip(): Boolean {") &&
+                screen.contains(
+                    "runCatching { mediaStripFocusRequester.requestFocus() }" +
+                        ".getOrDefault(false)"
+                )
+        )
+        val strip = screen
+            .substringAfter("suspend fun focusMediaStrip(): Boolean {")
+            .substringBefore("fun mediaStripFocus(")
+        assertTrue(
+            "the strip is scrolled back in, anchored on the card row beside it",
+            strip.contains("detailListState.revealRail(MEDIA_STRIP_KEY, hint)") &&
+                strip.contains("firstOrNull { it.key == MEDIA_ROW_KEY }?.index ?: 0")
+        )
+        assertTrue(
+            "and the focus is retried while it recomposes, not asked for once",
+            strip.contains("while (attempts < RETURN_FOCUS_STEPS)") &&
+                strip.contains("delay(RETURN_FOCUS_DELAY_MS)")
+        )
+        assertTrue(
+            "the card's UP hands over to that, so the press is never consumed " +
+                "with the focus left on the card",
+            screen.contains("onFocusStrip = { scope.launch { focusMediaStrip() } }")
+        )
+    }
+
+    @Test
+    fun `the active page survives the tab list being rebuilt`() {
+        assertTrue(
+            "the tab index must not be keyed on the mediaTabs instance: the " +
+                "detail payload re-emits (a rating or runtime landing, a cache " +
+                "refresh) and a rebuilt list snapped the viewer back to the " +
+                "first page mid-browse",
+            screen.contains("var mediaTabIndex by remember { mutableIntStateOf(0) }")
+        )
+        assertFalse(
+            "the keyed spelling is the bug",
+            screen.contains("var mediaTabIndex by remember(mediaTabs)")
+        )
+        assertTrue(
+            "list shrinkage is still handled: the active page is read with a " +
+                "clamp rather than indexed blind",
+            screen.contains(
+                "val mediaTab = mediaTabs.getOrNull(mediaTabIndex) ?: " +
+                    "mediaTabs.firstOrNull()"
+            )
+        )
+    }
+
     private fun read(relativePath: String): String =
         File(findMainSourceRoot(), relativePath).readText()
 
