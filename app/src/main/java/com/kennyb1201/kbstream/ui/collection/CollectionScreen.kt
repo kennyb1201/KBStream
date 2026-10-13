@@ -14,7 +14,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,6 +46,11 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.collectionBrowseScreenKey
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -54,6 +60,7 @@ import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.delay
 
 /**
  * Collection screen: a fixed (non-scrolling) header — poster, name, count,
@@ -119,6 +126,63 @@ fun CollectionScreen(
 
     val detail = collection
 
+    // Release order, resolved once: the rail paints in this order and the card
+    // a return from Detail is coming back for is a position IN this list, so
+    // the two have to be the same list (see [BrowseReturnFocus]).
+    val parts = remember(detail) {
+        detail?.parts?.sortedBy { it.releaseDate ?: "9999-99-99" }.orEmpty()
+    }
+
+    // Where this page's Detail page was opened from, read once when the films
+    // land: the card the viewer pressed and its place in the rail, so backing
+    // out of Detail reopens the franchise where they left it instead of at the
+    // top. A collection is ONE rail that is already on screen, so there is no
+    // outer list to put back first - only the rail's own scroll and focus.
+    val browseReturnKey = remember(collectionId) {
+        collectionBrowseScreenKey(collectionId)
+    }
+    val rowState = rememberLazyListState()
+    var returnTarget by remember {
+        mutableStateOf<BrowseReturnTarget?>(null)
+    }
+    val returnFocusRequester = remember { FocusRequester() }
+
+    // The card is named by the key its own rail keys it with, so a collection
+    // that has re-ordered under the viewer comes back on the film that is still
+    // there rather than on whatever took its position; the recorded position is
+    // the fallback for a card the record cannot name.
+    val returnIndex = returnTarget?.let { target ->
+        parts.indexOfFirst { "collection_part:${it.id}" == target.itemId }
+            .takeIf { it >= 0 }
+            ?: target.position
+    }
+
+    LaunchedEffect(parts, returnTarget) {
+        val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)
+            ?: return@LaunchedEffect
+        // Held from the moment it is read: the films arrive after the screen
+        // composes, and a record read and then dropped because they are not
+        // there yet would lose the place it was raised for.
+        if (returnTarget == null) returnTarget = recorded
+        if (parts.isEmpty()) return@LaunchedEffect
+        val index = parts.indexOfFirst { "collection_part:${it.id}" == recorded.itemId }
+            .takeIf { it >= 0 }
+            ?: recorded.position.takeIf { it in parts.indices }
+            ?: return@LaunchedEffect
+        runCatching { rowState.scrollToItem(index) }
+        // The card is only focusable once its row has composed it, which is a
+        // frame or more after the rail itself came back, and a request against
+        // a card that is not composed yet is a silent miss.
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+            landed = runCatching { returnFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
+
     // Screen root Box so the long-press context menu's full-screen scrim
     // overlays everything (the menu fills whatever parent it's placed in).
     Box(
@@ -183,6 +247,7 @@ fun CollectionScreen(
                     // Compact poster rail: release order, watched badges, and
                     // title/year captions — 2-5 titles fill one screen.
                     LazyRow(
+                        state = rowState,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         // 24dp edge insets (matching the header) keep the focused
                         // poster's 1.03 scale + glow from clipping on the first
@@ -194,10 +259,12 @@ fun CollectionScreen(
                             end = 24.dp
                         )
                     ) {
-                        items(
-                            items = detail.parts.sortedBy { it.releaseDate ?: "9999-99-99" },
-                            key = { part: TmdbCollectionPart -> "collection_part:${part.id}" }
-                        ) { part: TmdbCollectionPart ->
+                        itemsIndexed(
+                            items = parts,
+                            key = { _, part: TmdbCollectionPart ->
+                                "collection_part:${part.id}"
+                            }
+                        ) { index: Int, part: TmdbCollectionPart ->
                             // Focus requester for restoring focus after the
                             // long-press menu dismisses.
                             val requester = remember(
@@ -205,6 +272,10 @@ fun CollectionScreen(
                             ) {
                                 FocusRequester()
                             }
+
+                            // The card this page's Detail page was opened from:
+                            // the one the focus is handed back to.
+                            val isReturnItem = index == returnIndex
 
                             val watched =
                                 resolvedIds[
@@ -229,6 +300,15 @@ fun CollectionScreen(
                                         ) in partialWatchedKeys
                                     } == true,
                                 onClick = {
+                                    // Remember this film, so backing out of its
+                                    // Detail page reopens the rail ON it.
+                                    BrowseReturnFocus.record(
+                                        BrowseReturnTarget(
+                                            screenKey = browseReturnKey,
+                                            itemId = "collection_part:${part.id}",
+                                            position = index
+                                        )
+                                    )
                                     onNavigateDetail(
                                         "movie",
                                         part.id.toString()
@@ -241,6 +321,15 @@ fun CollectionScreen(
                                 },
                                 modifier = Modifier
                                     .focusRequester(requester)
+                                    .then(
+                                        if (isReturnItem) {
+                                            Modifier.focusRequester(
+                                                returnFocusRequester
+                                            )
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             )
                         }
                     }

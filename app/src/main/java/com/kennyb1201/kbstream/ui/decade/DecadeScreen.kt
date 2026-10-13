@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -67,6 +68,12 @@ import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.decadeBrowseScreenKey
+import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.tag.RailPagingState
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
@@ -130,6 +137,21 @@ fun DecadeScreen(
 
     val firstItemFocusRequester = remember { FocusRequester() }
 
+    // Where this page's Detail page was opened from, read once when the rails
+    // land: the card the viewer pressed, its rail and its position, so backing
+    // out of Detail reopens the page where they left it instead of at the top
+    // (see [BrowseReturnFocus]).
+    val browseReturnKey = remember(decadeStart) {
+        decadeBrowseScreenKey(decadeStart)
+    }
+    val browseListState = rememberLazyListState()
+    var returnTarget by remember {
+        mutableStateOf<BrowseReturnTarget?>(null)
+    }
+    // How many rails this page has waited for the return's rail to land behind.
+    var returnAttempts by remember { mutableStateOf(0) }
+    val returnFocusRequester = remember { FocusRequester() }
+
     // Long-press context menu for rail posters.
     var menuItem by remember {
         mutableStateOf<StudioItem?>(
@@ -148,6 +170,43 @@ fun DecadeScreen(
         lastRailFocusRequester?.requestFocus()
     }
 
+    /**
+     * Puts the page back where the viewer left it, if its Detail page was opened
+     * from here: the rail on screen, its row scrolled to the card, and the focus
+     * on that card.
+     *
+     * Answers whether the focus landed. A record for a rail this page does not
+     * paint answers false, and the caller holds the record and asks again when
+     * the next rail lands - the rails stream in one at a time, so the rail
+     * holding the card can arrive after the first one does.
+     */
+    suspend fun restoreBrowseReturn(recorded: BrowseReturnTarget): Boolean {
+        val railKey = recorded.railKey ?: return false
+        if (sections.none { it.title == railKey }) return false
+        browseListState.revealBrowseReturnRail(railKey, recorded.railIndex)
+        // The card is only focusable once its row has composed AND scrolled to
+        // it, which is a frame or more after the rail itself came back, and a
+        // request against a card that is not composed yet is a silent miss.
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+            landed = runCatching { returnFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+        return landed
+    }
+
+    /**
+     * Takes the page's own first card: where an ordinary open lands, and the
+     * last resort for a return this page could never put back.
+     */
+    suspend fun focusFirstCard() {
+        delay(100)
+        runCatching { firstItemFocusRequester.requestFocus() }
+    }
+
     LaunchedEffect(decadeStart) {
         // Re-pass the current chip selection so the VM's same-route guard
         // treats Back-restore as a no-op instead of resetting the filter.
@@ -159,14 +218,32 @@ fun DecadeScreen(
     // card every time another rail arrives behind the viewer. A new load (a
     // genre chip, another decade) resets it, so the fresh page still takes
     // focus once its first rail is on screen.
+    //
+    // A page reopened from one of its own Detail pages is the same move in
+    // reverse: the card the viewer pressed comes back, and only an ordinary
+    // open - or a return this page could never put back - falls through to the
+    // first card (see [BrowseReturnFocus]). The record is HELD here until it is
+    // honoured: the rail that holds the card can land after the first one does,
+    // and a record read and then dropped would lose the place it was raised for.
     var focusPlaced by remember { mutableStateOf(false) }
     LaunchedEffect(sections, isLoading) {
         if (isLoading) {
             focusPlaced = false
+            // A new load is a new list: a position in the old one means nothing.
+            returnTarget = null
+            returnAttempts = 0
         } else if (!focusPlaced && sections.any { it.items.isNotEmpty() }) {
+            val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)
+            if (recorded != null && returnAttempts < BROWSE_RETURN_FOCUS_STEPS) {
+                returnTarget = recorded
+                returnAttempts++
+                // The landing is what marks the page focused; a false leaves the
+                // retry to the next rail that lands behind this one.
+                focusPlaced = restoreBrowseReturn(recorded)
+                return@LaunchedEffect
+            }
             focusPlaced = true
-            delay(100)
-            runCatching { firstItemFocusRequester.requestFocus() }
+            focusFirstCard()
         }
     }
 
@@ -205,6 +282,7 @@ fun DecadeScreen(
             )
 
             LazyColumn(
+                state = browseListState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(
                     top = 8.dp,
@@ -257,10 +335,13 @@ fun DecadeScreen(
                 }
 
                 else -> {
-                    items(
+                    // Indexed, so a card that is clicked can name the rail it
+                    // sits in AND where that rail was, which is what puts the
+                    // page back on it (see [BrowseReturnFocus]).
+                    itemsIndexed(
                         items = sections,
-                        key = { section: StudioSection -> section.title }
-                    ) { section ->
+                        key = { _, section: StudioSection -> section.title }
+                    ) { railIndex, section ->
                     val pagingState = pagingStates[section.title] ?: RailPagingState()
 
                     DecadeRailRow(
@@ -274,6 +355,19 @@ fun DecadeScreen(
                         isLoadingMore = pagingState.isLoadingMore,
                         isFirstSection = section == sections.firstOrNull(),
                         firstItemFocusRequester = firstItemFocusRequester,
+                        returnTarget = returnTarget?.takeIf { it.railKey == section.title },
+                        returnFocusRequester = returnFocusRequester,
+                        onBeforeOpenDetail = { cardKey, index ->
+                            BrowseReturnFocus.record(
+                                BrowseReturnTarget(
+                                    screenKey = browseReturnKey,
+                                    itemId = cardKey,
+                                    position = index,
+                                    railKey = section.title,
+                                    railIndex = railIndex
+                                )
+                            )
+                        },
                         viewModel = viewModel,
                         onOpenPosterMenu = { item, requester ->
                             lastRailFocusRequester =
@@ -501,10 +595,25 @@ private fun DecadeRailRow(
     isLoadingMore: Boolean,
     isFirstSection: Boolean,
     firstItemFocusRequester: FocusRequester,
+    // The card a return from Detail is coming back for, and the requester the
+    // page lands the focus with - both null/unused on an ordinary open (see
+    // [BrowseReturnFocus]).
+    returnTarget: BrowseReturnTarget?,
+    returnFocusRequester: FocusRequester,
+    onBeforeOpenDetail: (cardKey: String, index: Int) -> Unit,
     viewModel: DecadeViewModel,
     onOpenPosterMenu: (StudioItem, FocusRequester) -> Unit
 ) {
     val rowState = rememberLazyListState()
+
+    // Puts this rail ON the card a return is coming back for: a rail the viewer
+    // scrolled twenty cards into has not composed that card, so it has no focus
+    // node yet (see [BrowseReturnFocus]).
+    LaunchedEffect(returnTarget) {
+        returnTarget?.let { target ->
+            runCatching { rowState.scrollToItem(target.position) }
+        }
+    }
 
     InfiniteDecadeRailHandler(
         listState = rowState,
@@ -532,12 +641,12 @@ private fun DecadeRailRow(
             ),
             modifier = Modifier.focusGroup()
         ) {
-            items(
+            itemsIndexed(
                 items = section.items,
-                key = { item: StudioItem ->
+                key = { _, item: StudioItem ->
                     "${item.mediaType}:${item.item.id}"
                 }
-            ) { studioItem ->
+            ) { itemIndex, studioItem ->
                 // Focus requester for restoring focus after the long-press
                 // menu dismisses, so the D-pad lands back on this exact card.
                 val requester = remember(
@@ -546,6 +655,17 @@ private fun DecadeRailRow(
                 ) {
                     FocusRequester()
                 }
+
+                val cardKey = "${studioItem.mediaType}:${studioItem.item.id}"
+
+                // The record names the card by the key ITS rail keys it with,
+                // so a rail that has re-ordered under the viewer (a hidden
+                // title, a new release) comes back on the card that is still
+                // there rather than on whatever took its position.
+                val isReturnItem =
+                    returnTarget != null &&
+                        itemIndex == returnTarget.position &&
+                        cardKey == returnTarget.itemId
 
                 val tmdbId = studioItem.item.id
                 val rawMediaType = studioItem.mediaType
@@ -594,6 +714,9 @@ private fun DecadeRailRow(
                         isWatched = watched,
                         isPartiallyWatched = watchedPartially,
                         onClick = {
+                            // Remember this card, so backing out of its Detail
+                            // page reopens this rail ON it.
+                            onBeforeOpenDetail(cardKey, itemIndex)
                             viewModel.resolveAndNavigate(
                                 tmdbId = studioItem.item.id,
                                 mediaType = rawMediaType,
@@ -614,6 +737,13 @@ private fun DecadeRailRow(
                             .then(
                                 if (isFirstItem) {
                                     Modifier.focusRequester(firstItemFocusRequester)
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .then(
+                                if (isReturnItem) {
+                                    Modifier.focusRequester(returnFocusRequester)
                                 } else {
                                     Modifier
                                 }
