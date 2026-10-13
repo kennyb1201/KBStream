@@ -412,6 +412,7 @@ fun SettingsScreen(
     // AppPreferences.isDiagNoRelabel): keep the declared Dolby Vision codec
     // string and strip the RPU/EL + HDR10+ in place instead of relabeling.
     var diagNoRelabel by remember { mutableStateOf(AppPreferences.isDiagNoRelabel(context)) }
+    var diagVpsRewrite by remember { mutableStateOf(AppPreferences.isDiagVpsRewrite(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
@@ -1764,6 +1765,25 @@ fun SettingsScreen(
                     onToggle = {
                         diagNoRelabel = it
                         AppPreferences.setDiagNoRelabel(context, it)
+                    }
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Diagnostic: with no-relabel on, additionally rewrite the VPS
+                // to HDR10 while keeping the dvhe.08.06 codec string. The
+                // hypothesis: a MediaTek DV decoder configures its pipeline
+                // from the VPS and then waits for RPUs that never arrive, so
+                // stripping DV signaling from the VPS (while keeping the
+                // codec string) lets it fall back to the HDR10 base layer and
+                // produce frames.
+                ToggleRow(
+                    label = "diagnose: rewrite VPS to HDR10 (no-relabel path)",
+                    description = "Diagnostic only. With the no-relabel toggle above on, also rewrite the VPS to HDR10 (remove the DV extension) while keeping the declared dvhe.08.06 codec string. The decoder configures its DV pipeline from the VPS and waits for RPUs that never arrive; removing DV signaling from the VPS may make it fall back to the base layer. Outputs HDR10 picture while the label says dvhe.08.06.",
+                    checked = diagVpsRewrite,
+                    onToggle = {
+                        diagVpsRewrite = it
+                        AppPreferences.setDiagVpsRewrite(context, it)
                     }
                 )
 

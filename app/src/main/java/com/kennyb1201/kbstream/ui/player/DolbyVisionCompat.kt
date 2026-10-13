@@ -2005,6 +2005,96 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * Rewrites only the VPS NAL(s) inside a sample to clean single-layer HDR10
+     * and returns the rewritten sample, or null when no VPS needed the rewrite
+     * (in which case nothing is allocated and [buf] is never touched).
+     *
+     * A new array rather than an in-place compaction, because the rewrite does
+     * not have to shrink: [rewriteVpsToHdr10] rebuilds the RBSP and re-applies
+     * emulation prevention, and a VPS carrying almost no extension comes back
+     * longer than the one it replaces (4 bytes longer on the test fixture).
+     * Shifting a longer NAL through a sample that is already packed would both
+     * clobber the NALs it is about to move and, at the buffer's end, run off
+     * the array — which is exactly how the in-place first version failed.
+     *
+     * The `diagVpsRewrite` experiment's whole job: by the time it runs the
+     * strip has already dropped the RPU/EL while the codec string still
+     * declares Dolby Vision, so the single variable under test is the VPS's
+     * DV extension. This walks the same framing the strip walks and hands each
+     * VPS to [rewriteVpsNal], which expects the payload *past* the 2-byte NAL
+     * header — never a raw byte offset (offset 0 is the start code / length
+     * prefix, so a direct [rewriteVpsToHdr10] call there parses garbage and
+     * silently does nothing). Unlike [transformAnnexB], the SPS is not touched:
+     * the codec string is derived from it, so it stays bit-exact and only the
+     * VPS changes.
+     */
+    fun rewriteVpsInSample(
+        buf: ByteArray,
+        length: Int,
+        annexB: Boolean,
+        nalLengthFieldLength: Int
+    ): ByteArray? {
+        val out = ByteArrayOutputStream(length)
+        var read = 0
+        var changed = false
+        if (annexB) {
+            while (read < length) {
+                val code = indexOfStartCode(buf, read, length)
+                if (code < 0) {
+                    out.write(buf, read, length - read)
+                    break
+                }
+                // Bytes ahead of the first start code - a sample that opens on
+                // a partial NAL - ride through as they arrived.
+                if (code > read) out.write(buf, read, code - read)
+                val codeLen =
+                    if (code + 3 < length && buf[code + 2].toInt() == 0 && buf[code + 3].toInt() == 1) 4 else 3
+                val header = code + codeLen
+                var nalEnd = indexOfStartCode(buf, header, length)
+                if (nalEnd < 0) nalEnd = length
+                val rewritten = if (nalEnd - header >= 2) rewriteVpsNal(buf, header, nalEnd) else null
+                if (rewritten != null) {
+                    // start code + 2-byte NAL header + rewritten RBSP
+                    out.write(buf, code, codeLen)
+                    out.write(buf, header, 2)
+                    out.write(rewritten, 0, rewritten.size)
+                    changed = true
+                } else {
+                    out.write(buf, code, nalEnd - code)
+                }
+                read = nalEnd
+            }
+        } else {
+            val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
+            while (read + fieldLen <= length) {
+                val nal = readLength(buf, read, fieldLen)
+                if (nal <= 0 || read + fieldLen + nal > length) break
+                val header = read + fieldLen
+                val nalEnd = header + nal
+                val rewritten = rewriteVpsNal(buf, header, nalEnd)
+                if (rewritten != null) {
+                    // The same shape [rewriteVpsInLengthDelimited] writes: the
+                    // declared length counts the 2-byte NAL header as well as
+                    // the rewritten RBSP, and the header itself is copied
+                    // through — a length that omitted it would shift every NAL
+                    // after the VPS by two bytes.
+                    writeLengthTo(out, rewritten.size + 2, fieldLen)
+                    out.write(buf, header, 2)
+                    out.write(rewritten, 0, rewritten.size)
+                    changed = true
+                } else {
+                    out.write(buf, read, fieldLen + nal)
+                }
+                read = nalEnd
+            }
+            // A trailing partial NAL - fewer bytes than a length field, or a
+            // prefix that runs past the sample - is forwarded as it arrived.
+            if (read < length) out.write(buf, read, length - read)
+        }
+        return if (changed) out.toByteArray() else null
+    }
+
+    /**
      * Length-delimited (MP4/fMP4) counterpart of [transformAnnexB]. Malformed
      * samples are forwarded untouched.
      */

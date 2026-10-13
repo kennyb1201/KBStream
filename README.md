@@ -373,3 +373,9 @@ GPLv3, so any distributed build has to carry GPL-compatible terms and ship
 corresponding source. [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists
 the other bundled components (mpv, FFmpeg, libass, and the permissive
 libraries) with their licenses.
+
+## Privacy
+
+What the app does with your data — crash reports, optional Supabase sync, the
+credentials it stores locally, and the third-party services it talks to — is
+described in [`PRIVACY.md`](PRIVACY.md).

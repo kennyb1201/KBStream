@@ -5092,6 +5092,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // strip the RPU/EL + HDR10+ in place, instead of re-advertising the base
         // layer as hvc1 — see DolbyVisionCompatExtractorsFactory. Off by default.
         val diagNoRelabel = AppPreferences.isDiagNoRelabel(this)
+        // Diagnostic companion to diagNoRelabel: also rewrite the VPS to HDR10
+        // (drop the DV extension) while keeping the dvhe.08.06 codec string.
+        val diagVpsRewrite = AppPreferences.isDiagVpsRewrite(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         // True when the platform advertises a Dolby Vision decoder. On such
         // devices single-layer DV (P4/P8) normally passes through as native
@@ -5250,7 +5253,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
                 "allProfiles=$convertAllProfiles to81=$convertTo81 " +
                 "(p7=$convertP7To81 p5=$convertP5To81) stripHdr10Plus=$stripHdr10Plus " +
-                "diagNoRelabel=$diagNoRelabel " +
+                "diagNoRelabel=$diagNoRelabel diagVpsRewrite=$diagVpsRewrite " +
                 "nativeDv=$nativeDvSupported deviceNativeDv=$deviceNativeDvSupported " +
                 "displaySupportsDv=$displaySupportsDv " +
                 "audioDecoder=$audioDecoderPriority " +                    "audioOutput=$audioOutputMode decodeToPcm=$decodeToPcm " +
@@ -5293,7 +5296,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     convertP5To81 = convertP5To81,
                     nativeDvSupported = nativeDvSupported,
                     nonDvDisplayOnDvDevice = dvDisplayMismatch,
-                    diagNoRelabel = diagNoRelabel
+                    diagNoRelabel = diagNoRelabel,
+                    diagVpsRewrite = diagVpsRewrite
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(cachedFactory, extractorsFactory)
@@ -7820,7 +7824,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         language = fmt.language,
                         mimeType = fmt.sampleMimeType,
                         forced = fmt.selectionFlags and C.SELECTION_FLAG_FORCED != 0,
-                        supported = group.isTrackSupported(i)
+                        supported = group.isTrackSupported(i),
+                        // The track's own name carries the kind (SDH / signs /
+                        // commentary) and the language tag never does, so the
+                        // rules read it to rank SDH above a forced track - see
+                        // SubtitleTrackRules.choose.
+                        title = fmt.label
                     )
                     locations += group to i
                 }
@@ -7843,10 +7852,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         )
                         .build()
                     changed = true
+                    // The language alone cannot answer "which one did it pick?"
+                    // on a file that ships EN SDH, EN regular and EN forced -
+                    // every one of the three logs "en". The track index, its
+                    // kind and its own label are what make the field run
+                    // readable.
+                    val picked = group.getTrackFormat(index)
                     Log.i(
                         "PLAYER_LANG",
-                        "Auto-selected subtitle: " +
-                            (group.getTrackFormat(index).language ?: "untagged")
+                        "Auto-selected subtitle: ${picked.language ?: "untagged"} " +
+                            "track=$index kind=${SubtitleKindRules.tagText(picked.label) ?: "regular"} " +
+                            "label=${picked.label ?: "none"}"
                     )
                 }
 

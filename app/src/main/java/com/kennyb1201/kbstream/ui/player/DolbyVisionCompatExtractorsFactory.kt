@@ -133,7 +133,16 @@ internal class DolbyVisionCompatExtractorsFactory(
      * layer as hvc1. Default false — with the flag off the relabel path is
      * byte-for-byte unchanged.
      */
-    private val diagNoRelabel: Boolean = false
+    private val diagNoRelabel: Boolean = false,
+    /**
+     * Diagnostic, driven by the `diagVpsRewrite` setting: with [diagNoRelabel]
+     * on, also rewrite the VPS to HDR10 (drop the DV extension) while keeping
+     * the declared dvhe.08.06 codec string — the MediaTek "DV pipeline
+     * configures from the VPS and then waits for RPUs that never arrive"
+     * hypothesis. Default false: with it off the strip path is byte-for-byte
+     * unchanged.
+     */
+    private val diagVpsRewrite: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -171,12 +180,12 @@ internal class DolbyVisionCompatExtractorsFactory(
                 "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
                 "stripHdr10Plus=$stripHdr10Plus convertP7To81=$convertP7To81 convertP5To81=$convertP5To81 " +
                 "nativeDv=$nativeDvSupported nonDvDisplay=$nonDvDisplayOnDvDevice " +
-                "diagNoRelabel=$diagNoRelabel"
+                "diagNoRelabel=$diagNoRelabel diagVpsRewrite=$diagVpsRewrite"
         )
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
             convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-            diagNoRelabel
+            diagNoRelabel, diagVpsRewrite
         )
     }
 }
@@ -195,7 +204,8 @@ private class VideoCompatExtractor(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNoRelabel: Boolean
+    private val diagNoRelabel: Boolean,
+    private val diagVpsRewrite: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -204,7 +214,7 @@ private class VideoCompatExtractor(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
                 convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                diagNoRelabel
+                diagNoRelabel, diagVpsRewrite
             )
         )
     }
@@ -231,7 +241,8 @@ private class VideoCompatExtractorOutput(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNoRelabel: Boolean
+    private val diagNoRelabel: Boolean,
+    private val diagVpsRewrite: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -240,7 +251,7 @@ private class VideoCompatExtractorOutput(
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
                 convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                diagNoRelabel
+                diagNoRelabel, diagVpsRewrite
             )
         } else {
             track
@@ -267,7 +278,8 @@ private class VideoCompatTrackOutput(
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
     private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNoRelabel: Boolean
+    private val diagNoRelabel: Boolean,
+    private val diagVpsRewrite: Boolean
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
@@ -920,7 +932,53 @@ private class VideoCompatTrackOutput(
                         "sei=${accounting?.summary()?.ifEmpty { "none" } ?: "none"}"
                 )
             }
-            emit(if (stripped >= 0) stripped else sampleEnd)
+            // Diagnostic: with diagNoRelabel and diagVpsRewrite BOTH on, also
+            // rewrite the VPS to HDR10 (remove the DV extension) while keeping
+            // the dvhe.08.06 codec string. The hypothesis: a MediaTek DV
+            // decoder configures its DV pipeline from the VPS and then waits
+            // for RPUs that never arrive, so removing DV signaling from the
+            // VPS lets the decoder fall back to the HDR10 base layer.
+            //
+            // Both flags, not just this one: the RELABEL_ONLY branch below
+            // drives this same in-place strip through its own two dispatch
+            // sites, so gating on `diagVpsRewrite` alone would let the new
+            // toggle rewrite the parameter sets of the shipped relabel path —
+            // a field-proven arm this experiment is not allowed to touch.
+            // `diagNoRelabel` is an exact proxy for "the unrelabeled arm chose
+            // this mode": that branch returns before the RELABEL_ONLY branch
+            // is reached, so whenever it is true those two sites are dead.
+            var outLen = if (stripped >= 0) stripped else sampleEnd
+            if (diagNoRelabel && diagVpsRewrite) {
+                // Rewrite only the VPS, framed the same way the strip is. The
+                // rewrite is NAL-offset-correct (see rewriteVpsInSample): the
+                // strip above already dropped the RPU/EL, so this removes the
+                // VPS's DV extension and leaves the SPS — and the codec string
+                // derived from it — exactly as declared. -1 means no VPS
+                // needed the rewrite, so the stripped length stands.
+                val rewritten = DolbyVisionCompat.rewriteVpsInSample(
+                    pendingBuf, outLen, framing == NalFraming.ANNEX_B, nalLengthFieldLength
+                )
+                if (rewritten != null) {
+                    // The rewritten sample replaces the stripped one. It is not
+                    // guaranteed to shrink (emulation prevention is re-applied
+                    // to the rebuilt VPS), so the carry that follows it is
+                    // parked first — a longer sample would otherwise land on
+                    // the bytes it has to preserve — and the sample is copied
+                    // into a buffer that can hold it. The carry then goes back
+                    // at 0 with pendingLen, which is where the next read
+                    // appends, exactly as the path below leaves it.
+                    val carry =
+                        if (carrySize > 0) pendingBuf.copyOfRange(sampleEnd, sampleEnd + carrySize)
+                        else null
+                    ensurePendingCapacity(rewritten.size)
+                    rewritten.copyInto(pendingBuf, 0)
+                    emit(rewritten.size)
+                    carry?.copyInto(pendingBuf, 0)
+                    pendingLen = carrySize
+                    return
+                }
+            }
+            emit(outLen)
             if (carrySize > 0) System.arraycopy(pendingBuf, sampleEnd, pendingBuf, 0, carrySize)
             pendingLen = carrySize
             return

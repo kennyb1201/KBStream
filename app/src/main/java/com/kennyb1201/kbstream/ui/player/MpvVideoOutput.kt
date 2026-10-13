@@ -36,16 +36,23 @@ internal object MpvVideoOutput {
     )
 
     /**
-     * The GPU path this app has configured since before the library swap:
-     * `vo=gpu` on the Android context, with the API pinned to OpenGL ES because
-     * `gpu-api` defaults to `auto` and a Vulkan-capable box answered with the
-     * Vulkan path while `gpu-context=android` asked for GL — a mismatched pair
-     * that opens without error, plays audio, and never shows a frame.
+     * The GPU path with the pin dropped: `vo=gpu` on the Android context, with
+     * `gpu-api` left on mpv's default `auto` (instead of the `opengl` pin that
+     * had been set for the old library). Unsetting it here is done by the
+     * caller ([MpvPlayerView.applyOptions]) doing nothing when [gpuApi] is null
+     * — mpv resolves `auto` itself, the same resolved path NuvioTV takes on the
+     * same library and the path the spec wants tested on the field boxes first.
+     *
+     * The device table ([resolve]) keeps sending Fire TV Stick 4K Plus and Onn
+     * 4K Plus to `mediacodec_embed` for now, so an install that is not using the
+     * manual `gpu` override behaves exactly as it did before — the pin removal
+     * is gated behind that override, and the table is re-pointed to `OPENGL`
+     * without the pin only after `gpu` is confirmed working on the field boxes.
      */
     private val OPENGL = Settings(
         vo = AppPreferences.MPV_VO_GPU,
         gpuContext = "android",
-        gpuApi = "opengl",
+        gpuApi = null, // was "opengl" — unset: the mpv default (`auto`) applies
         openglEs = true
     )
 
@@ -53,9 +60,24 @@ internal object MpvVideoOutput {
      * Bypass the GPU entirely: MediaCodec decodes straight into the Surface.
      * No `gpu-context`, no `gpu-api` and no `opengl-es` — there is no GPU
      * context to configure on this path, and naming one is what the stalled
-     * boxes choke on. The cost is the GPU's own work: no shader-based
-     * subtitle blending or scaling, which is why it is the fallback the field
-     * test cycles away from once a GPU configuration works.
+     * boxes choke on.
+     *
+     * The cost is larger than "no GPU scaling", and mpv documents it plainly:
+     * ``mediacodec_embed`` renders `IMGFMT_MEDIACODEC` frames straight to an
+     * `android.view.Surface`, so "many of mpv's features (subtitle rendering,
+     * OSD/OSC, video filters, etc) are not available with this driver"
+     * (`DOCS/man/vo.rst`). This app delegates subtitles to mpv — the size /
+     * background / position controls in [applySubtitleAppearance] are `sub-*`
+     * options and an ASS track is typeset by mpv's libass — so on a box that
+     * `auto` sends here (the two in [resolve]) the viewer gets a picture with
+     * no subtitle rendering at all, and those settings silently do nothing.
+     * It also only accepts frames from the zero-copy `--hwdec=mediacodec`, so
+     * the `hwdec` chain in [MpvPlayerView.applyOptions] has to resolve to
+     * `mediacodec`; a copy-back or software fallback leaves nothing to show.
+     *
+     * That is why this is a workaround and not a fix: it trades a black screen
+     * for no subtitles, and the field test cycles away from it the moment a
+     * GPU configuration is confirmed working on the box.
      */
     private val MEDIACODEC_EMBED = Settings(
         vo = AppPreferences.MPV_VO_MEDIACODEC_EMBED,

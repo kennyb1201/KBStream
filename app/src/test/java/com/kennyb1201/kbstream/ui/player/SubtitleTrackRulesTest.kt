@@ -22,8 +22,9 @@ class SubtitleTrackRulesTest {
     private fun srt(
         language: String? = null,
         forced: Boolean = false,
-        supported: Boolean = true
-    ) = Candidate(language, MimeTypes.APPLICATION_SUBRIP, forced, supported)
+        supported: Boolean = true,
+        title: String? = null
+    ) = Candidate(language, MimeTypes.APPLICATION_SUBRIP, forced, supported, title)
 
     private fun pgs(language: String? = null, forced: Boolean = false) =
         Candidate(language, MimeTypes.APPLICATION_PGS, forced, supported = false)
@@ -85,18 +86,110 @@ class SubtitleTrackRulesTest {
         assertEquals(Choice.Show(1), choice)
     }
 
-    // ── Forced tracks ──────────────────────────────────────────────────────
+    // ── SDH, regular and forced ────────────────────────────────
+    //
+    // Within one language the order is by how COMPLETE a track is, not by the
+    // forced flag: SDH (dialogue plus the sound description), then a regular
+    // full translation, then the forced signs / foreign-dialogue track. The
+    // flag being set on the one track a viewer wants subtitles for is the
+    // report these cases exist to answer.
 
     @Test
-    fun `forced wins a tie in the preferred language`() {
-        val choice = SubtitleTrackRules.choose(listOf(srt("en"), srt("en", forced = true)), "en")
-        assertEquals(Choice.Show(1), choice)
+    fun `SDH beats the regular and the forced track in the preferred language`() {
+        // Field check 1: English SDH, English regular, English forced.
+        val tracks = listOf(
+            srt("en", forced = true),
+            srt("en"),
+            srt("en", title = "English SDH")
+        )
+        assertEquals(Choice.Show(2), SubtitleTrackRules.choose(tracks, "en"))
     }
 
     @Test
-    fun `forced wins the untagged fallback`() {
-        val choice = SubtitleTrackRules.choose(listOf(srt(null), srt(null, forced = true)), "en")
-        assertEquals(Choice.Show(1), choice)
+    fun `a regular track beats the forced one in the preferred language`() {
+        // Field check 2: no SDH in the file.
+        val tracks = listOf(srt("en"), srt("en", forced = true))
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `the forced track is still chosen when its language has nothing else`() {
+        // Field check 3: better than nothing.
+        val tracks = listOf(srt("en", forced = true))
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `SDH is recognized from the words a track names itself with`() {
+        listOf("English SDH", "SDH", "English (HI)", "English CC", "English - Hearing Impaired")
+            .forEach { name ->
+                val tracks = listOf(srt("en"), srt("en", title = name))
+                assertEquals(
+                    "an SDH track named \"$name\" has to beat the plain one",
+                    Choice.Show(1),
+                    SubtitleTrackRules.choose(tracks, "en")
+                )
+            }
+    }
+
+    @Test
+    fun `a plain track name still beats the forced one`() {
+        // Generous detection is not blind detection: nothing in "English"
+        // names a kind, so the track is regular and outranks the forced one.
+        val tracks = listOf(srt("en", title = "English"), srt("en", forced = true))
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `an SDH-named track is taken at its name even when the forced flag is set`() {
+        // The two signals contradict each other, and the flag is the one this
+        // ordering exists to stop trusting.
+        val tracks = listOf(srt("en"), srt("en", forced = true, title = "English SDH"))
+        assertEquals(Choice.Show(1), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `the untagged bucket ranks by kind too`() {
+        val tracks = listOf(
+            srt(null, forced = true),
+            srt(null),
+            srt(null, title = "SDH")
+        )
+        assertEquals(Choice.Show(2), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `an untagged regular track beats an untagged forced one`() {
+        val tracks = listOf(srt(null), srt(null, forced = true))
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `the kind only breaks ties inside a language, so a forced match still wins`() {
+        // An untagged SDH track is a guess; the track tagged for the language
+        // the viewer named is not.
+        val tracks = listOf(srt(null, title = "SDH"), srt("en", forced = true))
+        assertEquals(Choice.Show(1), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `the other-language fallback does not lead with its forced track`() {
+        val tracks = listOf(srt("fr", forced = true), srt("fr"))
+        assertEquals(Choice.Show(1), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `a forced track in another language is the last thing chosen before off`() {
+        val tracks = listOf(srt("fr", forced = true))
+        assertEquals(Choice.Show(0), SubtitleTrackRules.choose(tracks, "en"))
+    }
+
+    @Test
+    fun `a bitmap match in the preferred language still goes to the other engine`() {
+        // Unchanged: which bitmap of several is a question for the engine that
+        // can actually draw one.
+        val tracks = listOf(srt(null, title = "SDH"), pgs("en"))
+        assertEquals(Choice.NeedsMpv(1), SubtitleTrackRules.choose(tracks, "en"))
     }
 
     @Test

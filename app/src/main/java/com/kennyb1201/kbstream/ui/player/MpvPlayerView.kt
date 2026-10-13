@@ -956,13 +956,12 @@ class MpvPlayerView @JvmOverloads constructor(
         val vo = videoOutput()
         MPVLib.setOptionString("vo", vo.vo)
         vo.gpuContext?.let { MPVLib.setOptionString("gpu-context", it) }
-        // Pin the API as well as the context. `gpu-api` defaults to auto, and a
-        // box that advertises Vulkan can be answered with the Vulkan path while
-        // the OpenGL context asks for OpenGL ES - a mismatched pair that does
-        // not fail the open (audio plays, the track list populates) but never
-        // puts a frame on screen: black picture over playing sound. `opengl` is
-        // the API this app already configures for, and the resolved setting is
-        // never left unset on a GPU path.
+        // Only name the API when the resolver resolved one. When null the GPU
+        // path's gpuApi is left unset, so mpv resolves gpu-api on its own from
+        // the context — leave it on the default rather than handing mpv a value
+        // it could override away from what the driver picks. The guard already
+        // makes this correct: the new OPENGL settings surface no gpuApi, so
+        // neither applyOptions nor attachSurface sets gpu-api.
         vo.gpuApi?.let { MPVLib.setOptionString("gpu-api", it) }
         if (vo.openglEs) MPVLib.setOptionString("opengl-es", "yes")
         // The field test's line: which mode was stored, which device it was

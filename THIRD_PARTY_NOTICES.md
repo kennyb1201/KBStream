@@ -9,8 +9,8 @@ code shipped in the APK and the licenses its authors publish it under.
 | Component | Where it comes from | License |
 | --- | --- | --- |
 | NewPipeExtractor | `com.github.TeamNewPipe:NewPipeExtractor`, pinned to commit `43f8e6eb` (tag `v0.26.4`) | GPL-3.0-or-later |
-| mpv (libmpv) | the `mpvlib-1.1.2.aar` release AAR from [`Riteshp2001/mpvlibAndroid`](https://github.com/Riteshp2001/mpvlibAndroid) (release `v1.1.2`, sha256 `2bee300d…`), fetched into `app/libs/` by `scripts/fetch_mpv_aar.sh` — this replaced the old `dev.jdtech.mpv:libmpv` Maven artifact | LGPL-2.1-or-later (mpv is LGPL-2.1+ with some optional GPL parts) |
-| FFmpeg | the video-enabled `media3-ffmpeg-decoder.aar` built by `scripts/build_ffmpeg_video.sh`, and the FFmpeg linked into libmpv | LGPL-2.1-or-later for the libraries as built here (FFmpeg can be built as GPL; the build script enables only LGPL-compatible components) |
+| mpv (libmpv) | the `mpvlib-1.1.2.aar` release AAR from [`Riteshp2001/mpvlibAndroid`](https://github.com/Riteshp2001/mpvlibAndroid) (release `v1.1.2`, sha256 `2bee300d…`), fetched into `app/libs/` by `scripts/fetch_mpv_aar.sh` — this replaced the old `dev.jdtech.mpv:libmpv` Maven artifact, which is no longer a dependency of anything | The AAR's own Android wrapper is MIT (the mpv-android project, © 2016 Ilya Zhuravlev and sfan5). The `libmpv.so` and FFmpeg native libraries bundled inside it are **GPL-3.0-or-later**: the release builds its FFmpeg with `--enable-gpl` and `--enable-version3` (`buildscripts/scripts/ffmpeg.sh` at tag `v1.1.2`), which selects FFmpeg's GPLv3 terms rather than its default LGPL. mpv's own `-Dgpl` is left at its default, so libmpv links a GPLv3 FFmpeg. This is why the AAR's shipped native code is described here as GPLv3, not LGPL. |
+| FFmpeg | the video-enabled `media3-ffmpeg-decoder.aar` built by `scripts/build_ffmpeg_video.sh` (this repo's own FFmpeg), and the FFmpeg linked into libmpv | LGPL-2.1-or-later for the media3 extension built here (that build script enables only LGPL-compatible components). The FFmpeg inside libmpv is a different, separately built FFmpeg and is GPL-3.0-or-later — see the mpv row above. |
 | libass | linked into libmpv (subtitle typesetting) | ISC |
 | libass | also linked into `libassjni.so`, built by `scripts/build_libass.sh`, which is what typesets an `.ass` SIDECAR on the ExoPlayer engine | ISC |
 | FreeType | linked into `libassjni.so` by `scripts/build_libass.sh` | FTL or GPL-2.0-or-later (FreeType's own dual license; this build uses the FTL option) |
@@ -23,10 +23,11 @@ Because KBStream includes NewPipeExtractor, which is GPLv3, any distributed buil
 that contains it must be licensed under terms compatible with the GPLv3 and made
 available with corresponding source. The project's top-level `LICENSE` is
 GPL-3.0-or-later for exactly that reason. The same goes the other way for the
-copyleft libraries linked into `libassjni.so` and into libmpv: LGPL-2.1-or-later
-(FriBidi, libmpv, FFmpeg) is compatible with a GPL-3.0-or-later application, and
-FreeType is used under its permissive FTL option rather than its GPL-2.0-only
-alternative.
+copyleft libraries linked into `libassjni.so` and into libmpv: the LGPL-2.1-or-later
+of FriBidi and of the FFmpeg this repo builds itself is compatible with a
+GPL-3.0-or-later application, the GPLv3 of the libmpv/FFmpeg pair bundled in the
+mpvlibAndroid AAR is the same license as the app's own, and FreeType is used
+under its permissive FTL option rather than its GPL-2.0-only alternative.
 
 ## Permissive components
 
@@ -47,7 +48,8 @@ apart from attribution, impose no distribution obligations:
 
 The authoritative list is the `dependencies` block of `app/build.gradle.kts`,
 plus the native components that are not dependencies at all: the mpvlibAndroid
-AAR fetched by `scripts/fetch_mpv_aar.sh`, the FFmpeg AAR produced by
+AAR fetched by `scripts/fetch_mpv_aar.sh` (its license follows the build recipe
+in that release, not the repo's own MIT wrapper), the FFmpeg AAR produced by
 `scripts/build_ffmpeg_video.sh`, and the libass/FreeType/HarfBuzz/fontconfig/
 FriBidi/expat set linked into `libassjni.so` by `scripts/build_libass.sh`.
 When a dependency is added or upgraded, update the tables above. Dependabot

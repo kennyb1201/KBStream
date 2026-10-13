@@ -42,6 +42,46 @@ class SportsHubFavoritesContractTest {
     }
 
     @Test
+    fun `a hub that opens with teams followed lands on the favourites tab`() {
+        // The initial default only. The whole branch sits inside the guard that
+        // skips a selection which is still valid, which is what makes this the
+        // FIRST tab and nothing else:
+        //  - a manual switch has already set selectedPath, so a re-open keeps
+        //    the league that was picked (the tab is not bounced to FAVOURITES);
+        //  - `tabs` is the only key, so a star toggled in-session does not move
+        //    the viewer off the tab they are reading;
+        //  - and clearing the follow set restores the old first-league default,
+        //    since the empty branch is untouched.
+        assertTrue(
+            "the follow set picks FAVOURITES, and an empty one still falls to the first league",
+            hubFlat.contains(
+                "val current = selectedPath " +
+                    "if (current == null || tabs.none { it.path == current }) { " +
+                    "if (favoriteKeys.isNotEmpty()) { " +
+                    "viewModel.selectLeague(SportsLeagues.FAVORITES.path) } else { " +
+                    "leagues.firstOrNull()?.let { viewModel.selectLeague(it.path) } } }"
+            )
+        )
+        assertTrue(
+            "only the tab row is the key, so neither an in-session star nor a manual switch re-runs it",
+            hubFlat.contains("LaunchedEffect(tabs) {") &&
+                !hubFlat.contains("LaunchedEffect(tabs, favoriteKeys)") &&
+                !hubFlat.contains("LaunchedEffect(favoriteKeys")
+        )
+        assertTrue(
+            "the follow set comes from the hub's state, read from the store when the ViewModel is " +
+                "built, so the first composition already has it and the default cannot race a load",
+            hubFlat.contains(
+                "val favoriteKeys by viewModel.favoriteTeamKeys.collectAsStateWithLifecycle()"
+            ) && vmFlat.contains("MutableStateFlow( AppPreferences.getSportsFavoriteTeams(app) )")
+        )
+        assertTrue(
+            "and FAVOURITES really is in the row the selection is checked against",
+            hubFlat.contains("val tabs = remember(leagues) { listOf(SportsLeagues.FAVORITES) + leagues }")
+        )
+    }
+
+    @Test
     fun `the tab shows the viewer's games, and says so when there are none`() {
         assertTrue(
             "the section comes from the hub's own state",

@@ -25,9 +25,10 @@ import org.junit.Test
  *    Vulkan can answer with the Vulkan path - a mismatched pair that does not
  *    fail the open (audio plays, the track list populates) but never puts a
  *    frame on screen. That fix is now per-device (see MpvVideoOutput), so this
- *    test reads the pins out of the resolver, and MpvVideoOutputTest carries the
- *    behavioural half: no mode that opens a GPU context may leave `gpu-api`
- *    unset, and only the MediaCodec path names no context at all.
+ *    test reads the setting out of the resolver, and MpvVideoOutputTest carries
+ *    the behavioural half: the GPU path now leaves `gpu-api` unset on purpose
+ *    (mpv resolves its own `auto` on the new library), Vulkan still pins its
+ *    API, and only the MediaCodec path names no context at all.
  *
  * There is no device or emulator in CI and a libmpv Activity cannot be driven in
  * a JVM test, so the structure that fixes them is read out of the source the way
@@ -70,27 +71,25 @@ class MpvEngineOverlayContractTest {
     }
 
     @Test
-    fun `the video output pins the API its own context and opengl-es already imply`() {
-        // The three pins moved out of the view and into the resolver when the
+    fun `the video output resolves the API each of its paths needs`() {
+        // The settings moved out of the view and into the resolver when the
         // video output became a per-device choice (see MpvVideoOutput), so this
-        // asserts them where they now live. The behavioural half - that NO mode
-        // which opens a GPU context leaves gpu-api unset, and that only the
-        // MediaCodec path names no context at all - is pinned exhaustively by
-        // MpvVideoOutputTest, which is the stronger form of what the ordering
-        // check here used to say.
+        // asserts them where they now live. The behavioural half - that the GPU
+        // path leaves gpu-api unset for mpv to resolve, that Vulkan still pins
+        // its API, and that only the MediaCodec path names no context at all -
+        // is pinned exhaustively by MpvVideoOutputTest, which is the stronger
+        // form of what the ordering check here used to say.
         val output = read(MPV_VIDEO_OUTPUT)
         assertTrue(
             "the Android GPU context and its OpenGL ES flag are still configured",
             output.contains("gpuContext = \"android\"") && output.contains("openglEs = true")
         )
-        assertTrue(
-            "so gpu-api must not be left on auto: with the context and opengl-es above, a " +
-                "Vulkan-capable box is otherwise free to answer with the Vulkan path, which is " +
-                "audio over a black picture",
+        assertFalse(
+            "the OPENGL path no longer pins gpu-api=opengl - the GPU output with this library leaves gpuApi unset and lets mpv resolve auto itself, which is the state the field boxes confirm with mpv_vo=gpu",
             output.contains("gpuApi = \"opengl\"")
         )
         assertTrue(
-            "while the Vulkan mode pins the Vulkan API instead",
+            "while the Vulkan mode still pins the Vulkan API",
             output.contains("gpuApi = \"vulkan\"")
         )
         assertFalse(

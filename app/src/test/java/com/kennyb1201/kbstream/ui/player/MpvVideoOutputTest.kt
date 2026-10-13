@@ -4,6 +4,7 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -84,7 +85,7 @@ class MpvVideoOutputTest {
         )
         assertEquals("gpu", settings.vo)
         assertEquals("android", settings.gpuContext)
-        assertEquals("opengl", settings.gpuApi)
+        assertEquals(null, settings.gpuApi)
         assertTrue(settings.openglEs)
     }
 
@@ -117,7 +118,7 @@ class MpvVideoOutputTest {
         )
         assertEquals("gpu", forced.vo)
         assertEquals("android", forced.gpuContext)
-        assertEquals("opengl", forced.gpuApi)
+        assertEquals(null, forced.gpuApi)
         assertTrue(forced.openglEs)
 
         assertTrue(
@@ -131,13 +132,15 @@ class MpvVideoOutputTest {
     @Test
     fun `auto keeps the OpenGL path on hardware it does not know`() {
         // The upgrade path: an install on any other box must behave exactly as
-        // it did before the library swap introduced this setting.
+        // it did before the library swap introduced this setting. The GPU path
+        // now resolves gpuApi to null (mpv's `auto`), matching the unpinned path
+        // the field boxes took as the manual override.
         val settings = MpvVideoOutput.resolve(
             AppPreferences.MPV_VO_AUTO, "NVIDIA", "SHIELD Android TV", "mdarcy"
         )
         assertEquals("gpu", settings.vo)
         assertEquals("android", settings.gpuContext)
-        assertEquals("opengl", settings.gpuApi)
+        assertEquals(null, settings.gpuApi)
         assertTrue(settings.openglEs)
     }
 
@@ -152,7 +155,7 @@ class MpvVideoOutputTest {
             AppPreferences.MPV_VO_GPU, "Amazon", "AFTKRT", "karat"
         )
         assertEquals("gpu", forcedGpu.vo)
-        assertEquals("opengl", forcedGpu.gpuApi)
+        assertEquals(null, forcedGpu.gpuApi)
     }
 
     @Test
@@ -181,19 +184,24 @@ class MpvVideoOutputTest {
 
     @Test
     fun `no GPU path ever leaves gpu-api unset`() {
-        // `gpu-api` defaults to auto, and a Vulkan-capable box answers the
-        // OpenGL context with the Vulkan API - it opens without error, plays
-        // audio and shows nothing. Every mode that opens a GPU context has to
-        // name its API; only the MediaCodec path may name none.
-        AppPreferences.MPV_VO_MODES.forEach { mode ->
-            val settings = MpvVideoOutput.resolve(mode, "Amazon", "AFTKRT", "karat")
-            if (settings.gpuContext != null) {
-                assertTrue(
-                    "$mode opens a GPU context without pinning gpu-api",
-                    settings.gpuApi != null
-                )
-            }
-        }
+        // gpu-api defaults to `auto`, and a Vulkan-capable box answers the
+        // OpenGL context with the Vulkan API: opens without error, plays audio,
+        // shows nothing. Every mode that opens a GPU context must resolve an
+        // API, except that the GPU path's pin has been dropped (gpuApi null, so
+        // mpv's `auto` applies) and only the MediaCodec path is allowed to
+        // surface no gpu-api. The device table still sends Fire TV / Onn to
+        // MediaCodec at `auto`, so the baseline install is unaffected.
+        val modes = AppPreferences.MPV_VO_MODES
+        assertEquals(null, MpvVideoOutput.resolve(modes[0], "Amazon", "AFTKRT", "karat").gpuApi)
+        assertEquals("vulkan", MpvVideoOutput.resolve(modes[3], "Amazon", "AFTKRT", "karat").gpuApi)
+        assertNull(
+            "the MediaCodec_embed path names no gpu-api",
+            MpvVideoOutput.resolve(modes[2], "Amazon", "AFTKRT", "karat").gpuApi
+        )
+        assertNull(
+            "the auto path's GPU path also surfaces no gpu-api",
+            MpvVideoOutput.resolve(modes[1], "Amazon", "AFTKRT", "karat").gpuApi
+        )
     }
 
     // ── the wiring ────────────────────────────────────────────────────────

@@ -41,7 +41,15 @@ internal object SubtitleTrackRules {
          * [androidx.media3.common.Tracks.Group.isTrackSupported]. False means
          * selecting it produces nothing on screen, with no error.
          */
-        val supported: Boolean
+        val supported: Boolean,
+        /**
+         * The track's own name (media3's `Format.label`), or null when the
+         * container gave it none. This is where an SDH track says so — the
+         * language tag never does — and it is what [choose] reads for the kind
+         * ordering (see [SubtitleKindRules]). The viewer's picker already reads
+         * the same field (see [pickerLabel]).
+         */
+        val title: String? = null
     )
 
     /** What the player should do about subtitles. */
@@ -150,6 +158,26 @@ internal object SubtitleTrackRules {
      * returns [Choice.Off] before looking at anything else. (Whether forced subs
      * should override an explicit OFF is a product decision; silently overriding
      * one is the behavior viewers complain about most.)
+     *
+     * Within a language the tracks are ranked by HOW COMPLETE they are, not by
+     * the forced flag:
+     *
+     *  1. SDH — the dialogue plus the sound description, which reads as the
+     *     whole track and is why it wins. Detected from the track's own name
+     *     (see [SubtitleKindRules]); a `forced` flag on an SDH-named track is
+     *     ignored, because not trusting that flag is what this ordering is for.
+     *  2. A regular track — the full translation, not forced and not SDH.
+     *  3. The forced track — the signs / foreign-dialogue track. It is the
+     *     *least* of the three as a default, and the previous rules picked it
+     *     first on the theory that a disc shipping both puts the signs track in
+     *     the forced one. That holds on authored discs and not on the rips and
+     *     add-on tracks this app actually plays, where the flag is set on the
+     *     one track a viewer asks for subtitles to get past.
+     *
+     * The same three-way order applies to the untagged bucket and to the
+     * fallback onto another language, so a forced track is a last resort there
+     * too rather than the first pick. A language match still beats a better
+     * KIND: the kind only breaks ties within one language bucket.
      */
     fun choose(candidates: List<Candidate>, preferredLanguage: String): Choice {
         val preferred = normalize(preferredLanguage) ?: return Choice.Off
@@ -163,35 +191,47 @@ internal object SubtitleTrackRules {
         }
         val bitmap = candidates.withIndex().filter { isBitmapFormat(it.value.mimeType) }
         val isUntagged: (Candidate) -> Boolean = { normalize(it.language) == null }
+        val isPreferred: (Candidate) -> Boolean = { normalize(it.language) == preferred }
+        val isSdh: (Candidate) -> Boolean = {
+            SubtitleKindRules.of(it.title).contains(SubtitleKindRules.SDH)
+        }
+        val isRegular: (Candidate) -> Boolean = { !it.forced && !isSdh(it) }
 
-        // 1. The preferred language, among tracks this engine can draw. A forced
-        //    track wins a tie: on a disc that ships both, the forced track is
-        //    the signs/foreign-dialogue one and the other is a full translation.
-        renderable.firstOrNull {
-            normalize(it.value.language) == preferred && it.value.forced
-        }?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull { normalize(it.value.language) == preferred }
+        // 1. The preferred language, most complete kind first: SDH, then a
+        //    regular full translation, then its forced track as a last resort.
+        renderable.firstOrNull { isPreferred(it.value) && isSdh(it.value) }
+            ?.let { return Choice.Show(it.index) }
+        renderable.firstOrNull { isPreferred(it.value) && isRegular(it.value) }
+            ?.let { return Choice.Show(it.index) }
+        renderable.firstOrNull { isPreferred(it.value) && it.value.forced }
             ?.let { return Choice.Show(it.index) }
 
         // 2. The preferred language IS present, but only as a bitmap track. This
         //    is the silent failure this object exists for, and the answer is the
         //    other engine - not a dead selection, and not a track tagged for a
-        //    language the viewer did not ask for.
-        bitmap.firstOrNull { normalize(it.value.language) == preferred }
+        //    language the viewer did not ask for. Left as it was: which bitmap
+        //    is a question only the engine that can draw it should answer.
+        bitmap.firstOrNull { isPreferred(it.value) }
             ?.let { return Choice.NeedsMpv(it.index) }
 
         // 3. No tagged match. An UNTAGGED track is the common case in rips, and
         //    it is the viewer's own language far more often than not, so it is
-        //    preferred over a track tagged for a language they did ask for.
-        renderable.firstOrNull { isUntagged(it.value) && it.value.forced }
+        //    preferred over a track tagged for a language they did ask for -
+        //    and it is ranked by kind for the same reason.
+        renderable.firstOrNull { isUntagged(it.value) && isSdh(it.value) }
             ?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull { isUntagged(it.value) }
+        renderable.firstOrNull { isUntagged(it.value) && isRegular(it.value) }
+            ?.let { return Choice.Show(it.index) }
+        renderable.firstOrNull { isUntagged(it.value) && it.value.forced }
             ?.let { return Choice.Show(it.index) }
 
         // 4. Only tagged tracks, none of them the preferred language. The
         //    fallback is still taken - "some subtitles" beats none for a viewer
         //    who asked for subtitles - but the preferred language won above, so
-        //    this never overrides a real match.
+        //    this never overrides a real match, and a forced track in another
+        //    language is still the last thing chosen before [Choice.Off].
+        renderable.firstOrNull { isSdh(it.value) }?.let { return Choice.Show(it.index) }
+        renderable.firstOrNull { isRegular(it.value) }?.let { return Choice.Show(it.index) }
         renderable.firstOrNull { it.value.forced }?.let { return Choice.Show(it.index) }
         renderable.firstOrNull()?.let { return Choice.Show(it.index) }
 

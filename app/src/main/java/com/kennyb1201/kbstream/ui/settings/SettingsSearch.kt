@@ -211,6 +211,16 @@ internal object SettingsSearchIndex {
             "Keep DV codec (no relabel)",
             "dolby vision dv codec relabel hvc1 dvhe experiment diagnostic rpu strip"
         ),
+        // The VPS-rewrite companion to that experiment, drawn directly under it
+        // in the same cluster. Indexed for the same reason: the no-relabel row
+        // is only half the diagnostic, and a row a viewer can scroll to but no
+        // query can name is what the search contract exists to forbid.
+        SettingSearchEntry(
+            "playback.vps-rewrite-dv",
+            SettingsPane.PLAYBACK,
+            "diagnose: rewrite VPS to HDR10 (no-relabel path)",
+            "dolby vision dv vps rewrite hdr10 mediacodec mtk experiment diagnostic no relabel"
+        ),
         SettingSearchEntry(
             "playback.auto-select-stream",
             SettingsPane.PLAYBACK,

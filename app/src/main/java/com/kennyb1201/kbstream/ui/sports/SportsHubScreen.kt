@@ -232,13 +232,30 @@ fun SportsHubScreen(
     // switches leagues on and off, and this tab is a view over them.
     val tabs = remember(leagues) { listOf(SportsLeagues.FAVORITES) + leagues }
 
-    // Keep a tab selected as the catalog changes: the first enabled league is
-    // the sensible default, and a league that was just switched off must not
-    // stay the selection (its tab is gone).
+    // Keep a tab selected as the catalog changes: a league that was just
+    // switched off must not stay the selection (its tab is gone).
+    //
+    // Which tab a fresh hub opens on is the viewer's own games when they follow
+    // anyone - FAVOURITES is the only tab whose contents they chose, so it is
+    // the one they came for - and the first enabled league for everyone else,
+    // which is what this did before. `favoriteKeys` is the hub's own follow set
+    // (see SportsHubViewModel): it is read from the store when the ViewModel is
+    // built, so it is already populated on the first composition and the
+    // default cannot race a load and settle on a league by accident.
+    //
+    // `tabs` is the only key, on purpose. Reading the follow set here rather
+    // than keying on it is what keeps this the INITIAL default and nothing
+    // more: a star toggled while the hub is open must not yank the viewer off
+    // the tab they are reading, and a manual tab switch has already stored a
+    // selection, so the guard below skips them entirely.
     LaunchedEffect(tabs) {
         val current = selectedPath
         if (current == null || tabs.none { it.path == current }) {
-            leagues.firstOrNull()?.let { viewModel.selectLeague(it.path) }
+            if (favoriteKeys.isNotEmpty()) {
+                viewModel.selectLeague(SportsLeagues.FAVORITES.path)
+            } else {
+                leagues.firstOrNull()?.let { viewModel.selectLeague(it.path) }
+            }
         }
     }
 

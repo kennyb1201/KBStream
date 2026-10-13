@@ -72,6 +72,7 @@ object AppPreferences {
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
     private const val KEY_DIAG_NO_RELABEL = "diag_no_relabel"               // temporary DV experiment, see isDiagNoRelabel
+    private const val KEY_DV_DIAG_VPS_REWRITE = "dv_diag_vps_rewrite"       // diagnostic: rewrite VPS to HDR10 on the no-relabel path
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
     private const val KEY_DV_PASSTHROUGH_FAILED_AT = "dv_passthrough_failed_at" // learned: box's DV decoder failed, 0 = none
@@ -1058,6 +1059,15 @@ object AppPreferences {
 
     fun setDiagNoRelabel(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_DIAG_NO_RELABEL, enabled).apply()
+    }
+
+    // Diagnostic: rewrite the VPS to HDR10 on the no-relabel path while keeping
+    // the declared dvhe.08.06 codec string (MediaTek hypothesis).
+    fun isDiagVpsRewrite(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_DV_DIAG_VPS_REWRITE, false)
+
+    fun setDiagVpsRewrite(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_DV_DIAG_VPS_REWRITE, enabled).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────
