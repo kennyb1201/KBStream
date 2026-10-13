@@ -123,8 +123,12 @@ class FullResBackdropContractTest {
 
         val home = readSource(HOME_SCREEN)
         assertTrue(
-            "the home hero upgrades the backdrop where it draws it",
-            home.contains("val backdropArt = TmdbRepository.fullResBackdropUrl(")
+            "the home hero upgrades the backdrop where it draws it - the rung " +
+                "under the viewer's own choice, which is upgraded for the same " +
+                "reason the hero's own art is (see ImageOverrideArt): the hero " +
+                "fills the screen either way",
+            home.contains("val backdropArt = imageOverrideBackdropUrl(") &&
+                home.contains("fallbackUrl = TmdbRepository.fullResBackdropUrl(")
         )
         assertTrue(
             "the poster rungs stay outside the upgrade - a poster is not a backdrop",

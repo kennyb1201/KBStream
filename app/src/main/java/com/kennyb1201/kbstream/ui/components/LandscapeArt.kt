@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.components
 
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.TmdbDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
@@ -112,12 +113,32 @@ internal data class LandscapeArtRequest(
  * primary is what the hero is already showing, and cards that mirror it read as
  * a mistake rather than as artwork.
  */
-internal fun TmdbDetail?.landscapeArtUrls(): Pair<String?, String?> {
+internal fun TmdbDetail?.landscapeArtUrls(
+    /**
+     * The viewer's image choices, when the caller has already read them. The
+     * default is the live mirror ([ImageOverrides.paths]), so a surface that
+     * resolves art without having the mirror to hand still honors the choice.
+     */
+    overrides: Map<String, String> = ImageOverrides.paths.value
+): Pair<String?, String?> {
+
+    // The still the viewer chose for landscape cards wins over the alternate
+    // TMDB image below (see ImageOverrides). It is TMDB's own artwork, chosen
+    // deliberately, so it also overrides a pinned rail's "TMDB or nothing"
+    // rule - which exists to keep an ADD-ON's promo background out, not to
+    // refuse the viewer's own pick.
+    val chosen = ImageOverrides.pathFor(
+        paths = overrides,
+        tmdbId = this?.id,
+        type = ImageOverrides.TYPE_BACKDROP,
+        screen = ImageOverrides.SCREEN_LANDSCAPE_CARD
+    )
 
     val backdrop =
-        this?.cardBackdropPath()
-            ?.takeIf { it.isNotBlank() }
-            ?.let { TmdbRepository.BACKDROP_BASE + it }
+        chosen?.let { TmdbRepository.BACKDROP_BASE + it }
+            ?: this?.cardBackdropPath()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { TmdbRepository.BACKDROP_BASE + it }
 
     val logo =
         this?.bestLogoPath()

@@ -61,11 +61,14 @@ import com.kennyb1201.kbstream.data.reporting.StreamRankReport
 import com.kennyb1201.kbstream.domain.streamengine.AutoPlayQuality
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.components.StreamBadgeRow
 import com.kennyb1201.kbstream.ui.components.formatRuntimeMinutes
+import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
+import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -88,6 +91,13 @@ fun StreamsScreen(
     episode: Int?,
     runtimeMinutes: Int? = null,
     backdropUrl: String?,
+    /**
+     * The TMDB id of the title being resolved, so this screen can draw the
+     * still the viewer chose for it (see ImageOverrides) instead of the one the
+     * route carried. Null for a target with no TMDB id - an add-on id, a
+     * channel - which has no choices to look up and keeps [backdropUrl].
+     */
+    tmdbId: Int? = null,
     clearLogoUrl: String?,
     suppressAutoSelect: Boolean = false,
     onStreamSelected: (
@@ -263,15 +273,28 @@ fun StreamsScreen(
         }
     }
 
+    // The still the viewer chose for THIS screen, when they chose one: the
+    // backdrop the route carried is TMDB's own primary still, and a viewer who
+    // picked a different one on the title's Media row asked for it here too
+    // (see ImageOverrideArt). Read once per composition - the choices are a
+    // mirror, not a query - so a pick is honored without re-resolving anything.
+    val overridePaths = rememberImageOverridePaths()
+    val backdrop = imageOverrideBackdropUrl(
+        paths = overridePaths,
+        tmdbId = tmdbId,
+        screen = ImageOverrides.SCREEN_STREAMS,
+        fallbackUrl = backdropUrl
+    )
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
     ) {
-        if (!backdropUrl.isNullOrBlank()) {
+        if (!backdrop.isNullOrBlank()) {
             AsyncImage(
                 model = ImageRequest.Builder(context)
-                    .data(backdropUrl)
+                    .data(backdrop)
                     // Full-screen hero backdrop: the one image on the
                     // full-bleed backdrop.
                     .crossfade(true)

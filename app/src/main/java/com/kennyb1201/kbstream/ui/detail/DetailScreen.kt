@@ -115,6 +115,7 @@ import com.kennyb1201.kbstream.data.tmdb.displaySeasonName
 import com.kennyb1201.kbstream.data.tmdb.list
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
@@ -146,6 +147,8 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.theme.DEFAULT_ACCENT_INDEX
@@ -1092,16 +1095,16 @@ fun DetailScreen(
             }
     }
 
-    // ── The Media row: one row, two pages (see DetailMediaRow) ──────────
+    // ── The Media row: one row, three pages (see DetailMediaRow) ────────
 
     /**
-     * The videos and the extra backdrops the row draws, straight off the detail
-     * payload.
+     * The videos, extra backdrops and posters the row draws, straight off the
+     * detail payload.
      *
-     * Both are already in hand: `videos` and `images` are two of the parts this
-     * screen's single `append_to_response` asks TMDB for, so the full list of
-     * either costs no extra call - the header's trailer button picks its one
-     * entry out of the first (see [TrailerPick.best]) and the hero draws one
+     * All three are already in hand: `videos` and `images` are two of the parts
+     * this screen's single `append_to_response` asks TMDB for, so the full list
+     * of any of them costs no extra call - the header's trailer button picks its
+     * one entry out of the first (see [TrailerPick.best]), the hero draws one
      * entry of the second, and this is the first surface to show the rest of
      * them.
      */
@@ -1111,6 +1114,9 @@ fun DetailScreen(
     val mediaBackdrops = remember(tmdbDetail) {
         tmdbDetail?.images?.backdrops.orEmpty()
     }
+    val mediaPosters = remember(tmdbDetail) {
+        tmdbDetail?.images?.posters.orEmpty()
+    }
 
     /**
      * The row's pages, in the order its strip shows them, and the page the
@@ -1118,34 +1124,57 @@ fun DetailScreen(
      *
      * A page with nothing on it is not offered at all (see
      * [DetailMediaRow.tabs]), which is also what keeps the strip's DOWN always
-     * landing on a card: the row is only painted when one of the two lists is
+     * landing on a card: the row is only painted when one of the three lists is
      * non-empty, and each tab then has content under it.
      */
-    val mediaTabs = remember(mediaVideos, mediaBackdrops) {
-        DetailMediaRow.tabs(mediaVideos.size, mediaBackdrops.size)
+    val mediaTabs = remember(mediaVideos, mediaBackdrops, mediaPosters) {
+        DetailMediaRow.tabs(
+            mediaVideos.size,
+            mediaBackdrops.size,
+            mediaPosters.size
+        )
     }
     var mediaTabIndex by remember(mediaTabs) { mutableIntStateOf(0) }
     val mediaTab = mediaTabs.getOrNull(mediaTabIndex) ?: mediaTabs.firstOrNull()
 
     // The active page's cards, projected once per payload rather than per
     // recomposition of a screen that recomposes constantly (position ticks,
-    // badge updates, focus moves): which URL a card shows, what its badge says
-    // and which video it plays are [DetailMediaRow]'s rules.
-    val mediaCards = remember(mediaTab, mediaVideos, mediaBackdrops) {
+    // badge updates, focus moves): which URL a card shows, what its badge says,
+    // what shape it draws and which video it plays are [DetailMediaRow]'s rules.
+    val mediaCards = remember(mediaTab, mediaVideos, mediaBackdrops, mediaPosters) {
         when (mediaTab) {
             MediaTab.TRAILERS -> DetailMediaRow.trailers(mediaVideos)
             MediaTab.BACKDROPS -> DetailMediaRow.backdrops(mediaBackdrops)
+            MediaTab.POSTERS -> DetailMediaRow.posters(mediaPosters)
             null -> emptyList()
         }
     }
 
-    // The tab strip is ONE focus node (see mediaStripFocus): the two tabs are
-    // the strip's own pages, not two nodes to be walked between, so a
+    // The tab strip is ONE focus node (see mediaStripFocus): the tabs are the
+    // strip's own pages, not one node each to be walked between, so a
     // LEFT/RIGHT press can never leave the row sideways.
     val mediaStripFocusRequester = remember { FocusRequester() }
 
     // The backdrop a press opened fullscreen, or null (see BackdropOverlay).
     var selectedBackdrop by remember { mutableStateOf<String?>(null) }
+
+    /**
+     * The image choices the viewer has made, and the TMDB id they are filed
+     * under for this title.
+     *
+     * Read once here and handed to every place that needs it, so the hero and
+     * the long-press menu below cannot disagree about which title's choices
+     * they are looking at: the route id is the app's own spelling (a
+     * "tmdb:603" route, a bare number), while the choices are always written
+     * under the NUMBER (see [ImageOverrides.tmdbIdOf]).
+     */
+    val overridePaths = rememberImageOverridePaths()
+    val overrideTmdbId = tmdbDetail?.id ?: ImageOverrides.tmdbIdOf(id)
+
+    // The Media card a long press opened the image menu on, or null (see
+    // ImageOverrideMenu). One menu for the row: the card it was opened on is
+    // what it writes (see DetailMediaRow.overrideRows for which rows it gets).
+    var mediaImageMenu by remember { mutableStateOf<MediaCardItem?>(null) }
 
     val premiereDateFormatter = remember {
         DateFormats.longDate()
@@ -1860,7 +1889,7 @@ fun DetailScreen(
      *
      * A tab strip is a row inside a row, which is the one shape the page's
      * chain does not model ([DetailRow.MEDIA] is a single row as far as the
-     * handoff between rows goes), so the two rails inside it are traded between
+     * handoff between rows goes), so the rails inside it are traded between
      * here rather than by [DetailFocusChain]. That is also why the strip reads
      * the chain for UP alone: a DOWN belongs to the cards under it, not to the
      * row below.
@@ -2114,6 +2143,20 @@ fun DetailScreen(
                     ?: m.background
                     ?: m.poster
                     ?: initialPoster
+            }
+
+            // What the HERO draws: the still the viewer chose for this page when
+            // they chose one, and [backdropUrl] otherwise (see ImageOverrideArt).
+            // Only the hero: a still picked for this page is not a choice about
+            // the streams screen or the player's loading splash, which have
+            // their own - and those keep the art the route carries.
+            val heroBackdropUrl = remember(backdropUrl, overridePaths, overrideTmdbId) {
+                imageOverrideBackdropUrl(
+                    paths = overridePaths,
+                    tmdbId = overrideTmdbId,
+                    screen = ImageOverrides.SCREEN_DETAIL,
+                    fallbackUrl = backdropUrl
+                )
             }
 
             val context = LocalContext.current
@@ -2604,9 +2647,9 @@ fun DetailScreen(
                         .focusable()
                 )
                 AsyncImage(
-            model = remember(backdropUrl) {
+            model = remember(heroBackdropUrl) {
                 ImageRequest.Builder(context)
-                    .data(backdropUrl)
+                    .data(heroBackdropUrl)
                     .size(Size(1280, 720))
                     .allowHardware(true)
                     // The full-bleed hero is one of the few surfaces that
@@ -4687,9 +4730,10 @@ fun DetailScreen(
                             }
                         }
 
-                        // The Media row - the title's videos and its other
-                        // backdrops - is painted LAST, under More Like This:
-                        // one row of the chain, two rails inside it.
+                        // The Media row - the title's videos, its other
+                        // backdrops and its posters - is painted LAST, under
+                        // More Like This: one row of the chain, several rails
+                        // inside it.
                         if (hasMediaRow) {
                             item(key = "mediaheader", contentType = "section-header") {
                                 KBSectionHeader(
@@ -4702,8 +4746,8 @@ fun DetailScreen(
                             }
 
                             // The strip, then the cards of the page it is on:
-                            // one row of the chain, two rails inside it (see
-                            // mediaStripFocus / mediaCardFocus).
+                            // one row of the chain, several rails inside it
+                            // (see mediaStripFocus / mediaCardFocus).
                             item(key = "mediastrip", contentType = "section-row") {
                                 MediaTabStrip(
                                     tabs = mediaTabs,
@@ -4777,6 +4821,9 @@ fun DetailScreen(
                                             imageUrl = card.imageUrl,
                                             badge = card.badge,
                                             contentDescription = card.title,
+                                            // A poster draws portrait (see
+                                            // MediaCardItem.portrait).
+                                            portrait = card.portrait,
                                             onClick = {
                                                 val video = card.video
                                                 if (video != null) {
@@ -4802,7 +4849,17 @@ fun DetailScreen(
                                                         },
                                                         presence = detailRowPresence
                                                     )
-                                                )
+                                                ),
+                                            // The row's long press: which surface of
+                                            // this title the pressed still becomes.
+                                            // Only artwork offers one - a trailer
+                                            // card carries no imagePath, and the
+                                            // Trailers page offers no rows either.
+                                            onLongClick = {
+                                                if (card.imagePath != null) {
+                                                    mediaImageMenu = card
+                                                }
+                                            }
                                         )
                                     }
                                 }
@@ -4824,6 +4881,75 @@ fun DetailScreen(
                     BackdropOverlay(
                         imageUrl = backdrop,
                         onDismiss = { selectedBackdrop = null }
+                    )
+                }
+
+                // The Media row's long-press menu (see DetailMediaRow.overrideRows).
+                // Rows are written with the SURFACE the card's own page keyed
+                // them by: a still on the Backdrops page is a candidate for the
+                // four surfaces that draw a backdrop, a poster for the one that
+                // draws a poster everywhere.
+                mediaImageMenu?.let { card ->
+                    val menuType = if (mediaTab == MediaTab.POSTERS) {
+                        ImageOverrides.TYPE_POSTER
+                    } else {
+                        ImageOverrides.TYPE_BACKDROP
+                    }
+                    PosterContextMenu(
+                        title = tmdbDetail?.title
+                            ?: tmdbDetail?.name
+                            ?: id,
+                        subtitle = mediaTab?.label,
+                        actions = DetailMediaRow
+                            .overrideRows(
+                                tab = mediaTab,
+                                hasOverride = ImageOverrides.hasOverride(
+                                    paths = overridePaths,
+                                    tmdbId = overrideTmdbId,
+                                    type = menuType
+                                )
+                            )
+                            .map { row ->
+                                PosterContextAction(
+                                    label = row.label,
+                                    description = row.description,
+                                    isDestructive = row.isDestructive,
+                                    onClick = {
+                                        val path = card.imagePath
+                                        val targetId = overrideTmdbId
+                                        if (path != null && targetId != null) {
+                                            val surface = row.screen
+                                            if (surface == null) {
+                                                // "Reset to default": every
+                                                // surface of the kind, since a
+                                                // viewer asking for TMDB's art
+                                                // back is asking about the title.
+                                                ImageOverrides.reset(
+                                                    context = context,
+                                                    tmdbId = targetId,
+                                                    type = menuType
+                                                )
+                                            } else {
+                                                // Published by the store itself,
+                                                // so the choice reaches the hero
+                                                // on the next frame - this menu
+                                                // is gone by then.
+                                                ImageOverrides.choose(
+                                                    context = context,
+                                                    tmdbId = targetId,
+                                                    type = menuType,
+                                                    screen = surface,
+                                                    imagePath = path
+                                                )
+                                            }
+                                        }
+                                        // A row press closes the menu, like every
+                                        // other action in it.
+                                        mediaImageMenu = null
+                                    }
+                                )
+                            },
+                        onDismiss = { mediaImageMenu = null }
                     )
                 }
 
@@ -6839,7 +6965,7 @@ private fun seriesStatusTag(status: String?): String? {
 }
 
 /**
- * The Media row's tab strip: the row's two pages as a pair of pills, the active
+ * The Media row's tab strip: the row's pages as a row of pills, the active
  * one tinted.
  *
  * ONE focus node rather than one per tab, and that is the whole design: the tab
@@ -6901,12 +7027,16 @@ private fun MediaTabStrip(
 }
 
 /**
- * One card of the Media row: a 16:9 still with the video's type badged over its
- * top-left corner.
+ * One card of the Media row: a still with the video's type badged over its
+ * top-left corner, or - on the Posters page - 2:3 portrait artwork.
  *
  * The badge is what tells a trailer from the teaser and the clips beside it -
  * TMDB files a title's videos as a flat list, and on a rail of near-identical
  * stills the type is the only thing distinguishing one card from the next.
+ *
+ * [portrait] is [MediaCardItem.portrait]: a poster is 2:3, so it is drawn at the
+ * viewer's own poster size (Settings → Display, the same width every poster
+ * surface in the app uses) instead of a 16:9 crop through the middle of it.
  */
 @Composable
 private fun MediaThumbCard(
@@ -6914,21 +7044,29 @@ private fun MediaThumbCard(
     badge: String?,
     contentDescription: String,
     onClick: () -> Unit,
+    portrait: Boolean = false,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
+    val posterSize = rememberPosterSize()
+    val tileWidth = if (portrait) posterSize.width else 240.dp
+    val tileHeight = if (portrait) posterSize.height else 135.dp
+
     KBCard(
         onClick = onClick,
+        // The image menu on a backdrop or a poster (see the row's long press).
+        onLongClick = onLongClick,
         // A 16:9 tile has no room to grow inside a rail of them without shoving
         // its neighbours - the same call the cast rail makes - so focus is
         // spoken by the ring and the glow here rather than by the lift (see
         // KBCard).
         focusedScale = KBFocusNone,
-        modifier = modifier.width(240.dp)
+        modifier = modifier.width(tileWidth)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(135.dp)
+                .height(tileHeight)
         ) {
             if (imageUrl != null) {
                 AsyncImage(

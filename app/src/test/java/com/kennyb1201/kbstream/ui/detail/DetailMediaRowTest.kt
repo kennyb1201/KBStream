@@ -9,10 +9,10 @@ import org.junit.Test
 
 /**
  * The Media row's rules: which pages it offers, which page a LEFT/RIGHT reaches,
- * and what a card of either page is.
+ * and what a card of any of them is.
  *
- * The row is one entry of the vertical focus chain that holds two rails, so the
- * two things that decide what a viewer sees when they press a key in it - the
+ * The row is one entry of the vertical focus chain that holds several rails, so
+ * the things that decide what a viewer sees when they press a key in it - the
  * set of pages and the page a step lands on - are pinned here rather than in the
  * screen, whose key handler no unit test can press.
  */
@@ -29,30 +29,40 @@ class DetailMediaRowTest {
     // ── tabs: a page with nothing on it is not offered ──────────────────
 
     @Test
-    fun `both pages are offered when the title has both`() {
+    fun `every page the title has art for is offered, in strip order`() {
         assertEquals(
-            listOf(MediaTab.TRAILERS, MediaTab.BACKDROPS),
-            DetailMediaRow.tabs(videoCount = 4, backdropCount = 9)
+            listOf(MediaTab.TRAILERS, MediaTab.BACKDROPS, MediaTab.POSTERS),
+            DetailMediaRow.tabs(videoCount = 4, backdropCount = 9, posterCount = 27)
+        )
+        assertEquals(
+            "the pages are offered in the strip's own order whatever the " +
+                "counts, so a left-to-right walk is trailer, stills, posters",
+            listOf(MediaTab.TRAILERS, MediaTab.POSTERS),
+            DetailMediaRow.tabs(videoCount = 4, backdropCount = 0, posterCount = 27)
         )
     }
 
     @Test
     fun `a page with nothing on it is not offered`() {
         assertEquals(
-            "videos only: a Backdrops tab would be a press whose only " +
-                "outcome is nothing under it",
+            "videos only: a Backdrops or Posters tab would be a press whose " +
+                "only outcome is nothing under it",
             listOf(MediaTab.TRAILERS),
-            DetailMediaRow.tabs(videoCount = 4, backdropCount = 0)
+            DetailMediaRow.tabs(videoCount = 4, backdropCount = 0, posterCount = 0)
         )
         assertEquals(
             listOf(MediaTab.BACKDROPS),
-            DetailMediaRow.tabs(videoCount = 0, backdropCount = 9)
+            DetailMediaRow.tabs(videoCount = 0, backdropCount = 9, posterCount = 0)
+        )
+        assertEquals(
+            listOf(MediaTab.POSTERS),
+            DetailMediaRow.tabs(videoCount = 0, backdropCount = 0, posterCount = 27)
         )
         assertTrue(
-            "and a title with neither has no Media row at all - which is " +
-                "what makes the row's presence in the chain the same " +
+            "and a title with none of the three has no Media row at all - " +
+                "which is what makes the row's presence in the chain the same " +
                 "expression as the strip having a page",
-            DetailMediaRow.tabs(videoCount = 0, backdropCount = 0).isEmpty()
+            DetailMediaRow.tabs(videoCount = 0, backdropCount = 0, posterCount = 0).isEmpty()
         )
     }
 
@@ -207,6 +217,71 @@ class DetailMediaRowTest {
 
         assertEquals(1, cards.size)
         assertEquals("backdrop:/real.jpg", cards.single().id)
+    }
+
+    // ── the poster page ────────────────────────────────────────────────
+
+    @Test
+    fun `every poster becomes a portrait card at the card and fullscreen rungs`() {
+        val cards = DetailMediaRow.posters(
+            listOf(
+                TmdbImageAsset(filePath = "/one.jpg", width = 2000, height = 3000),
+                TmdbImageAsset(filePath = "/two.jpg", iso6391 = "en")
+            )
+        )
+
+        assertEquals(2, cards.size)
+        assertEquals(
+            listOf(
+                "https://image.tmdb.org/t/p/w500/one.jpg",
+                "https://image.tmdb.org/t/p/w500/two.jpg"
+            ),
+            cards.map { it.imageUrl }
+        )
+        assertEquals(
+            "the card is a w500 poster, so the press that opens it shows the " +
+                "artwork at the rung above the card",
+            listOf(
+                "https://image.tmdb.org/t/p/w780/one.jpg",
+                "https://image.tmdb.org/t/p/w780/two.jpg"
+            ),
+            cards.map { it.fullImageUrl }
+        )
+        assertTrue(
+            "a poster draws 2:3 portrait, unlike every still on the pages " +
+                "beside it - which is the one thing the card needs told",
+            cards.all { it.portrait }
+        )
+        assertTrue(
+            "and it has no video: the press opens the artwork, not the player",
+            cards.all { it.video == null }
+        )
+    }
+
+    @Test
+    fun `a still card is landscape and a poster card is not`() {
+        assertTrue(
+            "a trailer's still is 16:9 like every other card of the row",
+            DetailMediaRow.trailers(listOf(video())).all { !it.portrait }
+        )
+        assertTrue(
+            DetailMediaRow.backdrops(listOf(TmdbImageAsset(filePath = "/one.jpg")))
+                .all { !it.portrait }
+        )
+    }
+
+    @Test
+    fun `a poster with no path is not a card`() {
+        val cards = DetailMediaRow.posters(
+            listOf(
+                TmdbImageAsset(filePath = null),
+                TmdbImageAsset(filePath = "   "),
+                TmdbImageAsset(filePath = "/real.jpg")
+            )
+        )
+
+        assertEquals(1, cards.size)
+        assertEquals("poster:/real.jpg", cards.single().id)
     }
 
     @Test

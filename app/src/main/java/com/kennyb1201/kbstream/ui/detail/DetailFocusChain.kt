@@ -63,16 +63,17 @@ internal enum class DetailRow {
     MORE_LIKE_THIS,
 
     /**
-     * The Media row - the title's videos and its other backdrops, as one row
-     * with a tab strip on top of it - painted LAST, under More Like This.
+     * The Media row - the title's videos, its other backdrops and its posters,
+     * as one row with a tab strip on top of it - painted LAST, under More Like
+     * This.
      *
      * The chain names it ONCE, because what it is for is the handoff between
      * rows: UP is the More Like This rail above it and DOWN is the bottom of the
      * page, exactly as if the row held a single rail, which is what lands the
      * press on the fixed header PLAY rather than handing it to the default
-     * search. Which of its two pages the viewer is looking at, and the
-     * LEFT/RIGHT presses that swap them, never leave the row and are the row's
-     * own business (see [DetailMediaRow]).
+     * search. Which of its pages the viewer is looking at, and the LEFT/RIGHT
+     * presses that swap them, never leave the row and are the row's own
+     * business (see [DetailMediaRow]).
      */
     MEDIA
 }

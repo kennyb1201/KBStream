@@ -51,6 +51,7 @@ import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.domain.streamengine.StreamRanker
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tv.TvLauncherPublisher
 import com.kennyb1201.kbstream.data.update.AppUpdater
 import com.kennyb1201.kbstream.data.runCatchingCancellable
@@ -2228,6 +2229,12 @@ fun AppRoot(
                 episode = current.target.episode,
                 runtimeMinutes = current.target.runtimeMinutes,
                 backdropUrl = current.backdropUrl,
+                // The title's TMDB id, so the picker can draw the still the
+                // viewer chose for it on the Media row (see ImageOverrides).
+                // The route's parent id is one of the app's own spellings
+                // ("tmdb:603", a bare number), and the choices are filed under
+                // the number.
+                tmdbId = ImageOverrides.tmdbIdOf(current.parentId),
                 // The clearlogo resolved for this title, so the picker header
                 // shows the art even when the Continue Watching row had none.
                 clearLogoUrl = resolvedDetailClearLogos["${current.parentType}:${current.parentId}"]

@@ -134,7 +134,10 @@ class HeroLoadSpeedContractTest {
     @Test
     fun `a landscape rail card never draws a hole`() {
         val screen = source(SCREEN)
-        val start = screen.indexOf("backdropUrl = art?.first")
+        // The chain starts at the card's backdrop argument, which now hands its
+        // rungs to the shared helper as the fallback under the viewer's own
+        // choice (see ImageOverrideArt) - the chain itself is unchanged.
+        val start = screen.indexOf("backdropUrl = imageOverrideCardBackdropUrl(")
         val end = screen.indexOf("logoUrl = art?.second", start)
         assertTrue("the landscape card's backdrop chain must exist", start >= 0 && end > start)
 

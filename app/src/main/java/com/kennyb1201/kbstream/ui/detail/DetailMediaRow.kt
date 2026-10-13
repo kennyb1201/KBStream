@@ -1,32 +1,36 @@
 package com.kennyb1201.kbstream.ui.detail
 
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.TmdbImageAsset
 import com.kennyb1201.kbstream.data.tmdb.TmdbVideo
 import com.kennyb1201.kbstream.data.tmdb.tmdbImage
 import java.util.Locale
 
 /**
- * The two pages of the detail page's Media row.
+ * The pages of the detail page's Media row, in the order the strip shows them.
  *
  * The row is ONE row of the vertical focus chain ([DetailRow.MEDIA]) that
- * happens to hold two rails, swapped by its tab strip. Which of them a viewer
- * is looking at is the row's own business; only UP and DOWN out of the row are
- * the chain's.
+ * happens to hold several rails, swapped by its tab strip. Which of them a
+ * viewer is looking at is the row's own business; only UP and DOWN out of the
+ * row are the chain's.
  */
 internal enum class MediaTab(val label: String) {
     /** Every video TMDB lists for the title, in TMDB's own order. */
     TRAILERS("Trailers"),
 
     /** Every backdrop TMDB lists for the title, in TMDB's own order. */
-    BACKDROPS("Backdrops")
+    BACKDROPS("Backdrops"),
+
+    /** Every poster TMDB lists for the title, in TMDB's own order. */
+    POSTERS("Posters")
 }
 
 /**
  * One card of the Media row, whichever tab it belongs to.
  *
  * [video] and [fullImageUrl] are what separates the two kinds: a trailer card
- * hands its video to the trailer player, a backdrop card opens its still
- * fullscreen. Exactly one of them is set.
+ * hands its video to the trailer player, an artwork card (a backdrop or a
+ * poster) opens itself fullscreen. Exactly one of them is set.
  */
 internal data class MediaCardItem(
     /** Unique within the rail, for the lazy list's key. */
@@ -34,19 +38,54 @@ internal data class MediaCardItem(
     /** The thumbnail. Null when the video is not a YouTube one and TMDB sent
      * no thumbnail of its own. */
     val imageUrl: String?,
-    /** The type badge (TRAILER, TEASER, CLIP...), or null for a backdrop. */
+    /** The type badge (TRAILER, TEASER, CLIP...), or null for artwork. */
     val badge: String?,
     /** What a screen reader and a copy-to-clipboard name this card. */
     val title: String,
-    /** The video this card plays, or null for a backdrop still. */
+    /** The video this card plays, or null for an artwork card. */
     val video: TmdbVideo? = null,
-    /** The still a fullscreen view shows, or null for a video card. */
-    val fullImageUrl: String? = null
+    /** The image a fullscreen view shows, or null for a video card. */
+    val fullImageUrl: String? = null,
+    /**
+     * Whether the card draws PORTRAIT artwork: the Posters page is the one
+     * page of this row that is not a 16:9 still, and a poster shown as one
+     * would be cropped through the middle of its face.
+     */
+    val portrait: Boolean = false,
+    /**
+     * TMDB's own `file_path` for the artwork, or null on a video card.
+     *
+     * What a long press stores as the title's choice (see
+     * [com.kennyb1201.kbstream.data.images.ImageOverrides]): the URL above is
+     * built for THIS card's size, and the surfaces that will draw the choice
+     * want their own sizes, so the path is what travels.
+     */
+    val imagePath: String? = null
+)
+
+/**
+ * One row of the long-press menu a Media card opens: what it says, and which
+ * surface of the title it writes.
+ *
+ * A value rather than a built menu row, so which rows a card offers (and what
+ * each one means) can be pinned without a device - see
+ * [DetailMediaRow.overrideRows].
+ */
+internal data class ImageOverrideMenuItem(
+    val label: String,
+    val description: String,
+    /**
+     * The surface this row sets, or null for the reset row (which clears every
+     * surface of the card's kind - see
+     * [com.kennyb1201.kbstream.data.images.ImageOverrides.reset]).
+     */
+    val screen: String?,
+    val isDestructive: Boolean = false
 )
 
 /**
  * The Media row's rules: which pages it has, which page Left/Right reaches, and
- * what a card of either page actually is.
+ * what a card of any of them actually is.
  *
  * Kept pure and separate from the screen for the same reason as
  * [DetailChipColumns] and [DetailFocusChain]: what uses it is a key handler and
@@ -63,11 +102,16 @@ internal object DetailMediaRow {
      * A page with nothing on it is not offered at all: an empty tab is a
      * surface whose only outcome is a press that does nothing, and it is also
      * what keeps the strip's DOWN always landing on a card - the strip is only
-     * painted when at least one of the two lists is non-empty.
+     * painted when at least one of the three lists is non-empty.
      */
-    fun tabs(videoCount: Int, backdropCount: Int): List<MediaTab> = buildList {
+    fun tabs(
+        videoCount: Int,
+        backdropCount: Int,
+        posterCount: Int
+    ): List<MediaTab> = buildList {
         if (videoCount > 0) add(MediaTab.TRAILERS)
         if (backdropCount > 0) add(MediaTab.BACKDROPS)
+        if (posterCount > 0) add(MediaTab.POSTERS)
     }
 
     /**
@@ -121,7 +165,98 @@ internal object DetailMediaRow {
                 imageUrl = tmdbImage(path, "w780"),
                 badge = null,
                 title = "Backdrop",
-                fullImageUrl = tmdbImage(path, "w1280")
+                fullImageUrl = tmdbImage(path, "w1280"),
+                imagePath = path
+            )
+        }
+
+    /**
+     * The long-press rows [tab]'s cards offer, in the order they are drawn.
+     *
+     * Backdrops and posters are the two pages a viewer can CHOOSE from: a
+     * still on the Backdrops page is a candidate for one of the four surfaces
+     * that draw a backdrop (see [ImageOverrides]), and a poster covers the one
+     * that draws a poster everywhere. The Trailers page offers nothing here -
+     * a video is not artwork, and there is no surface whose image a trailer
+     * could stand in for.
+     *
+     * [hasOverride] adds the reset row, which appears only once there is
+     * something to reset - the same rule the rest of the app's menus use for
+     * rows that would otherwise do nothing.
+     */
+    fun overrideRows(tab: MediaTab?, hasOverride: Boolean): List<ImageOverrideMenuItem> =
+        when (tab) {
+            MediaTab.BACKDROPS -> {
+                listOf(
+                    ImageOverrideMenuItem(
+                        label = "Set as Detail backdrop",
+                        description = "Show this still on the title's detail page",
+                        screen = ImageOverrides.SCREEN_DETAIL
+                    ),
+                    ImageOverrideMenuItem(
+                        label = "Set as Streams backdrop",
+                        description = "Show this still behind the source list",
+                        screen = ImageOverrides.SCREEN_STREAMS
+                    ),
+                    ImageOverrideMenuItem(
+                        label = "Set as Home hero backdrop",
+                        description = "Show this still when the title is featured on Home",
+                        screen = ImageOverrides.SCREEN_HOME_HERO
+                    ),
+                    ImageOverrideMenuItem(
+                        label = "Set as Landscape card",
+                        description = "Show this still on the title's landscape cards",
+                        screen = ImageOverrides.SCREEN_LANDSCAPE_CARD
+                    )
+                ) + resetRow(hasOverride)
+            }
+            MediaTab.POSTERS -> {
+                listOf(
+                    ImageOverrideMenuItem(
+                        label = "Set as Poster",
+                        description = "Show this artwork wherever the title's poster appears",
+                        screen = ImageOverrides.SCREEN_POSTER
+                    )
+                ) + resetRow(hasOverride)
+            }
+            MediaTab.TRAILERS, null -> emptyList()
+        }
+
+    private fun resetRow(hasOverride: Boolean): List<ImageOverrideMenuItem> =
+        if (!hasOverride) {
+            emptyList()
+        } else {
+            listOf(
+                ImageOverrideMenuItem(
+                    label = "Reset to default",
+                    description = "Go back to the artwork TMDB offers",
+                    screen = null,
+                    isDestructive = true
+                )
+            )
+        }
+
+    /**
+     * The poster page: every poster TMDB lists, in TMDB's order, at `w500` for
+     * the card and `w780` for the fullscreen view.
+     *
+     * The one PORTRAIT page of this row (see [MediaCardItem.portrait]): a
+     * poster is the 2:3 artwork the title is sold by, and the viewer who opens
+     * this page is looking for exactly that, not for another still. The
+     * title's own `poster_path` is left IN, the same call the backdrop page
+     * makes for the hero's: this page is "all the art for this title".
+     */
+    fun posters(posters: List<TmdbImageAsset>): List<MediaCardItem> =
+        posters.mapNotNull { asset ->
+            val path = asset.filePath?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            MediaCardItem(
+                id = "poster:$path",
+                imageUrl = tmdbImage(path, "w500"),
+                badge = null,
+                title = "Poster",
+                fullImageUrl = tmdbImage(path, "w780"),
+                portrait = true,
+                imagePath = path
             )
         }
 

@@ -152,7 +152,7 @@ class DetailMediaRowWiringContractTest {
     }
 
     @Test
-    fun `the two pages are the payload the detail call already carries`() {
+    fun `the pages are the payload the detail call already carries`() {
         assertTrue(
             "the videos are the same list the header's trailer button picks " +
                 "its ONE entry out of",
@@ -165,9 +165,31 @@ class DetailMediaRowWiringContractTest {
             screen.contains("tmdbDetail?.images?.backdrops.orEmpty()")
         )
         assertTrue(
-            "the pages are derived from those two lists, so a page with " +
+            "the posters come off that same part, NOT a second call to the " +
+                "/images endpoint the detail request already asks for inline",
+            screen.contains("tmdbDetail?.images?.posters.orEmpty()")
+        )
+        assertTrue(
+            "the pages are derived from those three lists, so a page with " +
                 "nothing on it is never offered",
-            screen.contains("DetailMediaRow.tabs(mediaVideos.size, mediaBackdrops.size)")
+            screen.contains(
+                "DetailMediaRow.tabs( mediaVideos.size, mediaBackdrops.size, " +
+                    "mediaPosters.size )"
+            )
+        )
+        assertTrue(
+            "and the page the viewer is on is projected through the rule " +
+                "object, one branch per page",
+            screen.contains("MediaTab.TRAILERS -> DetailMediaRow.trailers(mediaVideos)") &&
+                screen.contains("MediaTab.BACKDROPS -> DetailMediaRow.backdrops(mediaBackdrops)") &&
+                screen.contains("MediaTab.POSTERS -> DetailMediaRow.posters(mediaPosters)")
+        )
+        assertTrue(
+            "a poster card draws the portrait shape it was projected with, " +
+                "so the one page that is not a 16:9 still is not cropped into one",
+            screen.contains("portrait = card.portrait") &&
+                screen.contains("val tileWidth = if (portrait) posterSize.width else 240.dp") &&
+                screen.contains("val tileHeight = if (portrait) posterSize.height else 135.dp")
         )
     }
 

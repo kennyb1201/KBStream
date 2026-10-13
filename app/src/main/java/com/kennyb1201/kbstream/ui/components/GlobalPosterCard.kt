@@ -79,9 +79,21 @@ fun GlobalPosterCard(
         addonType = artType,
         addonBackdrop = backdropUrl
     )
+    // The artwork the viewer chose for this title (see ImageOverrides). This is
+    // the ONE place every poster surface in the app converges on - Home's rails
+    // aside, which draw the two cards directly - so applying the choice here is
+    // what makes "Set as Poster" mean everywhere the poster appears, and "Set
+    // as Landscape card" mean the cards those rails do not draw themselves.
+    // Read from the mirror as a state: a choice made elsewhere repaints these
+    // cards on the next frame.
+    val overridePaths = rememberImageOverridePaths()
     if (useLandscape) {
         LandscapeCard(
-            backdropUrl = art.first?.takeIf { it.isNotBlank() } ?: posterUrl,
+            backdropUrl = imageOverrideCardBackdropUrl(
+                paths = overridePaths,
+                rawId = artId,
+                fallbackUrl = art.first?.takeIf { it.isNotBlank() } ?: posterUrl
+            ),
             logoUrl = art.second,
             fallbackTitle = contentDescription,
             contentDescription = contentDescription,
@@ -95,7 +107,11 @@ fun GlobalPosterCard(
         )
     } else {
         PosterCard(
-            posterUrl = posterUrl,
+            posterUrl = imageOverridePosterUrl(
+                paths = overridePaths,
+                rawId = artId,
+                fallbackUrl = posterUrl
+            ),
             contentDescription = contentDescription,
             isWatched = isWatched,
             isPartiallyWatched = isPartiallyWatched,

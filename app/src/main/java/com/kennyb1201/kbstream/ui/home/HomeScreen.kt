@@ -112,6 +112,7 @@ import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
@@ -139,6 +140,10 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
+import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
+import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
+import com.kennyb1201.kbstream.ui.components.imageOverrideCardBackdropUrl
+import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
 import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -1035,8 +1040,17 @@ private fun HomeHero(
     // Only the backdrop rungs are upgraded. The two poster rungs under them are
     // not backdrops: "original" on a poster would hand a portrait still to a
     // 16:9 slot at several times the bytes.
-    val backdropArt = TmdbRepository.fullResBackdropUrl(
-        heroBackdropUrl ?: meta?.background ?: preview.background
+    // ...and a viewer who chose a different still for the hero wins over all of
+    // it: this is the surface the Media row's "Set as Home hero backdrop" row
+    // names (see ImageOverrides).
+    val overridePaths = rememberImageOverridePaths()
+    val backdropArt = imageOverrideBackdropUrl(
+        paths = overridePaths,
+        tmdbId = tmdbDetail?.id,
+        screen = ImageOverrides.SCREEN_HOME_HERO,
+        fallbackUrl = TmdbRepository.fullResBackdropUrl(
+            heroBackdropUrl ?: meta?.background ?: preview.background
+        )
     )
     val backdrop = backdropArt
         ?: meta?.poster
@@ -2886,6 +2900,12 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
 
+    // The artwork the viewer chose for the titles the rails show (see
+    // ImageOverrides). Read once for the whole screen and handed to each card,
+    // so a choice made on a title's Media row reaches its rail card without the
+    // rail being rebuilt - and without a query per card.
+    val overridePaths = rememberImageOverridePaths()
+
     // KB collections (imported from a profile URL) interleaved with the
     // addon rails below; arrangement (pin/reorder/hide) from the manager.
     val kbViewModel: com.kennyb1201.kbstream.ui.kb.KBHomeViewModel =
@@ -4019,9 +4039,20 @@ fun HomeScreen(
                                                             // MARKER, not null, so it still
                                                             // stops the chain here and keeps its
                                                             // title-only treatment.
-                                                            backdropUrl = art?.first
-                                                                ?: meta.background
-                                                                ?: meta.poster,
+                                                            // The viewer's chosen still wins over
+                                                            // the rail's own art, including a pinned
+                                                            // rail's blank marker: they asked for that
+                                                            // image on landscape cards, and it is TMDB
+                                                            // art they picked rather than the add-on's
+                                                            // promo background the marker exists to
+                                                            // keep out.
+                                                            backdropUrl = imageOverrideCardBackdropUrl(
+                                                                paths = overridePaths,
+                                                                rawId = meta.id,
+                                                                fallbackUrl = art?.first
+                                                                    ?: meta.background
+                                                                    ?: meta.poster
+                                                            ),
                                                             // The card's logo is TMDB's English
                                                             // wordmark or nothing: the add-on's
                                                             // own `logo` is a bare URL with no
@@ -4059,7 +4090,13 @@ fun HomeScreen(
                                                         )
                                                     } else {
                                                         PosterCard(
-                                                            posterUrl = meta.poster,
+                                                            // One choice covers every surface this
+                                                            // title's poster appears on.
+                                                            posterUrl = imageOverridePosterUrl(
+                                                                paths = overridePaths,
+                                                                rawId = meta.id,
+                                                                fallbackUrl = meta.poster
+                                                            ),
                                                             contentDescription = meta.name,
                                                             isWatched = watched,
                                                             isPartiallyWatched = watchedPartially,

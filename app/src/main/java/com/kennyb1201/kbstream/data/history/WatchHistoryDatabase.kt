@@ -14,6 +14,8 @@ import com.kennyb1201.kbstream.data.cache.ImdbResolutionDao
 import com.kennyb1201.kbstream.data.cache.ImdbResolutionEntity
 import com.kennyb1201.kbstream.data.cache.SyncOutboxDao
 import com.kennyb1201.kbstream.data.cache.SyncOutboxEntity
+import com.kennyb1201.kbstream.data.images.ImageOverrideDao
+import com.kennyb1201.kbstream.data.images.ImageOverrideEntity
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheDao
 import com.kennyb1201.kbstream.data.cache.TmdbJsonCacheEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusDao
@@ -32,7 +34,7 @@ import kotlinx.coroutines.flow.flow
  * bump arrives without the Migration that carries it — the mistake that would
  * otherwise only show up as a wipe on a user's device.
  */
-internal const val WATCH_HISTORY_DB_VERSION = 12
+internal const val WATCH_HISTORY_DB_VERSION = 13
 
 @Database(
     entities = [
@@ -40,7 +42,8 @@ internal const val WATCH_HISTORY_DB_VERSION = 12
         WatchedStatusEntity::class,
         ImdbResolutionEntity::class,
         TmdbJsonCacheEntity::class,
-        SyncOutboxEntity::class
+        SyncOutboxEntity::class,
+        ImageOverrideEntity::class
     ],
     version = WATCH_HISTORY_DB_VERSION,
     // Was false, which is what made the migration list unverifiable after the
@@ -57,6 +60,7 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
     abstract fun imdbResolutionDao(): ImdbResolutionDao
     abstract fun tmdbJsonCacheDao(): TmdbJsonCacheDao
     abstract fun syncOutboxDao(): SyncOutboxDao
+    abstract fun imageOverrideDao(): ImageOverrideDao
 
     companion object {
         private const val TAG = "WATCH_HISTORY_DB"
@@ -77,7 +81,8 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
         internal val migrations: List<Migration>
             get() = listOf(
                 MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
-                MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12
+                MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12,
+                MIGRATION_12_13
             )
 
         /**
@@ -452,6 +457,28 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
         // write survives process death instead of relying on the in-memory
         // queue. Created empty; rows are re-enqueued by the normal write
         // paths on the next launch.
+        /**
+         * The viewer's own image choices (see [ImageOverrideEntity]). A new
+         * table, so nothing existing is touched - a title with no choice keeps
+         * drawing TMDB's art.
+         */
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `image_overrides` (
+                        `key` TEXT NOT NULL,
+                        `tmdbId` INTEGER NOT NULL,
+                        `type` TEXT NOT NULL,
+                        `screen` TEXT NOT NULL,
+                        `imagePath` TEXT NOT NULL,
+                        PRIMARY KEY(`key`)
+                    )
+                    """.trimIndent()
+                )
+            }
+        }
+
         private val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
