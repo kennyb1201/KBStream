@@ -680,10 +680,6 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         saveHiddenChannelIds()
     }
 
-    fun setChannelHidden(channelId: String, hidden: Boolean) {
-        if (hidden) hideChannel(channelId) else unhideChannel(channelId)
-    }
-
     fun unhideAllChannels() {
         if (_hiddenChannelIds.value.isEmpty()) return
         _hiddenChannelIds.value = emptySet()

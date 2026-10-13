@@ -327,16 +327,10 @@ internal class PlayerPanelSection(
         onClick: (T) -> Unit
     ) = ui.addPillRow(column, topMarginDp, entries, sink, onClick)
 
-    private fun pill(text: String): TextView = ui.pill(text)
-
     private fun header(text: String, topMarginDp: Int): TextView = ui.header(text, topMarginDp)
 
     private fun label(text: String, topMarginDp: Int, sizeSp: Float = 11f): TextView =
         ui.label(text, topMarginDp, sizeSp)
 
     private fun stylePill(view: TextView, selected: Boolean) = ui.stylePill(view, selected)
-
-    private fun isSelected(view: View): Boolean = ui.isSelected(view)
-
-    private fun dp(value: Int): Int = ui.dp(value)
 }

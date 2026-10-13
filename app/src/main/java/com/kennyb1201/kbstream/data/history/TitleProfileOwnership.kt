@@ -72,11 +72,6 @@ internal object TitleProfileOwnership {
     fun snapshot(context: Context): Map<String, String> =
         synchronized(this) { HashMap(map(context)) }
 
-    fun ownerOf(
-        context: Context,
-        titleKey: String
-    ): String? = synchronized(this) { map(context)[titleKey] }
-
     /**
      * Note that [profileId] watched [title]. Only a CHANGE is written: the
      * rails call this on every publish and the player writes progress rows

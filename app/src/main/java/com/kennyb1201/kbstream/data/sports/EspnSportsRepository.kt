@@ -167,17 +167,6 @@ class EspnSportsRepository(
     /** Whether the last standings attempt for [leaguePath] failed. See above. */
     fun lastStandingsFetchFailed(leaguePath: String): Boolean = leaguePath in tableFailed
 
-    /** Drops every cached league: what a "Refresh" press runs. */
-    fun clearCache() {
-        scoreboards.clear()
-        tournaments.clear()
-        tableCache.clear()
-        summaries.clear()
-        failed.clear()
-        tableFailed.clear()
-        summaryFailed.clear()
-    }
-
     private fun ttlMs(live: Boolean): Long = if (live) LIVE_TTL_MS else IDLE_TTL_MS
 
     private suspend fun fetch(leaguePath: String): String? =

@@ -173,25 +173,6 @@ class KBContentLoader(context: android.content.Context) {
     }
 
     /**
-     * Merged "All" tab for showAllTab folders: union of every source's items,
-     * de-duplicated by (type, id), provider order preserved.
-     */
-    suspend fun loadMergedItems(folder: KBFolder): List<KBContentItem> {
-        val rails = loadFolderRails(folder)
-        val seen = mutableSetOf<String>()
-        val merged = mutableListOf<KBContentItem>()
-        for (rail in rails) {
-            for (item in rail.items) {
-                val key = "${item.type}:${item.id}"
-                if (seen.add(key)) {
-                    merged += item
-                }
-            }
-        }
-        return merged
-    }
-
-    /**
      * The app-wide digital-release filter, applied to one rail's rows. Add-on
      * catalog pages carry IMDb/detail ids and TMDB discover rows carry a bare
      * TMDB id; [TmdbRepository.filterByHomeAvailabilityById] resolves either, so

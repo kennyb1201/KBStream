@@ -373,11 +373,6 @@ class IptvRepository(
         }
     }
 
-    suspend fun getGuideChannels(epgUrl: String): List<EpgChannelEntity> =
-        withContext(Dispatchers.IO) {
-            getOrCreateGuideSnapshot(epgUrl.trim()).guideChannels
-        }
-
     /**
      * Resolves each [GuideMatchQuery] against the guide imported for its
      * [GuideMatchQuery.epgUrl], returning `key -> guide channel id` for the ones

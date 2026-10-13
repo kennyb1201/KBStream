@@ -96,17 +96,6 @@ class KBRepository private constructor(context: Context) {
     }
 
     /**
-     * All folders across all configured profiles, flattened in profile order
-     * (pinToTop collections first), for the single "Collections" screen.
-     */
-    suspend fun loadAllFolders(forceRefresh: Boolean = false): List<KBFolder> =
-        loadProfiles(forceRefresh)
-            .sortedByDescending { it.pinToTop }
-            .flatMap { profile ->
-                profile.folders.map { it.withProfileDefaults(profile) }
-            }
-
-    /**
      * One folder by id, searching every configured profile. Used by the
      * folder screen when it is reopened directly (process-death restore)
      * without carrying the whole folder object through the saver.
@@ -242,13 +231,6 @@ class KBRepository private constructor(context: Context) {
                     .delete()
             }
         }
-    }
-
-    /** Validate + import a pasted JSON document; returns collection count. */
-    suspend fun importFromJson(jsonText: String): Int = withContext(Dispatchers.IO) {
-        val parsed = profileListAdapter.fromJson(jsonText)
-            ?: throw IllegalArgumentException("Not a KB collections profile")
-        parsed.size
     }
 
     /**
@@ -409,13 +391,6 @@ object KBProfilePrefs {
                 com.kennyb1201.kbstream.data.sync.PrefsPayloadBuilder.buildCollections(appContext)
             )
         }
-    }
-
-    fun getLastRefreshMs(context: Context): Long =
-        prefs(context).getLong(KEY_LAST_REFRESH, 0L)
-
-    fun setLastRefreshMs(context: Context, ms: Long) {
-        prefs(context).edit().putLong(KEY_LAST_REFRESH, ms).apply()
     }
 
     private fun prefs(context: Context) =

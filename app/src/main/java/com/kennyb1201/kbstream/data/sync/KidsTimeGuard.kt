@@ -254,12 +254,6 @@ object KidsTimeGuard {
     @Volatile
     private var overriddenProfileId: String? = null
 
-    /** Drop any session override (used on profile switch). */
-    fun clearOverride() {
-        overriddenProfileId = null
-        evaluate()
-    }
-
     // ── internals ───────────────────────────────────────────────────────
 
     private fun dayKeyNow(): String =

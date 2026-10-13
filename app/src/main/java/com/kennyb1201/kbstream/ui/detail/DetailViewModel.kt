@@ -16,7 +16,6 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDao
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
-import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.sync.KidsMode
@@ -214,7 +213,6 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
     // profile's (closed) database after the switch.
     private val historyDao: WatchHistoryDao
         get() = WatchHistoryDatabase.getInstanceScoped(app).watchHistoryDao()
-    private val watchHistoryRepository = WatchHistoryRepository(app)
     private val watchedStatusRepository = WatchedStatusRepository(app)
     // Second-source air dates (see [AirDateCorrection]). Display-only: it
     // never writes back to history, watch state or the metadata caches.
@@ -1832,12 +1830,6 @@ for ((metaAddon, response, error) in probeResults) {
                 episode.copy(airDate = corrected)
             }
         }
-    }
-
-    fun loadPerson(personId: Int) {
-        _selectedPersonLoading.value = false
-        _selectedPersonError.value = null
-        _selectedPersonDetail.value = null
     }
 
     /**

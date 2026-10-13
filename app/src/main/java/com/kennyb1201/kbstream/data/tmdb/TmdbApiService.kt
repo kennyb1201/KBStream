@@ -87,31 +87,6 @@ interface TmdbApiService {
         @Query("api_key") apiKey: String
     ): TmdbCollectionDetail
 
-    @GET("trending/all/day")
-    suspend fun getTrending(
-        @Query("api_key") apiKey: String
-    ): TmdbDiscoverResponse
-
-    @GET("movie/popular")
-    suspend fun getPopularMovies(
-        @Query("api_key") apiKey: String
-    ): TmdbDiscoverResponse
-
-    @GET("tv/popular")
-    suspend fun getPopularTv(
-        @Query("api_key") apiKey: String
-    ): TmdbDiscoverResponse
-
-    @GET("movie/top_rated")
-    suspend fun getTopRatedMovies(
-        @Query("api_key") apiKey: String
-    ): TmdbDiscoverResponse
-
-    @GET("tv/top_rated")
-    suspend fun getTopRatedTv(
-        @Query("api_key") apiKey: String
-    ): TmdbDiscoverResponse
-
     /**
      * Shows airing in the next seven days - the real "airing now" feed, as
      * opposed to a discover window. Item shape matches a discover response.
@@ -259,16 +234,6 @@ suspend fun searchCollection(
     @GET("search/tv")
     suspend fun searchTv(
         @Query("query") query: String,
-        @Query("api_key") apiKey: String
-    ): TmdbSearchTitleResponse
-
-    @GET("trending/movie/week")
-    suspend fun getTrendingMovies(
-        @Query("api_key") apiKey: String
-    ): TmdbSearchTitleResponse
-
-    @GET("trending/tv/week")
-    suspend fun getTrendingTv(
         @Query("api_key") apiKey: String
     ): TmdbSearchTitleResponse
 

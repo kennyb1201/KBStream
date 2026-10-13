@@ -116,6 +116,34 @@ class MpvSurfaceCycleContractTest {
     }
 
     @Test
+    fun `the surface is attached only from the callback, never from initialize`() {
+        // A Surface that reports isValid can still have NO native window behind
+        // it, so attaching one from initialize() hands mpv a dead window: it
+        // reconfigures to `video=audio-only`, the decoder renders anyway and mpv
+        // cannot acquire the frames. initialize() runs from the Activity's
+        // onCreate, before any surface exists, so there is nothing for it to
+        // attach to in the first place.
+        val initialize = code.substringAfter("fun initialize(): Boolean {")
+            .substringBefore("\n    }")
+        assertFalse(
+            "initialize() must not attach a surface - `isValid` is true before the " +
+                "native window exists, which is the dead-window bug: $initialize",
+            initialize.contains("attachSurface()") || initialize.contains("isValid")
+        )
+        val created = code.substringAfter("override fun surfaceCreated(holder: SurfaceHolder) {")
+            .substringBefore("\n    }")
+        assertTrue(
+            "surfaceCreated is the one point where the surface is really backed, so it " +
+                "is where the attach happens",
+            created.contains("attachSurface()")
+        )
+        assertTrue(
+            "and a load that was waiting for the surface starts from there too",
+            created.contains("startPendingLoad()")
+        )
+    }
+
+    @Test
     fun `attaching the surface says nothing about the video output`() {
         val attach = code.substringAfter("private fun attachSurface()")
             .substringBefore("private fun startPendingLoad()")

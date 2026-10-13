@@ -210,23 +210,6 @@ internal object PlayerTrackBridge {
         this.playerProvider = playerProvider
     }
 
-    fun unregister() {
-        applyAudioLanguage = null
-        applySubtitleLanguage = null
-        applyAudioDelay = null
-        applySubtitleOffset = null
-        playerProvider = null
-        titleKey = null
-        wiredPlayer = null
-        audioDownmix = -1
-        audioDialogueBoost = -1
-        audioVolumeBoostDb = -1
-        subtitleTrackSignature = ""
-        subtitlesOff = false
-        rememberedTrackApplied = false
-        rememberedSubtitleTrackApplied = false
-    }
-
     /**
      * Seeds the panel state for a new session: this title's remembered choices
      * when there are any, otherwise the global defaults. [titleKey] null (live

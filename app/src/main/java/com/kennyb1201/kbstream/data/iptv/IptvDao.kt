@@ -161,23 +161,6 @@ interface IptvDao {
         deletePlaylistEpgMatchesByGuide(sourceUrl)
     }
 
-    @Transaction
-    suspend fun replaceGuide(
-        sourceUrl: String,
-        channels: List<EpgChannelEntity>,
-        programs: List<EpgProgramEntity>
-    ) {
-        clearGuideBySource(sourceUrl)
-
-        if (channels.isNotEmpty()) {
-            insertChannels(channels)
-        }
-
-        if (programs.isNotEmpty()) {
-            insertPrograms(programs)
-        }
-    }
-
     @Query(
         "SELECT EXISTS(SELECT 1 FROM epg_channels " +
             "WHERE sourceId = (SELECT id FROM epg_sources WHERE url = :sourceUrl) LIMIT 1)"

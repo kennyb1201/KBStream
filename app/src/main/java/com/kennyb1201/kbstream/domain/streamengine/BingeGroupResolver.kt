@@ -92,9 +92,6 @@ object BingeGroupResolver {
         return if (fallback) streams else emptyList()
     }
 
-    /** True when the caller should show the stream picker instead of playing. */
-    fun shouldStopAutoplay(ordered: List<Stream>): Boolean = ordered.isEmpty()
-
     /**
      * Best-effort addon display name from a stream's title line. Stremio
      * stream names are conventionally "AddonName\nquality" (newline or space

@@ -1,7 +1,6 @@
 package com.kennyb1201.kbstream.data.reporting
 
 import android.os.SystemClock
-import android.util.Log
 
 /**
  * Lightweight in-memory timing trace for startup and network work.
@@ -283,17 +282,6 @@ internal object PerfTrace {
             lines += "perf· slowest: " + slowest.joinToString(", ") { "${it.label}=${it.ms}ms" }
         }
         return lines.joinToString("\n")
-    }
-
-    /**
-     * Logs the summary (and only that) so a long-running session can be
-     * inspected live with `adb logcat -s DIAGNOSTICS`, matching how the rest
-     * of the diagnostics output reaches the user.
-     */
-    fun logSummary(tag: String = "DIAGNOSTICS") {
-        val text = summary()
-        if (text.isEmpty()) return
-        text.lineSequence().forEach { Log.i(tag, it) }
     }
 
     /** How long this process has been alive, or "unmarked" before app start. */

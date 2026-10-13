@@ -60,10 +60,6 @@ object IptvReminderStore {
         prefs.edit().putStringSet(KEY_NOTIFIED, notifiedKeys(prefs) + key).apply()
     }
 
-    fun clearNotified(prefs: SharedPreferences, key: String) {
-        prefs.edit().putStringSet(KEY_NOTIFIED, notifiedKeys(prefs) - key).apply()
-    }
-
     /**
      * Drops announcement keys whose reminder is gone, so the set tracks the
      * reminders it describes instead of growing for the life of the install.

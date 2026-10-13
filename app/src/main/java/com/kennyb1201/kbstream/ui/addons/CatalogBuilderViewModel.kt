@@ -136,10 +136,6 @@ class CatalogBuilderViewModel(application: Application) : AndroidViewModel(appli
         )
     }
 
-    fun clearMessage() {
-        _message.value = null
-    }
-
     /**
      * Opens a fresh draft.
      *

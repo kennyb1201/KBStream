@@ -233,15 +233,4 @@ object PlayerEngine {
     fun mpvFallbackEnabled(context: Context): Boolean =
         isMpvAvailable() && selected(context) != AppPreferences.PLAYER_ENGINE_EXO_ONLY
 
-    /**
-     * Human-readable name of the engine the STORED choice opens - the anime
-     * setting can still send one particular title to MPV.
-     */
-    fun displayName(context: Context): String = when (selected(context)) {
-        AppPreferences.PLAYER_ENGINE_MPV -> "MPV"
-        AppPreferences.PLAYER_ENGINE_EXTERNAL ->
-            ExternalPlayer.target(context)?.label ?: "External player"
-
-        else -> "ExoPlayer"
-    }
 }

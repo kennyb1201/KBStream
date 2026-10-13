@@ -27,12 +27,6 @@ import kotlinx.coroutines.flow.Flow
  */
 class WatchHistoryRepository(private val appContext: Context) {
 
-    // 1. Recent history rows as a flow factory (same per-access rebinding
-    //    rationale as [continueWatchingParentsFlow] - no caller in the app
-    //    currently subscribes, kept for API parity).
-    fun recentHistoryFlow(): Flow<List<WatchHistoryEntity>> =
-        WatchHistoryDatabase.observeScopedDao(appContext) { it.observeRecent() }
-
     // 2. Continue Watching parents as a FLOW FACTORY, not a captured StateFlow:
     //    Room flows are bound to the DAO (and thus to the DB file) that created
     //    them. A captured StateFlow kept the Home pipeline subscribed to the

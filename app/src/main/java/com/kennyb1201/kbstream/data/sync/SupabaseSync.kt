@@ -13,6 +13,7 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.realtime.Realtime
 import io.github.jan.supabase.realtime.channel
 import io.github.jan.supabase.realtime.postgresChangeFlow
+import io.github.jan.supabase.realtime.realtime
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -232,6 +233,25 @@ object SupabaseSync {
             install(Auth)
             install(Postgrest)
             install(Realtime)
+        }
+
+        // Installing Realtime is not starting it, and this client was never
+        // connected. The SDK keeps each channel's authorization in step with
+        // the session by fanning setAuth() out to every live channel on every
+        // auth event - session restore, sign-in, and each background token
+        // refresh - and on a client with no websocket open that call reaches
+        // getWebsocket(), which throws IllegalStateException("Websocket not yet
+        // initialized") on the SDK's own dispatcher. Nothing here can catch
+        // that: it is not raised inside any coroutine this app owns, so it
+        // kills the process (the fatal crash on the 0.6.57 build). Opening the
+        // socket once, here, is the fix - before session restore below can
+        // raise the first auth event, and before startRealtime() registers a
+        // channel that would need it. Dispatched rather than awaited so a slow
+        // or refused handshake cannot hold up session restore, and guarded so
+        // a realtime failure stays a log line instead of taking sync down.
+        scope.launch {
+            runCatching { client?.realtime?.connect() }
+                .onFailure { Log.w(TAG, "realtime connect failed: ${it.message}") }
         }
 
         restoreSession(context)

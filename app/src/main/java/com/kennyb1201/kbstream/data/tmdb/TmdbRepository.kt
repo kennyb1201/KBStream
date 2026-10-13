@@ -1098,32 +1098,6 @@ class TmdbRepository private constructor(context: Context) :
             .getOrDefault(emptyList())
     }
 
-    suspend fun getMovieGenres(): List<TmdbGenre> {
-        if (apiKey.isBlank()) return emptyList()
-        movieGenresCache?.let { return it }
-        readGenresFromDisk("movie")?.let {
-            movieGenresCache = it
-            return it
-        }
-        return runCatchingCancellable { api.getMovieGenreList(apiKey).genres }
-            .getOrDefault(emptyList())
-            .also { movieGenresCache = it }
-            .also { writeGenresToDisk("movie", it) }
-    }
-
-    suspend fun getTvGenres(): List<TmdbGenre> {
-        if (apiKey.isBlank()) return emptyList()
-        tvGenresCache?.let { return it }
-        readGenresFromDisk("tv")?.let {
-            tvGenresCache = it
-            return it
-        }
-        return runCatchingCancellable { api.getTvGenreList(apiKey).genres }
-            .getOrDefault(emptyList())
-            .also { tvGenresCache = it }
-            .also { writeGenresToDisk("tv", it) }
-    }
-
     private suspend fun readGenresFromDisk(key: String): List<TmdbGenre>? {
         val now = System.currentTimeMillis()
         val diskCached = runCatchingCancellable {
@@ -1562,26 +1536,6 @@ class TmdbRepository private constructor(context: Context) :
     private fun episodeSchemeTag(imdbId: String, tvId: Int): String {
         val stable = EpisodeSchemeStore.stableShowId(imdbId, tvId) ?: return "1:1"
         return EpisodeSchemeStore.get(appContext, stable).encode() ?: "1:1"
-    }
-
-    suspend fun getEpisodeRating(
-    tmdbId: Int,
-    season: Int,
-    episode: Int
-): Double? {
-    if (apiKey.isBlank()) return null
-
-    return runCatchingCancellable {
-        api.getSeasonDetail(
-            id = tmdbId,
-            seasonNumber = season,
-            apiKey = apiKey
-        )
-            .episodes
-            .firstOrNull { it.episodeNumber == episode }
-            ?.voteAverage
-            ?.takeIf { it > 0.0 }
-    }.getOrNull()
     }
 
     suspend fun getDetailByTmdbId(tmdbId: Int, type: String): TmdbDetail? {

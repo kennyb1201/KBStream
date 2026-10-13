@@ -177,10 +177,6 @@ object LiveChannelZapRegistry {
     fun indexOfChannelNumber(entry: String): Int =
         ChannelNumberEntry.target(channels.map { it.chno }, entry)
 
-    /** The channel's number as a remote user would type it, for the banner. */
-    fun numberFor(index: Int): String? =
-        channels.getOrNull(index)?.chno?.trim()?.takeIf { it.isNotBlank() }
-
     /**
      * First index whose stream URL matches — fallback identity when the
      * player was launched with a parent id the lineup no longer contains.

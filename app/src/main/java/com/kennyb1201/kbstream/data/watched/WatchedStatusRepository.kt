@@ -844,23 +844,6 @@ class WatchedStatusRepository(
             System.currentTimeMillis()
     }
 
-    suspend fun forceRefresh(
-        items: List<Pair<String, String>>
-    ): Set<String> {
-
-        preload(
-            items =
-                items,
-
-            forceRemoteRefresh =
-                true
-        )
-
-        return watchedKeysFromCache(
-            items
-        )
-    }
-
     suspend fun refreshRemoteWatchStateIfNeeded(
         items: List<Pair<String, String>>
     ): BackgroundRefreshResult {

@@ -148,7 +148,6 @@ class AddonRepository private constructor() {
 
     // Shared, file-scope instances (declared above): all repository
     // instances reuse one connection pool per add-on host.
-    private val logging = sharedAddonLogging
     private val client = sharedAddonClient
 
     private val api: StremioApiService =
@@ -879,18 +878,6 @@ class AddonRepository private constructor() {
     suspend fun clearCatalogCache() {
         catalogMutex.withLock {
             catalogCache.clear()
-        }
-    }
-
-    suspend fun clearMetaCache() {
-        metaMutex.withLock {
-            metaCache.clear()
-        }
-    }
-
-    suspend fun clearStreamsCache() {
-        streamsMutex.withLock {
-            streamsCache.clear()
         }
     }
 

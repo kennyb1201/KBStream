@@ -45,16 +45,6 @@ interface SimklApiService {
         @Query("extended") extended: String? = "full"
     ): SimklWatchingShowsResponse
 
-    @GET("sync/all-items/shows/watching")
-    suspend fun getWatchingShowsDetailed(
-        @Header("Authorization") authorization: String,
-        @Query("date_from") dateFrom: String? = null,
-        @Query("extended") extended: String? = "full",
-        @Query("include_all_episodes") includeAllEpisodes: String? = "yes",
-        @Query("episode_watched_at") episodeWatchedAt: String? = "yes",
-        @Query("page") page: Int = 1
-    ): Response<SimklWatchingShowsDetailedResponse>
-
     /**
      * The completed list, slim: just the per-show tallies Continue Watching
      * gates on. Deliberately NOT the detailed variant below - that one carries
@@ -100,12 +90,6 @@ interface SimklApiService {
     @Query("date_from") dateFrom: String? = null,
     @Query("extended") extended: String? = "full"
     ): Response<SimklCompletedMoviesResponse>
-
-    @POST("sync/watched")
-    suspend fun getWatchedBulk(
-        @Header("Authorization") authorization: String,
-        @Body body: SimklWatchedBulkRequest
-    ): Response<SimklWatchedBulkResponse>
 
     @POST("sync/watched")
     suspend fun getWatchedBulkRaw(

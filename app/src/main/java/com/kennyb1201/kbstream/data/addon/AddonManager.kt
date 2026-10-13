@@ -644,52 +644,6 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     }
 
     /**
-     * Update a single catalog's Home visibility.
-     */
-    fun setCatalogHomeVisibility(
-        addonId: String,
-        catalogType: String,
-        catalogId: String,
-        showOnHome: Boolean
-    ) {
-        mutate {
-
-        val updated =
-            getInstalledAddons()
-                .map { addon ->
-
-                    if (addon.id != addonId) {
-                        return@map addon
-                    }
-
-                    val catalogs =
-                        addon.catalogs.map { catalog ->
-
-                            if (
-                                catalog.type == catalogType &&
-                                catalog.id == catalogId
-                            ) {
-
-                                catalog.copy(
-                                    showOnHome =
-                                        showOnHome
-                                )
-
-                            } else {
-                                catalog
-                            }
-                        }
-
-                    addon.copy(
-                        catalogs = catalogs
-                    )
-                }
-
-        saveInstalledAddons(updated)
-        }
-    }
-
-    /**
      * Move a catalog globally.
      *
      * Catalogs from ALL addons participate

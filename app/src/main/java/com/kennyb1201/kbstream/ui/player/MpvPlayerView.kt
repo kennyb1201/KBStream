@@ -288,11 +288,15 @@ class MpvPlayerView @JvmOverloads constructor(
         holder.addCallback(this)
         initialized = true
 
-        // The view may already be attached (a recreate, or a surface handed to
-        // us before onCreate finished): attach right away instead of waiting
-        // for a callback that will never come.
-        val existing = holder.surface
-        if (existing != null && existing.isValid) attachSurface()
+        // No early attach here. `holder.surface` can be non-null AND report
+        // isValid = true while the native window behind it does not exist yet,
+        // which is the log's "Could not find corresponding native window for
+        // surface": attaching that Surface leaves mpv with no window at all.
+        // It reconfigures to `video=audio-only`, the decoder still renders
+        // ("Got First Frame Render") and every frame is then unacquirable
+        // ("Did not find frame"). The callback is the only point at which the
+        // surface is known to be backed, so [surfaceCreated] is the only place
+        // that attaches.
         return true
     }
 
@@ -479,46 +483,6 @@ class MpvPlayerView @JvmOverloads constructor(
     /** Subtitle tracks mpv found in the file (embedded ASS/SSA included). */
     fun subtitleTracks(): List<Track> = tracksOfType("sub")
 
-    /**
-     * Cycles to the next subtitle track, ending on "no subtitles" so the
-     * button can turn them off again. Returns the new state's label.
-     */
-    fun cycleSubtitleTrack(): String {
-        if (!initialized) return "Subtitles"
-        val tracks = subtitleTracks()
-        if (tracks.isEmpty()) {
-            // Nothing to cycle through in this file. Still issue the command:
-            // mpv answers it by turning off an external track, which is what
-            // the button means when mpv found no embedded subtitles.
-            runCatching { MPVLib.command("cycle", "sub") }
-            return "No subtitles in this file"
-        }
-        val currentIndex = tracks.indexOfFirst { it.selected }
-        val nextIndex = currentIndex + 1
-        val next = tracks.getOrNull(nextIndex)
-        runCatching {
-            if (next == null) {
-                MPVLib.setPropertyString("sid", "no")
-            } else {
-                MPVLib.setPropertyInt("sid", next.id)
-            }
-        }
-        return when (next) {
-            null -> "Subtitles off"
-            else -> "Subtitles: " + (next.title ?: next.language ?: next.codec ?: "#${next.id}")
-        }
-    }
-
-    fun cycleAudioTrack(): String {
-        if (!initialized) return "Audio"
-        val tracks = audioTracks()
-        if (tracks.size < 2) return "Only one audio track"
-        val currentIndex = tracks.indexOfFirst { it.selected }
-        val next = tracks[(currentIndex + 1).mod(tracks.size)]
-        runCatching { MPVLib.setPropertyInt("aid", next.id) }
-        return "Audio: " + (next.title ?: next.language ?: next.codec ?: "#${next.id}")
-    }
-
     /** mpv's own name for what it is decoding, for the diagnostics log. */
     fun loadedFileDiagnostics(): String {
         val video = getPropertyStringOrNull("video-format") ?: "audio-only"
@@ -686,10 +650,6 @@ class MpvPlayerView @JvmOverloads constructor(
 
     /** True while a subtitle track is selected, for the panel's state. */
     fun subtitlesOn(): Boolean = subtitleTracks().any { it.selected }
-
-    /** Signature of the audio track playing now, for the per-title memory. */
-    fun selectedAudioSignature(): String =
-        audioTracks().firstOrNull { it.selected }?.signature.orEmpty()
 
     /**
      * Applies a track signature remembered for this title

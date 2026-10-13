@@ -76,18 +76,6 @@ interface WatchHistoryDao {
     @Query("SELECT * FROM watch_history WHERE id IN (:ids)")
     suspend fun getByIds(ids: List<String>): List<WatchHistoryEntity>
 
-    @Query(
-        """
-        SELECT * FROM watch_history
-        WHERE parentId = :parentId
-          AND positionMs > 0
-          AND isCompleted = 0
-        ORDER BY updatedAt DESC
-        LIMIT 1
-        """
-    )
-    suspend fun getResumeForParent(parentId: String): WatchHistoryEntity?
-
     /**
      * Flavor-tolerant form of [getResumeForParent].
      *
@@ -475,15 +463,6 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         season: Int,
         episode: Int
     )
-
-    @Query(
-        """
-        DELETE FROM watch_history
-        WHERE parentId = :parentId
-          AND isCompleted = 1
-        """
-    )
-    suspend fun deleteCompletedForParent(parentId: String)
 
     /** Flavor-tolerant form of [deleteCompletedForParent]. */
     @Query(

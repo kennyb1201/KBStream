@@ -583,30 +583,6 @@ object ProfileManager {
             .apply()
     }
 
-    fun applySyncedBlob(context: Context, blobJson: String) {
-        val synced = runCatching {
-            json.decodeFromString(kotlinx.serialization.builtins.ListSerializer(Profile.serializer()), blobJson)
-        }.getOrDefault(emptyList())
-        if (synced.isEmpty()) return
-
-        // Normalize kids ceilings defensively: a device on an older build
-        // may still push "age"-era ints inside its profiles blob.
-        val syncedNormalized = synced.map { p ->
-            if (p.kidsMaxAge == null) p
-            else p.copy(kidsMaxAge = KidsMode.normalize(p.kidsMaxAge))
-        }
-
-        val local = loadProfiles(context)
-        // Merge by id, newest createdAt wins; keep local-only profiles too.
-        val byId = (local + syncedNormalized).associateBy { it.id }
-        val merged = byId.values.sortedBy { it.createdAt }
-        saveProfiles(context, merged)
-        _profiles.value = merged
-        if (_activeProfile.value == null) {
-            _activeProfile.value = merged.firstOrNull()
-        }
-    }
-
     fun profilesSyncBlob(context: Context): JsonObject =
         buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
@@ -632,12 +608,6 @@ object ProfileManager {
                 }
             }
         }
-
-    fun syncedBlobJson(context: Context): String =
-        json.encodeToString(
-            kotlinx.serialization.builtins.ListSerializer(Profile.serializer()),
-            loadProfiles(context)
-        )
 
     private fun pushProfilesBlob(context: Context, profiles: List<Profile>) {
         com.kennyb1201.kbstream.data.addon.AppContextHolder.appContext?.let { appContext ->

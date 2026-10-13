@@ -390,7 +390,6 @@ dependencies {
     // least 1.10.3, which is what pins the floor of this line.
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui.base)
-    implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.material.icons.extended)
     // Retrofit 3 is the line that pairs with OkHttp 5 (Retrofit 2.11 pins

@@ -10,7 +10,6 @@ import android.view.View
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -1679,10 +1678,6 @@ class ExternalPlayerActivity : ComponentActivity() {
 
         season != null && episode != null -> "$itemName \u2014 S$season\u2009E$episode"
         else -> itemName
-    }
-
-    private fun showToast(message: String) {
-        runCatching { Toast.makeText(this, message, Toast.LENGTH_SHORT).show() }
     }
 
     /**

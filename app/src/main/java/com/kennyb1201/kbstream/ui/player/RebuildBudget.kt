@@ -41,7 +41,7 @@ internal fun rebuildAllowed(rebuildsForCause: Int): Boolean =
  * cause has had its allowance. Not thread-safe — it is only ever touched from
  * the Activity's main thread.
  */
-internal class RebuildBudget(private val cap: Int = MAX_REBUILDS_PER_CAUSE) {
+internal class RebuildBudget {
 
     private var cause: String? = null
     private var spent: Int = 0

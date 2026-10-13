@@ -204,6 +204,4 @@ internal object TorBoxClient {
         }
     }
 
-    /** Test seam: drop the memo so a case starts from a known-empty state. */
-    internal fun clearCache() = cache.clear()
 }

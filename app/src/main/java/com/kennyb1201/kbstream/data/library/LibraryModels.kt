@@ -396,9 +396,6 @@ object LocalLibraryStore {
         return list.items.map { it.copy(source = LibrarySource.LOCAL_LIST, listId = list.id, listName = list.name) }
     }
 
-    fun isListEmpty(context: Context, listId: Int): Boolean =
-        readLists(context).firstOrNull { it.id == listId }?.items.isNullOrEmpty()
-
     @Synchronized
     fun addToLocalList(
         context: Context,

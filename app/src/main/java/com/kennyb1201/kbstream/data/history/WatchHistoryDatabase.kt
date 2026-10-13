@@ -290,19 +290,6 @@ abstract class WatchHistoryDatabase : RoomDatabase() {
                 .build()
 
         /**
-         * Profile-switch isolation: closes the open profile-scoped DB so the
-         * next [getInstanceScoped] call reopens against the NEW active
-         * profile instead of returning the previous profile's instance.
-         */
-        fun closeScopedInstance() {
-            synchronized(this) {
-                retireGracefully(profileInstanceName, profileInstance)
-                profileInstance = null
-                profileInstanceName = null
-            }
-        }
-
-        /**
          * The database FILE the ACTIVE profile's history lives in.
          *
          * A caller that holds a DAO across a long operation uses this to
