@@ -49,6 +49,8 @@ import com.kennyb1201.kbstream.data.library.LibraryItem
 import com.kennyb1201.kbstream.data.library.LibraryList
 import com.kennyb1201.kbstream.data.library.LibrarySource
 import com.kennyb1201.kbstream.data.library.LocalLibraryStore
+import com.kennyb1201.kbstream.ui.components.KBCard
+import com.kennyb1201.kbstream.ui.components.KBDialogPanel
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
@@ -60,14 +62,17 @@ import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedback
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
+import com.kennyb1201.kbstream.ui.search.successorIndexAfter
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
@@ -158,6 +163,39 @@ fun LibraryScreen(
     // opens this menu instead of removing straight away, so removal is an
     // explicit choice rather than an accidental one.
     var menuItem by remember { mutableStateOf<LibraryItem?>(null) }
+
+    // Where the open menu's card is, so closing it puts the D-pad back where
+    // the viewer was. Every other screen stashes the pressed card's requester
+    // and restores it; the Library closed onto whatever the framework picked
+    // next, which is the sort/filter strip. One requester per title, keyed the
+    // way the grid keys its cells, because the row being REMOVED is the one
+    // requester that must not be used: its successor is named by key before
+    // the removal happens (see [successorIndexAfter]).
+    val cardFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+    var menuFocusKey by remember { mutableStateOf<String?>(null) }
+    var menuSuccessorKey by remember { mutableStateOf<String?>(null) }
+    var restoreFocusSignal by remember { mutableStateOf(0) }
+
+    // Closing the menu owes the D-pad a landing: on the card that was pressed
+    // for a plain dismiss, on the card that takes its place after a removal.
+    fun closeMenu(restoreKey: String?) {
+        menuItem = null
+        menuFocusKey = restoreKey
+        restoreFocusSignal++
+    }
+
+    LaunchedEffect(restoreFocusSignal) {
+        if (restoreFocusSignal == 0) return@LaunchedEffect
+        val key = menuFocusKey
+        menuFocusKey = null
+        landFocusOn(key?.let { cardFocusRequesters[it] })
+    }
+
+    // A local list waiting to be deleted (null = no dialog). The list rail's
+    // long press opened straight onto a delete that nothing asked about; the
+    // app's own rule for a long press is that it opens a menu and leaves the
+    // destructive choice to the viewer.
+    var listPendingDelete by remember { mutableStateOf<LibraryList?>(null) }
 
     LaunchedEffect(Unit) {
         // Re-read the list every time this tab is opened. The ViewModel is
@@ -292,7 +330,13 @@ fun LibraryScreen(
                     loading = state.loading,
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
-                    onItemLongClick = { item -> menuItem = item },
+                    onItemLongClick = { item, successorKey ->
+                        menuItem = item
+                        // Whose D-pad the removal hands on to, if the menu's
+                        // Remove row is the one pressed (see closeMenu).
+                        menuSuccessorKey = successorKey
+                    },
+                    cardFocusRequesters = cardFocusRequesters,
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys,
                     partiallyWatchedKeys = state.partiallyWatchedKeys,
@@ -315,7 +359,13 @@ fun LibraryScreen(
                     loading = state.loading,
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
-                    onItemLongClick = { item -> menuItem = item },
+                    onItemLongClick = { item, successorKey ->
+                        menuItem = item
+                        // Whose D-pad the removal hands on to, if the menu's
+                        // Remove row is the one pressed (see closeMenu).
+                        menuSuccessorKey = successorKey
+                    },
+                    cardFocusRequesters = cardFocusRequesters,
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys,
                     partiallyWatchedKeys = state.partiallyWatchedKeys,
@@ -344,7 +394,13 @@ fun LibraryScreen(
                     loading = state.loading,
                     sourceLabel = { it.source.label },
                     onItemClick = onItemClick,
-                    onItemLongClick = { item -> menuItem = item },
+                    onItemLongClick = { item, successorKey ->
+                        menuItem = item
+                        // Whose D-pad the removal hands on to, if the menu's
+                        // Remove row is the one pressed (see closeMenu).
+                        menuSuccessorKey = successorKey
+                    },
+                    cardFocusRequesters = cardFocusRequesters,
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys,
                     partiallyWatchedKeys = state.partiallyWatchedKeys,
@@ -364,14 +420,23 @@ fun LibraryScreen(
                     onListSelect = { viewModel.selectList(it) },
                     onListLongPress = { list ->
                         // Local lists can be deleted; MDBList lists are
-                        // managed on MDBList.
+                        // managed on MDBList. Asked about first: a long press
+                        // opens a menu everywhere else in the app, and a whole
+                        // list leaving on one is not a choice a stray press
+                        // should be able to make.
                         if (list.id < 0) {
-                            viewModel.deleteLocalList(list.id)
+                            listPendingDelete = list
                         }
                     },
                     onCreateList = { viewModel.createLocalList(it) },
                     onItemClick = onItemClick,
-                    onItemLongClick = { item -> menuItem = item },
+                    onItemLongClick = { item, successorKey ->
+                        menuItem = item
+                        // Whose D-pad the removal hands on to, if the menu's
+                        // Remove row is the one pressed (see closeMenu).
+                        menuSuccessorKey = successorKey
+                    },
+                    cardFocusRequesters = cardFocusRequesters,
                     ratings = state.ratings,
                     watchedKeys = state.watchedKeys,
                     partiallyWatchedKeys = state.partiallyWatchedKeys,
@@ -390,14 +455,33 @@ fun LibraryScreen(
     menuItem?.let { item ->
         LibraryItemMenu(
             item = item,
-            onDismiss = { menuItem = null },
+            onDismiss = { closeMenu(LocalLibraryStore.dedupeKey(item)) },
             onOpenDetails = { id ->
+                // Navigating away: the screen behind this one is about to be
+                // disposed, so there is nothing to hand the focus back to.
                 menuItem = null
                 onItemClick(item.mediaType, id)
             },
             onRemove = {
+                // The card leaves the grid, so the D-pad lands on the one that
+                // takes its place (or the one before it when the last row is
+                // the one going) - named from the grid's own list BEFORE the
+                // removal, the same successor the browse rails' Hide uses.
+                val successor = menuSuccessorKey
                 menuItem = null
                 viewModel.removeItem(item)
+                closeMenu(successor)
+            }
+        )
+    }
+
+    listPendingDelete?.let { list ->
+        LibraryDeleteListDialog(
+            list = list,
+            onDismiss = { listPendingDelete = null },
+            onConfirm = {
+                listPendingDelete = null
+                viewModel.deleteLocalList(list.id)
             }
         )
     }
@@ -493,6 +577,77 @@ private fun LibraryItemMenu(
         },
         onDismiss = onDismiss
     )
+}
+
+/**
+ * Confirms deleting one local list.
+ *
+ * The list rail's long press opens this instead of deleting on the spot: what
+ * leaves is a list the viewer made, and the app's one rule for a long press is
+ * that it opens a choice rather than acting (see [LibraryItemMenu]). MDBList
+ * lists never get here - they are managed on MDBList, and the rail's own
+ * callback refuses one.
+ *
+ * CANCEL is drawn FIRST and takes the focus, so the safe action is the default
+ * stop: this is the rule the Settings clear-history dialog needed, where
+ * Compose's first-focusable default put the destructive row under the OK of a
+ * double-tapped confirm. The request is retried across frames because the
+ * dialog's buttons attach a frame or more after it opens, and an unattached
+ * requester answers false rather than throwing.
+ */
+@Composable
+private fun LibraryDeleteListDialog(
+    list: LibraryList,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    val cancelFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+            landed = runCatching { cancelFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        KBDialogPanel(title = "Delete list?", subtitle = list.name) {
+            Text(
+                text = "The list is removed from this device. Its " +
+                    "${list.itemCount} titles stay in your Library.",
+                color = KBTextLo,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(top = 8.dp)
+            ) {
+                KBCard(
+                    onClick = onDismiss,
+                    modifier = Modifier.focusRequester(cancelFocusRequester)
+                ) {
+                    Text(
+                        text = "CANCEL",
+                        color = KBTextLo,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+                KBCard(onClick = onConfirm) {
+                    Text(
+                        text = "DELETE",
+                        color = KBAccent,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                    )
+                }
+            }
+        }
+    }
 }
 
 /** Thin rule between the filter group and the sort group in the chip strip. */
@@ -602,7 +757,15 @@ private fun ItemGrid(
     loading: Boolean = false,
     sourceLabel: (LibraryItem) -> String,
     onItemClick: (String, String) -> Unit,
-    onItemLongClick: ((LibraryItem) -> Unit)?,
+    // (the pressed item, the key of the card that takes its place if that item
+    // is removed - null when it is the only card). The successor is worked out
+    // HERE because this composable is the one holding the list, and it has to
+    // be known before the removal: by the time the menu closes, the pressed
+    // card's own node is gone.
+    onItemLongClick: ((LibraryItem, String?) -> Unit)?,
+    // One requester per cell, keyed the way this grid keys its cells: what the
+    // screen's long-press menu hands the D-pad back to (see its closeMenu).
+    cardFocusRequesters: MutableMap<String, FocusRequester>,
     ratings: Map<String, Double> = emptyMap(),
     watchedKeys: Set<String> = emptySet(),
     // Started-but-unfinished rows: the eye badge. Drawn only for keys the
@@ -701,6 +864,18 @@ private fun ItemGrid(
             key = { _, item -> LocalLibraryStore.dedupeKey(item) }
         ) { index, item ->
             val cardKey = LocalLibraryStore.dedupeKey(item)
+            // This cell's own node, published so the screen's menu can ask for
+            // it by key - including AFTER this card is the one that left the
+            // grid, which is when the neighbour's entry is the one that is
+            // read (the map is not pruned for the same reason: the entry is
+            // what a removal lands on).
+            val cardRequester = remember(cardKey) { FocusRequester() }
+            cardFocusRequesters[cardKey] = cardRequester
+            // The card that replaces this one when it is removed: the next one,
+            // or the one before it when this is the last - the same successor
+            // rule the browse chips' and the search rail's Hide use.
+            val successorKey = successorIndexAfter(items.size, index)
+                ?.let { LocalLibraryStore.dedupeKey(items[it]) }
             val isReturnItem =
                 returnTarget != null &&
                     index == returnTarget.position &&
@@ -735,15 +910,17 @@ private fun ItemGrid(
                     }
                 },
                 onLongClick = onItemLongClick?.let { handler ->
-                    { handler(item) }
+                    { handler(item, successorKey) }
                 },
-                modifier = Modifier.then(
-                    if (isReturnItem) {
-                        Modifier.focusRequester(returnFocusRequester)
-                    } else {
-                        Modifier
-                    }
-                )
+                modifier = Modifier
+                    .focusRequester(cardRequester)
+                    .then(
+                        if (isReturnItem) {
+                            Modifier.focusRequester(returnFocusRequester)
+                        } else {
+                            Modifier
+                        }
+                    )
             )
         }
     }
@@ -763,7 +940,10 @@ private fun ListsPane(
     onListLongPress: (LibraryList) -> Unit,
     onCreateList: (String) -> Unit,
     onItemClick: (String, String) -> Unit,
-    onItemLongClick: (LibraryItem) -> Unit,
+    onItemLongClick: (LibraryItem, String?) -> Unit,
+    // The screen's per-card requesters, registered by the grids below and read
+    // by its long-press menu's hand-back (see the screen's closeMenu).
+    cardFocusRequesters: MutableMap<String, FocusRequester>,
     ratings: Map<String, Double>,
     watchedKeys: Set<String>,
     partiallyWatchedKeys: Set<String>,
@@ -792,6 +972,17 @@ private fun ListsPane(
                 var focused by remember { mutableStateOf(false) }
                 val selected = selectedList?.id == list.id
                 val sourceLabel = if (list.id < 0) "This device" else "MDBList"
+                // The delete gesture the local lists never had: the parameter
+                // and the ViewModel call existed, nothing ever invoked them.
+                // Only for a list this device owns - an MDBList list is
+                // managed on MDBList, and the screen's callback refuses one
+                // anyway; not offering the press is what says so.
+                val onRowLongPress: (() -> Unit)? =
+                    if (list.id < 0) {
+                        { onListLongPress(list) }
+                    } else {
+                        null
+                    }
                 Surface(
                     onClick = { onListSelect(list) },
                     shape = ClickableSurfaceDefaults.shape(
@@ -828,6 +1019,11 @@ private fun ListsPane(
                     ),
                     modifier = Modifier
                         .fillMaxWidth()
+                        // A select-held gesture, so the row keeps its press and
+                        // its focus: the modifier swallows only the long KeyUp
+                        // (see KBCard), which is what leaves the short press
+                        // opening the list as it always did.
+                        .then(rememberLongPressModifier(onRowLongPress))
                         .onFocusChanged { focused = it.isFocused }
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
@@ -904,6 +1100,7 @@ private fun ListsPane(
             sourceLabel = { it.source.label },
             onItemClick = onItemClick,
             onItemLongClick = onItemLongClick,
+            cardFocusRequesters = cardFocusRequesters,
             ratings = ratings,
             watchedKeys = watchedKeys,
             partiallyWatchedKeys = partiallyWatchedKeys,

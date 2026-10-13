@@ -14,11 +14,15 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +32,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -42,7 +48,9 @@ import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBRail
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
@@ -57,10 +65,13 @@ import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
 import com.kennyb1201.kbstream.ui.components.imageOverrideCardBackdropUrl
 import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.home.HomeHeroArtwork
+import com.kennyb1201.kbstream.ui.search.successorIndexAfter
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -265,7 +276,14 @@ private fun FolderItemCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onFocus: (() -> Unit)? = null,
-    isPartiallyWatched: Boolean = false
+    isPartiallyWatched: Boolean = false,
+    // The key this card is registered and returned to under, the map the
+    // screen's long-press menu reads its requester back out of, and the one
+    // card a Back out of Detail is coming back for (see [BrowseReturnFocus]).
+    cardKey: String,
+    focusRegistry: MutableMap<String, FocusRequester>,
+    isReturnItem: Boolean = false,
+    returnFocusRequester: FocusRequester? = null
 ) {
     val isLandscape = showLandscapeCards
     val width = if (isLandscape) FolderLandscapeWidth else FolderPosterWidth
@@ -280,6 +298,12 @@ private fun FolderItemCard(
     // ([ImageOverrides.tmdbIdOf] reads a bare number, and ignores an add-on id
     // it cannot bridge without a network lookup).
     val artId = item.tmdbId?.toString() ?: item.id
+
+    // This card's own node, published so the screen's long-press menu can ask
+    // for it by key. The map is never pruned: the entry a Hide lands on is the
+    // SUCCESSOR card's, which is still on the rail and must still be found.
+    val cardFocusRequester = remember(cardKey) { FocusRequester() }
+    focusRegistry[cardKey] = cardFocusRequester
 
     // The tile's own focus drives the caption marquee below as well as the
     // caller's hook (Home keeps its header in step with the focused rail).
@@ -301,6 +325,14 @@ private fun FolderItemCard(
             contentAlignment = Alignment.Center
         ) {
             val cardModifier = focusModifier
+                .focusRequester(cardFocusRequester)
+                .then(
+                    if (isReturnItem && returnFocusRequester != null) {
+                        Modifier.focusRequester(returnFocusRequester)
+                    } else {
+                        Modifier
+                    }
+                )
                 .offset(y = (-3).dp)
                 .width(width)
                 .height(height)
@@ -386,6 +418,48 @@ private fun itemWatchedPartially(
 }
 
 /**
+ * The key a folder card is recorded under for a return out of Detail, and
+ * registered under for a long-press hand-back (see [BrowseReturnFocus]).
+ *
+ * Keyed on type AND id because a folder's items arrive from several sources at
+ * once and the same number means a different title in each of them.
+ */
+internal fun kbFolderCardKey(item: KBContentItem): String = "${item.type}:${item.id}"
+
+/**
+ * A folder's rails with hidden titles dropped as they are read.
+ *
+ * The folder's own Hide row wrote its record and left the card sitting on the
+ * rail - the one surface where hiding did nothing visible, because these rails
+ * were built straight from the ViewModel. Read here, a long-press Hide takes
+ * the tile it was pressed on off the rail, exactly as the same action does on
+ * Decade, Studio, Tag, Collection and the Library; a rail it empties is
+ * dropped with it, which is what the elsewhere-shared rails already do.
+ */
+private fun visibleFolderRails(
+    rails: List<KBRail>,
+    hidden: Set<String>,
+    resolvedIds: Map<String, String>
+): List<KBRail> = rails.mapNotNull { rail ->
+    val visible = rail.items.filterNot { item ->
+        val type = normalizeItemType(item)
+        HiddenTitles.hides(
+            hidden,
+            type,
+            item.title,
+            item.year?.take(4)?.toIntOrNull(),
+            item.id,
+            item.tmdbId?.toString(),
+            // A record written from a surface that knew the IMDB id (Home, the
+            // Library) is keyed on that id, so the TMDB half has to be bridged
+            // here or hiding from those screens leaves the folder's copy up.
+            item.tmdbId?.let { resolvedIds["$type::$it"] }
+        )
+    }
+    rail.takeIf { visible.isNotEmpty() }?.copy(items = visible)
+}
+
+/**
  * The folder hero: delegates to Home's own HomeHero composable so a
  * FOLLOW_LAYOUT folder is a pixel-identical replica of the home hero —
  * same clearlogo, gradients, metadata line and inline trailer player.
@@ -452,24 +526,61 @@ private fun FolderHero(
 @Composable
 private fun FolderRailPageHandler(
     rail: KBRail,
+    // Where this rail's row sits in the page's own list: part of the record a
+    // card press raises, so a return can put the rail back on screen (see
+    // [BrowseReturnFocus]).
+    railIndex: Int,
     railContext: RailCardContext,
     viewModel: KBFolderViewModel,
     onFocusItem: (KBContentItem) -> Unit
 ) {
     val listState = rememberLazyListState()
+
+    // Where a return out of Detail lands in this row: the card the record
+    // names, by its own key, or the position it was pressed at for a card the
+    // record cannot name. A row the viewer had scrolled twenty cards into has
+    // not composed that card, so it has no focus node until this scroll puts
+    // one there.
+    val returnIndex = railContext.returnTarget
+        ?.takeIf { it.railKey == "rail:${rail.sourceId}" }
+        ?.let { target ->
+            rail.items
+                .indexOfFirst { kbFolderCardKey(it) == target.itemId }
+                .takeIf { it >= 0 }
+                ?: target.position.takeIf { it in rail.items.indices }
+        }
+    LaunchedEffect(returnIndex) {
+        returnIndex?.let { index ->
+            runCatching { listState.scrollToItem(index) }
+        }
+    }
     LazyRow(
         state = listState,
+        // Vertical room for the focus glow, inside the row's own clips-to-
+        // bounds viewport (see [KBFocusRowInset]): 4dp at the top sliced the
+        // halo off the first tile of every rail flat.
         contentPadding = PaddingValues(
             start = FolderSafeHorizontal,
             end = FolderSafeHorizontal,
-            top = 4.dp,
-            bottom = 12.dp
+            top = KBFocusRowInset,
+            bottom = KBFocusRowInset
         )
     ) {
-        items(
+        itemsIndexed(
             items = rail.items,
-            key = { "${rail.sourceId}:${it.type}:${it.id}" }
-        ) { item ->
+            key = { _, item -> "${rail.sourceId}:${item.type}:${item.id}" }
+        ) { itemIndex, item ->
+            val cardKey = kbFolderCardKey(item)
+            // Where a press on this card comes back to, raised by the screen
+            // before it navigates - and by the menu's own "Go to Details" too
+            // (see [BrowseReturnFocus]).
+            val target = BrowseReturnTarget(
+                screenKey = railContext.browseReturnKey,
+                itemId = cardKey,
+                position = itemIndex,
+                railKey = "rail:${rail.sourceId}",
+                railIndex = railIndex
+            )
             FolderItemCard(
                 item = item,
                 isWatched = railContext.watchedLookup(item),
@@ -481,9 +592,20 @@ private fun FolderRailPageHandler(
                 art = railContext.landscapeArt[
                     landscapeArtKey(item.type, item.id)
                 ],
-                onClick = { railContext.onOpenItem(item) },
-                onLongClick = { railContext.onLongPressItem(item) },
-                onFocus = { onFocusItem(item) }
+                onClick = { railContext.onOpenItem(item, target) },
+                onLongClick = {
+                    railContext.onLongPressItem(
+                        item,
+                        successorIndexAfter(rail.items.size, itemIndex)
+                            ?.let { kbFolderCardKey(rail.items[it]) },
+                        target
+                    )
+                },
+                onFocus = { onFocusItem(item) },
+                cardKey = cardKey,
+                focusRegistry = railContext.focusRegistry,
+                isReturnItem = itemIndex == returnIndex,
+                returnFocusRequester = railContext.returnFocusRequester
             )
         }
     }
@@ -501,9 +623,22 @@ private data class RailCardContext(
     val landscapeArt: Map<String, HeroArtwork>,
     val watchedLookup: (KBContentItem) -> Boolean,
     val partiallyWatchedLookup: (KBContentItem) -> Boolean,
-    val onOpenItem: (KBContentItem) -> Unit,
-    val onLongPressItem: (KBContentItem) -> Unit,
-    val onFocus: (KBContentItem) -> Unit = {}
+    // The target is built by the rail, which is the only place that knows the
+    // card's position in it and the rail's OWN place on the page; the press
+    // records it before navigating (see [BrowseReturnFocus]).
+    val onOpenItem: (KBContentItem, BrowseReturnTarget) -> Unit,
+    // Carries the key of the card that takes this one's place when a Hide
+    // takes it off the rail - worked out before the removal happens, because
+    // afterwards the pressed card's node is gone - plus the record the menu's
+    // own "Go to Details" raises.
+    val onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit,
+    val onFocus: (KBContentItem) -> Unit = {},
+    // This page's return key, the screen's card registry, and the card a return
+    // from Detail is coming back for (see [BrowseReturnFocus]).
+    val browseReturnKey: String,
+    val focusRegistry: MutableMap<String, FocusRequester>,
+    val returnTarget: BrowseReturnTarget?,
+    val returnFocusRequester: FocusRequester
 )
 
 // ---------------------------------------------------------------------------
@@ -519,8 +654,20 @@ private fun FollowHomeLayout(
     watchedKeys: Set<String>,
     partialWatchedKeys: Set<String>,
     onSelectSource: (String?) -> Unit,
-    onOpenItem: (KBContentItem) -> Unit,
-    onLongPressItem: (KBContentItem) -> Unit
+    // The page's own list state, its return key, the card registry a long-press
+    // menu hands the D-pad back through, and the card a return out of Detail is
+    // coming back for - all owned by the SCREEN, because a Back out of Detail
+    // disposes everything below this point (see [BrowseReturnFocus]).
+    browseReturnKey: String,
+    listState: LazyListState,
+    focusRegistry: MutableMap<String, FocusRequester>,
+    returnTarget: BrowseReturnTarget?,
+    returnFocusRequester: FocusRequester,
+    onOpenItem: (KBContentItem, BrowseReturnTarget) -> Unit,
+    // Carries the key of the card that takes the pressed one's place when a
+    // Hide removes it (null when it was the rail's last card), plus the record
+    // the menu's own "Go to Details" raises.
+    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit
 ) {
     val context = LocalContext.current
     val showLandscapeCards = remember {
@@ -540,7 +687,11 @@ private fun FollowHomeLayout(
             itemWatchedPartially(item, partialWatchedKeys, resolvedIds)
         },
         onOpenItem = onOpenItem,
-        onLongPressItem = onLongPressItem
+        onLongPressItem = onLongPressItem,
+        browseReturnKey = browseReturnKey,
+        focusRegistry = focusRegistry,
+        returnTarget = returnTarget,
+        returnFocusRequester = returnFocusRequester
     )
 
     // Keyed on the folder id so navigating folder A -> folder B reseeds the
@@ -579,10 +730,21 @@ private fun FollowHomeLayout(
         heroTrailerReady = true
     }
 
-    val visibleRails = if (selectedSourceId != null) {
-        state.rails.filter { it.sourceId == selectedSourceId }
-    } else {
-        state.rails
+    // Hidden titles are dropped as the rails are read, so the long-press Hide
+    // takes the tile it was pressed on off the rail (see [visibleFolderRails]).
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    val visibleRails = remember(
+        state.rails,
+        selectedSourceId,
+        hiddenTitleKeys,
+        resolvedIds
+    ) {
+        val rails = if (selectedSourceId != null) {
+            state.rails.filter { it.sourceId == selectedSourceId }
+        } else {
+            state.rails
+        }
+        visibleFolderRails(rails, hiddenTitleKeys, resolvedIds)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -609,6 +771,10 @@ private fun FollowHomeLayout(
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
                 LazyColumn(
+                    // The screen's state, not one re-created here: a Back out of
+                    // Detail disposes this page and a return has a state to
+                    // scroll (see [BrowseReturnFocus]).
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     // Home's exact rail-column paddings: 2dp below the hero
                     // (its hero_spacer), 16dp at the very bottom, sections
@@ -616,7 +782,7 @@ private fun FollowHomeLayout(
                     contentPadding = PaddingValues(top = 2.dp, bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(FolderRailSectionGap)
                 ) {
-                    visibleRails.forEach { rail ->
+                    visibleRails.forEachIndexed { railIndex, rail ->
                         item(key = "title:${rail.sourceId}") {
                             RailTitle(rail, showRailType)
                         }
@@ -627,6 +793,9 @@ private fun FollowHomeLayout(
                             Column(modifier = Modifier.padding(bottom = 8.dp)) {
                                 FolderRailPageHandler(
                                     rail = rail,
+                                    // The rail item's own index on the page: title,
+                                    // then rail, per rail above it.
+                                    railIndex = railIndex * 2 + 1,
                                     railContext = railCardContext,
                                     viewModel = viewModel,
                                     onFocusItem = { heroItem = it }
@@ -659,8 +828,20 @@ private fun RowsLayout(
     watchedKeys: Set<String>,
     partialWatchedKeys: Set<String>,
     onSelectSource: (String?) -> Unit,
-    onOpenItem: (KBContentItem) -> Unit,
-    onLongPressItem: (KBContentItem) -> Unit
+    // The page's own list state, its return key, the card registry a long-press
+    // menu hands the D-pad back through, and the card a return out of Detail is
+    // coming back for - all owned by the SCREEN, because a Back out of Detail
+    // disposes everything below this point (see [BrowseReturnFocus]).
+    browseReturnKey: String,
+    listState: LazyListState,
+    focusRegistry: MutableMap<String, FocusRequester>,
+    returnTarget: BrowseReturnTarget?,
+    returnFocusRequester: FocusRequester,
+    onOpenItem: (KBContentItem, BrowseReturnTarget) -> Unit,
+    // Carries the key of the card that takes the pressed one's place when a
+    // Hide removes it (null when it was the rail's last card), plus the record
+    // the menu's own "Go to Details" raises.
+    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit
 ) {
     val context = LocalContext.current
     val showLandscapeCards = remember {
@@ -677,10 +858,21 @@ private fun RowsLayout(
         viewModel.ensureLandscapeArt(showLandscapeCards)
     }
 
-    val visibleRails = if (selectedSourceId != null) {
-        state.rails.filter { it.sourceId == selectedSourceId }
-    } else {
-        state.rails
+    // Hidden titles are dropped as the rails are read, so the long-press Hide
+    // takes the tile it was pressed on off the rail (see [visibleFolderRails]).
+    val hiddenTitleKeys = rememberHiddenTitleKeys()
+    val visibleRails = remember(
+        state.rails,
+        selectedSourceId,
+        hiddenTitleKeys,
+        resolvedIds
+    ) {
+        val rails = if (selectedSourceId != null) {
+            state.rails.filter { it.sourceId == selectedSourceId }
+        } else {
+            state.rails
+        }
+        visibleFolderRails(rails, hiddenTitleKeys, resolvedIds)
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -702,25 +894,68 @@ private fun RowsLayout(
                 FolderStatus("Nothing to show here yet.", icon = KB_STATUS_ICON_EMPTY)
             else -> {
                 LazyColumn(
+                    // The screen's state: a Back out of Detail disposes this page
+                    // and a return scrolls this list (see [BrowseReturnFocus]).
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    visibleRails.forEach { rail ->
+                    visibleRails.forEachIndexed { railIndex, rail ->
                         item(key = "title:${rail.sourceId}") {
                             RailTitle(rail, showRailType)
                         }
                         item(key = "rail:${rail.sourceId}") {
+                            // The row's own state, owned here rather than inside
+                            // the LazyRow: a return out of Detail has to scroll it
+                            // onto the pressed card (the same move
+                            // [FolderRailPageHandler] makes for the hero layout's
+                            // paged rails).
+                            val rowState = rememberLazyListState()
+                            val returnIndex = returnTarget
+                                ?.takeIf { it.railKey == "rail:${rail.sourceId}" }
+                                ?.let { target ->
+                                    rail.items
+                                        .indexOfFirst {
+                                            kbFolderCardKey(it) == target.itemId
+                                        }
+                                        .takeIf { it >= 0 }
+                                        ?: target.position.takeIf {
+                                            it in rail.items.indices
+                                        }
+                                }
+                            LaunchedEffect(returnIndex) {
+                                returnIndex?.let { index ->
+                                    runCatching { rowState.scrollToItem(index) }
+                                }
+                            }
                             LazyRow(
+                                state = rowState,
+                                // Same vertical room as the paged rail above:
+                                // a row that clips to its own bounds cut the
+                                // focused tile's glow off flat (see
+                                // [KBFocusRowInset]).
                                 contentPadding = PaddingValues(
                                     start = FolderSafeHorizontal,
-                                    end = FolderSafeHorizontal
+                                    end = FolderSafeHorizontal,
+                                    top = KBFocusRowInset,
+                                    bottom = KBFocusRowInset
                                 )
                             ) {
-                                items(
+                                itemsIndexed(
                                     items = rail.items,
-                                    key = { "${rail.sourceId}:${it.type}:${it.id}" }
-                                ) { item ->
+                                    key = { _, item ->
+                                        "${rail.sourceId}:${item.type}:${item.id}"
+                                    }
+                                ) { itemIndex, item ->
+                                    val cardKey = kbFolderCardKey(item)
+                                    val target = BrowseReturnTarget(
+                                        screenKey = browseReturnKey,
+                                        itemId = cardKey,
+                                        position = itemIndex,
+                                        railKey = "rail:${rail.sourceId}",
+                                        railIndex = railIndex * 2 + 1
+                                    )
                                     FolderItemCard(
                                         item = item,
                                         isWatched = itemWatched(item, watchedKeys, resolvedIds),
@@ -734,8 +969,21 @@ private fun RowsLayout(
                                         art = landscapeArt[
                                             landscapeArtKey(item.type, item.id)
                                         ],
-                                        onClick = { onOpenItem(item) },
-                                        onLongClick = { onLongPressItem(item) }
+                                        onClick = { onOpenItem(item, target) },
+                                        onLongClick = {
+                                            onLongPressItem(
+                                                item,
+                                                successorIndexAfter(
+                                                    rail.items.size,
+                                                    itemIndex
+                                                )?.let { kbFolderCardKey(rail.items[it]) },
+                                                target
+                                            )
+                                        },
+                                        cardKey = cardKey,
+                                        focusRegistry = focusRegistry,
+                                        isReturnItem = itemIndex == returnIndex,
+                                        returnFocusRequester = returnFocusRequester
                                     )
                                 }
                             }
@@ -759,22 +1007,59 @@ private fun GridLayout(
     watchedKeys: Set<String>,
     partialWatchedKeys: Set<String>,
     onSelectSource: (String?) -> Unit,
-    onOpenItem: (KBContentItem) -> Unit,
-    onLongPressItem: (KBContentItem) -> Unit
+    // Same four the rails take: the page's return key, the grid state a return
+    // scrolls, the card registry for a long-press hand-back, and the card a
+    // return is coming back for (see [BrowseReturnFocus]).
+    browseReturnKey: String,
+    gridState: LazyGridState,
+    focusRegistry: MutableMap<String, FocusRequester>,
+    returnTarget: BrowseReturnTarget?,
+    returnFocusRequester: FocusRequester,
+    onOpenItem: (KBContentItem, BrowseReturnTarget) -> Unit,
+    // Carries the key of the card that takes the pressed one's place when a
+    // Hide removes it (null when it was the grid's last poster), plus the
+    // record the menu's own "Go to Details" raises.
+    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit
 ) {
     val context = LocalContext.current
     Column(modifier = Modifier.fillMaxSize()) {
         FolderTitleBlock(state.folder)
         SourceTabs(state, selectedSourceId, onSelectSource)
 
-        val gridItems = remember(state.rails, selectedSourceId) {
+        // Hidden titles are dropped as the grid is read (see
+        // [visibleFolderRails]), so the long-press Hide takes the poster it was
+        // pressed on off the grid.
+        val hiddenTitleKeys = rememberHiddenTitleKeys()
+        val gridItems = remember(
+            state.rails,
+            selectedSourceId,
+            hiddenTitleKeys,
+            resolvedIds
+        ) {
             val rails = if (selectedSourceId != null) {
                 state.rails.filter { it.sourceId == selectedSourceId }
             } else {
                 state.rails
             }
             val seen = mutableSetOf<String>()
-            rails.flatMap { it.items }.filter { seen.add("${it.type}:${it.id}") }
+            visibleFolderRails(rails, hiddenTitleKeys, resolvedIds)
+                .flatMap { it.items }
+                .filter { seen.add(kbFolderCardKey(it)) }
+        }
+
+        // Puts the grid ON the card a return out of Detail is coming back for:
+        // the card by its own key, or its recorded position for one this grid
+        // cannot name. A poster the scroll left behind has not composed at all,
+        // so it has no focus node until this runs; the focus itself belongs to
+        // the screen, which retries while this scroll settles.
+        LaunchedEffect(returnTarget, gridItems) {
+            val target = returnTarget ?: return@LaunchedEffect
+            val index = gridItems
+                .indexOfFirst { kbFolderCardKey(it) == target.itemId }
+                .takeIf { it >= 0 }
+                ?: target.position.takeIf { it in gridItems.indices }
+                ?: return@LaunchedEffect
+            runCatching { gridState.scrollToItem(index) }
         }
 
         when {
@@ -792,20 +1077,43 @@ private fun GridLayout(
             else -> {
                 LazyVerticalGrid(
                     columns = GridCells.Fixed(6),
+                    // The screen's state, not one re-created here: a Back out of
+                    // Detail disposes this grid and a return scrolls it (see
+                    // [BrowseReturnFocus]).
+                    state = gridState,
+                    // 16dp at the top, matching the Library's ItemGrid: the
+                    // glow of a focused card in the FIRST row had 8dp of room
+                    // and lost its top edge (see [KBFocusRowInset]).
                     contentPadding = PaddingValues(
                         start = FolderSafeHorizontal,
                         end = FolderSafeHorizontal,
-                        top = 8.dp,
+                        top = KBFocusRowInset,
                         bottom = 24.dp
                     ),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    items(
+                    itemsIndexed(
                         items = gridItems,
-                        key = { "grid:${it.type}:${it.id}" }
-                    ) { item ->
+                        key = { _, item -> "grid:${item.type}:${item.id}" }
+                    ) { itemIndex, item ->
+                        val cardKey = kbFolderCardKey(item)
+                        // This cell's own node, published so the screen's
+                        // long-press menu can ask for it by key - including the
+                        // successor's, which is the one a Hide lands on.
+                        val cardRequester = remember(cardKey) { FocusRequester() }
+                        focusRegistry[cardKey] = cardRequester
+                        val isReturnItem = returnTarget != null &&
+                            itemIndex == returnTarget.position &&
+                            cardKey == returnTarget.itemId
+                        // The grid has no rail, so its record names the card and
+                        // its place and nothing else (see [BrowseReturnFocus]).
+                        val target = BrowseReturnTarget(
+                            screenKey = browseReturnKey,
+                            itemId = cardKey,
+                            position = itemIndex
+                        )
                         Column {
                             GlobalPosterCard(
                                 posterUrl = item.posterUrl,
@@ -817,8 +1125,15 @@ private fun GridLayout(
                                     partialWatchedKeys,
                                     resolvedIds
                                 ),
-                                onClick = { onOpenItem(item) },
-                                onLongClick = { onLongPressItem(item) },
+                                onClick = { onOpenItem(item, target) },
+                                onLongClick = {
+                                    onLongPressItem(
+                                        item,
+                                        successorIndexAfter(gridItems.size, itemIndex)
+                                            ?.let { kbFolderCardKey(gridItems[it]) },
+                                        target
+                                    )
+                                },
                                 posterWidth = FolderPosterWidth,
                                 posterHeight = FolderPosterHeight,
                                 // A folder item ships a backdrop but no logo;
@@ -827,7 +1142,16 @@ private fun GridLayout(
                                 artType = item.type,
                                 // Only the global setting reshapes the Grid;
                                 // the Home-rails toggle keeps it posters.
-                                landscape = AppPreferences.getLandscapePosters(context)
+                                landscape = AppPreferences.getLandscapePosters(context),
+                                modifier = Modifier
+                                    .focusRequester(cardRequester)
+                                    .then(
+                                        if (isReturnItem) {
+                                            Modifier.focusRequester(returnFocusRequester)
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             )
                             // Grid always keeps regular posters, but its
                             // item captions honor the toggles like Rows.
@@ -856,26 +1180,42 @@ internal fun KBFolderBody(
     watchedKeys: Set<String>,
     partialWatchedKeys: Set<String>,
     onSelectSource: (String?) -> Unit,
-    onOpenItem: (KBContentItem) -> Unit,
-    onLongPressItem: (KBContentItem) -> Unit
+    // Where a return out of Detail lands, per layout: the page's list or grid
+    // state (whichever this mode draws), its return key, the card registry a
+    // long-press hands the D-pad back through, and the card the return is
+    // coming back for (see [BrowseReturnFocus]).
+    browseReturnKey: String,
+    listState: LazyListState,
+    gridState: LazyGridState,
+    focusRegistry: MutableMap<String, FocusRequester>,
+    returnTarget: BrowseReturnTarget?,
+    returnFocusRequester: FocusRequester,
+    onOpenItem: (KBContentItem, BrowseReturnTarget) -> Unit,
+    onLongPressItem: (KBContentItem, String?, BrowseReturnTarget) -> Unit
 ) {
     when (layoutMode) {
         KBLayoutModes.Mode.FOLLOW_LAYOUT ->
             FollowHomeLayout(
                 viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
-                partialWatchedKeys, onSelectSource, onOpenItem, onLongPressItem
+                partialWatchedKeys, onSelectSource, browseReturnKey, listState,
+                focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
+                onLongPressItem
             )
 
         KBLayoutModes.Mode.ROWS ->
             RowsLayout(
                 viewModel, state, resolvedIds, selectedSourceId, watchedKeys,
-                partialWatchedKeys, onSelectSource, onOpenItem, onLongPressItem
+                partialWatchedKeys, onSelectSource, browseReturnKey, listState,
+                focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
+                onLongPressItem
             )
 
         KBLayoutModes.Mode.GRID ->
             GridLayout(
                 state, resolvedIds, selectedSourceId, watchedKeys,
-                partialWatchedKeys, onSelectSource, onOpenItem, onLongPressItem
+                partialWatchedKeys, onSelectSource, browseReturnKey, gridState,
+                focusRegistry, returnTarget, returnFocusRequester, onOpenItem,
+                onLongPressItem
             )
     }
 }

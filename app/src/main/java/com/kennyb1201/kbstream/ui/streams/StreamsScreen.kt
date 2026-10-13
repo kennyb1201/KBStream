@@ -278,8 +278,20 @@ fun StreamsScreen(
     val firstStreamFocusRequester = remember { FocusRequester() }
     val refreshFocusRequester = remember { FocusRequester() }
     var entryFocusPlaced by remember { mutableStateOf(false) }
+
+    // Set the moment focus lands anywhere inside this screen. The entry latch
+    // above guards repeat GRABS, but not a viewer who moved focus themselves
+    // while the first load was still in flight: the effect had early-returned on
+    // `isLoading`, DOWN parked them on REFRESH, and when the sources landed the
+    // grab yanked focus to the first card. The grab is now skipped once the
+    // viewer has placed focus at all (see the root onFocusChanged below).
+    var userPlacedFocus by remember { mutableStateOf(false) }
+
     LaunchedEffect(isLoading, visibleStreams.size) {
         if (entryFocusPlaced) return@LaunchedEffect
+        // The viewer has already taken the D-pad somewhere (REFRESH during a
+        // slow load): their place wins over the entry grab.
+        if (userPlacedFocus) return@LaunchedEffect
         // Held while the first load is in flight: the list has no rows yet, and
         // a request against a card that does not exist is a silent miss.
         if (isLoading && visibleStreams.isEmpty()) return@LaunchedEffect
@@ -331,6 +343,10 @@ fun StreamsScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid)
+            // Root-level read of whether anything in this screen holds focus,
+            // so the entry grab can tell an untouched screen (no focus yet) from
+            // one the viewer has already navigated (see userPlacedFocus).
+            .onFocusChanged { userPlacedFocus = it.hasFocus }
     ) {
         if (!backdrop.isNullOrBlank()) {
             AsyncImage(

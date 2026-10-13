@@ -619,7 +619,12 @@ fun PosterContextMenu(
         hideTarget?.let { target ->
             add(
                 PosterContextAction(
-                    label = "Hide",
+                    // "everywhere" is what separates this row from a rail's own
+                    // "Remove from Continue Watching" / "Remove from Home"
+                    // sitting above it: those take the title off ONE row, this
+                    // takes it off every screen, and the bare "Hide" read as the
+                    // same kind of thing at a glance.
+                    label = "Hide everywhere",
                     description = "Remove this title from every screen",
                     isDestructive = true
                 ) {

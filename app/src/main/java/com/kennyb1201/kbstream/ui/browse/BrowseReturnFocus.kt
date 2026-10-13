@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.browse
 
 import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.ui.focus.FocusRequester
 import kotlinx.coroutines.delay
 
 /**
@@ -110,6 +111,34 @@ internal const val BROWSE_RETURN_FOCUS_STEPS = 12
 internal const val BROWSE_RETURN_FOCUS_DELAY_MS = 40L
 
 /**
+ * Puts the focus on [requester] once the node it names is attached.
+ *
+ * The app's one rule for a hand-back, and it reads the request's own answer for
+ * the reason [KBStatusMessage] documents: `requestFocus()` returns FALSE for a
+ * node that is not in the tree yet rather than throwing, so `runCatching`
+ * reports success for every call ever made and a missed landing leaves no trace.
+ * The node a hand-back names is usually one that is being (re)composed in the
+ * same frame - a menu's scrim is leaving, a lazy row is putting a card back, a
+ * row is un-dimming - so the ask is retried across frames like the browse
+ * return record's own landing.
+ *
+ * Answers whether it landed. A caller that only wants the D-pad somewhere (the
+ * menu dismiss paths) can ignore the answer; one that is choosing between two
+ * targets can read it and fall back.
+ */
+internal suspend fun landFocusOn(requester: FocusRequester?): Boolean {
+    if (requester == null) return false
+    var landed = false
+    var attempts = 0
+    while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
+        delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+        landed = runCatching { requester.requestFocus() }.getOrDefault(false)
+        attempts++
+    }
+    return landed
+}
+
+/**
  * The unique key of each browse page. Every route the page is opened with that
  * leads to a DIFFERENT list is part of the key.
  *
@@ -130,6 +159,16 @@ internal fun collectionBrowseScreenKey(collectionId: Int): String =
 
 internal fun decadeBrowseScreenKey(decadeStart: Int): String =
     "decade:$decadeStart"
+
+/**
+ * The imported KB folder page: one key per folder, so a title opened from one
+ * folder cannot answer for a return into another.
+ *
+ * Keyed on the folder id rather than its route alone: two profiles can import
+ * the same manifest, and the folders they resolve to are different lists.
+ */
+internal fun kbFolderBrowseScreenKey(folderId: String): String =
+    "kbfolder:$folderId"
 
 /**
  * Scrolls the rail keyed [railKey] back into view, or answers false if it cannot

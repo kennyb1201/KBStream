@@ -74,7 +74,14 @@ class SportsHubScrollContractTest {
     fun `the scroll is bounded, and only happens when the list can move`() {
         assertTrue(
             "a press at the end of the list must not consume itself",
-            flat.contains("listState.canScrollForward") && flat.contains("listState.canScrollBackward")
+            flat.contains("scrollTarget.canScrollForward") &&
+                flat.contains("scrollTarget.canScrollBackward")
+        )
+        assertTrue(
+            "the state the fallback rides is the focused standings column when " +
+                "the body is two-column (its own grid states are the only lists " +
+                "composed with there), and the screen's own list otherwise",
+            flat.contains("val scrollTarget = standingsColumnState.value ?: listState")
         )
         assertTrue(
             "the distance is the pure rule's",
@@ -82,7 +89,7 @@ class SportsHubScrollContractTest {
         )
         assertTrue(
             "and it is a real scroll, in the direction the press asked for",
-            flat.contains("listState.animateScrollBy(") &&
+            flat.contains("scrollTarget.animateScrollBy(") &&
                 flat.contains("if (direction == FocusDirection.Down) step.toFloat() else -step.toFloat()")
         )
     }

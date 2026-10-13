@@ -287,7 +287,12 @@ class SportsHubLayoutContractTest {
         assertTrue(
             "the games grid and the standings columns both land through a wrapper that installs it",
             flat.contains("HubGrid( listState = listState, columns = gameColumns, modifier = Modifier.fillMaxSize() )") &&
-                flat.contains("HubList( listState = listState, modifier = modifier )")
+                // The column wrapper, whose modifier is now the column's own
+                // focus observer PLUS the caller's: the two-column body has to
+                // know which column the viewer is in, because the screen's
+                // D-pad scroll fallback used to read the list state nothing
+                // composes with in that mode (P2 SP1).
+                flat.contains("HubList( listState = listState, modifier = modifier.then(")
         )
         assertTrue(
             "which hands the scroll a spec instead of leaving it the default one",

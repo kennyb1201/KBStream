@@ -31,6 +31,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -63,6 +65,15 @@ import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
+import kotlinx.coroutines.android.awaitFrame
+
+/**
+ * Frames to keep asking for a focus target before giving up (the verified-retry
+ * loop [KBStatusMessage] documents: `requestFocus()` reports a node that is not
+ * attached yet by returning false rather than by throwing, and this screen's
+ * targets land a frame or two after the composable that wants them).
+ */
+private const val ONBOARDING_FOCUS_ATTEMPTS = 12
 
 /** First-run completion flag — lives in its own prefs file. */
 object OnboardingPrefs {
@@ -114,6 +125,28 @@ fun OnboardingScreen(
     onOpenGuide: () -> Unit,
     onFinish: () -> Unit
 ) {
+    // Nothing claimed focus on entry, so the first D-pad press landed on the
+    // email field - the first focusable - and its default openKeyboardOnFocus
+    // threw the full-screen IME over the welcome copy. Setup now opens on the
+    // first SOURCE hand-off instead (the row below), and the two account fields
+    // are set not to open the keyboard on focus by themselves.
+    val entryFocusRequester = remember { FocusRequester() }
+    // Where focus lands when a sign-in finishes and the account form is replaced
+    // by the "SIGNED IN" strip: the strip carries no focusable node, so without
+    // an explicit re-aim the D-pad is left with nothing (see OnboardingAccountPanel).
+    val startBrowsingFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < ONBOARDING_FOCUS_ATTEMPTS) {
+            awaitFrame()
+            landed = runCatching { entryFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
+
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
@@ -158,7 +191,9 @@ fun OnboardingScreen(
                 // IPTV and settings from the account. It also used to be
                 // reachable only from Settings → Sync, so a new install on a
                 // second TV had no obvious way to get any of it.
-                OnboardingAccountPanel()
+                OnboardingAccountPanel(
+                    signedInFocusRequester = startBrowsingFocusRequester
+                )
             }
 
             Spacer(modifier = Modifier.width(34.dp))
@@ -168,7 +203,9 @@ fun OnboardingScreen(
                     title = "Add Add-ons",
                     description = "Stremio manifests for movies, series & more",
                     icon = Icons.Filled.Add,
-                    onClick = onOpenAddons
+                    onClick = onOpenAddons,
+                    // The screen's entry focus (see the requester above).
+                    focusRequester = entryFocusRequester
                 )
                 Spacer(modifier = Modifier.height(10.dp))
                 OnboardingSourceRow(
@@ -205,7 +242,12 @@ fun OnboardingScreen(
                     glow = ClickableSurfaceDefaults.glow(
                         focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
                     ),
-                    modifier = Modifier.fillMaxWidth()
+                    // Where focus is re-aimed when a sign-in finishes and the
+                    // account form it was inside is replaced (see
+                    // OnboardingAccountPanel).
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(startBrowsingFocusRequester)
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -249,9 +291,14 @@ fun OnboardingScreen(
  * Sync form (same calls, same email + 6-character-password rule) so the two
  * cannot drift; the panel swaps itself for a confirmation strip once signed in,
  * and the app's own auth hooks start the first sync from there.
+ *
+ * [signedInFocusRequester] belongs to the START BROWSING card below the panel.
+ * Signing in replaces this whole form with the "SIGNED IN" strip, which holds
+ * no focusable node of its own, so the D-pad would be left with nowhere to be;
+ * focus is re-aimed there the moment the form goes away.
  */
 @Composable
-private fun OnboardingAccountPanel() {
+private fun OnboardingAccountPanel(signedInFocusRequester: FocusRequester) {
     val context = LocalContext.current
     val authState by SupabaseSync.authState.collectAsStateWithLifecycle()
     val syncError by SupabaseSync.syncError.collectAsStateWithLifecycle()
@@ -265,6 +312,27 @@ private fun OnboardingAccountPanel() {
     }
 
     val signedIn = authState as? SupabaseSync.AuthState.SignedIn
+
+    // The SECOND focus drop of the sign-in round trip: the form (and the button
+    // the viewer just pressed) is replaced by the signed-in strip, which is not
+    // focusable at all. Seeded with the state the panel opened in, so a profile
+    // that is ALREADY signed in does not steal the entry focus this screen just
+    // placed on its first setup row - only the transition re-aims.
+    var wasSignedIn by remember { mutableStateOf(signedIn != null) }
+    LaunchedEffect(signedIn != null) {
+        val nowSignedIn = signedIn != null
+        val changed = nowSignedIn != wasSignedIn
+        wasSignedIn = nowSignedIn
+        if (!changed || !nowSignedIn) return@LaunchedEffect
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < ONBOARDING_FOCUS_ATTEMPTS) {
+            awaitFrame()
+            landed = runCatching { signedInFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
     val credentialsValid = email.isNotBlank() && password.length >= 6
     val shape = KBShapePanel
 
@@ -358,6 +426,12 @@ private fun OnboardingAccountPanel() {
                     // Committing a field must not drop focus, or the next
                     // D-pad Down escapes the form (same as Settings → Sync).
                     keepFocusOnDone = true,
+                    // The first D-pad press of a first run landed on this field,
+                    // and its default openKeyboardOnFocus threw the full-screen
+                    // IME over the welcome copy before the viewer had read a
+                    // word. Focus now passes over the form silently; OK starts
+                    // editing and Done ends it (the settings-search rule).
+                    openKeyboardOnFocus = false,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 12.dp)
@@ -369,6 +443,7 @@ private fun OnboardingAccountPanel() {
                     keyboardType = KeyboardType.Password,
                     visualTransformation = PasswordVisualTransformation(),
                     keepFocusOnDone = true,
+                    openKeyboardOnFocus = false,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 10.dp)
@@ -381,13 +456,15 @@ private fun OnboardingAccountPanel() {
                 ) {
                     OnboardingActionButton(
                         label = if (busy) "SIGNING IN…" else "SIGN IN",
-                        enabled = !busy && credentialsValid
+                        credentialsValid = credentialsValid,
+                        busy = busy
                     ) {
                         SupabaseSync.signIn(context, email, password)
                     }
                     OnboardingActionButton(
                         label = "CREATE ACCOUNT",
-                        enabled = !busy && credentialsValid
+                        credentialsValid = credentialsValid,
+                        busy = busy
                     ) {
                         SupabaseSync.signUp(context, email, password)
                     }
@@ -405,20 +482,36 @@ private fun OnboardingAccountPanel() {
     }
 }
 
-/** Same shape as the Settings → Sync buttons: a KBCard when enabled, a dimmed
- * non-focusable surface when not. */
+/**
+ * The Settings → Sync button, with one difference that is the whole point of
+ * this signature being split in two.
+ *
+ * [credentialsValid] controls whether the card is DRAWN AT ALL and therefore
+ * whether it can hold focus; [busy] only controls whether it acts. The first
+ * version used a single flag, so pressing OK on SIGN IN flipped the button from
+ * a focusable `KBCard` to a plain (unfocusable) `Surface` and disposed the very
+ * node the D-pad was sitting on, mid-press. Focus was then nowhere for the
+ * whole round trip. While a sign-in is in flight the card now stays exactly
+ * where it is - dimmed, label swapped to SIGNING IN…, presses ignored - and
+ * only gives way when the form itself does.
+ */
 @Composable
 private fun OnboardingActionButton(
     label: String,
-    enabled: Boolean,
+    credentialsValid: Boolean,
+    busy: Boolean,
     onClick: () -> Unit
 ) {
-    if (enabled) {
-        KBCard(onClick = onClick) {
+    val ready = credentialsValid && !busy
+    if (credentialsValid) {
+        KBCard(onClick = { if (ready) onClick() }) {
             Text(
                 text = label,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
+                // KBCard paints its content bright in both focus states (see
+                // its own comment), and a busy button must not read as ready.
+                color = if (ready) KBTextHi else KBTextLo.copy(alpha = 0.6f),
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
             )
         }
@@ -450,7 +543,11 @@ private fun OnboardingSourceRow(
     title: String,
     description: String,
     icon: ImageVector,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    // Only the first row is given one: it is where the screen places entry
+    // focus (see OnboardingScreen), so the D-pad has a home the moment setup
+    // opens instead of landing on the account form.
+    focusRequester: FocusRequester? = null
 ) {
     androidx.tv.material3.Surface(
         onClick = onClick,
@@ -483,7 +580,11 @@ private fun OnboardingSourceRow(
         glow = ClickableSurfaceDefaults.glow(
             focusedGlow = Glow(elevationColor = KBAccent, elevation = KBFocusGlowSmall)
         ),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier
+            )
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

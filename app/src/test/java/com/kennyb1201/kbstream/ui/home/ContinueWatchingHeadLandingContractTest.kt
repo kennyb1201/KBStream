@@ -130,8 +130,10 @@ class ContinueWatchingHeadLandingContractTest {
             landing.contains("continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)")
         )
         assertEquals(
-            "one call site: no other rail in Home lands its own head",
-            1,
+            "two call sites, one per rail: Continue Watching, and the Upcoming " +
+                "rail whose own Hide deletes a card the same way (P2 H4). No " +
+                "third rail lands a head of its own.",
+            2,
             home.split("continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)").size - 1
         )
     }
@@ -148,8 +150,9 @@ class ContinueWatchingHeadLandingContractTest {
             scroll < ask
         )
         assertEquals(
-            "this rail's scroll is the only scrollToItem in Home",
-            1,
+            "the two landings' scrolls are the only scrollToItems in Home - " +
+                "one per rail (see the Upcoming rail's own landing)",
+            2,
             home.split("scrollToItem(").size - 1
         )
     }
@@ -259,18 +262,54 @@ class ContinueWatchingHeadLandingContractTest {
         )
     }
 
+    // ------------------------------------------------- the Upcoming rail too --
+
+    /**
+     * The Upcoming rail lands the same way, for the same reason.
+     *
+     * It used to have no long press at all, so nothing on it could delete a
+     * card and nothing there needed a landing. P2 gave its cards the app's
+     * normal "Go to Details" + "Hide" menu, and Hide takes the card off this
+     * rail exactly as the CW row's own removal does (see the Delete action) -
+     * so the row lands on its new head from the same shared rule, and the
+     * deleted card's own requester is never the one asked.
+     */
+    @Test
+    fun `the Upcoming rail lands on its head when its own Hide deletes a card`() {
+        val upcoming = home.substringAfter("private fun BuiltinUpcomingRail(")
+            .substringBefore("private fun SectionTitle(")
+        assertTrue(
+            "the same machinery, keyed the same way and on the same rule",
+            upcoming.contains("val headId = episodes.firstOrNull()?.id") &&
+                upcoming.contains("LaunchedEffect(headId, railHasFocus, landOnHeadSignal)") &&
+                upcoming.contains(
+                    "continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)"
+                )
+        )
+        assertTrue(
+            "the row owns its state and a requester for position 0 alone",
+            upcoming.contains("val railState = rememberLazyListState()") &&
+                upcoming.contains("val headRequester = remember { FocusRequester() }")
+        )
+        val upcomingLanding = upcoming
+            .substringAfter("LaunchedEffect(headId, railHasFocus, landOnHeadSignal)")
+        val scroll = upcomingLanding.indexOf("railState.scrollToItem(")
+        val ask = upcomingLanding.indexOf("headRequester.requestFocus()")
+        assertTrue("the head is put on screen first", scroll >= 0)
+        assertTrue("and then asked for", ask >= 0)
+        assertTrue("in that order: a request against a card that is not laid out is a silent miss", scroll < ask)
+        assertTrue(
+            "and the ask reports its own miss, so it is retried rather than lost",
+            upcomingLanding.contains(
+                "landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)"
+            )
+        )
+    }
+
     // ------------------------------------------------------ nothing else moved --
 
     @Test
-    fun `the Upcoming rail and the card's own UI are untouched`() {
-        val upcoming = home.substringAfter("private fun BuiltinUpcomingRail(")
-            .substringBefore("private fun SectionTitle(")
-        assertFalse(
-            "the Upcoming rail gets no landing of its own",
-            upcoming.contains("scrollToItem") ||
-                upcoming.contains("continueWatchingLandsOnHead") ||
-                upcoming.contains("headRequester")
-        )
+    fun `the card's own UI is untouched`() {
         val card = home.substringAfter("private fun CompactUpNextCard(")
             .substringBefore("fun HomeScreen(")
         assertFalse(

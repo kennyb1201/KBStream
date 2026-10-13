@@ -166,10 +166,15 @@ class HeroTrailerResumeTest {
 
     @Test
     fun `the resume position is only written when a retry will really happen`() {
+        // Bounded by the overlay that follows the player call: the onFailed
+        // body ends before the composable's closing paren, and the hero's
+        // first-frame backdrop overlay is the first thing after it (the
+        // backdrop itself now lives in HeroBackdropArt, so the old AsyncImage
+        // anchor no longer exists here).
         val failed = between(
             rawScreen(),
             "onFailed = { positionMs ->",
-            "    } else {\n        AsyncImage("
+            "AnimatedVisibility("
         )
         val capAt = failed.indexOf("if (trailerAttempt < 1) {")
         val writeAt = failed.indexOf("trailerResumeMs = positionMs")

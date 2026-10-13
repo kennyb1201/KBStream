@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
@@ -98,7 +99,13 @@ fun KBSkeletonRail(
     posterHeight: Dp,
     modifier: Modifier = Modifier,
     itemCount: Int = 6,
-    horizontalPadding: Dp = 20.dp,
+    // The app's screen edge, not a 20dp of its own. A placeholder that insets
+    // itself differently from the rail replacing it moves the whole page 4dp
+    // sideways at the exact moment the posters land - the one jolt a skeleton
+    // exists to prevent (see the class comment). Browse pages and the catalog
+    // grid all line their rails up to [KBScreenEdge], so a caller that says
+    // nothing now gets the right answer instead of a near miss.
+    horizontalPadding: Dp = KBScreenEdge,
     titleWidth: Dp = 168.dp,
     // The poster's own edge (see posterEdgeShape): a placeholder that is
     // rounded while the real tile is a pill promises the wrong thing and makes
@@ -144,7 +151,7 @@ fun KBSkeletonRailStack(
     modifier: Modifier = Modifier,
     railCount: Int = 3,
     itemCount: Int = 6,
-    horizontalPadding: Dp = 20.dp,
+    horizontalPadding: Dp = KBScreenEdge,
     shape: androidx.compose.ui.graphics.Shape = KBShapeCard
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -168,7 +175,7 @@ fun KBSkeletonGrid(
     columns: Int,
     modifier: Modifier = Modifier,
     rows: Int = 2,
-    horizontalPadding: Dp = 20.dp,
+    horizontalPadding: Dp = KBScreenEdge,
     verticalSpacing: Dp = 14.dp,
     shape: androidx.compose.ui.graphics.Shape = KBShapeCard
 ) {

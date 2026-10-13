@@ -107,6 +107,7 @@ import com.kennyb1201.kbstream.data.sports.SportsLeagues
 import com.kennyb1201.kbstream.data.sports.SportsTeam
 import com.kennyb1201.kbstream.data.sports.StandingEntry
 import com.kennyb1201.kbstream.data.sports.StandingGroup
+import com.kennyb1201.kbstream.data.sports.standingsTeam
 import com.kennyb1201.kbstream.data.sports.TournamentEvent
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
@@ -290,6 +291,15 @@ fun SportsHubScreen(
     val scrollScope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
 
+    // Which standings column holds the D-pad, when the body is in its
+    // two-column form. Each column scrolls on its own LazyGridState there, so
+    // the screen-level [listState] the scroll fallback is built on is composed
+    // with by NOTHING in that mode - a Down/Up at a column edge scrolled
+    // nothing and the press appeared dead. The focused column reports itself
+    // here (see StandingsBody/StandingsColumn) and the fallback rides on it,
+    // falling back to [listState] for the one-column body and the games list.
+    val standingsColumnState = remember { mutableStateOf<LazyGridState?>(null) }
+
     // A game the playlist cannot carry is deliberately NOT focusable - a run of
     // dead cards should not cost the D-pad a stop - so focus alone cannot walk
     // past one, and a section of them has no focus target below it for the
@@ -300,13 +310,14 @@ fun SportsHubScreen(
     // that HAS a target still does - and only when there is nothing to focus
     // does the press become a scroll.
     val scrollByPage: (FocusDirection) -> Boolean = { direction ->
-        val info = listState.layoutInfo
+        val scrollTarget = standingsColumnState.value ?: listState
+        val info = scrollTarget.layoutInfo
         val viewport = info.viewportSize.height -
             info.beforeContentPadding - info.afterContentPadding
         val canScroll = if (direction == FocusDirection.Down) {
-            listState.canScrollForward
+            scrollTarget.canScrollForward
         } else {
-            listState.canScrollBackward
+            scrollTarget.canScrollBackward
         }
         if (!canScroll || viewport <= 0) {
             false
@@ -314,7 +325,7 @@ fun SportsHubScreen(
             val row = info.visibleItemsInfo.lastOrNull()?.size?.height ?: viewport
             val step = sportsScrollStep(rowHeight = row, viewportHeight = viewport)
             scrollScope.launch {
-                listState.animateScrollBy(
+                scrollTarget.animateScrollBy(
                     if (direction == FocusDirection.Down) step.toFloat() else -step.toFloat()
                 )
             }
@@ -661,6 +672,21 @@ fun SportsHubScreen(
                     loading = standingsLeague.path in standingsLoading,
                     failed = standingsLeague.path in standingsFailed,
                     listState = listState,
+                    // Following a team from the standings keys under the same
+                    // favourite the scoreboard uses, so the row has a real
+                    // action instead of being a D-pad stop that does nothing.
+                    favoriteKeys = favoriteKeys,
+                    onToggleTeam = { team, on -> viewModel.setTeamFavorite(team, on) },
+                    // Two-column standings: whichever column the D-pad is on
+                    // becomes the state the scroll fallback rides, so a press
+                    // at a column edge scrolls THAT column instead of dying.
+                    onColumnFocusChanged = { state, hasFocus ->
+                        if (hasFocus) {
+                            standingsColumnState.value = state
+                        } else if (standingsColumnState.value === state) {
+                            standingsColumnState.value = null
+                        }
+                    },
                     onRetry = viewModel::retryStandings,
                 )
                 return@Column
@@ -2496,6 +2522,15 @@ private fun StandingsBody(
     loading: Boolean,
     failed: Boolean,
     listState: LazyGridState,
+    /** The followed-team keys, so a row can show and toggle its state. */
+    favoriteKeys: Set<String> = emptySet(),
+    /** Follow/unfollow one team, keyed exactly like a game side. */
+    onToggleTeam: ((SportsTeam, Boolean) -> Unit)? = null,
+    /**
+     * Two-column mode's focus reporting: (this column's state, does it hold
+     * focus). Null in callers that do not offer the two-column body.
+     */
+    onColumnFocusChanged: ((LazyGridState, Boolean) -> Unit)? = null,
     onRetry: () -> Unit,
 ) {
     when {
@@ -2534,9 +2569,17 @@ private fun StandingsBody(
                     horizontalArrangement = Arrangement.spacedBy(GRID_GUTTER_DP.dp)
                 ) {
                     columns.forEach { columnGroups ->
+                        // One scroll state per column, and the two report which
+                        // of them holds the D-pad so the screen's scroll
+                        // fallback knows which list a Down/Up should move.
+                        val columnState = rememberLazyGridState()
                         StandingsColumn(
                             groups = columnGroups,
-                            listState = rememberLazyGridState(),
+                            listState = columnState,
+                            leaguePath = league.path,
+                            favoriteKeys = favoriteKeys,
+                            onToggleTeam = onToggleTeam,
+                            onColumnFocusChanged = onColumnFocusChanged,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -2548,6 +2591,9 @@ private fun StandingsBody(
                 StandingsColumn(
                     groups = columns.first(),
                     listState = listState,
+                    leaguePath = league.path,
+                    favoriteKeys = favoriteKeys,
+                    onToggleTeam = onToggleTeam,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -2567,11 +2613,30 @@ private fun StandingsBody(
 private fun StandingsColumn(
     groups: List<StandingGroup>,
     listState: LazyGridState,
+    /** The league this table belongs to; scopes a row's follow key. */
+    leaguePath: String?,
+    favoriteKeys: Set<String> = emptySet(),
+    onToggleTeam: ((SportsTeam, Boolean) -> Unit)? = null,
+    /**
+     * Reports (this column's state, hasFocus) as focus enters and leaves the
+     * column, so the screen can ride its scroll fallback on the column the
+     * viewer is actually in (see StandingsBody). Null for the one-column body,
+     * which already uses the screen's own state.
+     */
+    onColumnFocusChanged: ((LazyGridState, Boolean) -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     HubList(
         listState = listState,
-        modifier = modifier
+        modifier = modifier.then(
+            if (onColumnFocusChanged == null) {
+                Modifier
+            } else {
+                Modifier.onFocusChanged {
+                    onColumnFocusChanged(listState, it.hasFocus)
+                }
+            }
+        )
     ) {
         groups.forEach { group ->
             item(key = "std-head-" + group.name) {
@@ -2583,7 +2648,20 @@ private fun StandingsColumn(
                 key = { _, entry ->
                     "std-" + group.name + "-" + entry.abbreviation + "-" + entry.displayName
                 }
-            ) { _, entry -> StandingsRow(entry = entry) }
+            ) { _, entry ->
+                // The row is a real action now: OK follows/unfollows the team it
+                // names. Before, onClick was empty, so the one D-pad stop the
+                // table offered did nothing at all (see standingsTeam).
+                val team = standingsTeam(leaguePath, entry)
+                val followed = team.favoriteKey in favoriteKeys
+                StandingsRow(
+                    entry = entry,
+                    followed = followed,
+                    onToggleFollow = {
+                        onToggleTeam?.invoke(team, !followed)
+                    }
+                )
+            }
         }
     }
 }
@@ -2643,11 +2721,16 @@ private fun StandingsColumnHeader() {
 }
 
 @Composable
-private fun StandingsRow(entry: StandingEntry) {
+private fun StandingsRow(
+    entry: StandingEntry,
+    followed: Boolean,
+    onToggleFollow: () -> Unit
+) {
     KBCard(
-        // Navigable like a game card, with no tap action of its own: an empty
-        // lambda keeps the row a D-pad stop without giving it a destination.
-        onClick = {},
+        // Navigable like a game card, and it does something: OK follows the
+        // team the row names. The old empty lambda left a full D-pad stop
+        // (border + glow) that answered the press with nothing.
+        onClick = onToggleFollow,
         focusedScale = KBFocusRow,
         shape = KBShapeCard,
         modifier = Modifier.fillMaxWidth()

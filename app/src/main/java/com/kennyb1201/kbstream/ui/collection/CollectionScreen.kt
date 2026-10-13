@@ -29,6 +29,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -63,6 +64,7 @@ import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBShapePanel
 import com.kennyb1201.kbstream.ui.theme.KBSurface
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -291,8 +293,12 @@ fun CollectionScreen(
                         // poster's 1.03 scale + glow from clipping on the first
                         // and last tiles.
                         contentPadding = PaddingValues(
-                            top = 2.dp,
-                            bottom = 4.dp,
+                            // Vertical room for the focus glow too, not just the
+                            // 2dp/4dp that was here: the row clips to its own
+                            // bounds, so the top of the halo on the films was
+                            // sliced off flat (see [KBFocusRowInset]).
+                            top = KBFocusRowInset,
+                            bottom = KBFocusRowInset,
                             start = 24.dp,
                             end = 24.dp
                         )
@@ -541,7 +547,14 @@ private fun CollectionHeader(
                 isWatched = false,
                 onClick = {},
                 posterWidth = 110.dp,
-                posterHeight = 165.dp
+                posterHeight = 165.dp,
+                // The header's own poster is decoration, and it always was -
+                // its click was a no-op. It stayed focusable, so it was the
+                // first thing the D-pad highlighted on open, OK did nothing on
+                // it, and reaching the films cost an extra DOWN. Out of the
+                // focus order, the page opens on the first film instead, which
+                // is what the press was going to be spent on anyway.
+                modifier = Modifier.focusProperties { canFocus = false }
             )
 
             Column(

@@ -78,6 +78,7 @@ import com.kennyb1201.kbstream.ui.browse.decadeBrowseScreenKey
 import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.tag.RailPagingState
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -339,10 +340,13 @@ fun DecadeScreen(
                 when {
                 isLoading -> {
                     item(key = "loading") {
+                        // Edge inset from the skeleton's own default, which is
+                        // the screen edge: a placeholder that insets itself 4dp
+                        // inside the rail replacing it shifts the page when the
+                        // posters land.
                         KBSkeletonRailStack(
                             posterWidth = posterSize.width,
                             posterHeight = posterSize.height,
-                            horizontalPadding = 20.dp,
                             shape = posterEdgeShape()
                         )
                     }
@@ -717,9 +721,15 @@ private fun DecadeRailRow(
 
         LazyRow(
             state = rowState,
+            // The vertical inset is the room a focused tile needs INSIDE the
+            // row's own clips-to-bounds viewport: the 12dp glow plus the ~3% a
+            // poster grows by per side (see [KBFocusRowInset]). Without it the
+            // top of the halo on the first row of tiles was sliced off flat.
             contentPadding = PaddingValues(
                 start = KBScreenEdge,
-                end = KBScreenEdge
+                end = KBScreenEdge,
+                top = KBFocusRowInset,
+                bottom = KBFocusRowInset
             ),
             modifier = Modifier.focusGroup()
         ) {

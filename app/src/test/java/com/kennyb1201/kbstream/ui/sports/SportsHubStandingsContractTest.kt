@@ -103,15 +103,22 @@ class SportsHubStandingsContractTest {
     }
 
     @Test
-    fun `a row is a D-pad stop with no tap action of its own`() {
+    fun `a row is a D-pad stop that follows the team it names`() {
         val row = slice(hub, "private fun StandingsRow(", "private fun StandingsStat(")
         assertTrue(
             "it is a card so the D-pad can reach it",
             row.contains("KBCard(")
         )
         assertTrue(
-            "with an empty action - the spec's \"no tap action on a row\"",
-            row.contains("onClick = {},")
+            "the empty action left a full focus stop (border + glow) that " +
+                "answered OK with nothing; OK now follows/unfollows the team",
+            row.contains("onClick = onToggleFollow,")
+        )
+        assertTrue(
+            "and the row's follow state is read from the same favourite set the " +
+                "scoreboard uses, keyed by the same league-scoped rule",
+            hub.contains("val followed = team.favoriteKey in favoriteKeys") &&
+                hub.contains("val team = standingsTeam(leaguePath, entry)")
         )
     }
 
@@ -138,6 +145,11 @@ class SportsHubStandingsContractTest {
         assertTrue(
             "the standings host is the web.api one, not the scoreboard's",
             repository.contains("\"https://site.web.api.espn.com/apis/v2/sports/\"")
+        )
+        assertTrue(
+            "a row's team id is read from the feed, so a follow from the table " +
+                "keys under the same favourite the scoreboard does",
+            repository.contains("teamId = team.optString(\"id\", \"\").takeIf { it.isNotBlank() }")
         )
         assertTrue(
             "the endpoint carries the spec's query",
@@ -181,7 +193,18 @@ class SportsHubStandingsContractTest {
         )
         assertTrue(
             "each column stacks its own conference's divisions",
-            hub.contains("columns.forEach { columnGroups -> StandingsColumn( groups = columnGroups,")
+            hub.contains("columns.forEach { columnGroups ->") &&
+                hub.contains("StandingsColumn( groups = columnGroups, listState = columnState,")
+        )
+        assertTrue(
+            "each column keeps its OWN scroll state, and reports it so the " +
+                "D-pad's scroll fallback can ride the focused one instead of a " +
+                "list nothing composes with in this mode",
+            hub.contains("val columnState = rememberLazyGridState()") &&
+                hub.contains("onColumnFocusChanged = onColumnFocusChanged,") &&
+                hub.contains(
+                    "val scrollTarget = standingsColumnState.value ?: listState"
+                )
         )
         assertTrue(
             "the one-column body keeps the screen's scroll state the D-pad fallback rides on",

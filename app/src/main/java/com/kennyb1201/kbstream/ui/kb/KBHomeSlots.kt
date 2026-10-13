@@ -923,6 +923,12 @@ fun KBHomeBrowseRail(
     // menu hand focus back to the tile it came from - the same contract the
     // catalog rails' cards have (see HomeScreen's lastPosterFocusRequester).
     onShortcutLongPress: ((BrowseHomeShortcut, FocusRequester) -> Unit)? = null,
+    // Optional registry of one FocusRequester per chip, OWNED BY THE CALLER.
+    // Home needs to name a chip it is not looking at - the successor that takes
+    // a removed chip's place - so the requester cannot live only inside this
+    // row (see Home's "Remove from Home" landing). Same contract the search
+    // browser's chip grid has. Null keeps the old local-only requester.
+    chipFocusRequesters: MutableMap<String, FocusRequester>? = null,
     // Non-null only for the rail Home draws first (see [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null,
     // The rail's own name ("Genres & Tags", "Studios", ...). Defaulted to the
@@ -937,11 +943,14 @@ fun KBHomeBrowseRail(
             bottom = 8.dp
         )
     ) {
-        Text(
-            text = title,
-            color = KBTextHi.copy(alpha = 0.94f),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp)
+        // The app's rail heading, not a treatment of its own: this was a raw
+        // titleMedium at 94% white with its own padding, so a Browse rail's
+        // title sat a little smaller and tighter than the same rail's title on
+        // every other Home row (see KBSectionHeader) - the same drift the
+        // collection rail above was fixed for.
+        KBSectionHeader(
+            title = title,
+            modifier = Modifier.padding(top = 4.dp)
         )
 
         LazyRow(
@@ -957,7 +966,16 @@ fun KBHomeBrowseRail(
                 items = shortcuts,
                 key = { it.chipKey() }
             ) { shortcut ->
-                val requester = remember { FocusRequester() }
+                // From the caller's registry when one was handed in, so Home
+                // can hand focus to the chip that takes a removed one's place
+                // before that chip leaves; a local one otherwise. The lookup
+                // itself is remembered (a memoising map is not something the
+                // lint rule can see through), keyed by the chip's own identity.
+                val chipKey = shortcut.chipKey()
+                val requester = remember(chipKey) {
+                    chipFocusRequesters?.getOrPut(chipKey) { FocusRequester() }
+                        ?: FocusRequester()
+                }
                 BrowseShortcutTile(
                     shortcut = shortcut,
                     art = artByKey[shortcut.chipKey()],

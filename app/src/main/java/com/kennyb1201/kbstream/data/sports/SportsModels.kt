@@ -286,6 +286,34 @@ data class StandingEntry(
     val gamesBehind: String,
     /** "W4"; blank when the feed carries none. */
     val streak: String,
+    /**
+     * ESPN's own team id from the row's `team` object - the same id a favourite
+     * is stored under (see [SportsTeam.favoriteKey]), which is what lets a
+     * standings row be followed. Null when the feed carries none, in which case
+     * the follow key falls back to the display name, exactly as a game side's
+     * does.
+     */
+    val teamId: String? = null,
+)
+
+/**
+ * The team a standings row stands for, built from its row and the league the
+ * table belongs to.
+ *
+ * A row and a game side are the same team, so a follow started from the table
+ * has to key under the same [SportsTeam.favoriteKey] the FAVORITES tab and the
+ * schedule read - otherwise "follow" from the standings would look like it did
+ * nothing. The league path is what scopes the bare id (see [favoriteKey]).
+ */
+fun standingsTeam(leaguePath: String?, entry: StandingEntry): SportsTeam = SportsTeam(
+    id = entry.teamId,
+    abbreviation = entry.abbreviation,
+    displayName = entry.displayName,
+    logoUrl = entry.logoUrl,
+    score = null,
+    isHome = false,
+    record = null,
+    league = leaguePath
 )
 
 /**

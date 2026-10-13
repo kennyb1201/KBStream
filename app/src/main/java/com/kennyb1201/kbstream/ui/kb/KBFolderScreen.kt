@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -11,10 +13,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.kbFolderBrowseScreenKey
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
+import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
 import com.kennyb1201.kbstream.ui.components.watchedMenuLabel
@@ -58,8 +67,98 @@ fun KBFolderScreen(
     // "Open in Grid" returning to the rails.
     var showAsGrid by remember(folderId) { mutableStateOf(false) }
 
+    // Everything a return out of Detail needs, owned HERE rather than in the
+    // layout below: that trip disposes this whole composable and every scroll
+    // position in it, which is why the folder used to reopen at the top with
+    // the D-pad on whatever the framework picked (see [BrowseReturnFocus]).
+    val browseReturnKey = remember(folderId) { kbFolderBrowseScreenKey(folderId) }
+    val browseListState = rememberLazyListState()
+    val browseGridState = rememberLazyGridState()
+    val returnFocusRequester = remember { FocusRequester() }
+    var returnTarget by remember(folderId) {
+        mutableStateOf<BrowseReturnTarget?>(null)
+    }
+    var returnAttempts by remember(folderId) { mutableStateOf(0) }
+    // Whether the card this page came back for has been landed on. Set by the
+    // landing itself, never before it: the rails stream in one at a time, and a
+    // flag raised ahead of a request that never landed would leave the rest of
+    // the page's arrivals skipping the restore.
+    var returnHandled by remember(folderId) { mutableStateOf(false) }
+
+    // Where the open long-press menu hands the D-pad back. Every other surface
+    // stashes the pressed card's requester and restores it; this one follows
+    // the Library instead, because a Hide takes the card off the rail - so the
+    // SUCCESSOR's key is captured while the pressed card is still there to name
+    // it, and resolved when the menu closes.
+    val cardFocusRequesters = remember(folderId) {
+        mutableMapOf<String, FocusRequester>()
+    }
+    var menuSuccessorKey by remember { mutableStateOf<String?>(null) }
+    var menuReturnTarget by remember {
+        mutableStateOf<BrowseReturnTarget?>(null)
+    }
+    var menuRestoreKey by remember { mutableStateOf<String?>(null) }
+    var restoreFocusSignal by remember { mutableStateOf(0) }
+    // Set by the Hide row on its way through [PosterContextMenu.onBeforeHide],
+    // so the dismiss that follows it knows the pressed card is leaving rather
+    // than staying.
+    var menuHidePending by remember { mutableStateOf(false) }
+
+    fun closeMenu(restoreKey: String?) {
+        menuTarget = null
+        menuSuccessorKey = null
+        menuReturnTarget = null
+        menuHidePending = false
+        menuRestoreKey = restoreKey
+        restoreFocusSignal++
+    }
+
+    LaunchedEffect(restoreFocusSignal) {
+        if (restoreFocusSignal == 0) return@LaunchedEffect
+        val key = menuRestoreKey
+        menuRestoreKey = null
+        // A dismiss owes the D-pad the card that was pressed; a Hide owes it
+        // the card that took its place, which is the only one still on the
+        // rail by the time this runs. A null key (the rail's last card went)
+        // leaves the focus where the framework puts it rather than nowhere.
+        landFocusOn(key?.let { cardFocusRequesters[it] })
+    }
+
     LaunchedEffect(folderId) {
         viewModel.loadById(folderId)
+    }
+
+    // Puts the page back where the viewer left it when its Detail page was
+    // opened from here: the rail on screen, its row scrolled onto the card,
+    // and the focus on that card. The rails arrive one at a time, so the
+    // record is HELD until it is honoured - the rail holding the card can land
+    // after the first one does, and a record read and then dropped would lose
+    // the place it was raised for (see [BrowseReturnFocus]).
+    LaunchedEffect(state.isLoading, state.rails, selectedSourceId) {
+        if (state.isLoading) {
+            // A new load is a new list: a position in the old one means
+            // nothing.
+            returnHandled = false
+            returnTarget = null
+            returnAttempts = 0
+            return@LaunchedEffect
+        }
+        if (returnHandled) return@LaunchedEffect
+        val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)
+            ?: return@LaunchedEffect
+        if (returnAttempts >= BROWSE_RETURN_FOCUS_STEPS) return@LaunchedEffect
+        returnTarget = recorded
+        returnAttempts++
+        // The rail has to be on screen before its own row can scroll onto the
+        // card, and a rail outside the viewport has composed nothing at all.
+        recorded.railKey?.let { railKey ->
+            browseListState.revealBrowseReturnRail(railKey, recorded.railIndex)
+        }
+        // A request against a card that is not composed yet is a silent miss
+        // (requestFocus() answers false rather than throwing), and the rails
+        // and the grid scroll themselves onto the card from the record they
+        // are handed above.
+        returnHandled = landFocusOn(returnFocusRequester)
     }
 
     val folder = state.folder
@@ -83,7 +182,16 @@ fun KBFolderScreen(
             watchedKeys = watchedKeys,
             partialWatchedKeys = partialWatchedKeys,
             onSelectSource = viewModel::selectSource,
-            onOpenItem = { item ->
+            browseReturnKey = browseReturnKey,
+            listState = browseListState,
+            gridState = browseGridState,
+            focusRegistry = cardFocusRequesters,
+            returnTarget = returnTarget,
+            returnFocusRequester = returnFocusRequester,
+            onOpenItem = { item, target ->
+                // Remember this card, so backing out of its Detail page reopens
+                // the folder ON it (see [BrowseReturnFocus]).
+                BrowseReturnFocus.record(target)
                 viewModel.resolveAndNavigate(item) { type, imdbId ->
                     onItemClick(
                         type,
@@ -94,7 +202,11 @@ fun KBFolderScreen(
                     )
                 }
             },
-            onLongPressItem = { menuTarget = it }
+            onLongPressItem = { item, successorKey, target ->
+                menuTarget = item
+                menuSuccessorKey = successorKey
+                menuReturnTarget = target
+            }
         )
     }
 
@@ -113,6 +225,9 @@ fun KBFolderScreen(
             val imdbId = resolvedIds["$normalizedType::$tmdbId"]
             imdbId != null && viewModel.watchedKey(imdbId, normalizedType) in watchedKeys
         } ?: false
+        // The card the menu was raised on, by the key it is registered under
+        // (see [kbFolderCardKey]).
+        val menuCardKey = kbFolderCardKey(item)
         PosterContextMenu(
             title = item.title ?: "Untitled",
             // A KB row carries whatever its add-on sent: an IMDB id, a
@@ -140,14 +255,21 @@ fun KBFolderScreen(
                     label = "Open in Grid",
                     description = "Browse this whole collection as a poster grid"
                 ) {
-                    menuTarget = null
+                    // Nothing is leaving the rail here, so the D-pad goes back
+                    // on the card that was pressed.
+                    closeMenu(menuCardKey)
                     showAsGrid = true
                 },
                 PosterContextAction(
                     label = "Go to Details",
                     description = "Open this title's detail page"
                 ) {
-                    menuTarget = null
+                    // Where this menu's own drill-down is being opened from, so
+                    // backing out of that Detail lands here rather than at the
+                    // top (see [BrowseReturnFocus]). Raised BEFORE the menu
+                    // state is cleared, which is where the record lives.
+                    menuReturnTarget?.let { BrowseReturnFocus.record(it) }
+                    closeMenu(null)
                     viewModel.resolveAndNavigate(item) { type, imdbId ->
                         onItemClick(
                             type,
@@ -168,7 +290,7 @@ fun KBFolderScreen(
                         mediaType = item.type
                     )
                 ) {
-                    menuTarget = null
+                    closeMenu(menuCardKey)
                     if (menuWatched) {
                         viewModel.markUnwatched(item)
                     } else {
@@ -176,7 +298,15 @@ fun KBFolderScreen(
                     }
                 }
             ),
-            onDismiss = { menuTarget = null }
+            // The Hide row announces itself here, before it removes anything:
+            // the rail is filtered by hidden titles, so the pressed card is
+            // gone by the next frame and the card owed the D-pad is the
+            // successor named while the pressed one was still there.
+            onBeforeHide = { menuHidePending = true },
+            onDismiss = {
+                val wasHidden = menuHidePending
+                closeMenu(if (wasHidden) menuSuccessorKey else menuCardKey)
+            }
         )
     }
 

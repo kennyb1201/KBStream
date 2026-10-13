@@ -198,6 +198,13 @@ internal fun SearchHero(
             modifier = Modifier
                 .padding(top = 12.dp)
                 .fillMaxWidth(),
+            // Done hides the IME but leaves the field focused; without this the
+            // very next DOWN toward the results re-focuses the hero and the
+            // LaunchedEffect(editing, focused) re-opens the keyboard over them,
+            // so every search cost an extra Back + DOWN. The guide's search
+            // overlay and the sports hub already pass this; search was the one
+            // field that did not (see KBTextField.closeKeyboardOnBlur).
+            closeKeyboardOnBlur = true,
             onDone = { onSubmit() },
             leading = {
                 Icon(

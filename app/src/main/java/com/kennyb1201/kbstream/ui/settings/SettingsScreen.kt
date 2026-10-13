@@ -126,6 +126,7 @@ import com.kennyb1201.kbstream.ui.theme.customAccentHexText
 import com.kennyb1201.kbstream.ui.theme.hsvFromArgb
 import com.kennyb1201.kbstream.ui.theme.kbCustomAccentState
 import com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
@@ -3580,6 +3581,29 @@ private fun SettingsClearHistoryDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
+    /*
+     * The SAFE action is the default stop.
+     *
+     * The dialog claimed no initial focus, so Compose landed on the first
+     * focusable node in it - CLEAR, which is drawn before CANCEL - and a double
+     * tap of OK ("open it, then confirm it") wiped every resume position on the
+     * device. CANCEL now takes focus explicitly, through the verified retry the
+     * rest of the app uses: the dialog enters the tree in this same frame, and
+     * requestFocus() answers false for a node that is not attached yet rather
+     * than throwing, which is why the loop reads its answer (see
+     * KBStatusMessage) instead of wrapping it in a try.
+     */
+    val cancelFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < 12) {
+            awaitFrame()
+            landed = runCatching { cancelFocusRequester.requestFocus() }
+                .getOrDefault(false)
+            attempts++
+        }
+    }
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
             Column(
                 modifier = Modifier
@@ -3613,7 +3637,10 @@ private fun SettingsClearHistoryDialog(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
                         )
                     }
-                    KBCard(onClick = onDismiss) {
+                    KBCard(
+                        onClick = onDismiss,
+                        modifier = Modifier.focusRequester(cancelFocusRequester)
+                    ) {
                         Text(
                             text = "CANCEL",
                             color = KBTextLo,

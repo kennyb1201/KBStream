@@ -55,6 +55,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.images.ImageOverrides
+import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
@@ -67,6 +68,7 @@ import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
 import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
+import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
@@ -86,6 +88,8 @@ import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlow
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
+import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeCard
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import kotlinx.coroutines.delay
@@ -121,6 +125,30 @@ private class ActorBringIntoViewSpec(
 
 @OptIn(ExperimentalFoundationApi::class)
 private val LocalActorBringIntoViewSpec = ActorBringIntoViewSpec()
+
+/**
+ * Whether the viewer has hidden this credit.
+ *
+ * Read the way every other browser rail reads it (see [HiddenTitles.hides]):
+ * the IMDB id the ViewModel resolved for it, its TMDB id, or the
+ * title-and-year spelling a surface with no ids writes. Without the IMDB half a
+ * title hidden from Home or the Library - where that id is what is recorded -
+ * stayed on the person's filmography.
+ */
+private fun creditHidden(
+    credit: TmdbPersonCredit,
+    normalizedType: String,
+    hidden: Set<String>,
+    resolvedCreditIds: Map<String, String?>,
+    viewModel: ActorViewModel
+): Boolean = HiddenTitles.hides(
+    hidden,
+    normalizedType,
+    credit.title ?: credit.name,
+    (credit.releaseDate ?: credit.firstAirDate)?.take(4)?.toIntOrNull(),
+    credit.id.toString(),
+    resolvedCreditIds[viewModel.creditLookupKey(credit.id, normalizedType)]
+)
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -233,11 +261,28 @@ fun ActorScreen(
                 p.profilePath?.let { TmdbRepository.PROFILE_BASE + it }
             }
 
-            val movies = remember(sortedCredits) {
-                sortedCredits.filter { it.mediaType == "movie" }
+            // Hidden titles are filtered out of the credits as they are read,
+            // so the long-press Hide takes the poster it was pressed on off the
+            // rail - the one place in the app where hiding a title recorded the
+            // choice and left the card sitting there (see [creditHidden]). A
+            // rail it empties is dropped with the credit, which is what the
+            // guards below already do.
+            val hiddenTitleKeys = rememberHiddenTitleKeys()
+            val movies = remember(sortedCredits, hiddenTitleKeys, resolvedCreditIds) {
+                sortedCredits.filter {
+                    it.mediaType == "movie" &&
+                        !creditHidden(
+                            it, "movie", hiddenTitleKeys, resolvedCreditIds, viewModel
+                        )
+                }
             }
-            val tvShows = remember(sortedCredits) {
-                sortedCredits.filter { it.mediaType == "tv" }
+            val tvShows = remember(sortedCredits, hiddenTitleKeys, resolvedCreditIds) {
+                sortedCredits.filter {
+                    it.mediaType == "tv" &&
+                        !creditHidden(
+                            it, "series", hiddenTitleKeys, resolvedCreditIds, viewModel
+                        )
+                }
             }
 
             // The outer item indices of the two rail rows, which is what
@@ -773,7 +818,16 @@ private fun ActorCreditRail(
 
     LazyRow(
         state = rowState,
-        contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 8.dp, bottom = 8.dp),
+        // Horizontal at the app's screen edge, and vertical with the room a
+        // focused tile needs INSIDE the row's own clips-to-bounds viewport:
+        // 8dp here cut the top of the first credits row's halo off flat (see
+        // [KBFocusRowInset]).
+        contentPadding = PaddingValues(
+            start = KBScreenEdge,
+            end = KBScreenEdge,
+            top = KBFocusRowInset,
+            bottom = KBFocusRowInset
+        ),
         modifier = Modifier.padding(bottom = bottomPadding).focusGroup().focusRestorer()
     ) {
         itemsIndexed(

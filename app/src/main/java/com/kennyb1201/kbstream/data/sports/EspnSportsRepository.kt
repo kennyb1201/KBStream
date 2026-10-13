@@ -538,6 +538,9 @@ private fun espnStandingEntry(row: JSONObject): StandingEntry? {
         winPercent = espnStatText(stats, "winPercent"),
         gamesBehind = espnStatText(stats, "gamesBehind"),
         streak = espnStatText(stats, "streak"),
+        // The same id a favourite is stored under, so a row can be followed
+        // from the table and match the side on the scoreboard.
+        teamId = team.optString("id", "").takeIf { it.isNotBlank() },
     )
 }
 

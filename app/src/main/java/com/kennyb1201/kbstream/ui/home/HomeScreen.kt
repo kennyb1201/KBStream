@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.home
 
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
@@ -31,6 +32,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlin.math.abs
 import androidx.compose.foundation.shape.CircleShape
 import com.kennyb1201.kbstream.data.kb.BrowseHomeShortcut
+import com.kennyb1201.kbstream.data.kb.browseChipSuccessor
 import com.kennyb1201.kbstream.data.kb.chipKey
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.sync.ProfileManager
@@ -615,6 +617,14 @@ private fun HeroInlineTrailerPlayer(
      */
     startPositionMs: Long = 0L,
     modifier: Modifier = Modifier,
+    /**
+     * The player has drawn its FIRST frame. Until this is called the pooled
+     * player's SurfaceView is an unpainted black rectangle - the hero keeps the
+     * backdrop mounted over it until then (see HomeHero's crossfade), so the
+     * trailer's first frame is what the crossfade reveals rather than the empty
+     * surface behind it.
+     */
+    onFirstFrame: () -> Unit = {},
     onEnded: () -> Unit = {},
     /**
      * Playback failed; [positionMs] is where it failed, read while the player
@@ -810,6 +820,13 @@ private fun HeroInlineTrailerPlayer(
                     }
                 }
 
+                override fun onRenderedFirstFrame() {
+                    // The surface has a real frame on it now, so the hero can
+                    // drop the backdrop it was holding over the (until now
+                    // black) player surface.
+                    onFirstFrame()
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
                     // A failed trailer must never leave a blank hero:
                     // fall back to the backdrop image immediately, then
@@ -872,6 +889,37 @@ private fun HeroInlineTrailerPlayer(
             }
         },
         modifier = modifier
+    )
+}
+
+/**
+ * The hero's backdrop art, as one composable.
+ *
+ * It is drawn in TWO places - as the whole hero when no trailer is resolved,
+ * and as the layer held over the trailer player until its first frame renders -
+ * so it lives here rather than being written out twice.
+ *
+ * 1280x720, not 1920x1080: the hero draws at roughly 1150x520, so the extra
+ * pixels were never on screen - they only doubled the bitmap (8 MB of
+ * ARGB_8888) and the decode/upload for every new backdrop a settled focus
+ * brought in. Visually identical at the size it renders. The Home hero backdrop
+ * is the one image the whole screen is built around, so it keeps the fade.
+ */
+@Composable
+private fun HeroBackdropArt(url: String?) {
+    val context = LocalContext.current
+    AsyncImage(
+        model = remember(url) {
+            ImageRequest.Builder(context)
+                .data(url)
+                .size(Size(1280, 720))
+                .crossfade(true)
+                .build()
+        },
+        contentDescription = null,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop,
+        alignment = Alignment.Center
     )
 }
 
@@ -1464,63 +1512,73 @@ private fun HomeHero(
             ) {
             
                 Crossfade(
-    targetState = resolvedTrailer,
-    label = "hero_backdrop_crossfade"
-) { trailerPlayback ->
-    if (trailerPlayback != null) {
-        HeroInlineTrailerPlayer(
-            source = trailerPlayback.source,
-            muted = muted,
-            startPositionMs = trailerPlayback.startPositionMs,
-            modifier = Modifier.fillMaxSize(),
-            onEnded = {
-                // Video finished (or the watchdog gave up on a stuck
-                // player): drop the source so the hero crossfades back
-                // to the backdrop.
-                resolvedTrailer = null
-            },
-            onFailed = { positionMs ->
-                // Playback error (e.g. the signed URL went stale and a
-                // chunk 403'd): drop the source and retry resolution once
-                // with a fresh URL, resuming where it died. onEnded still
-                // fires first, so the backdrop shows immediately either
-                // way.
-                if (trailerAttempt < 1) {
-                    // Record the resume point ONLY when the retry is really
-                    // going to happen: a position written on the capped
-                    // second failure would sit there and be picked up by the
-                    // next re-arm (a foreground return), seeking a fresh
-                    // play to a dead position.
-                    trailerResumeMs = positionMs
-                    trailerAttempt += 1
-                } else {
-                    resolvedTrailer = null
+                    targetState = resolvedTrailer,
+                    label = "hero_backdrop_crossfade"
+                ) { trailerPlayback ->
+                    if (trailerPlayback != null) {
+                        // The pooled player is an unpainted SurfaceView: until
+                        // its first frame is drawn the surface is a black
+                        // rectangle, so the crossfade used to reveal BLACK
+                        // and the trailer popped in a moment later - and a
+                        // trailer that never rendered kept that black up for
+                        // the whole watchdog budget. Keep the backdrop mounted
+                        // ON TOP of the player and fade it out only once
+                        // Player.Listener.onRenderedFirstFrame reports a real
+                        // frame underneath, so the crossfade reveals the
+                        // trailer's first frame rather than an empty surface.
+                        var firstFrameRendered by remember(trailerPlayback) {
+                            mutableStateOf(false)
+                        }
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            HeroInlineTrailerPlayer(
+                                source = trailerPlayback.source,
+                                muted = muted,
+                                startPositionMs = trailerPlayback.startPositionMs,
+                                modifier = Modifier.fillMaxSize(),
+                                onFirstFrame = { firstFrameRendered = true },
+                                onEnded = {
+                                    // Video finished (or the watchdog gave up
+                                    // on a stuck player): drop the source so
+                                    // the hero crossfades back to the
+                                    // backdrop.
+                                    resolvedTrailer = null
+                                },
+                                onFailed = { positionMs ->
+                                    // Playback error (e.g. the signed URL went
+                                    // stale and a chunk 403'd): drop the source
+                                    // and retry resolution once with a fresh
+                                    // URL, resuming where it died. onEnded
+                                    // still fires first, so the backdrop shows
+                                    // immediately either way.
+                                    if (trailerAttempt < 1) {
+                                        // Record the resume point ONLY when the
+                                        // retry is really going to happen: a
+                                        // position written on the capped second
+                                        // failure would sit there and be picked
+                                        // up by the next re-arm (a foreground
+                                        // return), seeking a fresh play to a
+                                        // dead position.
+                                        trailerResumeMs = positionMs
+                                        trailerAttempt += 1
+                                    } else {
+                                        resolvedTrailer = null
+                                    }
+                                }
+                            )
+                            Crossfade(
+                                targetState = firstFrameRendered,
+                                label = "hero_first_frame_reveal",
+                                modifier = Modifier.fillMaxSize()
+                            ) { rendered ->
+                                if (!rendered) {
+                                    HeroBackdropArt(backdrop)
+                                }
+                            }
+                        }
+                    } else {
+                        HeroBackdropArt(backdrop)
+                    }
                 }
-            }
-        )
-    } else {
-        AsyncImage(
-            model = remember(backdrop) {
-                ImageRequest.Builder(context)
-                    .data(backdrop)
-                    // 1280x720, not 1920x1080: the hero draws at roughly
-                    // 1150x520, so the extra pixels were never on screen -
-                    // they only doubled the bitmap (8 MB of ARGB_8888) and the
-                    // decode/upload for every new backdrop a settled focus
-                    // brought in. Visually identical at the size it renders.
-                    .size(Size(1280, 720))
-                    // The Home hero backdrop is the one image the whole
-                    // screen is built around, so it keeps the fade.
-                    .crossfade(true)
-                    .build()
-            },
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize(),
-            contentScale = ContentScale.Crop,
-            alignment = Alignment.Center
-        )
-    }
-}
 
                 Box(
                     modifier = Modifier
@@ -1904,6 +1962,11 @@ private fun rememberHidesEpisodeTitle(inProgress: Boolean): Boolean {
 private fun UpcomingEpisodeCard(
     upcoming: UpcomingEpisode,
     onClick: () -> Unit,
+    // Long press raises the same menu the other poster cards offer. Upcoming
+    // cards used to ignore it entirely, so the one row that shows titles a
+    // viewer most often wants GONE (a show they stopped watching) had no
+    // in-place way to hide one - every other card did.
+    onLongClick: (() -> Unit)? = null,
     onFocus: () -> Unit = {},
     focusRequester: FocusRequester? = null,
     // Non-null only when this card's rail is the one Home draws first (see
@@ -1919,6 +1982,7 @@ private fun UpcomingEpisodeCard(
         contentDescription = upcoming.title,
         isWatched = false,
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = Modifier
             .width(224.dp)
             .height(146.dp)
@@ -2508,10 +2572,52 @@ private fun BuiltinUpcomingRail(
      * [BuiltinContinueWatchingRail.onFocusedCardRequester]).
      */
     onFocusedCardRequester: (FocusRequester) -> Unit,
+    /**
+     * A long press on a card, with that card's own [FocusRequester]: Home
+     * raises the same "Go to Details" + "Hide" menu every other poster card
+     * offers, and the requester is what lets a dismiss hand focus back to the
+     * card that opened it.
+     */
+    onLongPress: (UpcomingEpisode, FocusRequester) -> Unit,
+    /**
+     * Bumped by the screen when an action removed the card focus was on, so
+     * this rail lands on its new head whether or not the viewer had walked it
+     * by hand - the same landing [BuiltinContinueWatchingRail] makes.
+     */
+    landOnHeadSignal: Int = 0,
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
+    // Same landing machinery as BuiltinContinueWatchingRail, for the same
+    // reason: a Hide on a card deletes the card (and can empty the whole row),
+    // so the hand-back has to come from the rail's own new head rather than
+    // from the deleted card's requester, which has nothing to attach to.
+    val railState = rememberLazyListState()
+    val headRequester = remember { FocusRequester() }
+    var railHasFocus by remember { mutableStateOf(false) }
+    var viewerWalkedRail by remember { mutableStateOf(false) }
+    val headId = episodes.firstOrNull()?.id
+    var answeredLandingSignal by remember { mutableStateOf(landOnHeadSignal) }
+
+    LaunchedEffect(headId, railHasFocus, landOnHeadSignal) {
+        if (headId == null) return@LaunchedEffect
+        if (landOnHeadSignal != answeredLandingSignal) {
+            answeredLandingSignal = landOnHeadSignal
+            viewerWalkedRail = false
+        } else if (!continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)) {
+            return@LaunchedEffect
+        }
+        railState.scrollToItem(CONTINUE_WATCHING_HEAD_INDEX)
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < CONTINUE_WATCHING_LANDING_ATTEMPTS) {
+            awaitFrame()
+            landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)
+            attempts++
+        }
+    }
+
     Column(
         modifier = Modifier.padding(
             start = TvSafeAreaHorizontal,
@@ -2525,19 +2631,30 @@ private fun BuiltinUpcomingRail(
             LocalBringIntoViewSpec provides bringIntoViewSpec
         ) {
             LazyRow(
+                state = railState,
                 contentPadding = PaddingValues(
                     start = RailHorizontalStartPadding,
                     end = TvSafeAreaHorizontal,
                     top = 10.dp,
                     bottom = 12.dp
                 ),
-                horizontalArrangement = Arrangement.spacedBy(0.dp)
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                // What the landing above is gated on: focus anywhere in this
+                // row (see continueWatchingLandsOnHead).
+                modifier = Modifier.onFocusChanged {
+                    railHasFocus = it.hasFocus
+                }
             ) {
-                items(
+                itemsIndexed(
                     items = episodes,
-                    key = { it.id }
-                ) { upcoming ->
-                    val requester = remember { FocusRequester() }
+                    key = { _, item -> item.id }
+                ) { index, upcoming ->
+                    val ownRequester = remember { FocusRequester() }
+                    val requester = if (index == CONTINUE_WATCHING_HEAD_INDEX) {
+                        headRequester
+                    } else {
+                        ownRequester
+                    }
                     val heroItem = UpNextItem(
                         id = upcoming.id,
                         title = upcoming.title,
@@ -2564,6 +2681,7 @@ private fun BuiltinUpcomingRail(
                         UpcomingEpisodeCard(
                             upcoming = upcoming,
                             onClick = { onOpenDetails(heroItem) },
+                            onLongClick = { onLongPress(upcoming, requester) },
                             focusRequester = requester,
                             onUpPressed = onUpPressed,
                             onFocus = {
@@ -3104,6 +3222,15 @@ fun HomeScreen(
         mutableStateOf<FocusRequester?>(null)
     }
 
+    // One FocusRequester per mirrored browse chip, keyed by the chip's own
+    // identity. Owned HERE rather than made inside the browse rail, because the
+    // "Remove from Home" landing has to name a chip the menu is not pointing at
+    // - the successor that takes the removed chip's place - and the rail's own
+    // requester is not visible from this scope (see browseChipSuccessor).
+    val browseChipFocusRequesters = remember {
+        mutableMapOf<String, FocusRequester>()
+    }
+
     // The card D-pad focus is ON, kept current by every rail's own focus
     // callback. Its own var, and deliberately not [lastPosterFocusRequester]:
     //
@@ -3285,6 +3412,23 @@ fun HomeScreen(
 
     fun openContinueWatchingMenu(item: UpNextItem) {
         continueWatchingMenu = item
+    }
+
+    // Long-press menu on Upcoming Schedule cards (Go to Details + Hide).
+    var upcomingMenu by remember {
+        mutableStateOf<UpcomingEpisode?>(null)
+    }
+
+    // Bumped when an Upcoming Hide removed the card the viewer was on; the rail
+    // lands on its new head (see BuiltinUpcomingRail), the same signal class the
+    // Continue Watching rail uses for its own deletes.
+    var upcomingLandOnHeadSignal by remember {
+        mutableStateOf(0)
+    }
+
+    fun dismissUpcomingMenu() {
+        upcomingMenu = null
+        restoreFocus(lastPosterFocusRequester)
     }
 
     // Long-press menu on regular poster rails (movies/series catalogs).
@@ -3679,6 +3823,14 @@ fun HomeScreen(
                     onFocusedCardRequester = { requester ->
                         focusedCardRequester = requester
                     },
+                    onLongPress = { episode, requester ->
+                        // Same contract the Continue Watching cards have:
+                        // remember the tile that opened the menu, so dismissing
+                        // it hands focus back to that exact tile.
+                        lastPosterFocusRequester = requester
+                        upcomingMenu = episode
+                    },
+                    landOnHeadSignal = upcomingLandOnHeadSignal,
                     onUpPressed = upHook
                 )
             }
@@ -3987,6 +4139,8 @@ fun HomeScreen(
                                                     requester
                                                 browseShortcutMenu = shortcut
                                             },
+                                            chipFocusRequesters =
+                                                browseChipFocusRequesters,
                                             onShortcutFocused = { shortcut ->
                                                 userAdjustedFocus = true
                                                 focusedFolder = null
@@ -4295,6 +4449,16 @@ fun HomeScreen(
             }
         }
 
+        // Back dismisses the top bar. Every other overlay on Home (the poster
+        // menus) closes on Back because they are their own focus group; the top
+        // bar is a plain AnimatedVisibility with no such handling, so a press
+        // that opened it deliberately was the one Back press this screen
+        // ignored. Enabled only while it is showing, so Back still leaves Home
+        // normally the rest of the time.
+        BackHandler(enabled = showTopBar) {
+            dismissTopBar()
+        }
+
         AnimatedVisibility(
             visible = showTopBar,
             enter = fadeIn(),
@@ -4441,7 +4605,12 @@ fun HomeScreen(
                         continueWatchingLandOnHeadSignal++
                     },
                     PosterContextAction(
-                        label = "Remove",
+                        // Names the ROW it takes the card off, so it cannot be
+                        // confused with the shared menu's "Hide everywhere"
+                        // directly below it: the two verbs used to be swapped
+                        // between label and description, and a viewer aiming
+                        // for "off this rail" could not tell which row did it.
+                        label = "Remove from Continue Watching",
                         description = "Hide this from Continue Watching",
                         isDestructive = true
                     ) {
@@ -4458,6 +4627,59 @@ fun HomeScreen(
                 ),
                 onDismiss = {
                     dismissContinueWatchingMenu()
+                }
+            )
+        }
+
+        // Long-press menu for Upcoming Schedule cards. Two rows - open the
+        // title, or take it off every screen - because an upcoming episode has
+        // nothing to play, so the Continue Watching menu's in-progress rows do
+        // not apply.
+        upcomingMenu?.let { episode ->
+            val upcomingHero = UpNextItem(
+                id = episode.id,
+                title = episode.title,
+                poster = episode.poster,
+                badge = UpNextBadge.NEXT_UP,
+                backdrop = episode.backdrop,
+                parentId = episode.parentId,
+                parentType = episode.parentType,
+                airDateLabel = episode.airDateLabel,
+                airDateFull = episode.airDateFull,
+                season = episode.season,
+                episode = episode.episode,
+                episodeTitle = episode.episodeTitle
+            )
+            PosterContextMenu(
+                title = episode.title,
+                // The card is a SHOW: the show's own id and the row's stream
+                // key both go in, so Hide takes it off Continue Watching and
+                // the Upcoming row together (a card with no parent id still
+                // hides itself).
+                hideTarget = hideTarget(
+                    episode.title,
+                    episode.parentType ?: "series",
+                    episode.poster,
+                    listOf(episode.parentId, episode.id)
+                ),
+                actions = listOf(
+                    PosterContextAction(
+                        label = "Go to Details",
+                        description = "Open this title's detail page"
+                    ) {
+                        upcomingMenu = null
+                        openUpNext(upcomingHero, openDetailsOnly = true)
+                    }
+                ),
+                onBeforeHide = {
+                    // The card is about to leave the screen. Bump the rail's
+                    // landing signal so it puts focus on its new head after
+                    // the recomposition, rather than on the deleted card's
+                    // requester - which has nothing to attach to.
+                    upcomingLandOnHeadSignal++
+                },
+                onDismiss = {
+                    dismissUpcomingMenu()
                 }
             )
         }
@@ -4565,9 +4787,28 @@ fun HomeScreen(
                         description = "Take this chip off the $railTitle rail",
                         isDestructive = true
                     ) {
+                        // Decide the successor BEFORE the removal: once the
+                        // chip is gone, the list it has to be found in is the
+                        // new one.
+                        val successor = browseChipSuccessor(
+                            shortcut,
+                            kbState.browseShortcuts
+                        )
                         browseShortcutMenu = null
                         kbViewModel.removeBrowseShortcut(shortcut)
-                        lastPosterFocusRequester?.requestFocus()
+                        // Land on whatever takes the removed chip's place: the
+                        // next chip in the rail, the previous one, or - when
+                        // this was the rail's last chip and the whole rail is
+                        // dropped - the first chip of the next rail. Asking the
+                        // deleted chip's own requester (which is what the old
+                        // `lastPosterFocusRequester?.requestFocus()` did)
+                        // succeeded pre-recomposition and was then cleared with
+                        // the node, stranding the D-pad.
+                        restoreFocus(
+                            successor
+                                ?.let { browseChipFocusRequesters[it.chipKey()] }
+                                ?: lastPosterFocusRequester
+                        )
                     }
                 ),
                 onDismiss = {

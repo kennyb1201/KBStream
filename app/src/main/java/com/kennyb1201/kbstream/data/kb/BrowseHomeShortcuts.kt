@@ -303,6 +303,40 @@ internal fun browseHomeRails(
 }
 
 /**
+ * The chip that should take the focus when [removed] is taken off Home.
+ *
+ * Mirrors the Continue Watching delete's landing order: the next chip in the
+ * same rail, else the previous chip in it (removing the last chip of a rail
+ * lands on the new last), else - because the rail itself disappears once it has
+ * no chips ([browseHomeRails] drops empty rails) - the first chip of the NEXT
+ * rail, and finally the last chip of the previous rail. Null means the removal
+ * left nothing anywhere to land on.
+ *
+ * [shortcuts] is the list as it stands BEFORE the removal, so the successor is
+ * computed against what is actually on screen.
+ */
+internal fun browseChipSuccessor(
+    removed: BrowseHomeShortcut,
+    shortcuts: List<BrowseHomeShortcut>
+): BrowseHomeShortcut? {
+    val rails = browseHomeRails(shortcuts)
+    val railIndex = rails.indexOfFirst { rail ->
+        rail.shortcuts.any { it.chipKey() == removed.chipKey() }
+    }
+    if (railIndex < 0) return null
+
+    val rail = rails[railIndex]
+    val chipIndex = rail.shortcuts.indexOfFirst {
+        it.chipKey() == removed.chipKey()
+    }
+    rail.shortcuts.getOrNull(chipIndex + 1)?.let { return it }
+    rail.shortcuts.getOrNull(chipIndex - 1)?.let { return it }
+
+    rails.getOrNull(railIndex + 1)?.shortcuts?.firstOrNull()?.let { return it }
+    return rails.getOrNull(railIndex - 1)?.shortcuts?.lastOrNull()
+}
+
+/**
  * The arrangement flags that apply to one browse rail.
  *
  * A rail's OWN key wins as soon as the arrangement names it. Until then the

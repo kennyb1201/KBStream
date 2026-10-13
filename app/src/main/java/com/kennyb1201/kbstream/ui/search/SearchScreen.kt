@@ -136,6 +136,18 @@ fun SearchScreen(
         )
     }
 
+    // Which rail's list the long-press menu was opened from, so its Hide can
+    // resolve the successor WITHIN that rail. Add-on tiles are not part of the
+    // TMDB `results` list, so before this the add-on rail's Hide searched that
+    // list, found nothing, and let the framework drop the focus wherever it
+    // liked (see the menu's onBeforeHide).
+    var menuRailKey by remember {
+        mutableStateOf(TITLES_RAIL_FOCUS_KEY)
+    }
+    var menuRailResults by remember {
+        mutableStateOf<List<SearchTitleResult>>(emptyList())
+    }
+
     // Long-press menus for the browse browser: a submenu chip offers "Hide",
     // the category strip offers "Unhide all" for the hidden chips under it.
     // One FocusRequester per browse chip, keyed by BrowseChipVisibility.key(),
@@ -451,7 +463,11 @@ fun SearchScreen(
                                 // local remember, so the menu's Hide can reach
                                 // a tile it is not looking at (see
                                 // titleTileFocusRequesters).
-                                val tileKey = "${result.type}:${result.id}"
+                                // Keyed by the rail AND the tile (see
+                                // searchTileFocusKey), so the same title on two
+                                // rails cannot share one node and an add-on
+                                // rail's tile is reachable from the menu's Hide.
+                                val tileKey = searchTileFocusKey(TITLES_RAIL_FOCUS_KEY, result)
                                 // Remembered, for the same reason the browse
                                 // grid's registry lookup is: a FocusRequester
                                 // built during composition outside a remember
@@ -484,6 +500,8 @@ fun SearchScreen(
                                     onLongClick = {
                                         lastPosterFocusRequester =
                                             requester
+                                        menuRailKey = TITLES_RAIL_FOCUS_KEY
+                                        menuRailResults = results
                                         menuResult = result
                                     },
                                     modifier = Modifier
@@ -543,10 +561,21 @@ fun SearchScreen(
                                     "addon:${result.type}:${result.id}"
                                 }
                             ) { result: SearchTitleResult ->
-                                val requester = remember(
-                                    result.id
-                                ) {
-                                    FocusRequester()
+                                // Rail identity + tile key, so the menu's Hide
+                                // can name the tile that takes a hidden one's
+                                // place (see searchTileFocusKey). The old local
+                                // `remember(result.id)` was invisible outside
+                                // this lazy row.
+                                val railKey = "addon\u0001" + addonRailIdentity(
+                                    addonName = group.addonName,
+                                    railLabel = group.railLabel,
+                                    catalogType = group.catalogType
+                                )
+                                val tileKey = searchTileFocusKey(railKey, result)
+                                val requester = remember(tileKey) {
+                                    titleTileFocusRequesters.getOrPut(tileKey) {
+                                        FocusRequester()
+                                    }
                                 }
 
                                 TitlePosterTile(
@@ -570,6 +599,8 @@ fun SearchScreen(
                                     onLongClick = {
                                         lastPosterFocusRequester =
                                             requester
+                                        menuRailKey = railKey
+                                        menuRailResults = group.results
                                         menuResult = result
                                     },
                                     modifier = Modifier
@@ -687,16 +718,23 @@ fun SearchScreen(
                 // successorIndexAfter). Left alone, the D-pad was handed a
                 // dying node and the rail shrank out from under it.
                 onBeforeHide = {
-                    val index = results.indexOfFirst {
+                    // Resolve the successor INSIDE THE RAIL THE MENU CAME FROM:
+                    // an add-on tile is not in the TMDB `results` list, so
+                    // searching that list found nothing for it and left the
+                    // D-pad with no landing.
+                    val railResults = menuRailResults
+                    val railKey = menuRailKey
+                    val index = railResults.indexOfFirst {
                         it.type == result.type && it.id == result.id
                     }
                     // No neighbour (the rail held only this title) names
                     // nothing: the rail goes with it and the framework moves
                     // focus to the nearest surface still on screen.
-                    successorIndexAfter(results.size, index)?.let { successor ->
-                        val next = results[successor]
-                        titleTileFocusRequesters["${next.type}:${next.id}"]
-                            ?.requestFocus()
+                    successorIndexAfter(railResults.size, index)?.let { successor ->
+                        val next = railResults[successor]
+                        titleTileFocusRequesters[
+                            searchTileFocusKey(railKey, next)
+                        ]?.requestFocus()
                     }
                     // And the tile being hidden must not take the focus BACK:
                     // it is still attached for this frame, so the dismiss that
@@ -878,3 +916,18 @@ fun SearchScreen(
     }
 }
 
+/** The TMDB "Titles" rail's key in the tile-focus registry (see searchTileFocusKey). */
+private const val TITLES_RAIL_FOCUS_KEY = "tmdb\u0001titles"
+
+/**
+ * One search tile's key in [titleTileFocusRequesters].
+ *
+ * The RAIL is part of the key, not just the tile: search mixes the TMDB
+ * "Titles" rail with one rail per installed add-on, and the same title can
+ * legitimately appear in several of them. Keying by the tile alone let two
+ * rails share one FocusRequester (so a Hidden one took the other's focus with
+ * it), and made an add-on tile unreachable from the menu's Hide - which runs in
+ * this screen's scope and has no local `remember` to name.
+ */
+private fun searchTileFocusKey(railKey: String, result: SearchTitleResult): String =
+    "$railKey\u0001${result.type}:${result.id}"

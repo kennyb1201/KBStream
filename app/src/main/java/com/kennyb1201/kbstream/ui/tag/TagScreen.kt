@@ -77,6 +77,8 @@ import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.browse.tagBrowseScreenKey
 import com.kennyb1201.kbstream.ui.theme.KBAccent
+import com.kennyb1201.kbstream.ui.theme.KBFocusRowInset
+import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBShapeSmall
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -327,7 +329,6 @@ fun TagScreen(
                         KBSkeletonRailStack(
                             posterWidth = posterSize.width,
                             posterHeight = posterSize.height,
-                            horizontalPadding = 20.dp,
                             shape = posterEdgeShape()
                         )
                     }
@@ -691,16 +692,23 @@ private fun TagRailRow(
             text = section.title,
             style = MaterialTheme.typography.titleMedium,
             color = KBTextLo,
-            // Aligned with the posters' 20dp rail inset instead of sitting
-            // flush against the screen edge.
-            modifier = Modifier.padding(start = 20.dp, bottom = 8.dp)
+            // Aligned with the posters' rail inset - the app's screen edge -
+            // instead of sitting 4dp inside it, which is the drift that made
+            // this page's rails miss the line every other browse page keeps.
+            modifier = Modifier.padding(start = KBScreenEdge, bottom = 8.dp)
         )
 
         LazyRow(
             state = rowState,
+            // The vertical inset is the room a focused tile needs INSIDE the
+            // row's own clips-to-bounds viewport: the 12dp glow plus the ~3% a
+            // poster grows by per side (see [KBFocusRowInset]). Without it the
+            // top of the halo on the first row of tiles was sliced off flat.
             contentPadding = PaddingValues(
-                start = 20.dp,
-                end = 20.dp
+                start = KBScreenEdge,
+                end = KBScreenEdge,
+                top = KBFocusRowInset,
+                bottom = KBFocusRowInset
             ),
             modifier = Modifier.focusGroup()
         ) {
