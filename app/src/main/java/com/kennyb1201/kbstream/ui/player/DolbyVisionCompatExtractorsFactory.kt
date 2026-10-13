@@ -1256,7 +1256,18 @@ internal fun relabelDvFormat(
 ): RelabelOutcome? {
     val full = runCatching { relabelDvFull(format, rewriteCodec, applyColorInfo) }
     if (full.isSuccess) return RelabelOutcome(full.getOrThrow(), RelabelAttempt.FULL)
-    val fullFailure = full.exceptionOrNull()!!
+    // Defensive: a failed Result's exceptionOrNull() is non-null by contract, so
+    // this branch is unreachable in practice - but an early-return refactor above
+    // must never be able to turn it into an NPE crash mid-playback. Failing safe
+    // here means "play the stream unchanged", the same answer as both attempts
+    // throwing.
+    val fullFailure = full.exceptionOrNull() ?: run {
+        warn(
+            "DV relabel full failed with null exception (unexpected)",
+            IllegalStateException("Result was failure but exceptionOrNull() was null")
+        )
+        return null
+    }
     warn(
         "DV relabel full construction failed " +
             "(${fullFailure.javaClass.simpleName}: ${fullFailure.message}), " +
@@ -1267,7 +1278,14 @@ internal fun relabelDvFormat(
     if (minimalAttempt.isSuccess) {
         return RelabelOutcome(minimalAttempt.getOrThrow(), RelabelAttempt.MINIMAL)
     }
-    val minimalFailure = minimalAttempt.exceptionOrNull()!!
+    // Same defensive guard as the full attempt above; see that comment.
+    val minimalFailure = minimalAttempt.exceptionOrNull() ?: run {
+        warn(
+            "DV relabel minimal failed with null exception (unexpected)",
+            IllegalStateException("Result was failure but exceptionOrNull() was null")
+        )
+        return null
+    }
     warn(
         "DV relabel minimal construction failed " +
             "(${minimalFailure.javaClass.simpleName}: ${minimalFailure.message}) — " +
