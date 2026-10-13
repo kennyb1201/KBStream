@@ -196,6 +196,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     // Rate), created the first time mpv reports a rate and null when the
     // setting is off — which is what makes the call sites no-ops.
     private var frameRateMatcher: FrameRateMatcher? = null
+    // The content rate this session was last told, so a return to the player can
+    // re-arm the panel from it (see [rearmFrameRateMatch]). mpv reports its rate
+    // when the file loads and the probe reads the stream's head once at session
+    // start, so a resumed session has neither - and the stream this engine
+    // mostly plays is exactly the one that reports nothing (see [FrameRateProbe]).
+    private var lastContentFps: Double? = null
     private var loadingContainer: View? = null
     private var loadingTitle: TextView? = null
     private var loadingSubtitle: TextView? = null
@@ -1016,6 +1022,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     videoSurface = { surface?.holder?.surface }
                 )
             }
+            if (FrameRateMatch.normalise(fps) != null) lastContentFps = fps
             frameRateMatcher?.onContentFrameRate(fps)
         }
 
@@ -1167,7 +1174,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val probeHeaders = streamHeaders
         lifecycleScope.launch {
             FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)
-                ?.let { fps -> matcher.onContentFrameRate(fps, FrameRateSource.PROBE) }
+                ?.let { fps ->
+                    // Remembered as well as offered: on this engine the probe's
+                    // rate is often the ONLY one there is, and it is what a
+                    // resume re-arms from (see rearmFrameRateMatch).
+                    lastContentFps = fps
+                    matcher.onContentFrameRate(fps, FrameRateSource.PROBE)
+                }
         }
     }
 
@@ -1997,6 +2010,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         pickerContainer?.visibility = View.VISIBLE
         pickerList?.adapter = PickerAdapter(items)
         pickerList?.post {
+            // The panel can be gone again by the time this runs (a fast Back
+            // runs dismissPicker, which GONEs the container): a request against
+            // a hidden list re-parks the D-pad where nothing is drawn, so the
+            // press that follows goes nowhere.
+            if (!pickerOpen) return@post
             val list = pickerList ?: return@post
             if (list.childCount > 0) list.getChildAt(0).requestFocus() else list.requestFocus()
         }
@@ -2525,6 +2543,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
         val resumeAt = (if (positionMs > 0L) positionMs else startPositionMs).coerceAtLeast(0L)
         currentUrl = newUrl
+        // A new stream's rate is unknown until something reports one, so the
+        // previous stream's is forgotten rather than left to be re-offered on a
+        // resume: a 24 fps film's rate applied to the 60 fps channel the viewer
+        // switched to is worse than no request at all (nothing re-reads the head
+        // here - the probe is a session-start step, see startFrameRateProbe).
+        lastContentFps = null
         currentAudioUrl = stream.audioUrl
         // The switched source brings its OWN request headers. These used to
         // stay at whatever this activity launched with, so a host gated on a
@@ -4487,7 +4511,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // SWITCH PLAYER stays the card's default focus.
         errorNextSourceButton?.visibility =
             if (nextSourceOrNull() != null) View.VISIBLE else View.GONE
-        errorSwitchButton?.post { errorSwitchButton?.requestFocus() }
+        errorSwitchButton?.post {
+            // The card may have gone (a retry took, the source switched) and
+            // focus moved on: requesting on a hidden button only takes the
+            // D-pad off whatever the viewer is now looking at.
+            if (errorContainer?.visibility != View.VISIBLE) return@post
+            errorSwitchButton?.requestFocus()
+        }
     }
 
     /**
@@ -4802,7 +4832,48 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // Coming back to a session whose panel mode was restored on the way out
         // (see onStop): mpv reported its rate when the file loaded, which has
         // already happened, so it is re-offered here rather than waited for.
-        surface?.videoFrameRate()?.let { fps -> frameRateMatcher?.onContentFrameRate(fps) }
+        surface?.videoFrameRate()?.let { fps ->
+            if (FrameRateMatch.normalise(fps) != null) lastContentFps = fps
+            frameRateMatcher?.onContentFrameRate(fps)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        rearmFrameRateMatch()
+    }
+
+    /**
+     * Re-offers the remembered content rate when the viewer comes back to a
+     * session that will not measure it again.
+     *
+     * [FrameRateMatcher.release] puts the panel back to the mode the rest of the
+     * TV interface expects when the player is left ([onStop]), and on this
+     * engine the rate is measured exactly once: the probe reads the stream's
+     * head at session start, and mpv's own `videoFrameRate` report is the
+     * fallback - which for an addon stream is usually nothing at all (see
+     * [FrameRateProbe]). A 24 fps film therefore came back from a Back press on
+     * a 60 Hz panel, with nothing left alive to re-ask.
+     *
+     * [onStart]'s own re-offer above is not enough on its own: it can only offer
+     * what mpv reports, and mpv reports nothing for the streams this probe
+     * exists for. The remembered rate covers those.
+     *
+     * Three things have to hold, and each is a real reason to do nothing: a rate
+     * was actually measured ([FrameRateMatch.resumeRate] refuses a stored
+     * `NO_VALUE` exactly as it did on arrival), the setting is still on (it can
+     * be switched off while the player is away, and the matcher outlives a
+     * release on the way out), and the matcher exists at all. Re-offering a rate
+     * the panel is already in is a no-op by
+     * [FrameRateMatcher.onContentFrameRate]'s own contract.
+     */
+    private fun rearmFrameRateMatch() {
+        if (!AppPreferences.getMatchFrameRate(this)) return
+        val fps = FrameRateMatch.resumeRate(lastContentFps) ?: return
+        // Same tag the probe and the matcher log under, so a field capture of
+        // "AFR did not re-arm" reads as one sequence.
+        Log.i("PLAYER_AFR", "re-arming frame-rate match with $fps fps")
+        frameRateMatcher?.onContentFrameRate(fps, FrameRateSource.RESUME)
     }
 
     override fun onStop() {

@@ -419,6 +419,43 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     override fun onResume() {
         super.onResume()
         installManualSwitchFeedback()
+        rearmFrameRateMatch()
+    }
+
+    /**
+     * Re-offers the remembered content rate when the viewer comes back to a
+     * session that will not measure it again.
+     *
+     * Reported: a 24 fps film switched the panel to 24 Hz, leaving the player
+     * (Back or Home) put it back to 60 Hz as designed, and returning to the film
+     * left it at 60 Hz for the rest of the title. The rate was never lost - the
+     * probe still had it - but nothing re-asked: the probe runs once, the
+     * player's own report comes with the first track, and both had already
+     * happened, so the panel was the only thing that needed telling again.
+     *
+     * Three things have to hold, and each is a real reason to do nothing:
+     *
+     *  - a rate was actually measured. A stream nobody could measure stays
+     *    unmatchable rather than being guessed at (see [FrameRateMatch.resumeRate],
+     *    which refuses a stored `NO_VALUE` the same way it refused it on arrival).
+     *  - the setting is still on. It can be switched off while the player is
+     *    away, and a release() on the way out leaves the matcher alive to be
+     *    re-armed - so this is the check that honors the choice, not the
+     *    matcher's existence.
+     *  - the matcher exists, which is the same "the setting was on when this
+     *    session started" every other call site tests.
+     *
+     * Re-offering a rate the panel is already in is a no-op by
+     * [FrameRateMatcher.onContentFrameRate]'s own contract, so a resume that did
+     * not need a switch cannot cause one.
+     */
+    private fun rearmFrameRateMatch() {
+        if (!AppPreferences.getMatchFrameRate(this)) return
+        val fps = FrameRateMatch.resumeRate(lastContentFps) ?: return
+        // Same tag the probe and the matcher log under, so a field capture of
+        // "AFR did not re-arm" reads as one sequence.
+        Log.i("PLAYER_AFR", "re-arming frame-rate match with $fps fps")
+        frameRateMatcher?.onContentFrameRate(fps, FrameRateSource.RESUME)
     }
 
     /**
@@ -541,6 +578,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // track, and null when the setting is off — which is what makes every call
     // site below a no-op rather than a check repeated at each one.
     private var frameRateMatcher: FrameRateMatcher? = null
+    // The content rate this session was last told, so a return to the player can
+    // re-arm the panel from it (see [rearmFrameRateMatch]). Both halves that
+    // supply a rate run once per session - the probe reads the stream's HEAD,
+    // and the player reports its rate with the first video track - so without
+    // this a resume had nothing to re-offer and the panel stayed at whatever
+    // [FrameRateMatcher.release] put back on the way out. Fixed for this
+    // activity's lifetime: currentUrl is read from the intent at onCreate and a
+    // source switch is a new session, so a remembered rate always describes the
+    // stream that is playing.
+    private var lastContentFps: Double? = null
     private lateinit var p5VideoGlesView: P5VideoGlesView
     // Whether P5 color correction via GLES is currently active
     private lateinit var liveBadge: TextView
@@ -5587,7 +5634,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     val probeHeaders = streamHeaders
                     lifecycleScope.launch {
                         FrameRateProbe.probe(probeUrl, probeHeaders, cacheDir)
-                            ?.let { fps -> matcher.onContentFrameRate(fps, FrameRateSource.PROBE) }
+                            ?.let { fps ->
+                                // Remembered as well as offered: this is the one
+                                // rate an unmeasured stream will never produce
+                                // again, and it is what a resume re-arms from
+                                // (see rearmFrameRateMatch).
+                                lastContentFps = fps
+                                matcher.onContentFrameRate(fps, FrameRateSource.PROBE)
+                            }
                     }
                 } else {
                     // The probe's own log lines only exist once it RUNS, so a
@@ -6045,7 +6099,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         // media3's NO_VALUE, which the matcher refuses — so an
                         // unmeasured track leaves the panel alone instead of
                         // switching it to something arbitrary.
-                        frameRateMatcher?.onContentFrameRate(fmt.frameRate.toDouble())
+                        val reportedFrameRate = fmt.frameRate.toDouble()
+                        // Remembered only when it describes content: a track that
+                        // declares no rate reports media3's NO_VALUE (-1.0),
+                        // which must not become the rate a resume re-offers.
+                        // [FrameRateMatch.resumeRate] refuses it again on the way
+                        // out of the field, so the stored value can be kept raw.
+                        if (FrameRateMatch.normalise(reportedFrameRate) != null) {
+                            lastContentFps = reportedFrameRate
+                        }
+                        frameRateMatcher?.onContentFrameRate(reportedFrameRate)
                         val codec = fmt.codecs.orEmpty()
                         val colorInfo = fmt.colorInfo
                         streamWidth = fmt.width
@@ -6764,6 +6827,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun focusErrorButtons() {
         errorContainer.post {
+            // The card may have been taken down between the request and this
+            // runnable (a hand-off finished, a source switched): a request
+            // against a GONE container is a silent miss that leaves the D-pad
+            // on playerView - whose key listener swallows every press - so the
+            // card has to still be up for the move to mean anything.
+            if (errorContainer.visibility != View.VISIBLE) return@post
             val target = if (btnRetry.visibility == View.VISIBLE) btnRetry else btnChangeSource
             target.requestFocus()
         }
@@ -9069,11 +9138,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
 
     // --- Picker ---
     private fun showPicker(mode: PickerMode) {
-        pickerMode = mode
-        isPickerShowing = true
-        dismissSettingsPanel()
-        pickerContainer.visibility = View.VISIBLE
-        scrim.visibility = View.VISIBLE
+        // The rows are built BEFORE anything becomes visible, and an empty list
+        // abandons the whole call. The order used to be the other way round -
+        // container and scrim VISIBLE, isPickerShowing up (which is what stops
+        // the chrome auto-hiding, see chromeMayAutoHide) - and a player
+        // released mid-transition left `currentTracks` null, so the `?: return`
+        // in the AUDIO/SUBTITLE branches exited with a visible, empty, dimmed
+        // picker: no adapter ever set, the posted pickerList.requestFocus()
+        // never reached, and nothing but Back out of it. currentTracks == null
+        // now reads as an empty track list rather than a mid-state exit, and
+        // SOURCE mode gets the same empty guard MPV already has (see
+        // MpvPlayerActivity.showPicker).
+        val tracks = exoPlayer?.currentTracks
 
         val items = when (mode) {
             PickerMode.SOURCE -> {
@@ -9089,8 +9165,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             }
             PickerMode.AUDIO -> {
                 pickerTitle.text = "AUDIO"
-                val tracks = exoPlayer?.currentTracks ?: return
-                val audioGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO }
+                val audioGroups = tracks?.groups.orEmpty()
+                    .filter { it.type == C.TRACK_TYPE_AUDIO }
                 // Position of each audio track among all of them, and the total:
                 // both go into the stored signature, so a hand-picked track
                 // whose tag says nothing about its language can still be found
@@ -9163,8 +9239,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     )
                 }
                 val subtitleItems = listOfNotNull(searchItem, openFileItem) + onlineRows
-                val tracks = exoPlayer?.currentTracks ?: return
-                val textGroups = tracks.groups.filter { it.type == C.TRACK_TYPE_TEXT }
+                val textGroups = tracks?.groups.orEmpty()
+                    .filter { it.type == C.TRACK_TYPE_TEXT }
                 val anySelected = textGroups.any { g -> (0 until g.length).any { g.isTrackSelected(it) } }
                 val offItem = PickerItem(
                     label = "OFF",
@@ -9286,8 +9362,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             }
         }
 
+        // An empty list is a dead end, not a panel: nothing to pick means the
+        // picker stays shut rather than opening on a blank box, with the D-pad
+        // left on a scrim it cannot leave (MPV's rule).
+        if (items.isEmpty()) return
+
+        pickerMode = mode
+        isPickerShowing = true
+        dismissSettingsPanel()
+        pickerContainer.visibility = View.VISIBLE
+        scrim.visibility = View.VISIBLE
         pickerList.adapter = PickerAdapter(items)
-        pickerList.post { pickerList.requestFocus() }
+        pickerList.post {
+            // A fast Back between the picker coming up and this runnable firing
+            // (dismissPicker sets isPickerShowing false and GONEs the container)
+            // used to re-park the D-pad on a container that is no longer drawn:
+            // the press was swallowed with it.
+            if (!isPickerShowing) return@post
+            pickerList.requestFocus()
+        }
     }
 
     // --- Settings Panel ---
@@ -9306,7 +9399,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         settingsContainer.isFocusable = true
         settingsContainer.isFocusableInTouchMode = true
         updateSettingsPanelState()
-        settingsContainer.post { settingsBufferAuto.requestFocus() }
+        settingsContainer.post {
+            // Same race as the picker's: Back closes the panel and hides the
+            // container, and focus posted after that lands on nothing.
+            if (!showSettingsPanel) return@post
+            settingsBufferAuto.requestFocus()
+        }
     }
 
     private fun dismissSettingsPanel() {

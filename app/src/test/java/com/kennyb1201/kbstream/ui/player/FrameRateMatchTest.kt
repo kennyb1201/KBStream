@@ -428,4 +428,43 @@ class FrameRateMatchTest {
             FrameRateMatch.describeSource(23.976, FrameRateSource.PLAYER)
         )
     }
+
+    @Test
+    fun `a resumed player re-offers the rate it was told, and nothing else`() {
+        // Reported: leaving a 24 fps film and coming back left the panel at the
+        // 60 Hz release() had restored, because the rate had only ever been
+        // measured once and nothing re-asked for it. What a resume may re-offer
+        // is exactly what the session was told, put back through the same
+        // normalise every other rate goes through - so a session that was never
+        // told a rate, and a track that reported media3's NO_VALUE, re-arm
+        // nothing rather than guessing at a rate.
+        assertEquals(23.976, FrameRateMatch.resumeRate(23.976))
+        assertEquals(
+            "noise in a reported rate is settled the same way it is on arrival",
+            23.976,
+            FrameRateMatch.resumeRate(23.98)
+        )
+        assertNull("nothing was ever measured", FrameRateMatch.resumeRate(null))
+        assertNull(
+            "a track that declares no rate stores media3's NO_VALUE (-1.0)",
+            FrameRateMatch.resumeRate(-1.0)
+        )
+        assertNull(FrameRateMatch.resumeRate(0.0))
+        assertNull(FrameRateMatch.resumeRate(Double.NaN))
+        assertNull(
+            "a stored rate that describes no content cannot re-arm anything",
+            FrameRateMatch.resumeRate(4.0)
+        )
+    }
+
+    @Test
+    fun `the resume source line says the rate was measured earlier, not reported now`() {
+        // The diagnostics row is the only place these two can be told apart, and
+        // "the player reported…" on a resume would say the opposite of what
+        // happened: nothing measured anything on the way back in.
+        assertEquals(
+            "re-offered the 23.976 fps measured earlier in this session",
+            FrameRateMatch.describeSource(23.976, FrameRateSource.RESUME)
+        )
+    }
 }

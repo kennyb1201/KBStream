@@ -48,12 +48,15 @@ internal data class DisplayModeInfo(val id: Int, val refreshRate: Double)
 
 /**
  * Which half of the player supplied a content rate: the player's own track
- * report ([PLAYER]), or [FrameRateProbe] reading the stream's head before
- * playback ([PROBE]). Only the diagnostics row cares, but it is the whole
- * difference between "the player never knew the rate" and "the probe could not
- * read it", so it is stated rather than inferred.
+ * report ([PLAYER]), [FrameRateProbe] reading the stream's head before
+ * playback ([PROBE]), or the rate this session already knew, re-offered on the
+ * way back into a player that never measures the same stream twice ([RESUME]).
+ * Only the diagnostics row cares, but it is the whole difference between "the
+ * player never knew the rate" and "the probe could not read it" - and between
+ * either of those and a panel re-armed from a rate measured earlier, so it is
+ * stated rather than inferred.
  */
-internal enum class FrameRateSource { PLAYER, PROBE }
+internal enum class FrameRateSource { PLAYER, PROBE, RESUME }
 
 /**
  * What to hand `Surface.setFrameRate`.
@@ -148,6 +151,24 @@ internal object FrameRateMatch {
         val nearest = STANDARD_RATES.minByOrNull { abs(it - contentFps) } ?: return contentFps
         return if (abs(nearest - contentFps) / nearest <= 0.01) nearest else contentFps
     }
+
+    /**
+     * The rate a RESUMED player should offer the panel again, or null when
+     * there is nothing to re-arm with.
+     *
+     * [lastContentFps] is whatever this session was last told - by the probe, or
+     * by the player's own track report. It goes back out through the same
+     * [normalise] every other rate does, so a stored `NO_VALUE` (-1.0) or a
+     * misparse can never become a request: a rate that describes no content
+     * leaves the panel alone when it is re-offered, exactly as it did the first
+     * time it arrived.
+     *
+     * Pure, and separate from the Android shell, because this is the whole rule
+     * a resume depends on: it is the part that decides whether anything is asked
+     * for at all, and it is testable without a device.
+     */
+    fun resumeRate(lastContentFps: Double?): Double? =
+        lastContentFps?.let { normalise(it) }
 
     /**
      * The panel mode to switch to, or null when the panel must be left alone.
@@ -379,6 +400,8 @@ internal object FrameRateMatch {
         return when (source) {
             FrameRateSource.PROBE -> "probed ${rate(content)} fps from the stream head"
             FrameRateSource.PLAYER -> "the player reported ${rate(content)} fps"
+            FrameRateSource.RESUME ->
+                "re-offered the ${rate(content)} fps measured earlier in this session"
         }
     }
 
