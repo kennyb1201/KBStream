@@ -55,6 +55,9 @@ import com.kennyb1201.kbstream.ui.components.LandscapeCard
 import com.kennyb1201.kbstream.ui.components.landscapeArtKey
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.PosterCard
+import com.kennyb1201.kbstream.ui.components.imageOverrideCardBackdropUrl
+import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
+import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.home.HomeHeroArtwork
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -267,6 +270,16 @@ private fun FolderItemCard(
     val isLandscape = showLandscapeCards
     val width = if (isLandscape) FolderLandscapeWidth else FolderPosterWidth
     val height = if (isLandscape) FolderLandscapeHeight else FolderPosterHeight
+    // The viewer's image choices, read as state so a pick repaints this card on
+    // the next frame (see ImageOverrides). These cards draw their own artwork
+    // rather than going through GlobalPosterCard - the rail geometry is Home's -
+    // so the two choices have to be applied here or a KB folder is the one rail
+    // that keeps TMDB's art after a title's has been chosen.
+    val overridePaths = rememberImageOverridePaths()
+    // The title's TMDB id when the source knew one, its raw id otherwise
+    // ([ImageOverrides.tmdbIdOf] reads a bare number, and ignores an add-on id
+    // it cannot bridge without a network lookup).
+    val artId = item.tmdbId?.toString() ?: item.id
 
     // The tile's own focus drives the caption marquee below as well as the
     // caller's hook (Home keeps its header in step with the focused rail).
@@ -293,7 +306,14 @@ private fun FolderItemCard(
                 .height(height)
             if (isLandscape) {
                 LandscapeCard(
-                    backdropUrl = art?.backdropUrl ?: item.backdropUrl,
+                    // The resolver's answer already carries a chosen still when
+                    // the title has one (see LandscapeArt); this is the case
+                    // where it has none, which the choice still covers.
+                    backdropUrl = art?.backdropUrl ?: imageOverrideCardBackdropUrl(
+                        paths = overridePaths,
+                        rawId = artId,
+                        fallbackUrl = item.backdropUrl
+                    ),
                     logoUrl = art?.logoUrl,
                     fallbackTitle = item.title,
                     contentDescription = item.title,
@@ -305,7 +325,11 @@ private fun FolderItemCard(
                 )
             } else {
                 PosterCard(
-                    posterUrl = item.posterUrl,
+                    posterUrl = imageOverridePosterUrl(
+                        paths = overridePaths,
+                        rawId = artId,
+                        fallbackUrl = item.posterUrl
+                    ),
                     contentDescription = item.title,
                     isWatched = isWatched,
                     isPartiallyWatched = isPartiallyWatched,

@@ -60,6 +60,8 @@ import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
+import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
@@ -108,6 +110,9 @@ fun DecadeScreen(
     val partialWatchedKeys by viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
     val resolvedIds by viewModel.resolvedIds.collectAsStateWithLifecycle()
     val hiddenTitleKeys = rememberHiddenTitleKeys()
+    // The viewer's poster choices, read as state so a pick repaints the header's
+    // fan on the next frame (see ImageOverrides).
+    val overridePaths = rememberImageOverridePaths()
     // Hidden titles are filtered out of the rails as they are read, so a
     // long-press Hide empties the rail it was pressed on (and the whole
     // screen, when that was the only rail left).
@@ -290,15 +295,25 @@ fun DecadeScreen(
             .background(KBVoid)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top posters in this decade, for the header's poster fan.
-            val headerPosters = remember(sections) {
+            // Top posters in this decade, for the header's poster fan. Each
+            // one is the poster the viewer would see for that title anywhere
+            // else: the fan used to build its URLs straight from `poster_path`,
+            // so a title whose poster had been chosen still showed TMDB's there
+            // (see ImageOverrides).
+            val headerPosters = remember(sections, overridePaths) {
                 sections.asSequence()
                     .flatMap { it.items.asSequence() }
-                    .mapNotNull { it.item.posterPath }
+                    .mapNotNull { railItem ->
+                        val path = railItem.item.posterPath ?: return@mapNotNull null
+                        imageOverridePosterUrl(
+                            paths = overridePaths,
+                            rawId = railItem.item.id.toString(),
+                            fallbackUrl = "${TmdbRepository.POSTER_BASE}$path"
+                        )
+                    }
                     .distinct()
                     .take(5)
                     .toList()
-                    .map { "${TmdbRepository.POSTER_BASE}$it" }
             }
 
             DecadeHeader(

@@ -212,6 +212,17 @@ internal object DetailMediaRow {
                         label = "Set as Landscape card",
                         description = "Show this still on the title's landscape cards",
                         screen = ImageOverrides.SCREEN_LANDSCAPE_CARD
+                    ),
+                    // Every screen at once. It is a surface like the rest, but
+                    // it sits at the END of the chain every backdrop lookup
+                    // walks (see ImageOverrides.backdropPathFor): a screen with
+                    // a still of its own keeps it, and a screen that has never
+                    // offered a row - the actor page's header, a collection's,
+                    // a studio's - draws this one instead of TMDB's.
+                    ImageOverrideMenuItem(
+                        label = "Set as backdrop (all screens)",
+                        description = "Show this still everywhere the title's backdrop appears",
+                        screen = ImageOverrides.SCREEN_ALL
                     )
                 ) + resetRow(hasOverride)
             }

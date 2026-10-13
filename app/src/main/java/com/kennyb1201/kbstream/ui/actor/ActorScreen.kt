@@ -54,6 +54,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
@@ -62,6 +63,8 @@ import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
+import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.ui.components.hideTarget
@@ -136,6 +139,11 @@ fun ActorScreen(
     val topWorkBackdropUrl by viewModel.topWorkBackdropUrl.collectAsStateWithLifecycle()
     val topWorkCredit by viewModel.topWorkCredit.collectAsStateWithLifecycle()
 
+    // The viewer's image choices, read as state so a still picked for the
+    // top-billed work repaints this page's header on the next frame (see
+    // ImageOverrides).
+    val overridePaths = rememberImageOverridePaths()
+
     val posterSize = rememberPosterSize()
 
     // Where this page's Detail page was opened from, read once when the credits
@@ -209,7 +217,18 @@ fun ActorScreen(
             val p = loadedPerson
             val context = androidx.compose.ui.platform.LocalContext.current
             val sortedCredits = remember(p) { viewModel.sortedCredits(p) }
-            val backdropUrl = topWorkBackdropUrl
+            // The header's still, through the chain every backdrop surface
+            // walks (see ImageOverrides.backdropPathFor). This page offers no
+            // backdrop row of its own, so what the chain buys it is the
+            // all-screens choice: a viewer who sets one still for a title sees
+            // it behind that title's lead's filmography too, and the top work's
+            // own TMDB still is what is left when they have set none.
+            val backdropUrl = imageOverrideBackdropUrl(
+                paths = overridePaths,
+                tmdbId = topWorkCredit?.id,
+                screen = ImageOverrides.SCREEN_ALL,
+                fallbackUrl = topWorkBackdropUrl
+            )
             val headerPortraitUrl = remember(p) {
                 p.profilePath?.let { TmdbRepository.PROFILE_BASE + it }
             }

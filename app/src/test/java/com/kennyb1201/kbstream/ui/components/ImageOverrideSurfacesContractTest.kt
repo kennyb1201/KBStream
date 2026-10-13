@@ -201,8 +201,73 @@ class ImageOverrideSurfacesContractTest {
         )
     }
 
+    @Test
+    fun `the collection screen's header draws the choices too`() {
+        val collection = source(COLLECTION)
+        assertTrue(
+            "the screen the report named: its header must read the choices as " +
+                "state, so a pick made anywhere repaints it",
+            collection.contains("val overridePaths = rememberImageOverridePaths()")
+        )
+        assertTrue(
+            "the header's poster is the choice filed for the collection, not the " +
+                "path TMDB sent",
+            collection.contains("posterUrl = imageOverridePosterUrl(") &&
+                collection.contains("rawId = collectionId.toString(),")
+        )
+        assertTrue(
+            "and its still walks the same chain as every other backdrop, which is " +
+                "what a collection - a page with no Media row of its own - has " +
+                "instead of a row",
+            collection.contains("backdropUrl = imageOverrideBackdropUrl(") &&
+                collection.contains("tmdbId = collectionId,")
+        )
+    }
+
+    @Test
+    fun `a header with no row of its own draws the all-screens still`() {
+        val actor = source(ACTOR)
+        assertTrue(
+            "the actor page's header is the surface nobody listed: it offers no " +
+                "backdrop row, so the all-screens choice is what reaches it",
+            actor.contains("screen = ImageOverrides.SCREEN_ALL,") &&
+                actor.contains("tmdbId = topWorkCredit?.id,")
+        )
+        assertTrue(
+            "and it keeps the top work's own TMDB still as the last fallback",
+            actor.contains("fallbackUrl = topWorkBackdropUrl")
+        )
+    }
+
+    @Test
+    fun `the poster fans and the KB folder rails draw the chosen posters`() {
+        listOf(TAG, DECADE).forEach { screen ->
+            val fan = source(screen)
+            assertTrue(
+                "$screen's header fan must draw the poster a title actually has, " +
+                    "not the path TMDB sent it",
+                fan.contains("imageOverridePosterUrl(") &&
+                    fan.contains("rawId = railItem.item.id.toString(),")
+            )
+        }
+
+        val folders = source(KB_FOLDER_LAYOUTS)
+        assertTrue(
+            "a KB folder's cards draw their own artwork rather than going " +
+                "through GlobalPosterCard, so both choices have to be applied " +
+                "where they are drawn or a folder is the one rail left on TMDB's art",
+            folders.contains("imageOverridePosterUrl(") &&
+                folders.contains("imageOverrideCardBackdropUrl(")
+        )
+    }
+
     private companion object {
         const val DETAIL = "com/kennyb1201/kbstream/ui/detail/DetailScreen.kt"
+        const val COLLECTION = "com/kennyb1201/kbstream/ui/collection/CollectionScreen.kt"
+        const val ACTOR = "com/kennyb1201/kbstream/ui/actor/ActorScreen.kt"
+        const val KB_FOLDER_LAYOUTS = "com/kennyb1201/kbstream/ui/kb/KBFolderLayouts.kt"
+        const val TAG = "com/kennyb1201/kbstream/ui/tag/TagScreen.kt"
+        const val DECADE = "com/kennyb1201/kbstream/ui/decade/DecadeScreen.kt"
         const val STREAMS = "com/kennyb1201/kbstream/ui/streams/StreamsScreen.kt"
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
         const val MAIN_ACTIVITY = "com/kennyb1201/kbstream/MainActivity.kt"

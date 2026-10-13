@@ -127,10 +127,14 @@ internal fun TmdbDetail?.landscapeArtUrls(
     // deliberately, so it also overrides a pinned rail's "TMDB or nothing"
     // rule - which exists to keep an ADD-ON's promo background out, not to
     // refuse the viewer's own pick.
-    val chosen = ImageOverrides.pathFor(
+    //
+    // Read through the whole chain rather than the one surface: a card whose
+    // title has only the all-screens still chosen draws that, which is what
+    // makes one choice reach every card in the app (see
+    // ImageOverrides.backdropPathFor).
+    val chosen = ImageOverrides.backdropPathFor(
         paths = overrides,
         tmdbId = this?.id,
-        type = ImageOverrides.TYPE_BACKDROP,
         screen = ImageOverrides.SCREEN_LANDSCAPE_CARD
     )
 

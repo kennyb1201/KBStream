@@ -32,7 +32,11 @@ class DetailMediaRowOverrideMenuTest {
                 "Set as Streams backdrop",
                 "Set as Player splash",
                 "Set as Home hero backdrop",
-                "Set as Landscape card"
+                "Set as Landscape card",
+                // Last, because it is the fallback rather than a sixth surface
+                // to hunt for: a per-screen row still wins over it (see
+                // ImageOverrides.backdropPathFor).
+                "Set as backdrop (all screens)"
             ),
             rows.map { it.label }
         )
@@ -42,7 +46,8 @@ class DetailMediaRowOverrideMenuTest {
                 ImageOverrides.SCREEN_STREAMS,
                 ImageOverrides.SCREEN_PLAYER_SPLASH,
                 ImageOverrides.SCREEN_HOME_HERO,
-                ImageOverrides.SCREEN_LANDSCAPE_CARD
+                ImageOverrides.SCREEN_LANDSCAPE_CARD,
+                ImageOverrides.SCREEN_ALL
             ),
             rows.map { it.screen }
         )

@@ -33,7 +33,18 @@ class ImageOverridesRulesTest {
     @Test
     fun `every backdrop surface is one list, so a reset cannot miss one`() {
         assertEquals(
-            listOf("detail", "streams", "player_splash", "home_hero", "landscape_card"),
+            listOf(
+                "detail",
+                "streams",
+                "player_splash",
+                "home_hero",
+                "landscape_card",
+                // The all-screens choice is a surface like any other, and it
+                // is in this list for the reset: a title whose ONLY choice is
+                // that one must not keep drawing the still the viewer just
+                // asked to be rid of, on every screen at once.
+                ImageOverrides.SCREEN_ALL
+            ),
             ImageOverrides.screensFor(ImageOverrides.TYPE_BACKDROP)
         )
         assertEquals(
@@ -85,6 +96,63 @@ class ImageOverridesRulesTest {
         assertNull(
             "a card with no id to look up by keeps TMDB's art",
             ImageOverrides.pathFor(paths, "tt0133093", ImageOverrides.TYPE_BACKDROP, ImageOverrides.SCREEN_DETAIL)
+        )
+    }
+
+    @Test
+    fun `a backdrop walks its own surface, then all screens, then TMDB's`() {
+        val ownScreen = mapOf("603:backdrop:detail" to "/detail.jpg")
+        val allScreens = mapOf("603:backdrop:all" to "/everywhere.jpg")
+        val both = ownScreen + allScreens
+
+        assertEquals(
+            "a surface with a choice of its own keeps it, so the five per-screen " +
+                "rows still mean exactly what they did",
+            "/detail.jpg",
+            ImageOverrides.backdropPathFor(both, 603, ImageOverrides.SCREEN_DETAIL)
+        )
+        assertEquals(
+            "a surface with none draws the all-screens still rather than TMDB's, " +
+                "which is what reaches a screen that never offered a row",
+            "/everywhere.jpg",
+            ImageOverrides.backdropPathFor(allScreens, 603, ImageOverrides.SCREEN_DETAIL)
+        )
+        assertEquals(
+            "the same still, found by the id spelling a card holds",
+            "/everywhere.jpg",
+            ImageOverrides.backdropPathFor(allScreens, "tmdb:603", ImageOverrides.SCREEN_STREAMS)
+        )
+        assertNull(
+            "and with no choice at all it answers nothing, which the caller turns " +
+                "into TMDB's own art",
+            ImageOverrides.backdropPathFor(emptyMap(), 603, ImageOverrides.SCREEN_ALL)
+        )
+        assertNull(
+            "another title's all-screens still is not this one's",
+            ImageOverrides.backdropPathFor(allScreens, 604, ImageOverrides.SCREEN_DETAIL)
+        )
+    }
+
+    @Test
+    fun `an all-screens choice is a choice the reset row is offered for`() {
+        val onlyTheAllScreensStill = mapOf("603:backdrop:all" to "/everywhere.jpg")
+
+        assertTrue(
+            "a reset that could not clear it would leave every screen on the " +
+                "image the viewer just rejected",
+            ImageOverrides.hasOverride(
+                onlyTheAllScreensStill,
+                603,
+                ImageOverrides.TYPE_BACKDROP
+            )
+        )
+        assertFalse(
+            "and a backdrop choice is still not a poster choice",
+            ImageOverrides.hasOverride(
+                onlyTheAllScreensStill,
+                603,
+                ImageOverrides.TYPE_POSTER
+            )
         )
     }
 

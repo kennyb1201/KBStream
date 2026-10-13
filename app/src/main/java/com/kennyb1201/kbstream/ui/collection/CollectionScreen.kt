@@ -24,7 +24,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.font.FontWeight
@@ -34,12 +37,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
+import coil3.compose.AsyncImage
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionPart
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_LOADING
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
+import com.kennyb1201.kbstream.ui.components.imageOverrideBackdropUrl
+import com.kennyb1201.kbstream.ui.components.imageOverridePosterUrl
+import com.kennyb1201.kbstream.ui.components.rememberImageOverridePaths
 import com.kennyb1201.kbstream.ui.components.rememberPosterSize
 import com.kennyb1201.kbstream.ui.components.rememberPosterTileWidth
 import com.kennyb1201.kbstream.data.library.HiddenTitles
@@ -126,6 +134,13 @@ fun CollectionScreen(
 
     val detail = collection
 
+    // The viewer's image choices (see ImageOverrides), read as state so a still
+    // picked in the Media row's menu repaints this header on the next frame.
+    // This is the screen the report named: its header drew TMDB's own artwork
+    // whatever had been chosen, because the poster was handed to the card with
+    // no id to look a choice up by and the header drew no backdrop at all.
+    val overridePaths = rememberImageOverridePaths()
+
     // Release order, resolved once: the rail paints in this order and the card
     // a return from Detail is coming back for is a position IN this list, so
     // the two have to be the same list (see [BrowseReturnFocus]).
@@ -207,7 +222,30 @@ fun CollectionScreen(
                 CollectionHeader(
                     name = detail?.name ?: collectionName,
                     overview = detail?.overview,
-                    posterUrl = detail?.posterPath?.let { "https://image.tmdb.org/t/p/w500$it" },
+                    // Keyed on the collection's own TMDB id, so a poster chosen
+                    // for it is the one drawn; TMDB's own otherwise.
+                    posterUrl = imageOverridePosterUrl(
+                        paths = overridePaths,
+                        rawId = collectionId.toString(),
+                        fallbackUrl = detail?.posterPath
+                            ?.let { "${TmdbRepository.POSTER_BASE}$it" }
+                    ),
+                    // The header's still, through the same chain every other
+                    // backdrop surface walks (see
+                    // ImageOverrides.backdropPathFor): the still chosen for
+                    // this screen, then the all-screens one, then TMDB's own
+                    // for the collection. A collection offers no Media row of
+                    // its own, so for it the chain is what reaches the header
+                    // at all - and the all-screens key is the one a viewer can
+                    // reach for a title the collection holds.
+                    backdropUrl = imageOverrideBackdropUrl(
+                        paths = overridePaths,
+                        tmdbId = collectionId,
+                        screen = ImageOverrides.SCREEN_ALL,
+                        fallbackUrl = detail?.backdropPath
+                            ?.takeIf { it.isNotBlank() }
+                            ?.let { TmdbRepository.fullResBackdropUrl(it) }
+                    ),
                     partCount = detail?.parts?.size
                 )
             }
@@ -456,65 +494,103 @@ private fun CollectionHeader(
     name: String,
     overview: String?,
     posterUrl: String?,
+    backdropUrl: String?,
     partCount: Int?
 ) {
-    Row(
+    // The panel, with the collection's still behind its content when there is
+    // one: a franchise header that carried only a poster left the rest of the
+    // row as flat surface, and a chosen still had nowhere to be drawn. The
+    // scrim is what keeps the name and the overview readable over it, and the
+    // hairline edge is drawn last so the image cannot paint over it.
+    Box(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(KBShapePanel)
             .background(KBSurface, KBShapePanel)
-            .border(1.dp, KBTextLo.copy(alpha = 0.25f), KBShapePanel)
-            .padding(18.dp),
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        GlobalPosterCard(
-            posterUrl = posterUrl,
-            contentDescription = name,
-            isWatched = false,
-            onClick = {},
-            posterWidth = 110.dp,
-            posterHeight = 165.dp
-        )
+        if (!backdropUrl.isNullOrBlank()) {
+            AsyncImage(
+                model = backdropUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.matchParentSize()
+            )
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(
+                                KBVoid.copy(alpha = 0.9f),
+                                KBVoid.copy(alpha = 0.6f)
+                            )
+                        )
+                    )
+            )
+        }
 
-        Column(
+        Row(
             modifier = Modifier
-                .padding(start = 18.dp)
-                .weight(1f)
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = name,
-                // A collection hero is a screen title, not a section label:
-                // it was headlineSmall (22sp), so a saga's name read smaller
-                // than the page title of the screen that opened it.
-                style = MaterialTheme.typography.headlineLarge,
-                color = KBTextHi,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+            GlobalPosterCard(
+                posterUrl = posterUrl,
+                contentDescription = name,
+                isWatched = false,
+                onClick = {},
+                posterWidth = 110.dp,
+                posterHeight = 165.dp
             )
 
-            partCount?.let { count ->
+            Column(
+                modifier = Modifier
+                    .padding(start = 18.dp)
+                    .weight(1f)
+            ) {
                 Text(
-                    text = if (count == 1) "1 movie" else "$count movies",
-                    color = KBAccent,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(top = 4.dp)
+                    text = name,
+                    // A collection hero is a screen title, not a section label:
+                    // it was headlineSmall (22sp), so a saga's name read smaller
+                    // than the page title of the screen that opened it.
+                    style = MaterialTheme.typography.headlineLarge,
+                    color = KBTextHi,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
-            }
 
-            overview
-                ?.takeIf { it.isNotBlank() }
-                ?.let {
+                partCount?.let { count ->
                     Text(
-                        text = it,
-                        color = KBTextLo,
+                        text = if (count == 1) "1 movie" else "$count movies",
+                        color = KBAccent,
                         style = MaterialTheme.typography.bodySmall,
-                        maxLines = 4,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 8.dp)
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
+
+                overview
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let {
+                        Text(
+                            text = it,
+                            color = KBTextLo,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 4,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
+            }
         }
+
+        Box(
+            Modifier
+                .matchParentSize()
+                .border(1.dp, KBTextLo.copy(alpha = 0.25f), KBShapePanel)
+        )
     }
 }
 

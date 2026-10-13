@@ -69,6 +69,19 @@ object ImageOverrides {
     /** Landscape cards in rails (More Like This, Home rails, catalog grids). */
     const val SCREEN_LANDSCAPE_CARD = "landscape_card"
 
+    /**
+     * Every backdrop surface at once - the still a viewer wants everywhere,
+     * rather than the same still chosen five times.
+     *
+     * It is a SURFACE like any other row in the table (the schema is unchanged),
+     * and it sits at the END of the chain every backdrop lookup walks: a
+     * surface's own choice wins, then this one, then TMDB's art (see
+     * [backdropPathFor]). That is what makes it reach surfaces that have no
+     * choice of their own at all - the actor page's header still, a screen that
+     * never offered a row - without inventing a key per screen.
+     */
+    const val SCREEN_ALL = "all"
+
     /** The title's poster, everywhere a poster is drawn. */
     const val SCREEN_POSTER = "poster"
 
@@ -89,7 +102,14 @@ object ImageOverrides {
             SCREEN_STREAMS,
             SCREEN_PLAYER_SPLASH,
             SCREEN_HOME_HERO,
-            SCREEN_LANDSCAPE_CARD
+            SCREEN_LANDSCAPE_CARD,
+            // Last, and here for a reason that is easy to lose: "Reset to
+            // default" clears every surface this list names. A title whose ONLY
+            // choice is the all-screens one would otherwise keep drawing the
+            // still the viewer just asked to be rid of - on every screen at
+            // once. It also makes the reset row appear for that choice, because
+            // [hasOverride] reads the same list.
+            SCREEN_ALL
         )
         TYPE_POSTER -> listOf(SCREEN_POSTER)
         else -> emptyList()
@@ -257,6 +277,35 @@ object ImageOverrides {
         type: String,
         screen: String
     ): String? = pathFor(paths, tmdbIdOf(rawId), type, screen)
+
+    /**
+     * The backdrop [screen] should draw, walking the whole chain: the still
+     * chosen FOR that surface first, then the one chosen for every screen
+     * ([SCREEN_ALL]), then nothing - which every caller turns into TMDB's own
+     * art (see [applied]).
+     *
+     * The order is the point. A surface with a choice of its own keeps it, so
+     * setting five surfaces still works exactly as it did and "all screens" is
+     * a fallback rather than an override of them. A surface with no row at all -
+     * the actor page's header, anything that has never offered one - draws the
+     * all-screens still instead of TMDB's, which is what "applies everywhere"
+     * means for a screen nobody listed.
+     *
+     * Pure, so the chain is pinned without a device.
+     */
+    fun backdropPathFor(
+        paths: Map<String, String>,
+        tmdbId: Int?,
+        screen: String
+    ): String? = pathFor(paths, tmdbId, TYPE_BACKDROP, screen)
+        ?: pathFor(paths, tmdbId, TYPE_BACKDROP, SCREEN_ALL)
+
+    /** [backdropPathFor] for a surface that holds an id rather than a number. */
+    fun backdropPathFor(
+        paths: Map<String, String>,
+        rawId: String?,
+        screen: String
+    ): String? = backdropPathFor(paths, tmdbIdOf(rawId), screen)
 
     /**
      * The TMDB id a surface's own id spelling refers to, or null when it names

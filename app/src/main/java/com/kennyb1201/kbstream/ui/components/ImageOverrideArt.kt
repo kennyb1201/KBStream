@@ -48,10 +48,13 @@ internal fun imageOverrideBackdropUrl(
     screen: String,
     fallbackUrl: String?
 ): String? {
-    val chosen = ImageOverrides.pathFor(
+    // The chain, not the one surface: the still chosen for this screen, then
+    // the one chosen for every screen, then the caller's own art (see
+    // ImageOverrides.backdropPathFor). A surface that has never had a row of
+    // its own therefore draws the all-screens still rather than TMDB's.
+    val chosen = ImageOverrides.backdropPathFor(
         paths = paths,
         tmdbId = tmdbId,
-        type = ImageOverrides.TYPE_BACKDROP,
         screen = screen
     )
     return chosen?.let { TmdbRepository.fullResBackdropUrl(it) } ?: fallbackUrl
@@ -69,10 +72,9 @@ internal fun imageOverrideCardBackdropUrl(
     rawId: String?,
     fallbackUrl: String?
 ): String? {
-    val chosen = ImageOverrides.pathFor(
+    val chosen = ImageOverrides.backdropPathFor(
         paths = paths,
         rawId = rawId,
-        type = ImageOverrides.TYPE_BACKDROP,
         screen = ImageOverrides.SCREEN_LANDSCAPE_CARD
     )
     return chosen?.let { TmdbRepository.BACKDROP_BASE + it } ?: fallbackUrl
