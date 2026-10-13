@@ -148,9 +148,15 @@ class DetailFocusChainWiringContractTest {
             detail.contains("direction !in directions")
         )
         assertTrue(
-            "and the bottom of the page is consumed too, landing on the header " +
-                "PLAY rather than being handed to the default search with only " +
-                "the bottom spacer below it",
+            "and the bottom of the page is consumed too - the Media row is the " +
+                "last row painted, so a DOWN off it stays where the viewer is " +
+                "rather than teleporting to the header PLAY",
+            detail.contains(
+                "DetailFocusChain.nextRow(row, direction, presence) == null) { true } else {"
+            )
+        )
+        assertFalse(
+            "the teleport is what that arm used to do with the press",
             detail.contains("scope.launch { focusTopOfPage() } true")
         )
     }
@@ -162,11 +168,24 @@ class DetailFocusChainWiringContractTest {
                 "val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false"
             )
         )
-        assertTrue(detail.contains("return focusRow(target, fromColumn, from)"))
+        assertTrue(
+            detail.contains("return focusRow(target, fromColumn, from, direction, presence)")
+        )
+        assertTrue(
+            "and the one row the move does NOT land through focusRow is the " +
+                "Media row on the way DOWN: that press means the row's TAB " +
+                "STRIP, so it is given to the strip directly instead of to a " +
+                "card - landing on a card strands the tab-switcher behind an UP " +
+                "the viewer has no reason to expect",
+            detail.contains(
+                "if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) { " +
+                    "lastMediaCardColumn = fromColumn return focusMediaStrip(from) }"
+            )
+        )
     }
 
     @Test
-    fun `a rail the scroll disposed is revealed, then the header is the last resort`() {
+    fun `a rail the scroll disposed is revealed, then the next row gets the press`() {
         val columnArm = detail.indexOf("focusChipColumn(targetKey, fromColumn)")
         val revealArm = detail.indexOf(
             "revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)"
@@ -174,12 +193,31 @@ class DetailFocusChainWiringContractTest {
         val fallback = detail.indexOf(
             "anchorKey != null && revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)"
         )
+        val nextRow = detail.indexOf(
+            "val nextTarget = DetailFocusChain.nextRow(target, direction, presence)"
+        )
         assertTrue("the direct ask comes first", columnArm >= 0)
         assertTrue("a rail that exists but is disposed is put back", revealArm >= 0)
         assertTrue(
-            "and only a rail that cannot answer at all falls to the header, " +
-                "which is above the list and so always composed",
-            fallback >= 0 && detail.contains("else -> focusTopOfPage()")
+            "and a rail that cannot answer at all walks ON rather than giving " +
+                "up: the next row that way gets the press, so a rail that is " +
+                "there and will not take the focus can never teleport the " +
+                "viewer back to the top of the page",
+            fallback >= 0 && nextRow > fallback
+        )
+        assertTrue(
+            "the walk's own end is where the press STAYS: with no row left that " +
+                "way it is consumed where the viewer is, never handed to the " +
+                "default search with only the bottom spacer below it",
+            detail.contains(
+                "Log.w(TAG, \"focusRow: could not focus \$target or any row beyond it\")"
+            ) &&
+                detail.contains("focusRow(nextTarget, fromColumn, target, direction, presence)")
+        )
+        assertFalse(
+            "the walk steps strictly the way the press was going, which is what " +
+                "bounds it - asking for the very same row again is not a move",
+            detail.contains("focusRow(target, fromColumn, target")
         )
         assertTrue(columnArm < revealArm)
     }

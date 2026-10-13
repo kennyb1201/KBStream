@@ -1162,6 +1162,15 @@ fun DetailScreen(
     // LEFT/RIGHT press can never leave the row sideways.
     val mediaStripFocusRequester = remember { FocusRequester() }
 
+    // The horizontal position the viewer last held in the Media row, as a CARD
+    // column. It is written as the cards take focus (walking them with
+    // LEFT/RIGHT) and when a press from the row ABOVE hands over to the strip,
+    // because to a viewer those are one thing - where they are in the Media
+    // section - and both directions read it: DOWN back into the cards returns to
+    // the card they were on (see [focusFirstMediaCard]) and UP out of the strip
+    // keeps that column in the More Like This rail above (see [mediaStripFocus]).
+    var lastMediaCardColumn by remember { mutableIntStateOf(0) }
+
     // The backdrop a press opened fullscreen, or null (see BackdropOverlay).
     var selectedBackdrop by remember { mutableStateOf<String?>(null) }
 
@@ -1806,13 +1815,21 @@ fun DetailScreen(
      *    them a press belongs on - the target episode, or the chip for the
      *    season on screen ([focusSeasonOrEpisode]).
      *  - a card rail - the chip rails and the poster rails alike - keeps its
-     *    column, is revealed when it exists but the scroll disposed it, and
-     *    falls back to the header when it cannot answer at all.
+     *    column, and is revealed when it exists but the scroll disposed it.
+     *
+     * [direction] and [presence] are the press's own, and they are what lets the
+     * last arm walk on: a rail that exists but will not take the focus hands the
+     * press to the NEXT row that way rather than throwing the viewer back to the
+     * top of the page, which is a move nobody asked for and, from the bottom of
+     * a long page, a disorienting one. The walk is bounded by the chain's own
+     * row list and ends in the top-of-page arm.
      */
     suspend fun focusRow(
         target: DetailRow,
         fromColumn: Int,
-        from: DetailRow
+        from: DetailRow,
+        direction: DetailFocusDirection,
+        presence: DetailRowPresence
     ): Boolean = when (target) {
         DetailRow.HEADER -> focusTopOfPage()
         DetailRow.EPISODES -> focusSeasonOrEpisode() || focusTopOfPage()
@@ -1832,9 +1849,94 @@ fun DetailScreen(
                 focusChipColumn(targetKey, fromColumn) -> true
                 anchorKey != null &&
                     revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true
-                else -> focusTopOfPage()
+                else -> {
+                    // The row exists, is even on screen, and still would not
+                    // take the focus. Field report: GENRE -> KEYWORDS looked
+                    // like a skip, and static reading cannot tell a row that is
+                    // not there from one that is there and cannot answer. So
+                    // the state is logged here, where the failure is.
+                    if (target == DetailRow.KEYWORDS) {
+                        Log.w(
+                            TAG,
+                            "focusRow(KEYWORDS) failed: hasKeywordsRow=" +
+                                "${presence.hasKeywordsRow}, column=$fromColumn, " +
+                                "from=$from, direction=$direction, visibleKeys=" +
+                                detailListState.layoutInfo.visibleItemsInfo.map { it.key }
+                        )
+                    }
+                    // Then the NEXT row that way, before giving up on the move
+                    // altogether: a rail that will not take the focus must not
+                    // teleport the viewer to the top of the page. The walk can
+                    // only get shorter - each step moves strictly the way the
+                    // press was going - so this recursion is bounded by the
+                    // page's row count and ends in the arm below.
+                    val nextTarget =
+                        DetailFocusChain.nextRow(target, direction, presence)
+                    if (nextTarget == null) {
+                        Log.w(TAG, "focusRow: could not focus $target or any row beyond it")
+                        true
+                    } else {
+                        focusRow(nextTarget, fromColumn, target, direction, presence)
+                    }
+                }
             }
         }
+    }
+
+    /**
+     * UP out of a Media card: back to the row's tab strip, and the landing
+     * [moveFocusVertical] uses when a press comes DOWN into the row from above.
+     *
+     * The strip and the cards are SEPARATE LazyColumn items, and scrolling the
+     * card row in can push the strip off screen; a disposed strip's
+     * FocusRequester is unattached, so `requestFocus()` prints the focus warning
+     * and returns false rather than throwing. That false used to be swallowed,
+     * which left the press consumed with the focus still on the card - the
+     * "sometimes UP does nothing" the viewer saw. The report is read here
+     * instead: the strip is scrolled back in, anchored on its OWN index while
+     * it has one and on the row the press came from otherwise, and the focus is
+     * retried while it recomposes, exactly as [revealAndFocusChipColumn] does
+     * for the rails.
+     *
+     * Answers whether the focus landed, so the caller is never left guessing.
+     *
+     * [from] is the row the press came from, and it is the scroll hint when the
+     * strip is not on screen at all (see the hint below).
+     */
+    suspend fun focusMediaStrip(from: DetailRow): Boolean {
+        if (
+            runCatching { mediaStripFocusRequester.requestFocus() }.getOrDefault(false)
+        ) {
+            return true
+        }
+
+        // The hint is, in order: the strip's OWN index while it is still among
+        // the laid-out items, then the row the press came from - a rail's
+        // neighbour is the closest thing to its index there is - and only then
+        // the top. Anchoring on the CARDS unconditionally (as this did) sent a
+        // press that came from a rail ABOVE the row past the strip it was
+        // looking for; a missing anchor's 0 walked the page back to its top.
+        val hint = detailListState.layoutInfo.visibleItemsInfo
+            .firstOrNull { it.key == MEDIA_STRIP_KEY }?.index
+            ?: detailListState.layoutInfo.visibleItemsInfo
+                .firstOrNull { it.key == detailRowKey(from) }?.index
+            ?: 0
+        detailListState.revealRail(MEDIA_STRIP_KEY, hint)
+
+        var attempts = 0
+        while (attempts < RETURN_FOCUS_STEPS) {
+            val composed =
+                detailListState.layoutInfo.visibleItemsInfo.any { it.key == MEDIA_STRIP_KEY }
+            if (
+                composed &&
+                runCatching { mediaStripFocusRequester.requestFocus() }.getOrDefault(false)
+            ) {
+                return true
+            }
+            delay(RETURN_FOCUS_DELAY_MS)
+            attempts++
+        }
+        return false
     }
 
     /**
@@ -1847,8 +1949,12 @@ fun DetailScreen(
      * rather than mistaken for a row that is not there, and a row that is not
      * there is stepped over. Null - nothing in that direction - is only possible
      * going DOWN out of the bottom row, and answers false without moving: the
-     * handler is what turns that into a landing on the header rather than a
-     * press handed to the default search (see [detailRowVerticalFocus]).
+     * handler is what turns that into a consumed press that stays where it is
+     * rather than a press handed to the default search (see
+     * [detailRowVerticalFocus]).
+     *
+     * The one row that is not landed through [focusRow] is the Media row on the
+     * way DOWN: its strip is what that press means (see below).
      */
     suspend fun moveFocusVertical(
         from: DetailRow,
@@ -1857,7 +1963,36 @@ fun DetailScreen(
         presence: DetailRowPresence
     ): Boolean {
         val target = DetailFocusChain.nextRow(from, direction, presence) ?: return false
-        return focusRow(target, fromColumn, from)
+        // The GENRE -> KEYWORDS handoff, logged when it does NOT happen. The
+        // chain steps over a row the page does not have by design, so a title
+        // with no keywords skips the row and looks exactly like a broken
+        // handoff - and a failure INSIDE that row is logged where it fails (see
+        // focusRow). Between the two, the log says which cause this is: no row
+        // at all, the row there but not composed, or the focus landing going
+        // elsewhere.
+        if (
+            from == DetailRow.GENRE &&
+            direction == DetailFocusDirection.DOWN &&
+            target != DetailRow.KEYWORDS
+        ) {
+            Log.w(
+                TAG,
+                "GENRE DOWN stepped over KEYWORDS: hasKeywordsRow=" +
+                    "${presence.hasKeywordsRow}, target=$target, visibleKeys=" +
+                    detailListState.layoutInfo.visibleItemsInfo.map { it.key }
+            )
+        }
+        // DOWN into the Media row lands on its tab strip, never on a card: the
+        // strip is the row's selector, and a press that skipped it left the
+        // tab-switcher behind an UP the viewer has no reason to expect - the
+        // reported "I land on the first trailer and have to press UP to reach
+        // the tabs". The column the press arrived with is recorded either way,
+        // so the strip can hand it back on the way up.
+        if (target == DetailRow.MEDIA && direction == DetailFocusDirection.DOWN) {
+            lastMediaCardColumn = fromColumn
+            return focusMediaStrip(from)
+        }
+        return focusRow(target, fromColumn, from, direction, presence)
     }
 
     /**
@@ -1871,12 +2006,13 @@ fun DetailScreen(
      * time.
      *
      * A DOWN the chain has no row for - the bottom of the page, where the Media
-     * row now sits - is consumed too, and lands
-     * on the header's PLAY row: the header lives above the list and is always
-     * composed, so the press can never be left without a landing, and the
-     * default search is never handed a key whose only nodes below it are the
-     * bottom spacer. UP never reaches that arm - [DetailRow.HEADER] always
-     * exists and sits at the top, so an upward walk always ends on it.
+     * row is the last row painted - is consumed too, and goes NOWHERE: the
+     * focus stays on the card or the strip the viewer is holding. The Media row
+     * is terminal, so there is nothing below it to aim at, and throwing the
+     * focus back up to the header PLAY from the bottom of a long page reads as
+     * the D-pad having lost the viewer's place. UP never reaches that arm -
+     * [DetailRow.HEADER] always exists and sits at the top, so an upward walk
+     * always ends on it.
      *
      * [directions] is the set of presses this row answers. The episodes row
      * takes only DOWN; its UP belongs to the episode card, which owns the season
@@ -1898,10 +2034,13 @@ fun DetailScreen(
         if (direction == null || direction !in directions) {
             false
         } else if (DetailFocusChain.nextRow(row, direction, presence) == null) {
-            // The bottom of the chain: consumed by construction, like every
-            // other press this handler owns, so the key is never handed to the
-            // default search and the focus lands on the header PLAY.
-            scope.launch { focusTopOfPage() }
+            // The bottom of the chain, and the press stops HERE: the Media row
+            // is the last row the page paints, so a DOWN off its cards is the
+            // end of the page and the focus stays on the card the viewer is
+            // holding. Consumed like every other press this handler owns, so
+            // the key is never handed to the default search - and not moved
+            // either: being thrown back to the header PLAY from the bottom of
+            // the page is the disorientation this arm used to cause.
             true
         } else {
             scope.launch { moveFocusVertical(row, direction, column, presence) }
@@ -1910,59 +2049,26 @@ fun DetailScreen(
     }
 
     /**
-     * DOWN out of the Media row's tab strip: the first card of the page that is
-     * active.
+     * DOWN out of the Media row's tab strip: the card of the page that is
+     * active in the column the viewer last held ([lastMediaCardColumn]), not
+     * column 0 - a viewer who stepped UP out of the fifth card expects the
+     * DOWN back to return to it.
      *
      * Asked for directly first, because the cards are laid out immediately
-     * under the strip and column 0 is one request away - and then through the
-     * same reveal every other rail uses, for the case where the scroll has put
-     * the row out of composition (see [revealAndFocusChipColumn]).
+     * under the strip - and then through the same reveal every other rail uses,
+     * for the case where the scroll has put the row out of composition (see
+     * [revealAndFocusChipColumn]).
+     *
+     * The remembered column needs no bounds check of its own: the column rule
+     * clamps to the rail's own last card (a page with fewer cards than the one
+     * the column was remembered on), and the second ask covers the other way a
+     * direct request can miss - the remembered slot being the one card the
+     * scroll has not composed yet, while the first card is there.
      */
     suspend fun focusFirstMediaCard() {
-        if (focusChipColumn(MEDIA_ROW_KEY, 0)) return
-        revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_ROW_KEY, 0)
-    }
-
-    /**
-     * UP out of a Media card: back to the row's tab strip.
-     *
-     * The strip and the cards are SEPARATE LazyColumn items, and scrolling the
-     * card row in can push the strip off screen; a disposed strip's
-     * FocusRequester is unattached, so `requestFocus()` prints the focus warning
-     * and returns false rather than throwing. That false used to be swallowed,
-     * which left the press consumed with the focus still on the card - the
-     * "sometimes UP does nothing" the viewer saw. The report is read here
-     * instead: the strip is scrolled back in, anchored on the card row (its
-     * neighbour in the list), and the focus is retried while it recomposes,
-     * exactly as [revealAndFocusChipColumn] does for the rails.
-     *
-     * Answers whether the focus landed, so the caller is never left guessing.
-     */
-    suspend fun focusMediaStrip(): Boolean {
-        if (
-            runCatching { mediaStripFocusRequester.requestFocus() }.getOrDefault(false)
-        ) {
-            return true
-        }
-
-        val hint = detailListState.layoutInfo.visibleItemsInfo
-            .firstOrNull { it.key == MEDIA_ROW_KEY }?.index ?: 0
-        detailListState.revealRail(MEDIA_STRIP_KEY, hint)
-
-        var attempts = 0
-        while (attempts < RETURN_FOCUS_STEPS) {
-            val composed =
-                detailListState.layoutInfo.visibleItemsInfo.any { it.key == MEDIA_STRIP_KEY }
-            if (
-                composed &&
-                runCatching { mediaStripFocusRequester.requestFocus() }.getOrDefault(false)
-            ) {
-                return true
-            }
-            delay(RETURN_FOCUS_DELAY_MS)
-            attempts++
-        }
-        return false
+        if (focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)) return
+        if (lastMediaCardColumn != 0 && focusChipColumn(MEDIA_ROW_KEY, 0)) return
+        revealAndFocusChipColumn(MEDIA_ROW_KEY, MEDIA_ROW_KEY, lastMediaCardColumn)
     }
 
     /**
@@ -2005,7 +2111,10 @@ fun DetailScreen(
             }
             else -> detailRowVerticalFocus(
                 DetailRow.MEDIA,
-                0,
+                // The column the section remembers, not 0: coming DOWN out of
+                // the More Like This rail, this press has to be able to give
+                // back the column it arrived on.
+                lastMediaCardColumn,
                 presence,
                 setOf(DetailFocusDirection.UP)
             )(keyEvent)
@@ -2031,6 +2140,12 @@ fun DetailScreen(
         presence: DetailRowPresence
     ): (KeyEvent) -> Boolean = { keyEvent ->
         if (keyEvent.type == KeyEventType.KeyDown && keyEvent.key == Key.DirectionUp) {
+            // The card the viewer is leaving IS the column the strip owes them
+            // on the way back down (see [lastMediaCardColumn]). Recorded here
+            // as well as when a card takes focus, so the round trip through
+            // the strip is exact for a card that got the focus without a focus
+            // event of its own.
+            lastMediaCardColumn = index
             onFocusStrip()
             true
         } else {
@@ -4902,6 +5017,10 @@ fun DetailScreen(
                                             mediaTabIndex = index
                                         },
                                         onFocusContent = {
+                                            // DOWN out of the strip: the page's
+                                            // cards, in the column the section
+                                            // remembers (see
+                                            // focusFirstMediaCard).
                                             scope.launch { focusFirstMediaCard() }
                                         },
                                         presence = detailRowPresence
@@ -4977,6 +5096,17 @@ fun DetailScreen(
                                             },
                                             modifier = Modifier
                                                 .focusRequester(requester)
+                                                // Where the section's column
+                                                // memory is kept current as the
+                                                // viewer walks the cards, so
+                                                // both the strip's DOWN and its
+                                                // UP can give the column back
+                                                // (see lastMediaCardColumn).
+                                                .onFocusChanged { state ->
+                                                    if (state.hasFocus) {
+                                                        lastMediaCardColumn = cardIndex
+                                                    }
+                                                }
                                                 // The row's own handoff: UP is
                                                 // the tab strip, DOWN is the
                                                 // chain's press out of the page.
@@ -4985,7 +5115,9 @@ fun DetailScreen(
                                                         cardIndex,
                                                         onFocusStrip = {
                                                             scope.launch {
-                                                                focusMediaStrip()
+                                                                focusMediaStrip(
+                                                                    DetailRow.MEDIA
+                                                                )
                                                             }
                                                         },
                                                         presence = detailRowPresence
@@ -7122,8 +7254,14 @@ private fun seriesStatusTag(status: String?): String? {
  * geometrically, which is the same geometric guess the page's chip rails had to
  * stop making; with one node there is nothing sideways to guess about.
  *
- * Focus is spoken by the ring around the ACTIVE pill and by nothing else - the
- * labels do not change color on focus, the same call the poster cards make.
+ * Focus is spoken by a FILLED BAR, and that is deliberate: the cards one press
+ * below carry the app's ring-and-glow, so an outlined pill sitting directly
+ * above an outlined card read as the same kind of thing at TV distance, and the
+ * viewer could not tell whether the D-pad was on the row's selector or on its
+ * content. A filled bar is a selector; a ring is content (see KBCard). The
+ * selected page goes solid accent inside the bar so it stays legible on the
+ * wash, and the labels are otherwise unchanged - focus is never spoken by the
+ * text alone.
  */
 @Composable
 private fun MediaTabStrip(
@@ -7135,12 +7273,20 @@ private fun MediaTabStrip(
 ) {
     var isFocused by remember { mutableStateOf(false) }
 
+    // Read with hasFocus rather than isFocused: the strip's focusable node is
+    // the end of this chain, so what has to be observed is the subtree - the
+    // same reading the app's poster tiles use for a tile plus its caption.
+    val barTint = if (isFocused) KBAccent.copy(alpha = 0.22f) else Color.Transparent
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = modifier
+            .clip(KBShapePill)
+            .background(barTint)
+            .padding(horizontal = 10.dp, vertical = 6.dp)
             .focusRequester(focusRequester)
-            .onFocusChanged { isFocused = it.isFocused }
+            .onFocusChanged { isFocused = it.hasFocus }
             .onPreviewKeyEvent(onKey)
             .focusable()
     ) {
@@ -7150,20 +7296,30 @@ private fun MediaTabStrip(
                 modifier = Modifier
                     .clip(KBShapePill)
                     .background(
-                        if (active) KBAccent.copy(alpha = 0.22f) else KBSurface
-                    )
-                    .then(
-                        if (isFocused && active) {
-                            Modifier.border(2.dp, KBAccent, KBShapePill)
-                        } else {
-                            Modifier
+                        when {
+                            // The selected page goes SOLID while the bar has
+                            // focus, so the selection is still unmistakable on
+                            // top of the wash.
+                            active && isFocused -> KBAccent
+                            active -> KBAccent.copy(alpha = 0.22f)
+                            // An unselected pill lets the bar's wash through,
+                            // so the strip reads as one focused control rather
+                            // than as three separate plates.
+                            isFocused -> Color.Transparent
+                            else -> KBSurface
                         }
                     )
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
                     text = tab.label.uppercase(Locale.US),
-                    color = if (active) KBTextHi else KBTextLo,
+                    // KBVoid on the solid accent: the app's background color is
+                    // the readable end of pairing with an accent fill.
+                    color = when {
+                        active && isFocused -> KBVoid
+                        active -> KBTextHi
+                        else -> KBTextLo
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
                     maxLines = 1

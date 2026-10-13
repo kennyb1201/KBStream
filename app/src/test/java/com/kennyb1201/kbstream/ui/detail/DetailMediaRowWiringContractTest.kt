@@ -100,9 +100,11 @@ class DetailMediaRowWiringContractTest {
         )
         assertTrue(
             "and its UP is the chain's: the More Like This rail above, read with " +
-                "the row's own directions because a DOWN of its own is spoken for",
+                "the row's own directions because a DOWN of its own is spoken for" +
+                " - and in the COLUMN the section remembers, so a press out of " +
+                "the row keeps the column it arrived on",
             screen.contains(
-                "detailRowVerticalFocus( DetailRow.MEDIA, 0, presence, " +
+                "detailRowVerticalFocus( DetailRow.MEDIA, lastMediaCardColumn, presence, " +
                     "setOf(DetailFocusDirection.UP) )"
             )
         )
@@ -124,7 +126,8 @@ class DetailMediaRowWiringContractTest {
                 "card's own wrapper rather than by the chain",
             screen.contains(
                 "if (keyEvent.type == KeyEventType.KeyDown && " +
-                    "keyEvent.key == Key.DirectionUp) { onFocusStrip() true }"
+                    "keyEvent.key == Key.DirectionUp) { lastMediaCardColumn = index " +
+                    "onFocusStrip() true }"
             )
         )
         assertTrue(
@@ -135,7 +138,58 @@ class DetailMediaRowWiringContractTest {
             "and every card is filed under its column, which is what a press " +
                 "into the row from either side is aimed by",
             screen.contains("registerChipColumn( MEDIA_ROW_KEY, cardIndex, requester )") &&
-                screen.contains("focusChipColumn(MEDIA_ROW_KEY, 0)")
+                screen.contains("focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)")
+        )
+    }
+
+    @Test
+    fun `a press into the row from above lands on the strip, not on a card`() {
+        val move = screen
+            .substringAfter("suspend fun moveFocusVertical(")
+            .substringBefore("suspend fun detailRowVerticalFocus(")
+        assertTrue(
+            "DOWN into the Media row means the row's tab strip: landing on a " +
+                "card bypasses the tab-switcher, which is what left the viewer " +
+                "pressing UP to reach the tabs they had just skipped",
+            move.contains("if (target == DetailRow.MEDIA &&") &&
+                move.contains("direction == DetailFocusDirection.DOWN) {") &&
+                move.contains("return focusMediaStrip(from)")
+        )
+        assertTrue(
+            "and the column the press arrived with is kept for the way back, " +
+                "so the strip can hand it back down or up",
+            move.contains("lastMediaCardColumn = fromColumn")
+        )
+    }
+
+    @Test
+    fun `the strip's focus language is a filled bar, not a card ring`() {
+        val strip = screen
+            .substringAfter("private fun MediaTabStrip(")
+            .substringBefore("private fun MediaThumbCard(")
+        assertTrue(
+            "the whole strip is tinted while the D-pad is on it - a FILLED " +
+                "BAR, which is a selector",
+            strip.contains("val barTint =") &&
+                strip.contains("if (isFocused) KBAccent.copy(alpha = 0.22f) else Color.Transparent") &&
+                strip.contains(".clip(KBShapePill) .background(barTint)")
+        )
+        assertTrue(
+            "and the selected page goes solid accent inside it, so the " +
+                "selection stays unmistakable on that wash",
+            strip.contains("active && isFocused -> KBAccent") &&
+                strip.contains("active && isFocused -> KBVoid")
+        )
+        assertFalse(
+            "the ring the CARDS wear is what the strip must not look like: at " +
+                "TV distance, one press apart, an outlined pill and an outlined " +
+                "card read as the same kind of thing",
+            strip.contains("Modifier.border(2.dp, KBAccent, KBShapePill)")
+        )
+        assertTrue(
+            "the strip observes the focus of its own subtree, the reading the " +
+                "app's poster tiles use for a tile plus its caption",
+            strip.contains("onFocusChanged { isFocused = it.hasFocus }")
         )
     }
 
@@ -237,19 +291,24 @@ class DetailMediaRowWiringContractTest {
                 "cards in can push the strip out of composition - its requester " +
                 "then reports false, and that report has to be read rather than " +
                 "swallowed",
-            screen.contains("suspend fun focusMediaStrip(): Boolean {") &&
+            screen.contains("suspend fun focusMediaStrip(from: DetailRow): Boolean {") &&
                 screen.contains(
                     "runCatching { mediaStripFocusRequester.requestFocus() }" +
                         ".getOrDefault(false)"
                 )
         )
         val strip = screen
-            .substringAfter("suspend fun focusMediaStrip(): Boolean {")
-            .substringBefore("fun mediaStripFocus(")
+            .substringAfter("suspend fun focusMediaStrip(from: DetailRow): Boolean {")
+            .substringBefore("suspend fun moveFocusVertical(")
         assertTrue(
-            "the strip is scrolled back in, anchored on the card row beside it",
+            "the strip is scrolled back in, anchored on its OWN index while it " +
+                "has one and on the row the press came from otherwise - the " +
+                "cards' key is only the right anchor for a press out of the " +
+                "cards themselves, and anchoring on nothing walked up to the top",
             strip.contains("detailListState.revealRail(MEDIA_STRIP_KEY, hint)") &&
-                strip.contains("firstOrNull { it.key == MEDIA_ROW_KEY }?.index ?: 0")
+                strip.contains("firstOrNull { it.key == MEDIA_STRIP_KEY }?.index") &&
+                strip.contains("firstOrNull { it.key == detailRowKey(from) }?.index") &&
+                strip.contains("?: 0")
         )
         assertTrue(
             "and the focus is retried while it recomposes, not asked for once",
@@ -259,7 +318,9 @@ class DetailMediaRowWiringContractTest {
         assertTrue(
             "the card's UP hands over to that, so the press is never consumed " +
                 "with the focus left on the card",
-            screen.contains("onFocusStrip = { scope.launch { focusMediaStrip() } }")
+            screen.contains("onFocusStrip = { scope.launch { focusMediaStrip(") &&
+                screen.contains("DetailRow.MEDIA") &&
+                screen.contains("scope.launch { focusFirstMediaCard() }")
         )
     }
 

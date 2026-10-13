@@ -92,11 +92,12 @@ internal enum class DetailRow {
      *
      * The chain names it ONCE, because what it is for is the handoff between
      * rows: UP is the More Like This rail above it and DOWN is the bottom of the
-     * page, exactly as if the row held a single rail, which is what lands the
-     * press on the fixed header PLAY rather than handing it to the default
-     * search. Which of its pages the viewer is looking at, and the LEFT/RIGHT
-     * presses that swap them, never leave the row and are the row's own
-     * business (see [DetailMediaRow]).
+     * page, exactly as if the row held a single rail, which is what makes a DOWN
+     * off it the END of the page - consumed, with the focus staying on the card
+     * or the strip the viewer is holding, never thrown back to the top (see the
+     * screen's handler). Which of its pages the viewer is looking at, and the
+     * LEFT/RIGHT presses that swap them, never leave the row and are the row's
+     * own business (see [DetailMediaRow]).
      */
     MEDIA
 }
@@ -165,9 +166,9 @@ internal object DetailFocusChain {
      *
      * Null is only ever reached going DOWN out of the bottom row of the page -
      * [DetailRow.HEADER] always exists and sits at the top, so an upward walk
-     * always ends on it. The caller reads null as the end of the page and lands
-     * the press on the header rather than handing it to the default search (see
-     * the screen's handler).
+     * always ends on it. The caller reads null as the end of the page: the press
+     * is consumed and the focus stays where the viewer left it, rather than
+     * being handed to the default search (see the screen's handler).
      */
     fun nextRow(
         from: DetailRow,

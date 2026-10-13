@@ -159,8 +159,16 @@ class DetailChipColumnWiringContractTest {
             )
         )
         assertTrue(
-            "a page whose rails cannot answer at all still consumes the key and " +
-                "lands the focus on the top of the page",
+            "a rail that exists and still cannot answer hands the key to the " +
+                "NEXT row that way rather than to the top of the page - a " +
+                "teleport from the bottom of a long page is a lost place",
+            source.contains("else -> {") &&
+                source.contains("val nextTarget = DetailFocusChain.nextRow(target, direction, presence)") &&
+                source.contains("focusRow(nextTarget, fromColumn, target, direction, presence)")
+        )
+        assertFalse(
+            "and the walk's end consumes the key where the viewer is instead " +
+                "of jumping to the header",
             source.contains("else -> focusTopOfPage()")
         )
     }
@@ -168,22 +176,26 @@ class DetailChipColumnWiringContractTest {
     @Test
     fun `every vertical press between the rails goes through the one rule`() {
         // The definition, the chip lookup in the chain's focusRow, the reveal
-        // helper's own single call, and the Media row's ask for its OWN first
+        // helper's own single call, and the Media row's two asks for its OWN
         // card - its tab strip's DOWN, which is not a neighbour decision at
         // all: the rail it enters is the row it is already standing in, which
         // is why it asks directly instead of scrolling the row it is in to the
-        // top (see focusFirstMediaCard). A fifth call site - a rail deciding
-        // its own neighbour again - is a change someone has to make
-        // deliberately, which is exactly what this counts.
+        // top (see focusFirstMediaCard). The second of those two asks is the
+        // fallback to column 0 for the case the first cannot cover - the
+        // remembered column's slot being the one card the scroll has not
+        // composed yet - and not a second rail deciding its own neighbour, so
+        // the count below is the whole of it: any further site is a change
+        // someone has to make deliberately.
         assertEquals(
-            4,
+            5,
             Regex("focusChipColumn\\(").findAll(source).count()
         )
         assertTrue(
-            "the one new site is the Media row entering its own rail, by the " +
-                "row's key and its first column",
+            "the Media row enters its own rail in the column the section " +
+                "remembers, then falls back to the first card",
             source.contains("suspend fun focusFirstMediaCard() {") &&
-                source.contains("if (focusChipColumn(MEDIA_ROW_KEY, 0)) return")
+                source.contains("if (focusChipColumn(MEDIA_ROW_KEY, lastMediaCardColumn)) return") &&
+                source.contains("focusChipColumn(MEDIA_ROW_KEY, 0)")
         )
         assertTrue(
             source.contains("suspend fun revealAndFocusChipColumn(") &&

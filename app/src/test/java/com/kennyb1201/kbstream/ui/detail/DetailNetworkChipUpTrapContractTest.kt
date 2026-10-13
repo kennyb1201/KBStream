@@ -121,9 +121,16 @@ class DetailNetworkChipUpTrapContractTest {
         assertTrue(
             "and the bottom of the chain - reached only by DOWN, never by UP, " +
                 "because the header always exists - is consumed too: the press " +
-                "lands on the header PLAY rather than on the default search",
+                "stays where the viewer is, on the last row the page paints",
             source.contains("DetailFocusChain.nextRow(row, direction, presence) == null") &&
-                source.contains("scope.launch { focusTopOfPage() } true")
+                source.contains(
+                    "DetailFocusChain.nextRow(row, direction, presence) == null) { true } else {"
+                )
+        )
+        assertFalse(
+            "and it is NOT thrown up to the header PLAY, which is what that " +
+                "arm used to do from the bottom of the page",
+            source.contains("scope.launch { focusTopOfPage() } true")
         )
     }
 
@@ -141,10 +148,12 @@ class DetailNetworkChipUpTrapContractTest {
         val reveal = source.indexOf(
             "revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)"
         )
-        val fallback = source.indexOf("else -> focusTopOfPage()")
+        val fallback = source.indexOf(
+            "val nextTarget = DetailFocusChain.nextRow(target, direction, presence)"
+        )
         assertTrue(
             "existence decides the order: ask the rail, put it back on screen if " +
-                "it is disposed, and only then fall back",
+                "it is disposed, and only then walk on to the next row",
             direct in 0 until reveal && reveal in 0 until fallback
         )
     }
