@@ -12,7 +12,7 @@ import org.junit.Test
  * The card itself is a Compose tile and the menu is an overlay, neither of
  * which a unit test can press, so the part that decides what the menu SAYS and
  * which surface each row writes is pure and pinned here: a still on the
- * Backdrops page is a candidate for each of the four surfaces that draw a
+ * Backdrops page is a candidate for each of the surfaces that draw a
  * backdrop, a poster for the one that draws a poster everywhere, and the reset
  * row appears only once there is something to reset.
  *
@@ -30,6 +30,7 @@ class DetailMediaRowOverrideMenuTest {
             listOf(
                 "Set as Detail backdrop",
                 "Set as Streams backdrop",
+                "Set as Player splash",
                 "Set as Home hero backdrop",
                 "Set as Landscape card"
             ),
@@ -39,6 +40,7 @@ class DetailMediaRowOverrideMenuTest {
             listOf(
                 ImageOverrides.SCREEN_DETAIL,
                 ImageOverrides.SCREEN_STREAMS,
+                ImageOverrides.SCREEN_PLAYER_SPLASH,
                 ImageOverrides.SCREEN_HOME_HERO,
                 ImageOverrides.SCREEN_LANDSCAPE_CARD
             ),

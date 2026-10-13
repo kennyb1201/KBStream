@@ -174,7 +174,7 @@ internal object DetailMediaRow {
      * The long-press rows [tab]'s cards offer, in the order they are drawn.
      *
      * Backdrops and posters are the two pages a viewer can CHOOSE from: a
-     * still on the Backdrops page is a candidate for one of the four surfaces
+     * still on the Backdrops page is a candidate for each of the surfaces
      * that draw a backdrop (see [ImageOverrides]), and a poster covers the one
      * that draws a poster everywhere. The Trailers page offers nothing here -
      * a video is not artwork, and there is no surface whose image a trailer
@@ -197,6 +197,11 @@ internal object DetailMediaRow {
                         label = "Set as Streams backdrop",
                         description = "Show this still behind the source list",
                         screen = ImageOverrides.SCREEN_STREAMS
+                    ),
+                    ImageOverrideMenuItem(
+                        label = "Set as Player splash",
+                        description = "Show this still on the loading splash before playback",
+                        screen = ImageOverrides.SCREEN_PLAYER_SPLASH
                     ),
                     ImageOverrideMenuItem(
                         label = "Set as Home hero backdrop",

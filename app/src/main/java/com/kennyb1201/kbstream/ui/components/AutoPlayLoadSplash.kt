@@ -34,6 +34,7 @@ import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBVoid
@@ -64,13 +65,35 @@ fun AutoPlayLoadSplash(
     backdropUrl: String?,
     clearLogoUrl: String?,
     title: String,
-    subtitle: String? = null
+    subtitle: String? = null,
+    /**
+     * The TMDB id the viewer's image choices for this title are filed under,
+     * or null when this launch has no TMDB title behind it.
+     *
+     * The splash draws the SAME title the detail hero and the streams picker
+     * do, so it honors the still a long press on the Media row chose for it
+     * (see [ImageOverrides.SCREEN_PLAYER_SPLASH]). The id is resolved by the
+     * caller rather than parsed here, because only the caller knows what its
+     * launch is: a live channel launch carries its own id namespace, which
+     * must never reach a TMDB title's choice. A null id keeps [backdropUrl].
+     */
+    tmdbId: Int? = null
 ) {
     // Full resolution, and not one of absoluteTmdbArt's sized bases: this is
     // the one backdrop slot that is the entire screen, so w1280 - the size a
     // card wants - is a visible upscale on a 4K panel. The logo keeps its
     // sized base (see LOGO_BASE for why "original" is wrong for wordmarks).
-    val resolvedBackdrop = TmdbRepository.fullResBackdropUrl(backdropUrl)
+    //
+    // The chosen still is applied at the same master size, for the same
+    // reason: a path picked on the Backdrops page is resized to whichever
+    // surface draws it, and this one fills the frame.
+    val overridePaths = rememberImageOverridePaths()
+    val resolvedBackdrop = imageOverrideBackdropUrl(
+        paths = overridePaths,
+        tmdbId = tmdbId,
+        screen = ImageOverrides.SCREEN_PLAYER_SPLASH,
+        fallbackUrl = TmdbRepository.fullResBackdropUrl(backdropUrl)
+    )
     val resolvedLogo = absoluteTmdbArt(clearLogoUrl, TmdbRepository.LOGO_BASE)
 
     Box(

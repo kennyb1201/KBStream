@@ -37,9 +37,10 @@ internal fun rememberImageOverridePaths(): Map<String, String> {
  * resolution, or [fallbackUrl] when they have chosen nothing.
  *
  * For the surfaces that fill the frame - the detail hero, the streams screen,
- * the Home hero - which is why the choice is upgraded to TMDB's master size
- * exactly the way those surfaces upgrade their own art (see
- * [TmdbRepository.fullResBackdropUrl]).
+ * the Home hero, and the pre-playback load splash (see
+ * [com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash]) - which is why
+ * the choice is upgraded to TMDB's master size exactly the way those surfaces
+ * upgrade their own art (see [TmdbRepository.fullResBackdropUrl]).
  */
 internal fun imageOverrideBackdropUrl(
     paths: Map<String, String>,

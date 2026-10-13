@@ -33,7 +33,7 @@ class ImageOverridesRulesTest {
     @Test
     fun `every backdrop surface is one list, so a reset cannot miss one`() {
         assertEquals(
-            listOf("detail", "streams", "home_hero", "landscape_card"),
+            listOf("detail", "streams", "player_splash", "home_hero", "landscape_card"),
             ImageOverrides.screensFor(ImageOverrides.TYPE_BACKDROP)
         )
         assertEquals(

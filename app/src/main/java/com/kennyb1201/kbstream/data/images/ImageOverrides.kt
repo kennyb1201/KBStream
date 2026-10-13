@@ -55,6 +55,14 @@ object ImageOverrides {
     /** The streams screen's backdrop. */
     const val SCREEN_STREAMS = "streams"
 
+    /**
+     * The pre-playback load splash, in every hand-off that paints one: the
+     * "Finding sources" cover, the Continue Watching / Up Next deep-link cover,
+     * and the frame the Player route paints before the player Activity lands
+     * (see [com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash]).
+     */
+    const val SCREEN_PLAYER_SPLASH = "player_splash"
+
     /** The Home hero, when the title is the one being featured. */
     const val SCREEN_HOME_HERO = "home_hero"
 
@@ -79,6 +87,7 @@ object ImageOverrides {
         TYPE_BACKDROP -> listOf(
             SCREEN_DETAIL,
             SCREEN_STREAMS,
+            SCREEN_PLAYER_SPLASH,
             SCREEN_HOME_HERO,
             SCREEN_LANDSCAPE_CARD
         )

@@ -487,6 +487,19 @@ internal fun channelTitleGraphic(channelLogoUrl: String?, epgIconUrl: String?): 
         ?: epgIconUrl?.takeIf { it.isNotBlank() }
 
 /**
+ * The TMDB id the player splash looks a chosen still up by, or null when this
+ * launch has no TMDB title behind it.
+ *
+ * The splash is shared by on-demand playback and live channels, and this is the
+ * one place that difference is answered: a channel launch carries its own id
+ * namespace ("channel") whose id can be numeric, so it must never reach a TMDB
+ * title's choice (see [ImageOverrides]). An add-on id TMDB does not know is
+ * already rejected by [ImageOverrides.tmdbIdOf].
+ */
+private fun splashTmdbId(parentType: String, parentId: String): Int? =
+    if (parentType == "channel") null else ImageOverrides.tmdbIdOf(parentId)
+
+/**
  * The Player screen a live channel click produces, whichever screen asked.
  *
  * One function rather than two call sites because the guide and the sports hub
@@ -2850,14 +2863,16 @@ fun AppRoot(
                 ?: detailAutoPlay.itemClearLogo,
             title = detailAutoPlay.pendingTarget?.displayName.orEmpty()
                 .ifBlank { detailAutoPlay.id },
-            subtitle = "Finding sources…"
+            subtitle = "Finding sources…",
+            tmdbId = splashTmdbId(detailAutoPlay.type, detailAutoPlay.id)
         )
 
         pending != null -> AutoPlayLoadSplash(
             backdropUrl = pending.backdropUrl,
             clearLogoUrl = pending.clearLogoUrl,
             title = pending.target.displayName,
-            subtitle = "Finding sources…"
+            subtitle = "Finding sources…",
+            tmdbId = splashTmdbId(pending.parentType, pending.parentId)
         )
 
         // The PLAYER screen composes nothing visible of its own (it only
@@ -2873,7 +2888,8 @@ fun AppRoot(
             backdropUrl = playerSplash.backdropUrl,
             clearLogoUrl = playerSplash.clearLogoUrl,
             title = playerSplash.itemName,
-            subtitle = null
+            subtitle = null,
+            tmdbId = splashTmdbId(playerSplash.parentType, playerSplash.parentId)
         )
     }
     }

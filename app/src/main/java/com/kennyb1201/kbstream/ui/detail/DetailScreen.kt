@@ -2053,7 +2053,10 @@ fun DetailScreen(
             AutoPlayLoadSplash(
                 backdropUrl = initialBackdrop,
                 clearLogoUrl = initialClearLogo,
-                title = initialTarget.displayName.ifBlank { id }
+                title = initialTarget.displayName.ifBlank { id },
+                // The splash is the cover for this title's playback, so it
+                // honors the still the viewer chose for it (see ImageOverrides).
+                tmdbId = overrideTmdbId
             )
         }
 

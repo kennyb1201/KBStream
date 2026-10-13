@@ -9,9 +9,9 @@ import androidx.room.PrimaryKey
  * The Media row's backdrop and poster pages are galleries of the artwork TMDB
  * holds for a title, and until this existed the only thing a viewer could do
  * with a still they liked was look at it: the hero, the streams screen, the
- * Home hero and the landscape cards all drew whatever the detail payload
- * happened to carry. A long press on a card now writes the choice here and the
- * surfaces read it back.
+ * pre-playback load splash, the Home hero and the landscape cards all drew
+ * whatever the detail payload happened to carry. A long press on a card now
+ * writes the choice here and the surfaces read it back.
  *
  * [key] is the identity, and it is composed rather than synthetic so that a
  * lookup is one indexed hit on the primary key: `"${tmdbId}:${type}:${screen}"`

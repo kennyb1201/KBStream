@@ -135,6 +135,51 @@ class ImageOverrideSurfacesContractTest {
     }
 
     @Test
+    fun `the pre-playback splash draws the still the viewer chose for it`() {
+        val splash = source(AUTO_PLAY_LOAD_SPLASH)
+        assertTrue(
+            "the splash must consult SCREEN_PLAYER_SPLASH, the surface the " +
+                "menu's \"Set as Player splash\" row writes",
+            splash.contains("screen = ImageOverrides.SCREEN_PLAYER_SPLASH,")
+        )
+        assertTrue(
+            "and it must read the choices as state, so a pick repaints the " +
+                "splash on the next hand-off",
+            splash.contains("val overridePaths = rememberImageOverridePaths()")
+        )
+        assertTrue(
+            "the choice is upgraded to master size, exactly as the splash " +
+                "upgrades its own backdrop",
+            splash.contains("fallbackUrl = TmdbRepository.fullResBackdropUrl(backdropUrl)")
+        )
+    }
+
+    @Test
+    fun `every splash the route paints is handed the title's id`() {
+        val activity = source(MAIN_ACTIVITY)
+        assertTrue(
+            "the deep-link cover, the autoselect overlay, and the frame the " +
+                "Player route paints all go through the shared id resolution",
+            activity.contains("tmdbId = splashTmdbId(detailAutoPlay.type, detailAutoPlay.id)") &&
+                activity.contains("tmdbId = splashTmdbId(pending.parentType, pending.parentId)") &&
+                activity.contains(
+                    "tmdbId = splashTmdbId(playerSplash.parentType, playerSplash.parentId)"
+                )
+        )
+        assertTrue(
+            "and a live channel launch is left out: a channel id is its own " +
+                "namespace and must never reach a TMDB title's choice",
+            activity.contains(
+                "if (parentType == \"channel\") null else ImageOverrides.tmdbIdOf(parentId)"
+            )
+        )
+        assertTrue(
+            "Detail's own deep-link cover resolves the id the same way its hero does",
+            source(DETAIL).contains("tmdbId = overrideTmdbId")
+        )
+    }
+
+    @Test
     fun `each surface resolves its URL at its own size`() {
         val art = source(IMAGE_OVERRIDE_ART)
         assertTrue(
@@ -164,5 +209,7 @@ class ImageOverrideSurfacesContractTest {
         const val GLOBAL_POSTER_CARD = "com/kennyb1201/kbstream/ui/components/GlobalPosterCard.kt"
         const val LANDSCAPE_ART = "com/kennyb1201/kbstream/ui/components/LandscapeArt.kt"
         const val IMAGE_OVERRIDE_ART = "com/kennyb1201/kbstream/ui/components/ImageOverrideArt.kt"
+        const val AUTO_PLAY_LOAD_SPLASH =
+            "com/kennyb1201/kbstream/ui/components/AutoPlayLoadSplash.kt"
     }
 }
