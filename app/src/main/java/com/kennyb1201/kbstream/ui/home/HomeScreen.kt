@@ -157,6 +157,7 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.YoutubeChunkedDataSourceFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -2280,6 +2281,65 @@ private fun BuiltinContinueWatchingRail(
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
+    // Where this rail's scroll position lives. The LazyRow used to keep its
+    // state to itself; the landing below has to be able to put the rail back on
+    // its head, so the rail owns it now (the default state was a remembered
+    // one either way, so nothing else about the row moves).
+    val railState = rememberLazyListState()
+
+    // The card at the head of the rail is focusable through the RAIL's own
+    // requester, so the landing below can reach exactly the card in position 0:
+    // a card's requester is created inside the `items` block, where the rail
+    // cannot see it. Every other card keeps one of its own.
+    val headRequester = remember { FocusRequester() }
+
+    // Whether focus is anywhere inside this rail. `hasFocus` and not
+    // `isFocused`: the LazyRow itself is not focusable - its cards are - and a
+    // parent's `hasFocus` is "this node or any child of it".
+    var railHasFocus by remember { mutableStateOf(false) }
+
+    // Set once and never cleared: the rail is the viewer's from the moment they
+    // walk it (see [continueWatchingWalkedByFocus]).
+    var viewerWalkedRail by remember { mutableStateOf(false) }
+
+    // Identity of the card at the head - what the landing is keyed on. Keyed on
+    // the head rather than on the card LIST so the landing runs on the update
+    // that actually changes what is first: re-emitting the same list is not a
+    // reason to move focus, and an intermediate load (the local snapshot) whose
+    // head the enriched merge then replaces is corrected by the merge's own
+    // pass, whose head is the final one.
+    val headId = cards.firstOrNull()?.id
+
+    // Continue Watching lands on its head (the reported bug: the rail finished
+    // loading with focus on the card that WAS first, and the new first card off
+    // to the left). Also keyed on [railHasFocus] so a load that arrives while
+    // the viewer is elsewhere is corrected the moment they enter the rail,
+    // instead of leaving them on a rail anchored away from its own first card.
+    LaunchedEffect(headId, railHasFocus) {
+        if (headId == null) return@LaunchedEffect
+        if (!continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)) {
+            return@LaunchedEffect
+        }
+        // Put the head card on screen first: until it is laid out there is no
+        // focus node to ask for. This is also the scroll the viewer was making
+        // by hand - after the head changed, the list kept the CARD that was
+        // first at the leading edge, which is where "press Left to see the new
+        // first item" came from.
+        railState.scrollToItem(CONTINUE_WATCHING_HEAD_INDEX)
+        // The focus ask needs the card attached, and one frame is not always
+        // enough on a busy first composition - the retry the guide's focus
+        // grabs use. requestFocus() reports a miss by its RETURN value (it
+        // throws only for a requester with nothing attached), so success is
+        // read from it rather than from runCatching alone.
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < CONTINUE_WATCHING_LANDING_ATTEMPTS) {
+            awaitFrame()
+            landed = runCatching { headRequester.requestFocus() }.getOrDefault(false)
+            attempts++
+        }
+    }
+
     Column(
         modifier = Modifier.padding(
             start = TvSafeAreaHorizontal,
@@ -2293,19 +2353,33 @@ private fun BuiltinContinueWatchingRail(
             LocalBringIntoViewSpec provides bringIntoViewSpec
         ) {
             LazyRow(
+                state = railState,
                 contentPadding = PaddingValues(
                     start = RailHorizontalStartPadding,
                     end = TvSafeAreaHorizontal,
                     top = 10.dp,
                     bottom = 12.dp
                 ),
-                horizontalArrangement = Arrangement.spacedBy(0.dp)
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                // What the landing above is gated on: focus anywhere inside
+                // this row (see [continueWatchingLandsOnHead]).
+                modifier = Modifier.onFocusChanged {
+                    railHasFocus = it.hasFocus
+                }
             ) {
-                items(
+                // Indexed, so a card knows its own position: the head card is
+                // the one the rail can focus, and a focus landing anywhere else
+                // is the viewer walking the rail.
+                itemsIndexed(
                     items = cards,
-                    key = { it.id }
-                ) { item ->
-                    val requester = remember { FocusRequester() }
+                    key = { _, item -> item.id }
+                ) { index, item ->
+                    val ownRequester = remember { FocusRequester() }
+                    val requester = if (index == CONTINUE_WATCHING_HEAD_INDEX) {
+                        headRequester
+                    } else {
+                        ownRequester
+                    }
 
                     // Carry the row's own backdrop + clearLogo into the hero
                     // preview: while TMDB resolution is pending the hero renders
@@ -2329,7 +2403,15 @@ private fun BuiltinContinueWatchingRail(
                             onCardFocusRequester(requester)
                             onLongPress(item)
                         },
-                        onFocus = { onSelectHero(hero, item) },
+                        onFocus = {
+                            if (continueWatchingWalkedByFocus(index)) {
+                                // The viewer's own place in the rail, not the
+                                // landing's (which asks for index 0): from here
+                                // on no load moves focus again.
+                                viewerWalkedRail = true
+                            }
+                            onSelectHero(hero, item)
+                        },
                         onUpPressed = onUpPressed,
                         focusRequester = requester,
                         badgeColor = when {

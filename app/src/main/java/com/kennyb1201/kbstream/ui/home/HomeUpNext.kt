@@ -1248,6 +1248,64 @@ internal fun isCaughtUpForUpcoming(item: UpNextItem): Boolean {
 }
 
 /**
+ * The position of the Continue Watching rail's HEAD card: the first card, the
+ * one the rail's own landing puts focus on.
+ *
+ * Named rather than written as a literal `0` at each use, so "the rail lands on
+ * its head" reads the same in the scroll, the walk check and the tests.
+ */
+internal const val CONTINUE_WATCHING_HEAD_INDEX = 0
+
+/**
+ * How many frames the Continue Watching rail gives the head card to attach
+ * before it stops asking for focus on it.
+ *
+ * A request against the head's `FocusRequester` is a miss while the card has no
+ * node yet - `scrollToItem` composes it, but a busy first composition can still
+ * need a frame or two - and the miss is silent (the call returns false), so the
+ * rail retries rather than leaving the viewer on whatever card focus happened to
+ * be on. Twelve frames is the guide's own retry budget for the same race.
+ */
+internal const val CONTINUE_WATCHING_LANDING_ATTEMPTS = 12
+
+/**
+ * Whether focus arriving on the card at [cardIndex] means the VIEWER has taken
+ * the Continue Watching rail over.
+ *
+ * The rail loads in stages: the local snapshot seeds an older "most recent"
+ * card, and the enriched merge (or a tracker's feed) then puts a newer one at
+ * the front. The cards are keyed by identity, so the focus node FOLLOWS the card
+ * that moved - which left the rail scrolled to the second card, focus on it, and
+ * the real first card off-screen to the left (reported as "focus is on the chip
+ * I already had, and I have to scroll left to see the new one").
+ *
+ * The rail corrects that by putting focus back on its head, but only for a rail
+ * the viewer has not walked themselves. Focus sitting on a card that is NOT the
+ * head is the viewer having chosen where to be - a D-pad step along the row, a
+ * card a previous visit left them on - and a background refresh must never yank
+ * focus off it. Focus on the head itself (what Compose puts there when Home
+ * opens, and what the rail's own landing asks for) is not a walk.
+ */
+internal fun continueWatchingWalkedByFocus(cardIndex: Int): Boolean =
+    cardIndex != CONTINUE_WATCHING_HEAD_INDEX
+
+/**
+ * Whether the Continue Watching rail may move focus back to its head card.
+ *
+ * [railHasFocus] is whether focus is anywhere inside the rail. A load that lands
+ * while the viewer is in the top bar or on another rail must leave focus alone:
+ * moving it would pull them into a rail they are not in.
+ *
+ * [viewerWalkedRail] is [continueWatchingWalkedByFocus] accumulated over the
+ * rail's life. Once the viewer has walked it the rail is theirs for good, so a
+ * refresh that arrives an hour later does not undo their choice either.
+ */
+internal fun continueWatchingLandsOnHead(
+    railHasFocus: Boolean,
+    viewerWalkedRail: Boolean
+): Boolean = railHasFocus && !viewerWalkedRail
+
+/**
  * One row in the Home "Upcoming" rail: a show's next unaired episode,
  * derived for free from the Continue Watching enrichment (the TMDB detail
  * it already fetches carries next_episode_to_air). No extra network calls.
