@@ -1,5 +1,6 @@
 package com.kennyb1201.kbstream.ui.player
 
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -83,6 +84,32 @@ class DoviBridgeTest {
         )
         // Degenerate input is refused before any scan.
         assertEquals(DoviBridge.NOT_DOLBY_VISION, DolbyVisionCompat.sampleDvProfileFromLibdovi(byteArrayOf(), 0))
+    }
+
+    @Test
+    fun `with no library the sample strip declines instead of returning bytes`() {
+        // The two strip call sites in DolbyVisionCompat read null as "run the
+        // Kotlin parser", so a build without the .so must answer exactly that —
+        // not an empty array (which would erase the sample, since the caller
+        // copies what it is given) and not the input (which would look to the
+        // sniff path like a strip that ran).
+        val sample = byteArrayOf(0, 0, 0, 1, 0x7C, 0x01, 0x11, 0x22)
+        val before = sample.copyOf()
+        assertNull(
+            "no .so in this process, so the caller falls back to the Kotlin strip",
+            DoviBridge.stripSample(
+                sample,
+                sample.size,
+                DoviBridge.NAL_FORMAT_ANNEX_B,
+                0,
+                stripDv = true,
+                stripHdr10Plus = true
+            )
+        )
+        assertArrayEquals("and the caller's buffer is left alone", before, sample)
+        // Degenerate lengths are refused before anything else, like the
+        // conversion path's short ranges.
+        assertNull(DoviBridge.stripSample(sample, 0, DoviBridge.NAL_FORMAT_ANNEX_B, 0, true, true))
     }
 
     @Test

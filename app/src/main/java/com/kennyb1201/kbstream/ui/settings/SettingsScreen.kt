@@ -426,11 +426,6 @@ fun SettingsScreen(
     // color path) is then not a choice, it is the only correct picture.
     val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
-    // Temporary DV experiment (see the row in "Dolby Vision & HDR" and
-    // AppPreferences.isDiagNoRelabel): keep the declared Dolby Vision codec
-    // string and strip the RPU/EL + HDR10+ in place instead of relabeling.
-    var diagNoRelabel by remember { mutableStateOf(AppPreferences.isDiagNoRelabel(context)) }
-    var diagVpsRewrite by remember { mutableStateOf(AppPreferences.isDiagVpsRewrite(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
     var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
     var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
@@ -1799,43 +1794,6 @@ fun SettingsScreen(
                     onToggle = {
                         stripHdr10Plus = it
                         AppPreferences.setStripHdr10Plus(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Temporary experiment, and the only diagnostic row left in
-                // this section: it answers whether the hvc1 relabel itself —
-                // not the codec string, not the metadata — is what stalls a DV
-                // box on a non-DV TV. On, the track keeps its declared
-                // dvhe.08.06 and only the RPU/EL + HDR10+ SEI are stripped.
-                // Off is the shipping relabel, unchanged.
-                ToggleRow(
-                    label = "Keep DV codec (no relabel)",
-                    description = "Experiment: leave the file's declared Dolby Vision codec string (e.g. dvhe.08.06) on the track and strip the DV RPU/EL and HDR10+ metadata in place, instead of re-advertising the base layer as plain HEVC. Turn it on only while testing a DV file that stalls on a non-DV TV — the PLAYER_CODEC line then names the codec the decoder was actually handed. Off plays the normal relabel path",
-                    checked = diagNoRelabel,
-                    onToggle = {
-                        diagNoRelabel = it
-                        AppPreferences.setDiagNoRelabel(context, it)
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Diagnostic: with no-relabel on, additionally rewrite the VPS
-                // to HDR10 while keeping the dvhe.08.06 codec string. The
-                // hypothesis: a MediaTek DV decoder configures its pipeline
-                // from the VPS and then waits for RPUs that never arrive, so
-                // stripping DV signaling from the VPS (while keeping the
-                // codec string) lets it fall back to the HDR10 base layer and
-                // produce frames.
-                ToggleRow(
-                    label = "diagnose: rewrite VPS to HDR10 (no-relabel path)",
-                    description = "Diagnostic only. With the no-relabel toggle above on, also rewrite the VPS to HDR10 (remove the DV extension) while keeping the declared dvhe.08.06 codec string. The decoder configures its DV pipeline from the VPS and waits for RPUs that never arrive; removing DV signaling from the VPS may make it fall back to the base layer. Outputs HDR10 picture while the label says dvhe.08.06.",
-                    checked = diagVpsRewrite,
-                    onToggle = {
-                        diagVpsRewrite = it
-                        AppPreferences.setDiagVpsRewrite(context, it)
                     }
                 )
 

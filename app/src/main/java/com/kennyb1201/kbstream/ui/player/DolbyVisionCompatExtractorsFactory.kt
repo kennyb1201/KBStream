@@ -125,24 +125,7 @@ internal class DolbyVisionCompatExtractorsFactory(
      * MTK-class decoders, so P4/P8 take the relabel-only path instead (see
      * [selectHdr10BaseHandling]).
      */
-    private val nonDvDisplayOnDvDevice: Boolean = false,
-    /**
-     * Temporary experiment, driven by the `diagNoRelabel` setting: keep the
-     * declared Dolby Vision codec string and strip the RPU/EL + HDR10+ SEI in
-     * place (see `Mode.STRIP_NALS_ONLY`), instead of re-advertising the base
-     * layer as hvc1. Default false — with the flag off the relabel path is
-     * byte-for-byte unchanged.
-     */
-    private val diagNoRelabel: Boolean = false,
-    /**
-     * Diagnostic, driven by the `diagVpsRewrite` setting: with [diagNoRelabel]
-     * on, also rewrite the VPS to HDR10 (drop the DV extension) while keeping
-     * the declared dvhe.08.06 codec string — the MediaTek "DV pipeline
-     * configures from the VPS and then waits for RPUs that never arrive"
-     * hypothesis. Default false: with it off the strip path is byte-for-byte
-     * unchanged.
-     */
-    private val diagVpsRewrite: Boolean = false
+    private val nonDvDisplayOnDvDevice: Boolean = false
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -179,13 +162,11 @@ internal class DolbyVisionCompatExtractorsFactory(
             "Wrapping extractor=$simpleName framing=$framing " +
                 "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
                 "stripHdr10Plus=$stripHdr10Plus convertP7To81=$convertP7To81 convertP5To81=$convertP5To81 " +
-                "nativeDv=$nativeDvSupported nonDvDisplay=$nonDvDisplayOnDvDevice " +
-                "diagNoRelabel=$diagNoRelabel diagVpsRewrite=$diagVpsRewrite"
+                "nativeDv=$nativeDvSupported nonDvDisplay=$nonDvDisplayOnDvDevice"
         )
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-            diagNoRelabel, diagVpsRewrite
+            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
         )
     }
 }
@@ -203,9 +184,7 @@ private class VideoCompatExtractor(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNoRelabel: Boolean,
-    private val diagVpsRewrite: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -213,8 +192,7 @@ private class VideoCompatExtractor(
         delegate.init(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                diagNoRelabel, diagVpsRewrite
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
             )
         )
     }
@@ -240,9 +218,7 @@ private class VideoCompatExtractorOutput(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNoRelabel: Boolean,
-    private val diagVpsRewrite: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -250,8 +226,7 @@ private class VideoCompatExtractorOutput(
         return if (type == C.TRACK_TYPE_VIDEO) {
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
-                diagNoRelabel, diagVpsRewrite
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
             )
         } else {
             track
@@ -277,9 +252,7 @@ private class VideoCompatTrackOutput(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean,
-    private val diagNoRelabel: Boolean,
-    private val diagVpsRewrite: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
@@ -457,30 +430,6 @@ private class VideoCompatTrackOutput(
                         "(no strip — HDR10-base profiles play natively)"
                 )
                 mode = Mode.NORMAL
-                delegate.format(format)
-                return
-            }
-            // Temporary experiment (the diagNoRelabel setting): strip the
-            // RPU/EL + HDR10+ SEI exactly as the relabel arm below does, but
-            // WITHOUT re-advertising the track as hvc1 — the declared Dolby
-            // Vision codec string (dvhe.08.06) stays on the format. The
-            // reference transformer never relabels: it leaves the declared
-            // profile on the label and drops the metadata, so the MTK decoder configures its
-            // DV pipeline for that profile, receives no RPU, and falls back to
-            // the HDR10 base layer. Every KBStream DV arm so far relabeled, so
-            // "is the relabel itself what stalls this chipset?" has never been
-            // run. Only the two relabel sites are redirected — a box without a
-            // Dolby Vision decoder keeps the tested mutating strip below, and
-            // native passthrough has already returned above.
-            if (
-                diagNoRelabel &&
-                (handling == Hdr10BaseHandling.RELABEL_ONLY || nativeDvSupported)
-            ) {
-                Log.i(
-                    "PLAYER_DV",
-                    "diagNoRelabel: keeping ${format.codecs}, stripping RPU/EL + HDR10+ (no relabel)"
-                )
-                mode = Mode.STRIP_NALS_ONLY
                 delegate.format(format)
                 return
             }
@@ -909,12 +858,14 @@ private class VideoCompatTrackOutput(
             // (RPU alone, HDR10+ SEI kept) is a different caller's config and
             // is not passed here.
             //
-            // Two callers now engage this mode: the relabel above (which also
-            // re-advertises the codec) and the diagNoRelabel experiment, which
-            // strips the same NALs off the track's own declared Dolby Vision
-            // format and changes nothing else. The stripping is identical, so
-            // the log below names no codec source — the format line above it
-            // already says which of the two ran.
+            // Two callers engage this mode: the Auto non-DV-display relabel
+            // and the DV-hardware reroute in the strip branch, both of which
+            // re-advertise the codec before their samples arrive here. The
+            // stripping is identical for the two, so the log below names no
+            // codec source — the format line above it says which ran. The
+            // removal itself is libdovi's now (see
+            // [DolbyVisionCompat.stripAnnexB]), which the log's "(via libdovi)"
+            // marker below records.
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
@@ -942,55 +893,18 @@ private class VideoCompatTrackOutput(
                     "PLAYER_DV",
                     "NALS-strip: first sample (codecs=${currentCodecs ?: "?"}) " +
                         "modified=${stripped >= 0} nals=$inventory " +
-                        "sei=${accounting?.summary()?.ifEmpty { "none" } ?: "none"}"
+                        "sei=${accounting?.summary()?.ifEmpty { "none" } ?: "none"}" +
+                        // Which stripper produced these bytes: libdovi reports
+                        // no per-NAL detail, so its entries are categories and
+                        // the marker is what says so.
+                        if (accounting?.viaLibdovi == true) " (via libdovi)" else ""
                 )
             }
-            // Diagnostic: with diagNoRelabel and diagVpsRewrite BOTH on, also
-            // rewrite the VPS to HDR10 (remove the DV extension) while keeping
-            // the dvhe.08.06 codec string. The hypothesis: a MediaTek DV
-            // decoder configures its DV pipeline from the VPS and then waits
-            // for RPUs that never arrive, so removing DV signaling from the
-            // VPS lets the decoder fall back to the HDR10 base layer.
-            //
-            // Both flags, not just this one: the RELABEL_ONLY branch below
-            // drives this same in-place strip through its own two dispatch
-            // sites, so gating on `diagVpsRewrite` alone would let the new
-            // toggle rewrite the parameter sets of the shipped relabel path —
-            // a field-proven arm this experiment is not allowed to touch.
-            // `diagNoRelabel` is an exact proxy for "the unrelabeled arm chose
-            // this mode": that branch returns before the RELABEL_ONLY branch
-            // is reached, so whenever it is true those two sites are dead.
-            var outLen = if (stripped >= 0) stripped else sampleEnd
-            if (diagNoRelabel && diagVpsRewrite) {
-                // Rewrite only the VPS, framed the same way the strip is. The
-                // rewrite is NAL-offset-correct (see rewriteVpsInSample): the
-                // strip above already dropped the RPU/EL, so this removes the
-                // VPS's DV extension and leaves the SPS — and the codec string
-                // derived from it — exactly as declared. -1 means no VPS
-                // needed the rewrite, so the stripped length stands.
-                val rewritten = DolbyVisionCompat.rewriteVpsInSample(
-                    pendingBuf, outLen, framing == NalFraming.ANNEX_B, nalLengthFieldLength
-                )
-                if (rewritten != null) {
-                    // The rewritten sample replaces the stripped one. It is not
-                    // guaranteed to shrink (emulation prevention is re-applied
-                    // to the rebuilt VPS), so the carry that follows it is
-                    // parked first — a longer sample would otherwise land on
-                    // the bytes it has to preserve — and the sample is copied
-                    // into a buffer that can hold it. The carry then goes back
-                    // at 0 with pendingLen, which is where the next read
-                    // appends, exactly as the path below leaves it.
-                    val carry =
-                        if (carrySize > 0) pendingBuf.copyOfRange(sampleEnd, sampleEnd + carrySize)
-                        else null
-                    ensurePendingCapacity(rewritten.size)
-                    rewritten.copyInto(pendingBuf, 0)
-                    emit(rewritten.size)
-                    carry?.copyInto(pendingBuf, 0)
-                    pendingLen = carrySize
-                    return
-                }
-            }
+            // No parameter set is rewritten here: this mode is the sample-side
+            // half of the relabel, whose codec config is what carries the
+            // rewritten VPS (see relabelTargetFor). The samples themselves get
+            // nothing but the removal above.
+            val outLen = if (stripped >= 0) stripped else sampleEnd
             emit(outLen)
             if (carrySize > 0) System.arraycopy(pendingBuf, sampleEnd, pendingBuf, 0, carrySize)
             pendingLen = carrySize

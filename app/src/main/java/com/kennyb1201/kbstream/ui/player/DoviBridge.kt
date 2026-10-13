@@ -192,6 +192,65 @@ internal object DoviBridge {
         return out.copyOfRange(2, written)
     }
 
+    /**
+     * Strips DV RPU/EL and/or HDR10+ SEI from one sample via libdovi.
+     * Returns the stripped bytes, or null when this build has no libdovi
+     * or the native call failed (caller falls back to the Kotlin stripper).
+     *
+     * Unlike [convertRpuTo81] this operates on a whole sample, not one NAL,
+     * and writes into a caller-sized buffer.
+     *
+     * The sample is [buf]'s first [length] bytes: the JNI side reads the array
+     * from 0, which is how [DolbyVisionCompat]'s in-place strip already has it.
+     * Nothing here can grow — stripping only removes NALs — so the output buffer
+     * is [length] bytes and the result is at most [length].
+     *
+     * Two things about the native strip a caller has to know, because they are
+     * where it differs from the Kotlin parser it replaces:
+     *
+     *  - the enhancement layer goes with the RPU: `stripDoviRpu` drops UNSPEC63
+     *    AND every NAL with a non-zero layer id, where the Kotlin strip knows
+     *    only type 63. That is the P7 dual-layer case, and the reason the native
+     *    strip is the thorough one.
+     *  - its HDR10+ strip is coarse: the whole SEI NAL goes, where the Kotlin
+     *    surgery keeps the NAL and removes only the ST 2094-40 message.
+     */
+    fun stripSample(
+        buf: ByteArray,
+        length: Int,
+        nalFormat: Int,
+        nalLengthFieldLength: Int,
+        stripDv: Boolean,
+        stripHdr10Plus: Boolean
+    ): ByteArray? {
+        if (!available) return null
+        if (length <= 0) return null
+        // Stripping only removes bytes; output cannot exceed input.
+        val out = ByteArray(length)
+        val written = runCatching {
+            nativeProcessVideoSample(
+                sample = buf,
+                sampleLen = length,
+                nalFormat = nalFormat,
+                nalLengthFieldLength = nalLengthFieldLength,
+                outBuffer = out,
+                convertDovi = false,
+                doviMode = MODE_TO_81, // unused when convertDovi = false
+                doviProfile = 0, // unused when convertDovi = false
+                stripDoviRpu = stripDv,
+                stripHdr10Plus = stripHdr10Plus
+            )
+        }.getOrElse {
+            Log.w(TAG, "libdovi strip failed; keeping the Kotlin stripper", it)
+            return null
+        }
+        if (written < 0) {
+            Log.w(TAG, "libdovi strip returned $written; keeping the Kotlin stripper")
+            return null
+        }
+        return out.copyOf(written)
+    }
+
     private val DV_PROFILE_REGEX = Regex("^(dvhe|dvav|dvh1|dva1)\\.(\\d+)\\.")
 
     /**

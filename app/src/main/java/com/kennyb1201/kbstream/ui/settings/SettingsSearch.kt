@@ -202,25 +202,6 @@ internal object SettingsSearchIndex {
             "Strip HDR10+",
             "hdr10+ hdr plus strip playback picture"
         ),
-        // The temporary no-relabel DV experiment, drawn in the same cluster as
-        // Strip HDR10+. Indexed like every other drawn toggle: a row that is
-        // visible but unfindable is what that contract exists to forbid.
-        SettingSearchEntry(
-            "playback.no-relabel-dv",
-            SettingsPane.PLAYBACK,
-            "Keep DV codec (no relabel)",
-            "dolby vision dv codec relabel hvc1 dvhe experiment diagnostic rpu strip"
-        ),
-        // The VPS-rewrite companion to that experiment, drawn directly under it
-        // in the same cluster. Indexed for the same reason: the no-relabel row
-        // is only half the diagnostic, and a row a viewer can scroll to but no
-        // query can name is what the search contract exists to forbid.
-        SettingSearchEntry(
-            "playback.vps-rewrite-dv",
-            SettingsPane.PLAYBACK,
-            "diagnose: rewrite VPS to HDR10 (no-relabel path)",
-            "dolby vision dv vps rewrite hdr10 mediacodec mtk experiment diagnostic no relabel"
-        ),
         SettingSearchEntry(
             "playback.auto-select-stream",
             SettingsPane.PLAYBACK,

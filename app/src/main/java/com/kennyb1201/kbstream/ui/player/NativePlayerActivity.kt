@@ -5135,13 +5135,6 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             AppPreferences.getDvCompatMode(this)
         }
         val stripHdr10Plus = AppPreferences.getStripHdr10Plus(this)
-        // Temporary DV experiment: keep the declared Dolby Vision codec string and
-        // strip the RPU/EL + HDR10+ in place, instead of re-advertising the base
-        // layer as hvc1 — see DolbyVisionCompatExtractorsFactory. Off by default.
-        val diagNoRelabel = AppPreferences.isDiagNoRelabel(this)
-        // Diagnostic companion to diagNoRelabel: also rewrite the VPS to HDR10
-        // (drop the DV extension) while keeping the dvhe.08.06 codec string.
-        val diagVpsRewrite = AppPreferences.isDiagVpsRewrite(this)
         val audioDecoderPriority = AppPreferences.getAudioDecoder(this)
         // True when the platform advertises a Dolby Vision decoder. On such
         // devices single-layer DV (P4/P8) normally passes through as native
@@ -5300,7 +5293,6 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             "DV settings mode=$dvCompatMode rewriteEnabled=$dvRewriteEnabled " +
                 "allProfiles=$convertAllProfiles to81=$convertTo81 " +
                 "(p7=$convertP7To81 p5=$convertP5To81) stripHdr10Plus=$stripHdr10Plus " +
-                "diagNoRelabel=$diagNoRelabel diagVpsRewrite=$diagVpsRewrite " +
                 "nativeDv=$nativeDvSupported deviceNativeDv=$deviceNativeDvSupported " +
                 "displaySupportsDv=$displaySupportsDv " +
                 "audioDecoder=$audioDecoderPriority " +                    "audioOutput=$audioOutputMode decodeToPcm=$decodeToPcm " +
@@ -5342,9 +5334,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     convertP7To81 = convertP7To81,
                     convertP5To81 = convertP5To81,
                     nativeDvSupported = nativeDvSupported,
-                    nonDvDisplayOnDvDevice = dvDisplayMismatch,
-                    diagNoRelabel = diagNoRelabel,
-                    diagVpsRewrite = diagVpsRewrite
+                    nonDvDisplayOnDvDevice = dvDisplayMismatch
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(cachedFactory, extractorsFactory)

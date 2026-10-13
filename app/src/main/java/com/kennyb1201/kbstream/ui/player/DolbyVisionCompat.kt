@@ -202,72 +202,6 @@ internal object DolbyVisionCompat {
         return m.groupValues[1] + ".08." + m.groupValues[3]
     }
 
-    /**
-     * Converts ICtCp pixel data to Rec.2020 PQ (ST.2084) color space.
-     *
-     * ICtCp is a perceptual color encoding used by Dolby Vision Profile 5.
-     * The three components are:
-     *  - I  : intensity (perceptual lightness, ~0..1 range)
-     *  - Ct : chroma t (teal-orange axis, signed ~±0.5 range)
-     *  - Cp : chroma p (green-magenta axis, signed ~±0.5 range)
-     *
-     * The conversion path is:
-     *   ICtCp → linear BT.2020 signal → PQ (ST.2084) encoding
-     *
-     * ICtCp decoding (SMPTE ST 2094-10 / ISO 20941):
-     *   The encoded values are 10-bit (or higher) unsigned integers with
-     *   a 512 offset for I and 512 offset for Ct/Cp (signed).
-     *   Linear values are recovered via the inverse PQ (EOTF) function.
-     *
-     * ICtCp → linear Rec.2020 matrix (SMPTE ST 2094-10, D65 white point):
-     *   [Y]   [0.99963639  0.00004456  0.00031905] [I']
-     *   [R']  [0.00003799 -0.00000035  0.00031936] [Ct']
-     *   [G']  [-0.00004899 -0.00004477  0.00036611] [Cp']  (approx)
-     *   [B']                                         
-     *
-     * Actually the standard ICtCp→Rec.2020 matrix is:
-     *   R_linear = I' + Ct' * 0.3479 + Cp' * 0.1193  (approx, varies by spec version)
-     *   G_linear = I' - Ct' * 0.0378 - Cp' * 0.0550
-     *   B_linear = I' - Ct' * 0.3101 + Cp' * 0.1744
-     *
-     * These are derived from the ICtCp color space definition in ISO 20941.
-     * The I component is decoded from PQ, Ct/Cp are decoded from PQ, then
-     * the linear RGB is computed, and each channel is re-encoded with PQ.
-     *
-     * Implementation note: this operates on 10-bit sample data (the standard
-     * for HEVC Main10). The input bytes are interpreted as 10-bit values
-     * (packed as 2 bytes per sample in little-endian). The output is also
-     * 10-bit PQ-encoded values.
-     */
-    fun convertP5ToHdr10(sampleData: ByteArray, sampleLen: Int, width: Int, height: Int): ByteArray {
-        // P5 content is typically 10-bit 4:2:0 or 4:2:2 HEVC. This conversion
-        // assumes 4:2:0 10-bit layout: Y plane (width*height 10-bit samples)
-        // followed by Cb/Cr planes (each width/2 * height/2 10-bit samples).
-        // The ICtCp values are in the pixel data after the HEVC decoder produces
-        // them — at this point we're operating on the Annex-B / length-delimited
-        // NAL unit data BEFORE decoding, so a full pixel-level conversion is
-        // not possible here. Instead, we set up the framework for the conversion
-        // to be applied at the decoder output level.
-        //
-        // A complete implementation would:
-        // 1. Detect P5 from the codec string (done via isP5Profile above)
-        // 2. Strip RPU/EL NALs (done via stripAnnexB / stripLengthDelimited)
-        // 3. Set the format's colorInfo to Rec.2020 PQ HDR10 (done in the
-        //    extractor factory's format() callback)
-        // 4. Apply ICtCp→PQ conversion to the decoded pixel buffer
-        //    (requires a custom VideoRenderer or SurfaceTexture callback)
-        //
-        // Step 4 is the hard part: it needs access to the decoded YUV frames.
-        // This is done at the renderer level (VideoRendererEventListener or a
-        // custom renderer), not at the extractor level.
-        //
-        // For now, return the input unchanged — the color conversion is applied
-        // via the ColorInfo metadata injection in the extractor factory, and
-        // the pixel-level conversion (when feasible) is applied by a custom
-        // renderer that intercepts the decoded frames.
-        return sampleData
-    }
-
     private const val NAL_PREFIX_SEI = 39
     private const val NAL_SUFFIX_SEI = 40
     private const val NAL_DV_RPU = 62
@@ -568,6 +502,52 @@ internal object DolbyVisionCompat {
         dropRpuNal: Boolean = false,
         accounting: SeiStripAccounting? = null
     ): Int {
+        // Prefer libdovi's native strip; fall back to the Kotlin parser below.
+        //
+        // The Kotlin scan is the code that stalls the MediaTek decoder on every
+        // variant of the full strip, while libdovi parses the RPU NALs instead
+        // of pattern-matching them and the reference player renders the same
+        // file on the same chipset through it. So the whole "Strip All" path is
+        // libdovi's now, and the Kotlin parser below is the fallback for a
+        // build without the .so.
+        //
+        // The `dropRpuNal` callers stay on Kotlin: libdovi has no RPU-only arm
+        // (its strip_dovi_rpu drops the RPU and the enhancement layer
+        // together), so those keep the exact code they run today.
+        //
+        // NOTE: libdovi's HDR10+ strip is coarse (the whole SEI NAL goes); the
+        // Kotlin surgery below is finer (it keeps the NAL and every other
+        // message sharing it). For Strip All on DV content the coarse form is
+        // the point — the output is plain HEVC and an SEI NAL is supplemental —
+        // and it is what the reference transformer does. See
+        // [stripHdr10PlusMessagesInPlace] for the fine one, which is also the
+        // fallback here.
+        if (!dropRpuNal) {
+            DoviBridge.stripSample(
+                buf,
+                length,
+                DoviBridge.NAL_FORMAT_ANNEX_B,
+                0,
+                stripDv,
+                stripHdr10Plus
+            )?.let { stripped ->
+                // "Nothing was removed" is -1 in this function's contract and
+                // callers act on it — the sniff path locks its strip mode and
+                // logs "HDR10+ SEI detected" off this answer — so a sample that
+                // came back whole must not look stripped. libdovi forwards an
+                // unmatched sample byte-for-byte, so `length` back means no NAL
+                // was dropped and the caller's buffer is already correct.
+                if (stripped.size == length) return -1
+                System.arraycopy(stripped, 0, buf, 0, stripped.size)
+                // Accounting: the native path drops RPU/EL + HDR10+ SEI NALs
+                // without reporting them one by one — record the categories
+                // the first-sample log names (see recordNativeStripAccounting).
+                if (accounting != null) {
+                    recordNativeStripAccounting(accounting, stripDv, stripHdr10Plus)
+                }
+                return stripped.size
+            }
+        }
         if (length < 5) return -1
         var write = 0
         var read = 0
@@ -594,9 +574,11 @@ internal object DolbyVisionCompat {
                 if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
                     keep = false
                     // Recorded like the SEI drops below: the first-sample log
-                    // has to be able to say the RPU/EL were removed (that is
-                    // the no-relabel arm's whole evidence), not merely that the
-                    // sample changed.
+                    // has to be able to say the RPU/EL were removed, not merely
+                    // that the sample changed. Reached only when this is the
+                    // fallback (no libdovi in the build); the native path
+                    // records the same categories through
+                    // recordNativeStripAccounting.
                     accounting?.record(
                         nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
                     )
@@ -686,6 +668,28 @@ internal object DolbyVisionCompat {
         dropRpuNal: Boolean = false,
         accounting: SeiStripAccounting? = null
     ): Int {
+        // Prefer libdovi's native strip; fall back to the Kotlin parser below.
+        // Same contract and same trade as [stripAnnexB], in an MP4/fMP4 shape:
+        // every NAL the native side keeps is copied verbatim, length field
+        // included, so a sample it matched nothing in comes back
+        // byte-identical and is reported as unchanged (-1).
+        if (!dropRpuNal) {
+            DoviBridge.stripSample(
+                buf,
+                length,
+                DoviBridge.NAL_FORMAT_LENGTH_DELIMITED,
+                nalLengthFieldLength,
+                stripDv,
+                stripHdr10Plus
+            )?.let { stripped ->
+                if (stripped.size == length) return -1
+                System.arraycopy(stripped, 0, buf, 0, stripped.size)
+                if (accounting != null) {
+                    recordNativeStripAccounting(accounting, stripDv, stripHdr10Plus)
+                }
+                return stripped.size
+            }
+        }
         val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
         if (length <= fieldLen) return -1
         // Validity pre-scan — do not touch the buffer unless the sample parses
@@ -769,6 +773,35 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * [SeiStripAccounting] for the libdovi path, which drops NALs but reports no
+     * per-NAL detail back: the RPU and the enhancement layer together when told
+     * to strip DV, and whole SEI NALs when told to strip HDR10+.
+     *
+     * So the categories the caller asked for are recorded, with size 0 rather
+     * than a guessed byte count — the first-sample log carries the "(via
+     * libdovi)" marker [SeiStripAccounting.viaLibdovi] sets, which says these
+     * are categories and not measurements. Nothing here is a category of its
+     * own: the types are the ones the Kotlin path records for the same NALs
+     * ([NAL_DV_RPU], [NAL_DV_EL], [NAL_PREFIX_SEI]), and a prefix SEI is the
+     * type muxers use for HDR10+ (libdovi also drops suffix ones; it does not
+     * say which), so that entry stands for either.
+     */
+    private fun recordNativeStripAccounting(
+        accounting: SeiStripAccounting,
+        stripDv: Boolean,
+        stripHdr10Plus: Boolean
+    ) {
+        accounting.viaLibdovi = true
+        if (stripDv) {
+            accounting.record(NAL_DV_RPU, 0, SeiStripAccounting.Action.DROPPED)
+            accounting.record(NAL_DV_EL, 0, SeiStripAccounting.Action.DROPPED)
+        }
+        if (stripHdr10Plus) {
+            accounting.record(NAL_PREFIX_SEI, 0, SeiStripAccounting.Action.DROPPED)
+        }
+    }
+
+    /**
      * Aggregate strip/rewrite counters for one stream's first processed sample,
      * used to report exactly what was removed so device quirks stay diagnosable.
      */
@@ -787,15 +820,24 @@ internal object DolbyVisionCompat {
      * First-sample diagnostic for the STRIP_NALS_ONLY path: records the fate of
      * every NAL the strip removed or examined — the RPU (62) / EL (63) it
      * dropped ([stripDv] / [dropRpuNal]) and each HDR10+ SEI NAL. The field run
-     * reads a `62:<size>->dropped` off this to see that the no-relabel arm
-     * really did strip the RPU. Diagnostic only - it never influences the
-     * strip.
+     * reads a `62:<size>->dropped` off this to see that the strip really did
+     * remove the RPU. Diagnostic only - it never influences the strip.
      *
      * Sizes are NAL-unit bytes excluding framing (start code / length field),
-     * matching [describeNals]' convention.
+     * matching [describeNals]' convention. A size of 0 is not a measurement:
+     * [viaLibdovi] marks an object filled by the native strip, which drops NALs
+     * without saying which or how large they were.
      */
     internal class SeiStripAccounting {
         internal enum class Action { KEPT, DROPPED, SHRUNK }
+
+        /**
+         * True when libdovi produced these bytes ([recordNativeStripAccounting]),
+         * false when the Kotlin parser did. The first-sample log reads it to
+         * name the stripper, and the entries then carry categories with a size
+         * of 0 rather than the per-NAL fates the Kotlin path records.
+         */
+        var viaLibdovi = false
         internal data class Entry(
             val nalType: Int,
             val originalSize: Int,
@@ -815,7 +857,11 @@ internal object DolbyVisionCompat {
         ) {
             entries.add(Entry(nalType, originalSize, action, newSize, legacyDrop))
         }
-        /** Compact logcat rendering, e.g. "39:69->dropped,39:30->kept,40:35->shrunk=22". */
+        /**
+         * Compact logcat rendering, e.g. "39:69->dropped,39:30->kept,40:35->shrunk=22".
+         * Entries recorded by libdovi ([viaLibdovi]) print with a size of 0,
+         * which is "not measured", not "empty".
+         */
         fun summary(): String = entries.joinToString(",") { e ->
             "${e.nalType}:${e.originalSize}->${e.action.name.lowercase()}" +
                 if (e.action == Action.SHRUNK) "=${e.newSize}" else "" +
@@ -2017,10 +2063,12 @@ internal object DolbyVisionCompat {
      * clobber the NALs it is about to move and, at the buffer's end, run off
      * the array — which is exactly how the in-place first version failed.
      *
-     * The `diagVpsRewrite` experiment's whole job: by the time it runs the
-     * strip has already dropped the RPU/EL while the codec string still
-     * declares Dolby Vision, so the single variable under test is the VPS's
-     * DV extension. This walks the same framing the strip walks and hands each
+     * The relabel path's companion rewrite (see
+     * [DolbyVisionCompatExtractorsFactory]): the strip has already dropped the
+     * RPU/EL while the codec string still declares Dolby Vision, so a decoder
+     * can configure its DV pipeline from the VPS extension and then wait for
+     * RPUs that never arrive. This is what removes that extension, and it walks
+     * the same framing the strip walks and hands each
      * VPS to [rewriteVpsNal], which expects the payload *past* the 2-byte NAL
      * header — never a raw byte offset (offset 0 is the start code / length
      * prefix, so a direct [rewriteVpsToHdr10] call there parses garbage and

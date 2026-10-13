@@ -13,9 +13,12 @@
  * rewrite should come from libdovi rather than from a hand-rolled parser.
  *
  * This bridge is deliberately narrow: it hands libdovi the RPU NALs and writes
- * back what libdovi produced. The NAL scan, the framing, the codec-string
- * rewrite and the HDR10+ SEI surgery all stay on the Kotlin side, where they are
- * already tuned and pinned by tests (see DolbyVisionCompat).
+ * back what libdovi produced, and it strips a whole sample on request
+ * (strip_dovi_rpu / strip_hdr10_plus in process_sample): that is the "Strip All"
+ * path, the variant that stalls the MediaTek decoder. The codec-string rewrite
+ * and the surgical, message-level HDR10+ removal stay on the Kotlin side, where
+ * they are already tuned and pinned by tests (see DolbyVisionCompat), which also
+ * keeps its own NAL scan as the fallback for a build without these libraries.
  *
  * Requirements
  * ------------
@@ -109,10 +112,12 @@ static int hevc_layer_id(const uint8_t *p, size_t len) {
  *
  * The walk is over the NAL as it sits in the stream, so it does NOT remove
  * emulation-prevention bytes first: a message split by one is not recognized.
- * That is deliberate rather than overlooked -- this flag is a convenience for a
- * caller that wants one-call stripping, and KBStream's extractor does not use it
- * (Kotlin keeps its surgical, emulation-prevention-aware pass, which removes
- * only the HDR10+ message and leaves the rest of a shared SEI NAL alone).
+ * That is deliberate rather than overlooked -- this flag is the COARSE strip
+ * (the whole SEI NAL goes, as the reference transformer does), which is what the
+ * "Strip All" path and the plain-HDR10+ sniff path ask for. Kotlin keeps a
+ * surgical, emulation-prevention-aware pass that removes only the HDR10+ message
+ * and leaves the rest of a shared SEI NAL alone; that one is the fallback for a
+ * build without these libraries.
  */
 static bool sei_carries_hdr10_plus(const uint8_t *p, size_t len) {
     size_t i = DV_NAL_HEADER_BYTES;

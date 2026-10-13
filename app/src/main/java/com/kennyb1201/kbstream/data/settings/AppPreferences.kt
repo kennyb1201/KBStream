@@ -73,8 +73,6 @@ object AppPreferences {
     private const val KEY_AUDIO_OUTPUT = "audio_output_mode"                 // 0=auto, 1=passthrough, 2=decode (see PlayerAudioTuning)
     private const val KEY_DV_COMPAT_MODE = "dv_compat_mode"                  // 0=p7->8.1, 1=none, 3=strip all (2=legacy auto+hdr10+, 4=legacy combined 8.1)
     private const val KEY_STRIP_HDR10_PLUS = "strip_hdr10_plus"             // independent of the DV mode
-    private const val KEY_DIAG_NO_RELABEL = "diag_no_relabel"               // temporary DV experiment, see isDiagNoRelabel
-    private const val KEY_DV_DIAG_VPS_REWRITE = "dv_diag_vps_rewrite"       // diagnostic: rewrite VPS to HDR10 on the no-relabel path
     private const val KEY_CONVERT_P7_TO_81 = "dv_convert_p7_to_81"          // P7 → Profile 8.1 (independent of the DV mode)
     private const val KEY_CONVERT_P5_TO_81 = "dv_convert_p5_to_81"          // P5 → Profile 8.1 (independent of the DV mode)
     private const val KEY_DV_PASSTHROUGH_FAILED_AT = "dv_passthrough_failed_at" // learned: box's DV decoder failed, 0 = none
@@ -533,14 +531,6 @@ object AppPreferences {
         prefs(context).edit().putBoolean(KEY_MATCH_FRAME_RATE, enabled).apply()
     }
 
-    // ── Force software decoder (legacy) ──────────────────────────────
-    fun getForceSoftwareDecoder(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_FORCE_SOFTWARE_DECODER, false)
-
-    fun setForceSoftwareDecoder(context: Context, forced: Boolean) {
-        prefs(context).edit().putBoolean(KEY_FORCE_SOFTWARE_DECODER, forced).apply()
-    }
-
     // ── Picture-in-Picture ──────────────────────────────────────────
     fun getEnablePip(context: Context): Boolean =
         prefs(context).getBoolean(KEY_ENABLE_PIP, false)
@@ -991,13 +981,6 @@ object AppPreferences {
     // Ignored in "None" and "Strip All" modes. The stored P7 flag is kept only
     // for legacy-pref migration (the old combined "8.1" mode); DV_COMPAT_AUTO
     // always implies P7 → 8.1.
-    fun getConvertP7To81(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_CONVERT_P7_TO_81, false)
-
-    fun setConvertP7To81(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_CONVERT_P7_TO_81, enabled).apply()
-    }
-
     /**
      * Effective state of the P5 conversion: "this session rewrites Profile 5
      * tracks".
@@ -1060,14 +1043,6 @@ object AppPreferences {
         return mode == DV_COMPAT_AUTO && getConvertP5To81(context)
     }
 
-    /**
-     * Legacy writer for the removed P5 color-path switch. Kept so older builds
-     * (and any stored preference) stay compatible; nothing reads it.
-     */
-    fun setP5GlesCorrection(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_P5_GLES_CORRECTION, enabled).apply()
-    }
-
     // ── HDR10+ (ST 2094-40) stripping ──────────────────────────────────
     // Independent of the DV mode above: removes dynamic HDR10+ metadata from
     // plain-HEVC (HDR10+ without DV) and DV-converted streams, for displays
@@ -1078,33 +1053,6 @@ object AppPreferences {
 
     fun setStripHdr10Plus(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_STRIP_HDR10_PLUS, enabled).apply()
-    }
-
-    // ── Temporary DV experiment: strip the RPU/EL without relabeling ────
-    // The DV-box / non-DV-display stall arm. With this on the declared Dolby
-    // Vision codec string (e.g. dvhe.08.06) stays on the format and the RPU/EL
-    // + HDR10+ SEI are stripped in place, instead of re-advertising the base
-    // layer as hvc1 — the combination the reference transformer plays this
-    // chipset with (it never relabels). It exists to answer one
-    // question the field run cannot answer any other way: is the relabel itself
-    // what stalls the decoder, or is the codec string irrelevant?
-    //
-    // Default false, and nothing else reads it: with the flag off the relabel
-    // path is byte-for-byte what it was.
-    fun isDiagNoRelabel(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_DIAG_NO_RELABEL, false)
-
-    fun setDiagNoRelabel(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_DIAG_NO_RELABEL, enabled).apply()
-    }
-
-    // Diagnostic: rewrite the VPS to HDR10 on the no-relabel path while keeping
-    // the declared dvhe.08.06 codec string (MediaTek hypothesis).
-    fun isDiagVpsRewrite(context: Context): Boolean =
-        prefs(context).getBoolean(KEY_DV_DIAG_VPS_REWRITE, false)
-
-    fun setDiagVpsRewrite(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_DV_DIAG_VPS_REWRITE, enabled).apply()
     }
 
     // ── Default aspect ratio ─────────────────────────────────────────
@@ -1831,9 +1779,6 @@ object AppPreferences {
         val next = if (enabled) current + path else current - path
         setSportsEnabledLeagues(context, next)
     }
-
-    fun isSportsLeagueEnabled(context: Context, path: String): Boolean =
-        path in getSportsEnabledLeagues(context)
 
     /**
      * The viewer's own league order, as a run of league paths.
