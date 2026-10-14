@@ -258,17 +258,52 @@ class MpvLibrarySwapContractTest {
     }
 
     @Test
-    fun `no build pipeline links the test library`() {
-        // The flag exists for a field test run locally. If a workflow ever set
-        // it, a tag push could publish the unproven library to every install
-        // through the self-update feed - so this asserts nothing wires it in.
-        assertFalse(
-            "the release workflow must never select the test library",
-            source(".github/workflows/build.yml").contains("MPV_LIB")
-        )
+    fun `no build pipeline can publish the test library`() {
+        // The flag exists for a field test, and CI may now BUILD that arm: a
+        // workflow_dispatch input, because the field boxes are the only place a
+        // GPU video output can be judged and the app has to be installable to
+        // get there at all.
+        //
+        // What must stay impossible is PUBLISHING it - the concern this test
+        // was written for, a tag push handing the unproven library to every
+        // install through the self-update feed. That is what is pinned below,
+        // instead of the blanket ban on the flag existing anywhere in the
+        // workflow: that ban saved the shipping path but left the library with
+        // no way to reach a device, and it failed every run once the dispatch
+        // input was added rather than protecting anything.
+        val workflow = source(".github/workflows/build.yml")
         assertFalse(
             "nor may the fetch script it replaces",
             source("scripts/fetch_mpv_aar.sh").contains("MPV_LIB")
+        )
+        // A push or a tag has no dispatch input, so its run resolves to the
+        // SHIPPED library; the test arm is reachable only by asking for it, and
+        // only for the run that asked.
+        assertTrue(
+            "the test library must be selectable only by the dispatch input, with " +
+                "everything else falling back to the shipped one",
+            workflow.contains("MPV_LIB: \${{ inputs.mpv_lib || 'rites' }}")
+        )
+        assertEquals(
+            "the input's default must be the shipped library",
+            1,
+            Regex("default: rites").findAll(workflow).count()
+        )
+        // Every step a release needs refuses the test arm: the signed release
+        // build, the 16 KB native gate, the mapping upload, and all five
+        // publish steps (the stale-build guard, the release notes, the
+        // metadata, the tag cleanup and the release itself).
+        assertEquals(
+            "every release-only and publish step must be gated off FOR the test " +
+                "library, so a dispatch can produce an APK and never a release",
+            9,
+            Regex("inputs\\.mpv_lib != 'nuvio'").findAll(workflow).count()
+        )
+        // And the artifact is named for the arm, so a test build cannot be
+        // picked up believing it is the normal one.
+        assertTrue(
+            "the test build's artifact must say which arm it carries",
+            workflow.contains("kbstream-debug-nuvio")
         )
     }
 
