@@ -58,6 +58,43 @@ class EpisodeRowKeyTest {
         assertEquals("47 episodes, 47 keys", 47, keys.distinct().size)
     }
 
+    /**
+     * The rail is ONE ROW PER TMDB EPISODE, deliberately - not one row per file
+     * with a combined "E01 / E02" label.
+     *
+     * A file that holds two segments is one thing to PLAY and two things to
+     * WATCH: marking it watched marks both episodes, and the episode list is
+     * where a viewer looks for either of them. Collapsing the pair into one row
+     * would hide the second episode from the rail entirely (no artwork, no
+     * per-episode title, no way to jump straight to it), and would make one row
+     * answer two different watch states. So the rows stay one per episode, and
+     * the shared file is what the FILE id and the scheme mapping already
+     * express. This test pins that: 47 segments over 24 files are 47 rows.
+     */
+    @Test
+    fun `the rail keeps one row per episode when two of them share a file`() {
+        val sp2 = EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2)
+
+        // Paw Patrol season 1: 47 TMDB segments, 24 files.
+        val rows = (1..47).map { episode ->
+            Triple(episode, episodeRowKey(show, season, episode), sp2.fileForTmdbEpisode(episode))
+        }
+
+        assertEquals("one row per episode, never one row per file", 47, rows.size)
+        assertEquals(
+            "and no pair is merged into a single combined row",
+            47,
+            rows.map { it.second }.distinct().size
+        )
+        assertEquals(
+            "23 of the 24 files carry two episodes - the rows that share one",
+            23,
+            rows.groupBy { it.third }.values.count { it.size == 2 }
+        )
+        // The pair that shares file 1 is episodes 1 and 2, each still its own row.
+        assertEquals(listOf(1, 2), rows.filter { it.third == 1 }.map { it.first })
+    }
+
     @Test
     fun `a split episode keeps its halves apart`() {
         // The other direction: TWO files hold one TMDB episode, so the ids differ

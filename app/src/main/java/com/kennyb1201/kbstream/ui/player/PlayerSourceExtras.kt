@@ -34,6 +34,32 @@ internal fun Stream.sourceLabel(): String = listOfNotNull(
 }
 
 /**
+ * The file name this stream is named by, as the episode-scheme detector reads
+ * it (see [com.kennyb1201.kbstream.data.player.EpisodeScheme.detect]).
+ *
+ * The addon's `title` is the release name ("Paw Patrol S01E01E02 1080p"), the
+ * `name` is usually the addon's own, and `description` sometimes carries the
+ * name again - all three are candidates, joined so one string holds every
+ * signal the row has. The URL's last path segment is the fallback for a source
+ * launched with only a URL and no addon row: a direct link usually ends in the
+ * file name. A magnet's segment holds no `S<season>E<episode>` shape, so it
+ * cannot match anything.
+ *
+ * Null when nothing was named at all, which the detector reads as "no filename
+ * signal" rather than as an empty name to search.
+ */
+internal fun Stream.detectionFileName(): String? {
+    val named = listOfNotNull(name, title, description)
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    val fromUrl = url
+        ?.substringAfterLast('/')
+        ?.substringBefore('?')
+        ?.takeIf { it.isNotBlank() }
+    return (named + listOfNotNull(fromUrl)).joinToString(" ").ifBlank { null }
+}
+
+/**
  * The stream to fall back to when a caller launched the player with only a
  * `stream_url` (or with a list that does not contain it): the session must
  * always have at least the source it is playing, so the picker can mark it.

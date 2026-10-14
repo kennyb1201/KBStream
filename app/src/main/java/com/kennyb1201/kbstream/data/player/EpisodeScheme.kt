@@ -25,8 +25,19 @@ import kotlin.math.roundToInt
  * says it is, the file covers that many TMDB episodes, and the other way round
  * when the file is a fraction of it. No setting, no per-show list to keep.
  *
+ * Two signals, in that order, because neither alone is enough. The ratio
+ * cannot see a bundle whose metadata row is the bundle too - the addon says
+ * "44 minutes" because the file IS 44 minutes, so the ratio is 1.0 and the
+ * pair is invisible. The file NAME can: `S01E01E02` says two episodes outright,
+ * and it is in the stream title the addon already sends. And the name cannot
+ * see a split at all (no release is called `S01E01a`), which is the ratio's
+ * case. Neither is trusted past them: nothing is inferred from an episode
+ * number the addon wrote next to the file, because how an addon numbers its
+ * files is exactly the thing that does not line up.
+ *
  * [ONE_TO_ONE] is what every unknown answers, so a session with no duration, no
- * runtime, a movie or a live channel behaves exactly as it did before.
+ * runtime, no filename, a movie or a live channel behaves exactly as it did
+ * before.
  */
 
 /** Which way one file and TMDB's episodes divide. */
@@ -66,10 +77,26 @@ data class EpisodeScheme(val kind: SchemeKind, val factor: Int) {
         private const val MAX_FACTOR = 4
 
         /**
-         * Pure detection. Unknown or non-positive durations answer
-         * [ONE_TO_ONE], which is today's behavior.
+         * Pure detection, from the file's name and its duration.
+         *
+         * The NAME is read first and answers on its own when it names a run of
+         * consecutive episodes (`S01E01E02`, `S01E01-E02` - see
+         * [bundledEpisodeCount]), because that is a statement about what is in
+         * the file, while the ratio is an inference. It also answers for a file
+         * whose duration is not known yet, which is what lets a flagged file be
+         * modelled before it starts playing rather than one tick into it.
+         *
+         * Unknown or non-positive durations then answer [ONE_TO_ONE], which is
+         * today's behavior.
          */
-        fun detect(fileDurationMs: Long, tmdbRuntimeMs: Long): EpisodeScheme {
+        fun detect(
+            fileDurationMs: Long,
+            tmdbRuntimeMs: Long,
+            fileName: String? = null
+        ): EpisodeScheme {
+            bundledEpisodeCount(fileName)?.let { factor ->
+                return EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, factor)
+            }
             if (fileDurationMs <= 0 || tmdbRuntimeMs <= 0) return ONE_TO_ONE
             val ratio = fileDurationMs.toDouble() / tmdbRuntimeMs.toDouble()
             return when {
@@ -203,3 +230,44 @@ data class EpisodeScheme(val kind: SchemeKind, val factor: Int) {
         SchemeKind.FILES_PER_EPISODE -> "fe$factor"
     }
 }
+
+/**
+ * How many consecutive episodes a file name claims to hold, or null when it
+ * claims nothing.
+ *
+ * The spellings that mean a bundle are `S01E01E02`, `S01E01-E02` and the longer
+ * runs of the same shape; an ordinary `S01E01` names one episode and answers
+ * null. The run is required to be CONSECUTIVE and start at the named episode,
+ * so a name that lists separate files (`S01E01E05`) is read as the list it is
+ * and answers null rather than claiming four episodes in one file.
+ *
+ * The match is anchored on the `S<season>E<episode>` shape rather than on a
+ * second number alone, so a quality tag or a year elsewhere in the name cannot
+ * invent a pair: `2018 S01E02` still names one episode.
+ */
+internal fun bundledEpisodeCount(fileName: String?): Int? {
+    val text = fileName?.uppercase() ?: return null
+    val run = EPISODE_RUN.find(text) ?: return null
+    val first = run.groupValues[1].toIntOrNull() ?: return null
+    val rest = EPISODE_NUMBER.findAll(run.groupValues[2]).mapNotNull {
+        it.value.toIntOrNull()
+    }.toList()
+    if (rest.isEmpty()) return null
+    val numbers = listOf(first) + rest
+    // Consecutive only: "S01E01E05" is a list of files, not one file.
+    if (numbers.zipWithNext().any { (a, b) -> b != a + 1 }) return null
+    return numbers.size.takeIf { it in 2..MAX_BUNDLED_EPISODES }
+}
+
+/**
+ * `S01E01E02` and `S01E01-E02`, the two ways a release names a bundle, plus
+ * longer runs of the same shape. The trailing group also collects the extra
+ * `E<number>` tokens, so a four-episode bundle is one match and not the first
+ * pair of it.
+ */
+private val EPISODE_RUN = Regex("S\\d{1,2}E(\\d{1,3})((?:(?:-?E)\\d{1,3})+)\\b")
+
+private val EPISODE_NUMBER = Regex("\\d{1,3}")
+
+/** Same cap [EpisodeScheme.detect] applies: past four, the name is a bundle of a season. */
+private const val MAX_BUNDLED_EPISODES = 4

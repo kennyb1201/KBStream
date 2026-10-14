@@ -123,6 +123,32 @@ class EpisodeSchemeWiringContractTest {
     }
 
     @Test
+    fun `both in-app engines read the playing file's name, not just its duration`() {
+        // The runtime ratio cannot see a bundle whose metadata row is the bundle
+        // too - the field report's PAW Patrol row says 44 minutes because the
+        // file IS 44 minutes, so the ratio is 1.0 and the pair is invisible. The
+        // file's NAME is the signal that survives that, and it must reach the
+        // detector from the row that is playing.
+        listOf(NATIVE, MPV).forEach { path ->
+            val src = read(path)
+            assertTrue(
+                "$path must hand the played file's name to the detector, or a bundled " +
+                    "file whose metadata merged the pair is never seen",
+                src.contains("EpisodeScheme.detect(fileMs, tmdbMs, fileName)")
+            )
+            assertTrue(
+                "$path must read that name off the source row that is playing",
+                src.contains("detectionFileName()")
+            )
+            assertTrue(
+                "$path must let the name answer without a duration (and without the TMDB " +
+                    "runtime lookup), which is the case it exists for",
+                src.contains("bundledEpisodeCount(")
+            )
+        }
+    }
+
+    @Test
     fun `the next episode is the scheme's arithmetic and not a plus one`() {
         listOf(NATIVE, MPV, EXTERNAL).forEach { path ->
             val body = functionBody(read(path), "private fun nextEpisodeTarget(): Pair<Int, Int>? {")

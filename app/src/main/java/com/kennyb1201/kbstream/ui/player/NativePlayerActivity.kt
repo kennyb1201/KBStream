@@ -82,6 +82,7 @@ import com.kennyb1201.kbstream.ui.player.PickerAdapter.Companion.bindBadgeRow
 import com.kennyb1201.kbstream.data.history.PlaybackHistoryWriter
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
+import com.kennyb1201.kbstream.data.player.bundledEpisodeCount
 import com.kennyb1201.kbstream.data.player.LanePoolDataSourceFactory
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
@@ -10362,39 +10363,63 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
+     * The file name of the source playing now, for the scheme detector: the
+     * launch's own row for [currentUrl], read through
+     * [Stream.detectionFileName]. Null when the row named nothing (a bare
+     * `stream_url`), which the detector reads as "no filename signal".
+     */
+    private fun detectionFileName(): String? =
+        sources.firstOrNull { it.url == currentUrl }?.detectionFileName()
+
+    /**
      * Reads the file that is playing against the episode TMDB says it is, and
      * remembers what that says about the show (see [EpisodeScheme.detect]).
      *
-     * Runs from the position tick, so it is a no-op until both a duration and a
-     * runtime exist, and at most once per file ([schemeDetectedForFileId]): the
-     * answer cannot change while the same file plays, and the TMDB read behind
-     * it must not repeat every second. [fileEpisodeForHandoff] calls it too, as
-     * the backstop for a file watched without the tick ever seeing a duration.
+     * Runs from the position tick, so it is a no-op until a signal exists, and
+     * at most once per file ([schemeDetectedForFileId]): the answer cannot
+     * change while the same file plays, and the TMDB read behind it must not
+     * repeat every second. [fileEpisodeForHandoff] calls it too, as the
+     * backstop for a file watched without the tick ever seeing a duration.
+     *
+     * Two signals, and only one of them needs a duration. A name that says the
+     * file holds `E01E02` is a statement about the file, so it is read as soon
+     * as the session has one - and it skips the TMDB runtime lookup entirely,
+     * since the name outranks it. Without such a name this is the old wait: a
+     * duration and a runtime both have to exist before anything is committed,
+     * so a tick that knows neither leaves the file undetected rather than
+     * pinning it to 1:1.
      */
     private fun maybeDetectScheme() {
         if (isLiveChannel) return
         val sid = episodeStreamId ?: return
         if (schemeDetectedForFileId == sid) return
         val player = exoPlayer ?: return
-        val fileMs = player.duration
-        if (fileMs == C.TIME_UNSET || fileMs <= 0L) return
+        val fileMs = player.duration.takeIf { it != C.TIME_UNSET && it > 0L } ?: 0L
+        val fileName = detectionFileName()
+        val fromName = bundledEpisodeCount(fileName)
+        if (fileMs <= 0L && fromName == null) return
         val sessionScope = scope ?: return
         sessionScope.launch {
             if (schemeStoreKey == null) {
                 schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, resolveParentTmdbId())
                 bingeScheme = EpisodeSchemeStore.get(this@NativePlayerActivity, schemeStoreKey)
             }
-            val tmdbMs = currentEpisodeTmdbRuntimeMs() ?: return@launch
+            val tmdbMs = if (fromName != null) {
+                0L
+            } else {
+                currentEpisodeTmdbRuntimeMs() ?: return@launch
+            }
             // The tick that started this coroutine may have been for a file the
             // session has already left, so the guard is re-read inside.
             if (schemeDetectedForFileId == sid) return@launch
-            val detected = EpisodeScheme.detect(fileMs, tmdbMs)
+            val detected = EpisodeScheme.detect(fileMs, tmdbMs, fileName)
             bingeScheme = detected
             EpisodeSchemeStore.put(this@NativePlayerActivity, schemeStoreKey, detected)
             schemeDetectedForFileId = sid
             com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
                 "scheme ${detected.encode() ?: "1:1"} for $sid " +
-                    "(file=${fileMs}ms tmdb=${tmdbMs}ms)"
+                    "(file=${fileMs}ms tmdb=${tmdbMs}ms " +
+                    "name=${fileName?.take(80) ?: "-"})"
             )
         }
     }

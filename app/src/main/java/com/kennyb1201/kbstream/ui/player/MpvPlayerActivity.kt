@@ -40,6 +40,7 @@ import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
 import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
+import com.kennyb1201.kbstream.data.player.bundledEpisodeCount
 import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.PlayedLinkCache
@@ -3378,33 +3379,56 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     }
 
     /**
+     * The file name of the source playing now, for the scheme detector: the
+     * launch's own row for [currentUrl], read through
+     * [Stream.detectionFileName]. Null when the row named nothing (a bare
+     * `stream_url`), which the detector reads as "no filename signal".
+     */
+    private fun detectionFileName(): String? =
+        sources.firstOrNull { it.url == currentUrl }?.detectionFileName()
+
+    /**
      * Reads the file that is playing against the episode TMDB says it is, and
      * remembers what that says about the show (see EpisodeScheme.detect). Runs
-     * from the progress tick, so it does nothing until a duration and a runtime
-     * both exist, and at most once per file. Mirrors
-     * NativePlayerActivity.maybeDetectScheme().
+     * from the progress tick, so it does nothing until a signal exists, and at
+     * most once per file. Mirrors NativePlayerActivity.maybeDetectScheme().
+     *
+     * Two signals, and only one of them needs a duration. A name that says the
+     * file holds `E01E02` is a statement about the file, so it is read as soon
+     * as the session has one - and it skips the TMDB runtime lookup entirely,
+     * since the name outranks it. Without such a name this is the old wait: a
+     * duration and a runtime both have to exist before anything is committed,
+     * so a tick that knows neither leaves the file undetected rather than
+     * pinning it to 1:1.
      */
     private fun maybeDetectScheme() {
         val sid = episodeStreamId ?: return
         if (schemeDetectedForFileId == sid) return
         val fileMs = durationMs
-        if (fileMs <= 0L) return
+        val fileName = detectionFileName()
+        val fromName = bundledEpisodeCount(fileName)
+        if (fileMs <= 0L && fromName == null) return
         lifecycleScope.launch {
             if (schemeStoreKey == null) {
                 schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, tmdbId())
                 bingeScheme = EpisodeSchemeStore.get(this@MpvPlayerActivity, schemeStoreKey)
             }
-            val tmdbMs = currentEpisodeTmdbRuntimeMs() ?: return@launch
+            val tmdbMs = if (fromName != null) {
+                0L
+            } else {
+                currentEpisodeTmdbRuntimeMs() ?: return@launch
+            }
             // The tick that started this coroutine may have been for a file the
             // session has already left, so the guard is re-read inside.
             if (schemeDetectedForFileId == sid) return@launch
-            val detected = EpisodeScheme.detect(fileMs, tmdbMs)
+            val detected = EpisodeScheme.detect(fileMs, tmdbMs, fileName)
             bingeScheme = detected
             EpisodeSchemeStore.put(this@MpvPlayerActivity, schemeStoreKey, detected)
             schemeDetectedForFileId = sid
             com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
                 "scheme ${detected.encode() ?: "1:1"} for $sid " +
-                    "(file=${fileMs}ms tmdb=${tmdbMs}ms)"
+                    "(file=${fileMs}ms tmdb=${tmdbMs}ms " +
+                    "name=${fileName?.take(80) ?: "-"})"
             )
         }
     }

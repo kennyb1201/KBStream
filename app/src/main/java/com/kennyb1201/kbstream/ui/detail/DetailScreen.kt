@@ -232,6 +232,13 @@ private fun personRowKey(member: TmdbCastMember): String =
  * Season plus episode number is the identity the row actually HAS, and it is
  * unique per row however the files behind it are numbered - so the rail survives
  * every scheme, including one detected mid-season.
+ *
+ * The rail is deliberately ONE ROW PER EPISODE and not one row per file. A file
+ * holding two segments is one thing to play and two things to watch, so merging
+ * the pair into a single "E01 / E02" row would hide the second episode's
+ * artwork, title and watch state behind the first. The shared file is already
+ * expressed by the stream id and the scheme mapping; the rail keeps one row for
+ * each episode that is in it (see EpisodeRowKeyTest).
  */
 internal fun episodeRowKey(parentId: String, season: Int?, episodeNumber: Int): String =
     "$parentId:${season ?: "-"}:$episodeNumber"

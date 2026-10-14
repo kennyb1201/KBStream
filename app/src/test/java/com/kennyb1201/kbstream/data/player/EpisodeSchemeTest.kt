@@ -106,6 +106,99 @@ class EpisodeSchemeTest {
         )
     }
 
+    // --- the file name -----------------------------------------------------
+
+    @Test
+    fun `a name that spells out two episodes is read as a bundle`() {
+        // The field case: PAW Patrol's addon row describes the FILE, so the
+        // runtime ratio is 44 against 44 and sees nothing. The name is the only
+        // signal the pair leaves.
+        assertEquals(
+            EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2),
+            EpisodeScheme.detect(
+                fileDurationMs = minutes(44),
+                tmdbRuntimeMs = minutes(44),
+                fileName = "PAW.Patrol.S01E01E02.1080p.WEB-DL"
+            )
+        )
+        assertEquals(
+            EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2),
+            EpisodeScheme.detect(
+                fileDurationMs = minutes(22),
+                tmdbRuntimeMs = minutes(22),
+                fileName = "PAW Patrol S01E01-E02 720p"
+            )
+        )
+    }
+
+    @Test
+    fun `the name is read even when no duration is known yet`() {
+        assertEquals(
+            EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2),
+            EpisodeScheme.detect(
+                fileDurationMs = 0L,
+                tmdbRuntimeMs = 0L,
+                fileName = "Show.S02E05E06.mkv"
+            )
+        )
+    }
+
+    @Test
+    fun `the name outranks a runtime that would say otherwise`() {
+        // Half a runtime is the ratio's FILES_PER_EPISODE answer, and a name
+        // that spells out a run of episodes is a statement about the file, not
+        // an inference from it - so it wins.
+        assertEquals(
+            EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2),
+            EpisodeScheme.detect(
+                fileDurationMs = minutes(11),
+                tmdbRuntimeMs = minutes(22),
+                fileName = "Show.S01E01E02.1080p"
+            )
+        )
+    }
+
+    @Test
+    fun `an ordinary name changes nothing`() {
+        listOf(
+            "PAW.Patrol.S01E01.1080p.WEB-DL",
+            "Show.2018.S01E02.mkv",
+            "Some.Movie.2019.1080p",
+            ""
+        ).forEach { name ->
+            assertEquals(
+                name,
+                EpisodeScheme.ONE_TO_ONE,
+                EpisodeScheme.detect(minutes(22), minutes(24), name)
+            )
+        }
+        assertNull(bundledEpisodeCount(null))
+        assertNull(bundledEpisodeCount("   "))
+    }
+
+    @Test
+    fun `a name that lists separate files is not a bundle`() {
+        assertNull(
+            "S01E01E05 lists files, it does not hold four episodes",
+            bundledEpisodeCount("Show.S01E01E05.1080p")
+        )
+        assertNull("S01E01 names one episode", bundledEpisodeCount("Show.S01E01.1080p"))
+    }
+
+    @Test
+    fun `a longer run counts every episode it names`() {
+        assertEquals(3, bundledEpisodeCount("Show.S01E01E02E03.mkv"))
+        assertEquals(2, bundledEpisodeCount("Show.S01E01-E02.mkv"))
+        assertEquals(4, bundledEpisodeCount("Show.S1E9E10E11E12.mkv"))
+    }
+
+    @Test
+    fun `a name is capped like every other detection`() {
+        // Past four the name is a season dump, and following it would be worse
+        // than doing nothing - the same cap the ratio gets.
+        assertNull(bundledEpisodeCount("Show.S01E01E02E03E04E05.mkv"))
+    }
+
     // --- TMDB episode -> file ---------------------------------------------
 
     @Test
