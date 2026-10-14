@@ -253,12 +253,25 @@ internal object DolbyVisionCompat {
      * written to [dest]. A malformed message (truncated varint, payload
      * overrun) fails open as [SEI_STRIP_UNTOUCHED], so a parse quirk can never
      * delete a NAL the decoder needs.
+     *
+     * [keepNalWhenAllHdr10Plus] turns the all-HDR10+ case from a whole-NAL drop
+     * into [SEI_STRIP_UNTOUCHED]: the NAL is forwarded bit-exact. The Dolby
+     * Vision strip passes it (`stripDv`), because Nuvio's `HevcDvRpuStripper`
+     * drops only the RPU (62), the enhancement layer (63) and layer-id > 0 NALs
+     * and never a NAL 39/40 — a prefix SEI can share the HDR10+ message with
+     * the HDR10 static metadata (mastering display / content light) the decoder
+     * needs once the RPU is gone, and a NAL whose only message is HDR10+ is
+     * still left for the decoder rather than removed. The plain-HDR10+ path
+     * (`stripDv == false`) keeps the drop: a track with no Dolby Vision has no
+     * reason to keep an HDR10+ SEI, and that removal is what fixes
+     * HDR10+-intolerant TVs.
      */
     private fun stripHdr10PlusMessagesInPlace(
         buf: ByteArray,
         from: Int,
         to: Int,
-        dest: Int
+        dest: Int,
+        keepNalWhenAllHdr10Plus: Boolean = false
     ): Int {
         if (from >= to) return SEI_STRIP_UNTOUCHED
         // Pass 1 validates the whole message sequence and decides, without
@@ -295,7 +308,9 @@ internal object DolbyVisionCompat {
             pos += payloadSize
         }
         if (!found) return SEI_STRIP_UNTOUCHED
-        if (kept == 0) return SEI_STRIP_DROP
+        if (kept == 0) {
+            return if (keepNalWhenAllHdr10Plus) SEI_STRIP_UNTOUCHED else SEI_STRIP_DROP
+        }
         // Pass 2: the sequence is known to parse, so copy the kept messages
         // (and the trailing bits) down over the removed ones.
         pos = from
@@ -494,6 +509,16 @@ internal object DolbyVisionCompat {
      * sets and every other NAL alone. Default false = every existing caller
      * byte-for-byte unchanged.
      *
+     * With [stripDv], the ONLY NALs this removes are the RPU (62), the EL (63)
+     * and any NAL with `layerId > 0` — matching Nuvio's `HevcDvRpuStripper`.
+     * A prefix/suffix SEI NAL (39/40) is never dropped whole: a NAL whose only
+     * message is HDR10+ is forwarded bit-exact, and one that shares the HDR10+
+     * message with the HDR10 static metadata (mastering display / content
+     * light) is surgically shrunk so the static metadata the decoder needs after
+     * the RPU is gone survives. Without [stripDv] (the plain-HDR10+ path) an
+     * all-HDR10+ SEI NAL still goes whole, which is what fixes HDR10+-intolerant
+     * TVs there.
+     *
      * [kotlinOnly] skips the native strip even when one is available and runs
      * the Kotlin parser below. Strip All needs it: libdovi's HDR10+ strip is
      * coarse — it drops a whole SEI NAL — where the Kotlin surgery keeps the NAL
@@ -618,7 +643,14 @@ internal object DolbyVisionCompat {
                         // case in stripHdr10PlusMessagesInPlace).
                         val dest = write + codeLen + 2
                         if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
-                        when (val res = stripHdr10PlusMessagesInPlace(buf, header + 2, nalEnd, dest)) {
+                        when (
+                            val res = stripHdr10PlusMessagesInPlace(
+                                buf, header + 2, nalEnd, dest,
+                                // The DV strip never drops a NAL 39/40 (Nuvio
+                                // parity): an all-HDR10+ SEI is kept whole.
+                                keepNalWhenAllHdr10Plus = stripDv
+                            )
+                        ) {
                             SEI_STRIP_UNTOUCHED -> accounting?.record(
                                 nalType, nalEnd - header, SeiStripAccounting.Action.KEPT,
                                 legacyDrop = legacyDrop
@@ -749,7 +781,13 @@ internal object DolbyVisionCompat {
                     } else {
                         val dest = write + fieldLen + 2
                         if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
-                        when (val res = stripHdr10PlusMessagesInPlace(buf, payload + 2, payload + nal, dest)) {
+                        when (
+                            val res = stripHdr10PlusMessagesInPlace(
+                                buf, payload + 2, payload + nal, dest,
+                                // Same DV rule as [stripAnnexB]: no NAL 39/40 drop.
+                                keepNalWhenAllHdr10Plus = stripDv
+                            )
+                        ) {
                             SEI_STRIP_UNTOUCHED -> accounting?.record(
                                 nalType, nal, SeiStripAccounting.Action.KEPT,
                                 legacyDrop = legacyDrop

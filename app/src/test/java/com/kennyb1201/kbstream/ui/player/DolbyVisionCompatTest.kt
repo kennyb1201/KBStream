@@ -337,7 +337,14 @@ class DolbyVisionCompatTest {
     // Annex-B access unit.
 
     @Test
-    fun `stripAnnexB drops the RPU and HDR10 plus SEI but keeps the parameter sets`() {
+    fun `the DV strip drops the RPU but keeps the HDR10 plus SEI whole`() {
+        // Nuvio's HevcDvRpuStripper drops only the RPU (62), the enhancement
+        // layer (63) and layer-id > 0 NALs — a NAL 39 is never dropped for DV.
+        // The 2026-10-14 field file had a 39:69 prefix-SEI dropped whole as
+        // "HDR10+", and hdrStaticInfo came back absent: a prefix SEI can share
+        // the HDR10+ message with the HDR10 static metadata (mastering display /
+        // content light) the decoder needs once the RPU is gone. Here the SEI
+        // rides through bit-exact; the RPU is the only thing that goes.
         val vps = nal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
         val sps = nal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
         val pps = nal(34, byteArrayOf(0x0D, 0x0E, 0x0F))
@@ -351,11 +358,70 @@ class DolbyVisionCompatTest {
             buf, au.size, stripDv = true, stripHdr10Plus = true
         )
 
-        assertTrue("the RPU and SEI must have been removed", newLen >= 0)
-        // The VPS/SPS/PPS/VCL bytes are carried through untouched; only the RPU
-        // and the HDR10+ SEI are gone.
-        val expected = vps + sps + pps + vcl
-        assertArrayEquals("parameter sets and VCL must be byte-identical", expected, buf.copyOf(newLen))
+        assertTrue("the RPU must have been removed", newLen >= 0)
+        // Everything but the RPU is carried through untouched, the SEI included.
+        val expected = vps + sps + pps + sei + vcl
+        assertArrayEquals(
+            "the HDR10+ SEI, parameter sets and VCL must be byte-identical",
+            expected,
+            buf.copyOf(newLen)
+        )
+    }
+
+    @Test
+    fun `the DV strip records a kept all-HDR10-plus SEI on both framings`() {
+        // The accounting half of the rule above: the field log has to say the
+        // SEI was KEPT (not shrunk, not dropped) while the RPU is DROPPED, so
+        // the "39:...->kept ... 62:...->dropped" line this pins is the one a
+        // correct capture prints. An all-HDR10+ NAL is the shape Nuvio's
+        // stripper leaves untouched.
+        val sei = nal(39, t35Message(HDR10_PLUS_HEADER))
+        val rpu = nal(62, ByteArray(16) { it.toByte() })
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+        val au = sei + rpu + vcl
+        val buf = au.copyOf()
+        val accounting = DolbyVisionCompat.SeiStripAccounting()
+
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = true, stripHdr10Plus = true, accounting = accounting
+        )
+
+        assertTrue("the RPU is the only thing that goes", newLen >= 0)
+        assertArrayEquals("the SEI rides bit-exact", sei + vcl, buf.copyOf(newLen))
+        assertEquals(
+            "the SEI is KEPT, the RPU DROPPED",
+            listOf(
+                DolbyVisionCompat.SeiStripAccounting.Action.KEPT,
+                DolbyVisionCompat.SeiStripAccounting.Action.DROPPED
+            ),
+            accounting.entries.map { it.action }
+        )
+        assertTrue(
+            "and the summary starts with the SEI kept at its own size",
+            accounting.summary().startsWith("39:${sei.size - 4}->kept")
+        )
+
+        val sample = ldNal(39, t35Message(HDR10_PLUS_HEADER)) +
+            ldNal(62, ByteArray(16) { it.toByte() }) + ldNal(19, byteArrayOf(0x55, 0x66))
+        val sampleBuf = sample.copyOf()
+        val ldAccounting = DolbyVisionCompat.SeiStripAccounting()
+        val ldSei = ldNal(39, t35Message(HDR10_PLUS_HEADER))
+
+        val ldLen = DolbyVisionCompat.stripLengthDelimited(
+            sampleBuf, sample.size, 4, stripDv = true, stripHdr10Plus = true,
+            accounting = ldAccounting
+        )
+
+        assertTrue("ld: the RPU is the only thing that goes", ldLen >= 0)
+        assertArrayEquals(
+            "ld: the SEI rides bit-exact",
+            ldSei + ldNal(19, byteArrayOf(0x55, 0x66)),
+            sampleBuf.copyOf(ldLen)
+        )
+        assertTrue(
+            "ld: the summary starts with the SEI kept at its own size",
+            ldAccounting.summary().startsWith("39:${ldSei.size - 4}->kept")
+        )
     }
 
     // ── the enhancement layer is dropped by layer id, like Nuvio ──────────

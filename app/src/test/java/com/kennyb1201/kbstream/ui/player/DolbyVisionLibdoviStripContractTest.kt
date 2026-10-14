@@ -246,16 +246,18 @@ class DolbyVisionLibdoviStripContractTest {
 
     @Test
     fun `with no library in the build the Kotlin strip is what runs, byte for byte`() {
-        // Every Strip All removal the routing could have taken over, on one
-        // Annex-B access unit: the RPU (62), the enhancement layer (63) and the
-        // HDR10+ SEI go, and the parameter sets and the slice stay bit-exact.
+        // The Strip All removal the routing could have taken over, on one
+        // Annex-B access unit: the RPU (62) and the enhancement layer (63) go,
+        // and the parameter sets, the HDR10+ SEI and the slice stay bit-exact —
+        // a NAL 39 is never dropped for DV (Nuvio's stripper, and the
+        // 2026-10-14 field file's hdrStaticInfo=absent).
         val au = annexB(vps, sps, pps, rpu, el, hdr10PlusSei, vcl)
         val buf = au.copyOf()
         val newLen = DolbyVisionCompat.stripAnnexB(
             buf, au.size, stripDv = true, stripHdr10Plus = true
         )
 
-        val expected = annexB(vps, sps, pps, vcl)
+        val expected = annexB(vps, sps, pps, hdr10PlusSei, vcl)
         assertTrue("something had to be removed", newLen >= 0)
         assertArrayEquals("the Kotlin strip's bytes are unchanged", expected, buf.copyOf(newLen))
     }
@@ -340,9 +342,18 @@ class DolbyVisionLibdoviStripContractTest {
 
         assertFalse("no libdovi in this process, so the marker must stay off", accounting.viaLibdovi)
         assertEquals(
-            "the RPU, the EL and the HDR10+ SEI went",
+            "the RPU, the EL and the HDR10+ SEI are all examined, in order",
             listOf(62, 63, 39),
             accounting.entries.map { it.nalType }
+        )
+        assertEquals(
+            "but only the RPU and the EL go — the NAL 39 is kept whole for DV",
+            listOf(
+                DolbyVisionCompat.SeiStripAccounting.Action.DROPPED,
+                DolbyVisionCompat.SeiStripAccounting.Action.DROPPED,
+                DolbyVisionCompat.SeiStripAccounting.Action.KEPT
+            ),
+            accounting.entries.map { it.action }
         )
         assertTrue(
             "and their sizes are measurements, unlike the native path's categories",
