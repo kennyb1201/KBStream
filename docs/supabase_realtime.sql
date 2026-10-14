@@ -1,4 +1,4 @@
--- KBStream sync: enable Supabase Realtime for the three sync tables.
+-- KBStream sync: enable Supabase Realtime for the four sync tables.
 -- Run ONCE in the Supabase SQL Editor (Database → SQL Editor → New query →
 -- paste → Run). Safe to re-run: the guard below adds only the tables that are
 -- missing and reports what it did.
@@ -30,7 +30,7 @@
 -- supabase_sync_rls.sql are therefore also what stops an account from being
 -- pushed another account's rows over the websocket.
 
--- ── Add the three sync tables to the realtime publication ─────────────
+-- ── Add the four sync tables to the realtime publication ─────────────
 do $$
 declare
   t text;
@@ -41,7 +41,12 @@ begin
   end if;
 
   for t in
-    select unnest(array['sync_watch_history', 'sync_watched_status', 'sync_prefs'])
+    select unnest(array[
+      'sync_watch_history',
+      'sync_watched_status',
+      'sync_image_overrides',
+      'sync_prefs'
+    ])
   loop
     if exists (
       select 1

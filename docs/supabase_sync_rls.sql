@@ -5,7 +5,8 @@
 --
 -- What this guarantees:
 --   1. Tables exist with the exact columns the app reads/writes
---      (SyncRowDto: item_id / item_key / pref_key / payload / updated_at).
+--      (SyncRowDto: item_id / item_key / override_key / pref_key / payload /
+--      updated_at).
 --   2. Every row is OWNED by the account that wrote it. The app never sends
 --      user_id — the column defaults to auth.uid(), so PostgREST inserts are
 --      stamped automatically — and RLS stops any other account from reading
@@ -54,6 +55,22 @@ alter table public.sync_watched_status add column if not exists item_key text;
 alter table public.sync_watched_status add column if not exists payload jsonb;
 alter table public.sync_watched_status add column if not exists updated_at timestamptz;
 
+-- ── sync_image_overrides ────────────────────────────────────────────
+-- Poster / backdrop overrides chosen by long-press in the Media section (the
+-- cloud twin of the local `image_overrides` table). One row per (title, kind,
+-- surface) - the app's key is the composed "<tmdbId>:<type>:<screen>" - and
+-- `payload` carries tmdbId / type / screen / imagePath plus the enqueue-time
+-- `updatedAt` the merge compares. A "Reset to default" is a payload carrying
+-- `deletedAt` instead of an image, the same tombstone the history table uses.
+create table if not exists public.sync_image_overrides (
+  override_key text primary key,
+  payload jsonb not null,
+  updated_at timestamptz not null default now()
+);
+alter table public.sync_image_overrides add column if not exists override_key text;
+alter table public.sync_image_overrides add column if not exists payload jsonb;
+alter table public.sync_image_overrides add column if not exists updated_at timestamptz;
+
 -- ── sync_prefs ──────────────────────────────────────────────────────
 create table if not exists public.sync_prefs (
   pref_key text primary key,
@@ -72,7 +89,9 @@ declare
   t text;
   owner uuid;
 begin
-  foreach t in array array['sync_watch_history','sync_watched_status','sync_prefs']
+  foreach t in array array[
+    'sync_watch_history','sync_watched_status','sync_image_overrides','sync_prefs'
+  ]
   loop
     execute format('alter table public.%I add column if not exists user_id uuid', t);
   end loop;
@@ -82,7 +101,9 @@ begin
   -- accounts there is nothing to preserve.
   select id into owner from auth.users order by created_at asc limit 1;
 
-  foreach t in array array['sync_watch_history','sync_watched_status','sync_prefs']
+  foreach t in array array[
+    'sync_watch_history','sync_watched_status','sync_image_overrides','sync_prefs'
+  ]
   loop
     if owner is null then
       execute format('delete from public.%I where user_id is null', t);
@@ -110,8 +131,8 @@ declare
 begin
   for t, keycol in
     select * from unnest(
-      array['sync_watch_history','sync_watched_status','sync_prefs'],
-      array['item_id','item_key','pref_key']
+      array['sync_watch_history','sync_watched_status','sync_image_overrides','sync_prefs'],
+      array['item_id','item_key','override_key','pref_key']
     )
   loop
     want := array(select unnest(array['user_id', keycol]) order by 1);
@@ -143,6 +164,7 @@ end $$;
 -- the previous "any authenticated account" policies, which shared all rows.
 alter table public.sync_watch_history enable row level security;
 alter table public.sync_watched_status enable row level security;
+alter table public.sync_image_overrides enable row level security;
 alter table public.sync_prefs enable row level security;
 
 -- Retire the old shared-everything policies if they are present.
@@ -165,6 +187,14 @@ create policy "kbstream_own_watch_history"
 drop policy if exists "kbstream_own_watched_status" on public.sync_watched_status;
 create policy "kbstream_own_watched_status"
   on public.sync_watched_status
+  for all
+  to authenticated
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+drop policy if exists "kbstream_own_image_overrides" on public.sync_image_overrides;
+create policy "kbstream_own_image_overrides"
+  on public.sync_image_overrides
   for all
   to authenticated
   using (auth.uid() = user_id)
@@ -197,10 +227,13 @@ begin
     select policyname, tablename
     from pg_policies
     where schemaname = 'public'
-      and tablename in ('sync_watch_history','sync_watched_status','sync_prefs')
+      and tablename in (
+        'sync_watch_history','sync_watched_status','sync_image_overrides','sync_prefs'
+      )
       and policyname not in (
         'kbstream_own_watch_history',
         'kbstream_own_watched_status',
+        'kbstream_own_image_overrides',
         'kbstream_own_prefs'
       )
   loop

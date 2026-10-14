@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonObject
 internal data class SyncRowDto(
     @SerialName("item_id") val itemId: String? = null,
     @SerialName("item_key") val itemKey: String? = null,
+    @SerialName("override_key") val overrideKey: String? = null,
     @SerialName("pref_key") val prefKey: String? = null,
     val payload: JsonObject,
     @SerialName("updated_at") val updatedAt: String = ""

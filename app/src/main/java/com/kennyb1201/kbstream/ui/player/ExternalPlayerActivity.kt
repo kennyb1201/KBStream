@@ -183,7 +183,20 @@ class ExternalPlayerActivity : ComponentActivity() {
     private var concluded = false
 
     private var scrobbleStarted = false
-    private var completionSent = false
+
+    /**
+     * True once a COMPLETED row for this session has been written to watch
+     * history, and never cleared again for the life of the activity.
+     *
+     * The measured clock can conclude an episode without the external player
+     * ever reporting its end, and the saves that follow ([exitPlayer], the
+     * destroy-time save) would otherwise re-decide the verdict from the
+     * measured position and put a resume point back over the completion. Once
+     * a completion is filed the episode is done for this session, whatever the
+     * measured position says afterwards - the same sticky fact the other two
+     * engines keep (see [MpvPlayerActivity.completionFiled]).
+     */
+    private var completionFiled = false
     private var trackersMarkedWatched = false
     private var switchStarted = false
 
@@ -1251,6 +1264,29 @@ class ExternalPlayerActivity : ComponentActivity() {
             finish()
             return
         }
+        // The panel is only ever raised for a title the session has finished
+        // with, so the episode MUST already be filed as watched: the two
+        // systems that stand behind "watched" - the local history row and the
+        // tracker push - were told by the completion this session wrote. This
+        // line is the assertion the field report asked for ("BYW appeared but
+        // the episode is not marked watched"): a capture showing `byw shown`
+        // with `filed=false` is that inconsistency, caught the moment it
+        // happens rather than weeks later on Continue Watching.
+        if (!completionFiled) {
+            Log.w(
+                TAG,
+                "BYW raised without a filed completion for ${historyId} " +
+                    "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
+                    "not marked watched"
+            )
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+            )
+        } else {
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+            )
+        }
         ui.show(itemName)
         scrim?.visibility = View.VISIBLE
         ui.focusFirst()
@@ -1444,11 +1480,13 @@ class ExternalPlayerActivity : ComponentActivity() {
             val rawPosition = if (forceCompleted) durationMs else measuredPosition
             if (!forceCompleted && rawPosition < MIN_RESUME_POSITION_MS) return@launch
 
-            val completed = forceCompleted ||
+            val completed = forceCompleted || completionFiled ||
                 rawPosition >= (durationMs * COMPLETION_THRESHOLD_RATIO).toLong()
             val safePosition = if (completed) 0L else rawPosition.coerceAtMost(durationMs)
             val now = System.currentTimeMillis()
-            if (completed) completionSent = true
+            // Filed BEFORE the write is launched, so a later save reads the
+            // fact rather than re-deciding from the measured position.
+            if (completed) completionFiled = true
 
             Log.i(
                 TAG,

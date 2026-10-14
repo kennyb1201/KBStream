@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.sync.SupabaseSync
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -230,6 +231,13 @@ object ImageOverrides {
         runCatchingCancellable { dao(context).set(row) }.onFailure { error ->
             Log.w(TAG, "image override could not be saved", error)
         }
+        // The same choice on every device: the row is published to the account
+        // through SupabaseSync's outbox (see [SupabaseSync.enqueueImageOverride]).
+        // Signed out this is a no-op, and the choice stays local exactly as the
+        // other per-profile writes do.
+        runCatching { SupabaseSync.enqueueImageOverride(row) }.onFailure { error ->
+            Log.w(TAG, "image override could not be queued for sync", error)
+        }
     }
 
     private suspend fun persistClear(
@@ -240,6 +248,14 @@ object ImageOverrides {
     ) {
         runCatchingCancellable { dao(context).clear(tmdbId, type, screen) }.onFailure { error ->
             Log.w(TAG, "image override could not be cleared", error)
+        }
+        // Published as a tombstone rather than a cloud delete, so the sibling
+        // device stops drawing the still too (see
+        // [SupabaseSync.clearImageOverrides]).
+        runCatching {
+            SupabaseSync.clearImageOverrides(listOf(key(tmdbId, type, screen)))
+        }.onFailure { error ->
+            Log.w(TAG, "image override reset could not be queued for sync", error)
         }
     }
 

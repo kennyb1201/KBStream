@@ -74,6 +74,7 @@ import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace
+import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
@@ -2423,6 +2424,27 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * completed. A fresh session is a fresh activity, so nothing is inherited.
      */
     private var playbackEndReached = false
+
+    /**
+     * True once a COMPLETED row for this session has been written to watch
+     * history, and never cleared again for the life of the activity.
+     *
+     * [playbackEndReached] says the FILE ended. That is not the same fact as
+     * "the completion was filed": the 90% threshold in [saveProgress] completes
+     * an episode the file never actually reached the end of - a source that
+     * stops short, a stream whose last minutes are missing, a viewer who
+     * crossed the threshold and backed out - and the exit/pause saves that
+     * followed re-decided the verdict from the playhead alone. A viewer who
+     * paused six minutes from the end, resumed, watched past the threshold and
+     * then parked on a rewind filed a RESUME row over the completion: the
+     * episode lost its watched marker and Continue Watching offered to resume
+     * the ten minutes it had already finished. Once a completion is filed the
+     * episode is done for this session, whatever happens to the playhead - so
+     * every later save in the session is judged as completed too and can never
+     * write a resume row back over it (see [shouldRecordCompletion]'s
+     * `completionFiled` arm, which the handoff and exit paths pass).
+     */
+    private var completionFiled = false
 
     // Earliest-end trigger: the Up Next / Because-you-watched panel now opens
     // during the end credits (or shortly before the end) instead of waiting
@@ -10485,6 +10507,29 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         pendingNextEpisodeName = null
         pendingNextEpisodeRuntime = null
         pendingNextEpisodeOverview = null
+        // The panel is only ever raised for a title the session has finished
+        // with, so the episode MUST already be filed as watched: the two
+        // systems that stand behind "watched" - the local history row and the
+        // tracker push - were told by the completion this session wrote. This
+        // line is the assertion the field report asked for ("BYW appeared but
+        // the episode is not marked watched"): a capture showing `byw shown`
+        // with `filed=false` is that inconsistency, caught the moment it
+        // happens rather than weeks later on Continue Watching.
+        if (!completionFiled) {
+            Log.w(
+                TAG,
+                "BYW raised without a filed completion for ${historyId} " +
+                    "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
+                    "not marked watched"
+            )
+            PlaybackSessionTrace.note(
+                "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+            )
+        } else {
+            PlaybackSessionTrace.note(
+                "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+            )
+        }
         bywUi.show(itemName)
         // Credits are rolling: shrink the video into the corner so the picks
         // own the screen while the credits keep playing.
@@ -10791,7 +10836,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             positionMs = pos,
             durationMs = dur,
             played = sessionHasPlayed(),
-            explicitAdvance = true
+            explicitAdvance = true,
+            completionFiled = completionFiled
         )
         // The verdict is reported AFTER the write commits (onWritten), so the
         // trace can no longer claim "filed" for a row that was never stored.
@@ -11099,7 +11145,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // over the completion: the episode lost its watched marker and went
         // straight back onto Continue Watching. The episode DID finish, and no
         // later position can unsay it.
-        val sessionCompleted = forceCompleted || playbackEndReached
+        //
+        // [completionFiled] is the same fact arrived at the other way: the file
+        // never ended, but the 90% threshold below completed the episode, and
+        // that completion was written. From that moment on every save in the
+        // session is completed too, so the pause/exit save that follows can no
+        // longer race it and put a resume point back over the watched marker.
+        val sessionCompleted = forceCompleted || playbackEndReached || completionFiled
         if (dur == null && !sessionCompleted) return
         if (pos < MIN_RESUME_POSITION_MS && !sessionCompleted) return
         // With no length the played position is the best duration we have:
@@ -11111,6 +11163,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 (dur != null && pos >= (dur * COMPLETION_THRESHOLD_RATIO).toLong())
         val safePos = if (isCompleted) 0L else pos.coerceAtMost(effectiveDur)
         val now = System.currentTimeMillis()
+        // Filed BEFORE the write is launched, so a second save racing this one
+        // (a pause landing as the end is handled) reads the fact rather than
+        // re-deciding from the playhead. Cleared only with the activity.
+        if (isCompleted) completionFiled = true
 
         // A row filed from the credits tail is a "leaving" row even when the
         // local rule above did not call it completed: the tracker's own stop
@@ -11888,7 +11944,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 durationMs = exoPlayer?.duration
                     ?.takeIf { it > 0L && it != C.TIME_UNSET }
                     ?: 0L,
-                played = sessionHasPlayed()
+                played = sessionHasPlayed(),
+                completionFiled = completionFiled
             )
             saveProgress(reason = "stop", forceCompleted = completedOnExit)
             scrobbleSimkl("stop")

@@ -400,6 +400,53 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         streamIds: List<String>
     ): Int
 
+    /**
+     * The in-progress rows a COMPLETION for one episode supersedes, by the
+     * episode's identity.
+     *
+     * A completion is written as the same row the session has been saving - the
+     * completed marker and the resume point are one row in this table - so the
+     * everyday case clears the resume point by overwriting it (`positionMs = 0`,
+     * `isCompleted = 1`) and there is nothing left to delete. The rows this
+     * finds are the ones that overwrite does NOT reach: a resume row filed
+     * under a different row id than the completion is - an add-on's video id
+     * against the numbered key the launch resolved, or an earlier session that
+     * saved under its own id flavor. Continue Watching and the Detail screen's
+     * progress bar are both built from exactly these rows, so one of them left
+     * behind is the "it still says 10 minutes left" report: the episode is
+     * marked watched AND still offers to resume.
+     *
+     * The match is the identity pair the other resume-row deletes use - the
+     * stream id when the launch carried one (immune to a numbering
+     * disagreement), else the season/episode numbers - written once here rather
+     * than re-derived in Kotlin. Either half may be absent, and a session that
+     * carries neither (a movie) matches nothing, which is right: a movie's own
+     * resume row IS the row the completion overwrites.
+     *
+     * Returns the ids so the caller can tombstone them in the cloud too - a
+     * delete only local is re-inserted by the next pull (see
+     * [com.kennyb1201.kbstream.data.sync.SupabaseSync.deleteHistoryRows]).
+     */
+    @Query(
+        """
+        SELECT id FROM watch_history
+        WHERE parentId IN (:parentIds)
+          AND positionMs > 0
+          AND isCompleted = 0
+          AND (
+              (:streamId IS NOT NULL AND :streamId <> '' AND episodeStreamId = :streamId)
+              OR (:season IS NOT NULL AND :episode IS NOT NULL
+                  AND season = :season AND episode = :episode)
+          )
+        """
+    )
+    suspend fun getSupersededResumeIds(
+        parentIds: List<String>,
+        streamId: String?,
+        season: Int?,
+        episode: Int?
+    ): List<String>
+
     @Query("UPDATE watch_history SET backdropUrl = :backdropUrl WHERE id = :id AND (backdropUrl IS NULL OR backdropUrl = '')")
     suspend fun updateBackdropIfMissing(id: String, backdropUrl: String)
 

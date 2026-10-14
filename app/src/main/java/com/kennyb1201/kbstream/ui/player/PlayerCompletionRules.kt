@@ -65,6 +65,24 @@ internal fun isCreditsTail(positionMs: Long, durationMs: Long): Boolean =
  * middle of an episode still files a resume point. The `endPanelsShown` gate
  * above stays untouched for every other path — an unattended exit, a stream
  * that stops short, the app being backgrounded.
+ *
+ * [completionFiled] is the session's OWN record that a completion has already
+ * been written to watch history, and it outranks every position-based arm
+ * below. The arms above all read WHERE the playhead is, which is the right
+ * question only while the episode is unfinished: the 90% threshold completes a
+ * session without the file ever ending, so a viewer who crossed the threshold
+ * and then moved the playhead back — a rewind, or simply resuming a paused
+ * position — was re-decided as "not finished" by the next save, and the
+ * resume row that save wrote OVERWROTE the completion. The episode lost its
+ * watched marker and its old resume point ("Resume 32 min left") came back,
+ * which is the reported "watched it to the end but it still says 10 minutes
+ * left". A filed completion is a fact about the session, not about the
+ * playhead, so it is never re-decided — and it is what stops the pause/exit
+ * save from racing the completion it was already filed after.
+ *
+ * It is deliberately read only after [played]: a session that never played has
+ * nothing that could have been filed, and the filed flag on such a session
+ * would be a bug in the caller rather than a fact to honour.
  */
 internal fun shouldRecordCompletion(
     playbackEnded: Boolean,
@@ -72,9 +90,11 @@ internal fun shouldRecordCompletion(
     positionMs: Long,
     durationMs: Long,
     played: Boolean,
-    explicitAdvance: Boolean = false
+    explicitAdvance: Boolean = false,
+    completionFiled: Boolean = false
 ): Boolean {
     if (!played) return false
+    if (completionFiled) return true
     if (playbackEnded) return true
 
     // Inside the credits tail, an explicit advance is the viewer's own "done

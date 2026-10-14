@@ -75,8 +75,8 @@ to:
 - authenticate you with an **email address and password** (Supabase Auth); and
 - store, per account and protected by row-level security, the data it syncs:
   **watch history and resume positions, watched state, your profiles (names,
-  avatars, and any Kids-Mode settings), installed addons, collections, and
-  app settings.**
+  avatars, and any Kids-Mode settings), installed addons, collections, your
+  poster/backdrop artwork choices, and app settings.**
 
 This data is associated with your account and is what makes "continue watching"
 and setup follow you between devices. Password handling is done by Supabase Auth;

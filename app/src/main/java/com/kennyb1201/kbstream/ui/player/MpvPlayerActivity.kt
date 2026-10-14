@@ -818,7 +818,27 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private val handler = Handler(Looper.getMainLooper())
     private var audioFocusRequest: AudioFocusRequest? = null
     private var scrobbleStarted = false
-    private var completionSent = false
+
+    /**
+     * True once a COMPLETED row for this session has been written to watch
+     * history, and never cleared again for the life of the activity.
+     *
+     * [endedHandled] says the FILE ended. That is not the same fact as "the
+     * completion was filed": the 90% threshold in [saveProgress] completes an
+     * episode whose end the file never announced - a source that stops short, a
+     * frozen tail, a viewer who crossed the threshold and then left - and the
+     * pause/exit saves that followed re-decided the verdict from the playhead
+     * alone. A viewer who paused ten minutes from the end, resumed, watched
+     * past the threshold and then parked on a rewind filed a RESUME row over
+     * the completion: the episode lost its watched marker and Continue Watching
+     * offered to resume the ten minutes it had already finished. Once a
+     * completion is filed the episode is done for this session, whatever
+     * happens to the playhead - so every later save in the session is judged as
+     * completed too and can never write a resume row back over it (see
+     * [shouldRecordCompletion]'s `completionFiled` arm, which the handoff and
+     * exit paths pass), and the threshold check below never re-fires.
+     */
+    private var completionFiled = false
     private var trackersMarkedWatched = false
     private var endedHandled = false
     private var positionMs = 0L
@@ -2632,7 +2652,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // is safe; onProgress repopulates it with the new source's position.
         positionMs = 0L
         endedHandled = false
-        completionSent = false
+        completionFiled = false
         // The end-of-episode cards and their countdown go with the source being
         // replaced: see hideEndPanels. endPanelsShown is reset there, and so is
         // bywDismissed - the replacement file reaches its own end, and the
@@ -3584,6 +3604,29 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // an exit - the panel opens while the credits are still rolling, and
         // closing the session there would cut them short.
         if (ui == null || bywDismissed) return
+        // The panel is only ever raised for a title the session has finished
+        // with, so the episode MUST already be filed as watched: the two
+        // systems that stand behind "watched" - the local history row and the
+        // tracker push - were told by the completion this session wrote. This
+        // line is the assertion the field report asked for ("BYW appeared but
+        // the episode is not marked watched"): a capture showing `byw shown`
+        // with `filed=false` is that inconsistency, caught the moment it
+        // happens rather than weeks later on Continue Watching.
+        if (!completionFiled) {
+            Log.w(
+                TAG,
+                "BYW raised without a filed completion for ${historyId} " +
+                    "(s=${season ?: "-"} e=${episode ?: "-"}); the episode is " +
+                    "not marked watched"
+            )
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "byw shown filed=false s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+            )
+        } else {
+            com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace.note(
+                "byw shown filed=true s=${season ?: "-"} e=${episode ?: "-"} id=$historyId"
+            )
+        }
         ui.show(itemName)
         // The credits themselves are still rolling: shrink the video into the
         // corner so the picks get the screen, and take the chrome down with it -
@@ -4040,8 +4083,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
             // Completion is a watch-history fact, not an end-of-file event: a
             // title watched to 96% and then backed out of counts as watched,
-            // exactly as it does in the main player.
-            if (!completionSent &&
+            // exactly as it does in the main player. Filed once and never
+            // re-decided - see [completionFiled].
+            if (!completionFiled &&
                 durationMs > 0L &&
                 positionMs >= (durationMs * COMPLETION_THRESHOLD_RATIO).toLong()
             ) {
@@ -4145,7 +4189,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             positionMs = pos,
             durationMs = dur,
             played = sessionHasPlayed(),
-            explicitAdvance = true
+            explicitAdvance = true,
+            completionFiled = completionFiled
         )
         // The verdict is reported AFTER the write commits (onWritten), so the
         // trace can no longer claim "filed" for a row that was never stored.
@@ -4258,10 +4303,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // after a rewind, the onStop save, an actor-return, a sleep-timer save.
         // Judged from the playhead alone, a seek back past the credits filed a
         // RESUME row over the completion: the episode lost its watched marker
-        // and returned to Continue Watching. Mirrors
+        // and returned to Continue Watching. [completionFiled] is the same fact
+        // arrived at the other way - the file never ended, but the 90%
+        // threshold below completed the episode and that completion was
+        // written - so the pause/exit save that follows can no longer race it
+        // and put a resume point back over the watched marker. Mirrors
         // NativePlayerActivity.saveProgress's sessionCompleted, early returns
         // included.
-        val sessionCompleted = forceCompleted || endedHandled
+        val sessionCompleted = forceCompleted || endedHandled || completionFiled
         // A missing duration used to abandon the write entirely - including
         // the completion write at end of file, which is the one fact the
         // player can state without knowing how long the file was. A finished
@@ -4276,7 +4325,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 position >= (effectiveDuration * COMPLETION_THRESHOLD_RATIO).toLong()
         val safePosition = if (completed) 0L else position.coerceAtMost(effectiveDuration)
         val now = System.currentTimeMillis()
-        if (completed) completionSent = true
+        // Filed BEFORE the write is launched, so a second save racing this one
+        // reads the fact rather than re-deciding from the playhead.
+        if (completed) completionFiled = true
 
         // A row filed from the credits tail is a "leaving" row even when the
         // local rule above did not call it completed: the tracker's own stop
@@ -5325,7 +5376,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             endPanelsShown = endPanelsShown,
             positionMs = pos,
             durationMs = dur,
-            played = sessionHasPlayed()
+            played = sessionHasPlayed(),
+            completionFiled = completionFiled
         )
         saveProgress(reason = "exit", forceCompleted = completedOnExit)
         scrobble("stop")

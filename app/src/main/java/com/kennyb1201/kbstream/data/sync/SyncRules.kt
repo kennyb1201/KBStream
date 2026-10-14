@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.sync
 
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.images.ImageOverrideEntity
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -272,6 +273,101 @@ internal object HistoryRowRules {
             put("isCompleted", entity.isCompleted)
             entity.completedAt?.let { put("completedAt", it) }
         }
+}
+
+/**
+ * The exact JSON payload written for one `image_overrides` row, and the merge
+ * rules that carry it between devices.
+ *
+ * The overrides used to live on the device that set them and nowhere else: the
+ * long-press menu on a poster wrote the local `image_overrides` table, so a
+ * still chosen on the Fire TV was still TMDB's on the Onn 4K Plus until the
+ * viewer set it again there. The row travels as its own sync table
+ * (`sync_image_overrides`) keyed by the table's own primary key - the composed
+ * `"<tmdbId>:<type>:<screen>"` - so the cloud row and the local row are the
+ * same row, and the two devices converge on one choice per (title, kind,
+ * surface) exactly as the local table does.
+ *
+ * [UPDATED_AT_FIELD] is stamped at ENQUEUE time and is what the last-write-wins
+ * merge compares, matching the other tables: two devices setting different
+ * stills for the same (type, screen, tmdbId) leave the most recent choice, and
+ * a pull can never walk a newer choice back.
+ *
+ * A reset ("Reset to default") is a row carrying [DELETED_AT_FIELD] instead of
+ * an image - the same tombstone shape the history table uses, and for the same
+ * reason: a row deleted only locally is invisible to a sibling, which still
+ * holds its copy, so a real delete would leave the other device drawing the
+ * still the viewer just asked to be rid of.
+ */
+internal object ImageOverrideRowRules {
+
+    const val UPDATED_AT_FIELD = "updatedAt"
+
+    /** Payload field that marks a row as a deletion tombstone (epoch ms). */
+    const val DELETED_AT_FIELD = "deletedAt"
+
+    /**
+     * The wire payload for one choice. [updatedAt] is the enqueue-time stamp
+     * the merge compares: the local table carries no timestamp of its own -
+     * it is one row per surface, replaced in place - so the field only exists
+     * on the wire and is never re-derived on the receiving side.
+     */
+    fun payload(entity: ImageOverrideEntity, updatedAt: Long): JsonObject =
+        buildJsonObject {
+            put("key", entity.key)
+            put("tmdbId", entity.tmdbId)
+            put("type", entity.type)
+            put("screen", entity.screen)
+            put("imagePath", entity.imagePath)
+            put(UPDATED_AT_FIELD, updatedAt)
+        }
+
+    /** The stamp a pulled or queued row was written with (0 when absent). */
+    fun updatedAt(payload: JsonObject): Long =
+        (payload[UPDATED_AT_FIELD] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L
+
+    /** The payload written in place of a reset row. */
+    fun tombstone(key: String, deletedAt: Long): JsonObject =
+        buildJsonObject {
+            put("key", key)
+            put(DELETED_AT_FIELD, deletedAt)
+            put(UPDATED_AT_FIELD, deletedAt)
+        }
+
+    fun deletedAt(payload: JsonObject): Long? =
+        (payload[DELETED_AT_FIELD] as? JsonPrimitive)?.content?.toLongOrNull()
+
+    fun isTombstone(payload: JsonObject): Boolean = deletedAt(payload) != null
+
+    /**
+     * The entity a pulled row carries, or null when it is not a usable choice
+     * (a tombstone, or a payload without the fields the local row needs).
+     *
+     * [key] is the row's identity as the caller read it out of the key COLUMN,
+     * and it wins over the copy inside the payload: that column is what the
+     * cloud row is keyed by, so a payload whose `key` field disagreed with it
+     * would otherwise write the choice under a second primary key.
+     */
+    fun entity(key: String, payload: JsonObject): ImageOverrideEntity? {
+        if (isTombstone(payload)) return null
+        val rowKey = key.takeIf { it.isNotBlank() }
+            ?: (payload["key"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+            ?: return null
+        val tmdbId = (payload["tmdbId"] as? JsonPrimitive)?.content?.toIntOrNull() ?: return null
+        val type = (payload["type"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+            ?: return null
+        val screen = (payload["screen"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+            ?: return null
+        val imagePath = (payload["imagePath"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+            ?: return null
+        return ImageOverrideEntity(
+            key = rowKey,
+            tmdbId = tmdbId,
+            type = type,
+            screen = screen,
+            imagePath = imagePath
+        )
+    }
 }
 
 /**

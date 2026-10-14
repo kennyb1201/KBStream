@@ -138,7 +138,18 @@ internal object PlaybackHistoryWriter {
                 WatchHistoryDatabase.withScopedDao(context) { dao ->
                     val row = preserveCompletion(entry, dao)
                     dao.upsert(row)
+                    // The completion has landed, so the episode's resume point
+                    // goes with it - the rows the upsert above does not reach
+                    // (see [clearSupersededResumeRows]).
+                    val cleared = clearSupersededResumeRows(row, dao)
                     SupabaseSync.enqueueHistory(row, sessionProfileId)
+                    // ...and the cloud copies of those rows are TOMBSTONED, not
+                    // simply deleted: a row deleted only locally is re-inserted
+                    // by the next pull, which is how a finished episode's
+                    // resume card came back on the next sync.
+                    if (cleared.isNotEmpty()) {
+                        SupabaseSync.deleteHistoryRows(cleared, sessionProfileId)
+                    }
                     // Only the rows the launcher can actually publish, not the
                     // whole table: a save happens on every position tick, and
                     // getAll() dragged every completed row back with it.
@@ -180,9 +191,13 @@ internal object PlaybackHistoryWriter {
                 val dao = db.watchHistoryDao()
                 val row = preserveCompletion(entry, dao)
                 dao.upsert(row)
+                val cleared = clearSupersededResumeRows(row, dao)
                 // Already session-scoped: the cloud row carries the same
                 // profile the local row landed under.
                 SupabaseSync.enqueueHistory(row, target)
+                if (cleared.isNotEmpty()) {
+                    SupabaseSync.deleteHistoryRows(cleared, target)
+                }
             } finally {
                 runCatching { db.close() }
             }
@@ -200,6 +215,52 @@ internal object PlaybackHistoryWriter {
         }
 
         return WriteResult(ok = ok, profileId = target)
+    }
+
+    /**
+     * DELETES the episode's resume rows once its completion has been filed, and
+     * returns the ids it removed (so the caller can tombstone them).
+     *
+     * A completion and a resume point are the SAME row in this table - the
+     * completion is the resume row overwritten with `positionMs = 0` and
+     * `isCompleted = 1` - so this is deliberately about the OTHER rows: a
+     * resume row for the same episode filed under a different row id, which
+     * the overwrite cannot reach (see [WatchHistoryDao.getSupersededResumeIds]
+     * for what those are). Left behind, one of them is a Continue Watching card
+     * and a progress bar on an episode that is already ticked - the field
+     * report's "it keeps returning to the ten minutes it has already
+     * finished".
+     *
+     * Runs only for a completed row, so the once-a-session completion pays for
+     * it and the every-tick position save does not.
+     *
+     * A lookup that fails is not fatal: the completion itself has already been
+     * written, and the next session's completion retries the cleanup.
+     */
+    private suspend fun clearSupersededResumeRows(
+        entry: WatchHistoryEntity,
+        dao: WatchHistoryDao
+    ): List<String> {
+        if (!entry.isCompleted) return emptyList()
+        val parents = listOf(entry.parentId).filter { it.isNotBlank() }
+        if (parents.isEmpty()) return emptyList()
+        val ids = runCatchingCancellable {
+            dao.getSupersededResumeIds(
+                parentIds = parents,
+                streamId = entry.episodeStreamId?.takeIf { it.isNotBlank() },
+                season = entry.season,
+                episode = entry.episode
+            ).filter { it != entry.id }
+        }.onFailure { e ->
+            Log.w(TAG, "could not find the superseded resume rows for ${entry.id}", e)
+        }.getOrDefault(emptyList())
+        if (ids.isEmpty()) return emptyList()
+        return runCatchingCancellable {
+            dao.deleteByIds(ids)
+            ids
+        }.onFailure { e ->
+            Log.w(TAG, "could not delete the superseded resume rows for ${entry.id}", e)
+        }.getOrDefault(emptyList())
     }
 
     /**

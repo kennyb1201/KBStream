@@ -44,6 +44,8 @@ import com.kennyb1201.kbstream.data.cache.SyncOutboxEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
+import com.kennyb1201.kbstream.data.images.ImageOverrides
+import com.kennyb1201.kbstream.data.images.ImageOverrideEntity
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
@@ -53,13 +55,14 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
  * What syncs (per user request):
  *  - watch history / resume positions / completion   → sync_watch_history
  *  - watched markers (overrides + cache)             → sync_watched_status
+ *  - poster / backdrop overrides (long-press, Media) → sync_image_overrides
  *  - display prefs, addons, Simkl token, IPTV config → sync_prefs (keyed JSON blobs)
  *    (playback/decoder settings deliberately EXCLUDED — those are per-device)
  *
  * How:
  *  - Local writes enqueue into an in-memory outbox and flush immediately
  *    (also retried on reconnect/interval) — offline-safe.
- *  - A realtime subscription on all three tables applies remote changes
+ *  - A realtime subscription on all four tables applies remote changes
  *    within ~a second of the other device writing them.
  *  - Merge is last-write-wins per item using payload updatedAt (epoch ms),
  *    so newer progress always wins regardless of which device wrote it.
@@ -181,6 +184,16 @@ object SupabaseSync {
     private const val TABLE_HISTORY = "sync_watch_history"
     private const val TABLE_WATCHED = "sync_watched_status"
     private const val TABLE_PREFS = "sync_prefs"
+
+    /**
+     * Poster / backdrop overrides, one row per (title, kind, surface) - the
+     * cloud twin of the local `image_overrides` table. Its key column is
+     * `override_key` rather than `item_key`: the realtime applier identifies a
+     * table from the fields its record carries, and a second table reusing
+     * `item_key` would route its changes into the watched-marker merge.
+     */
+    private const val TABLE_OVERRIDES = "sync_image_overrides"
+    private const val KEY_OVERRIDES = "override_key"
 
     /** Shown when auth is pressed in a build compiled without Supabase keys. */
     private const val SYNC_NOT_CONFIGURED_MESSAGE =
@@ -1002,6 +1015,76 @@ object SupabaseSync {
         scheduleFlush()
     }
 
+    /**
+     * Publishes one poster/backdrop override to the account.
+     *
+     * Called by the long-press menu's write ([ImageOverrides.choose]) right
+     * after the local row lands, so the choice reaches the other device through
+     * the ordinary two channels - the outbox flush for the write, the realtime
+     * channel for the sibling that is already open. Signed out, this is a
+     * no-op exactly like [enqueueHistory]: there is no account to file it
+     * under, and the same-account sign-in re-seeds what this device has (see
+     * [pushOverrides]).
+     */
+    fun enqueueImageOverride(
+        entity: ImageOverrideEntity,
+        profileId: String? = currentProfileId(),
+        updatedAt: Long = System.currentTimeMillis()
+    ) {
+        if (!isSignedIn()) return
+        val row = OutboxItem(
+            TABLE_OVERRIDES,
+            KEY_OVERRIDES,
+            scopedKey(entity.key, profileId),
+            ImageOverrideRowRules.payload(entity, updatedAt)
+        )
+        outbox.put(row)
+        scheduleFlush()
+    }
+
+    /**
+     * Publishes a RESET ("Reset to default") as one tombstone per key.
+     *
+     * A tombstone rather than a cloud delete, for the reason the history table
+     * documents at length: a row that is simply deleted is invisible to a pull,
+     * so a sibling that still holds its copy goes on drawing the still the
+     * viewer asked to be rid of. The reset is therefore a newer WRITE carrying
+     * `deletedAt`, and every merge path reads it as "stop drawing this".
+     *
+     * Signed out there is no session to enqueue into - and the account's cloud
+     * rows still exist - so the reset is staged against the account it belongs
+     * to and replayed on that account's next sign-in, exactly like a signed-out
+     * history delete ([SyncDeferredDeletes]).
+     */
+    fun clearImageOverrides(
+        keys: List<String>,
+        profileId: String? = currentProfileId()
+    ) {
+        val clean = keys.mapNotNull { key -> key.trim().takeIf { it.isNotBlank() } }.distinct()
+        if (clean.isEmpty()) return
+        if (!isSignedIn()) {
+            stageSignedOutOverrideClear(clean, profileId)
+            return
+        }
+        outbox.removeKeys(
+            TABLE_OVERRIDES,
+            KEY_OVERRIDES,
+            clean.map { key -> scopedKey(key, profileId) }
+        )
+        val now = System.currentTimeMillis()
+        clean.forEach { key ->
+            outbox.put(
+                OutboxItem(
+                    TABLE_OVERRIDES,
+                    KEY_OVERRIDES,
+                    scopedKey(key, profileId),
+                    ImageOverrideRowRules.tombstone(key, now)
+                )
+            )
+        }
+        scheduleFlush()
+    }
+
     fun enqueueWatched(entity: WatchedStatusEntity, profileId: String? = currentProfileId()) {
         if (!isSignedIn()) return
         // Both badge flags travel: a row that only carried isWatched arrived
@@ -1140,6 +1223,7 @@ object SupabaseSync {
                                 when (row.keyColumn) {
                                     "item_id" -> "item_id"
                                     "item_key" -> "item_key"
+                                    KEY_OVERRIDES -> KEY_OVERRIDES
                                     else -> "pref_key"
                                 },
                                 row.key
@@ -1291,6 +1375,7 @@ object SupabaseSync {
         pullPrefs(context)
         pullHistory(context)
         pullWatched(context)
+        pullOverrides(context)
         val pulledAt = System.currentTimeMillis()
         _lastSyncAtMs.value = pulledAt
         _lastPullAtMs.value = pulledAt
@@ -1299,6 +1384,7 @@ object SupabaseSync {
     private suspend fun pushAllNow(context: Context) {
         pushHistory(context)
         pushWatched(context)
+        pushOverrides(context)
         pushPrefsBlobs(context)
         flushOutbox()
         val pushedAt = System.currentTimeMillis()
@@ -1553,6 +1639,90 @@ object SupabaseSync {
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_watched"))
             Log.e(TAG, "pullWatched crashed: ${t.message}")
         }
+    }
+
+    /**
+     * Pulls the account's poster/backdrop overrides into the local table.
+     *
+     * Same shape as [pullWatched]: one read of the account's rows, then each of
+     * them merged through [applyImageOverrideRow], which is also the realtime
+     * applier for a single row - so the pull and the live channel can never
+     * disagree about what a remote choice means, and the merge logic (the
+     * profile filter, the pending-write skip, the tombstone clear, the no-op
+     * for an identical row, the mirror refresh) exists once.
+     *
+     * What each row DOES is the applier's own verdict - it reads the local row
+     * itself - so the pull does not repeat that decision to count it; the log
+     * line below is the row count the account holds, not the number that
+     * actually changed.
+     */
+    private suspend fun pullOverrides(context: Context) {
+        val c = client ?: return
+        // Same captured-scope rule as pullHistory above.
+        val pid = currentProfileId()
+        try {
+            val rows = c.from(TABLE_OVERRIDES)
+                .select()
+                .decodeList<SyncRowDto>()
+            for (row in rows) {
+                // Bail on a mid-pull profile switch (same rule as pullHistory).
+                if (currentProfileId() != pid) return
+                val storedKey = row.overrideKey ?: continue
+                if (!storedKeyMatchesProfile(storedKey, pid)) continue
+                applyImageOverrideRow(row)
+            }
+            if (rows.isNotEmpty()) {
+                Log.i(TAG, "override pull read ${rows.size} row(s) for profile=${pid ?: "legacy"}")
+            }
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            Log.w(TAG, "pullOverrides failed: ${e.message}")
+            recordSyncError("Artwork sync", e)
+        } catch (t: Throwable) {
+            if (t is CancellationException) throw t
+            CrashReporter.recordNonFatal(t, mapOf("source" to "pull_overrides"))
+            Log.e(TAG, "pullOverrides crashed: ${t.message}")
+        }
+    }
+
+    /**
+     * Seeds the CLOUD from the local override table, for the keys the account
+     * does not carry yet.
+     *
+     * Deliberately narrow: a key the cloud already holds is NOT re-published
+     * here. The local table has no per-row timestamp, so a full push would have
+     * to stamp every row with `now` - and a device whose copy of a key is the
+     * older choice (it set it before the other TV changed it, or it simply has
+     * not pulled yet) would then overwrite the newer one with a fresh stamp.
+     * Missing keys are the only rows a push can add without that risk, and they
+     * are exactly what a device that chose artwork while signed out has to
+     * contribute.
+     */
+    private suspend fun pushOverrides(context: Context) {
+        val c = client ?: return
+        val pid = currentProfileId()
+        val all = WatchHistoryDatabase.getInstanceScoped(context)
+            .imageOverrideDao()
+            .getAll()
+        if (all.isEmpty()) return
+        val cloudKeys = runCatching {
+            c.from(TABLE_OVERRIDES)
+                .select()
+                .decodeList<SyncRowDto>()
+                .mapNotNull { row -> row.overrideKey }
+                .filter { storedKey -> storedKeyMatchesProfile(storedKey, pid) }
+                .map { storedKey -> unscopedKey(storedKey) }
+                .toSet()
+        }.getOrElse { e ->
+            Log.w(TAG, "pushOverrides could not read the cloud rows: ${e.message}")
+            return
+        }
+        if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
+        val missing = all.filter { entity -> entity.key !in cloudKeys }
+        if (missing.isEmpty()) return
+        val now = System.currentTimeMillis()
+        missing.forEach { entity -> enqueueImageOverride(entity, pid, now) }
+        flushOutbox()
     }
 
     private suspend fun pullPrefs(context: Context) {
@@ -1968,10 +2138,11 @@ object SupabaseSync {
                 try {
                     // One channel per table; the flow must be created BEFORE the
                     // channel subscribes (supabase-kt requirement).
-                    listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_PREFS).forEach { table ->
-                        subscribeTable(c, table)
-                    }
-                    Log.i(TAG, "realtime subscribed to 3 tables")
+                    listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_OVERRIDES, TABLE_PREFS)
+                        .forEach { table ->
+                            subscribeTable(c, table)
+                        }
+                    Log.i(TAG, "realtime subscribed to 4 tables")
                     _realtimeStatus.value = "live"
                     _realtimeChannelCount.value = realtimeSubscriptions.size
                     watchRealtimeHealth()
@@ -2128,6 +2299,7 @@ object SupabaseSync {
                 val table = when {
                     record["item_id"] != null -> TABLE_HISTORY
                     record["item_key"] != null -> TABLE_WATCHED
+                    record[KEY_OVERRIDES] != null -> TABLE_OVERRIDES
                     else -> TABLE_PREFS
                 }
 
@@ -2136,6 +2308,7 @@ object SupabaseSync {
                 when (table) {
                     TABLE_HISTORY -> applyHistoryRow(row)
                     TABLE_WATCHED -> applyWatchedRow(row)
+                    TABLE_OVERRIDES -> applyImageOverrideRow(row)
                     TABLE_PREFS -> {
                         val context = appContextRef?.get() ?: return@launch
                         val storedKey = row.prefKey ?: return@launch
@@ -2223,6 +2396,60 @@ object SupabaseSync {
         }
     }
 
+    /**
+     * Applies one remote poster/backdrop override.
+     *
+     * Unlike the history and watched merges this one has no local clock to
+     * compare against - `image_overrides` is one row per surface, replaced in
+     * place, and it carries no `updatedAt` (the local DAO and entity are
+     * deliberately untouched by this feature). So the rule is the outcome the
+     * other tables' last-write-wins produces, read from the other side: the
+     * cloud row is the newest write unless this device has one queued for the
+     * same key, and a row that differs from the local copy is applied. A row
+     * that DOESN'T differ is a no-op, which is what keeps the two devices from
+     * echoing each other's write back and forth forever.
+     */
+    private suspend fun applyImageOverrideRow(row: SyncRowDto) {
+        val context = appContextRef?.get() ?: return
+        val storedKey = row.overrideKey ?: return
+        // Same pin as applyHistoryRow: filter first, resolve the DB, then
+        // re-check the profile so a switch cannot file the row under it.
+        val pid = currentProfileId()
+        if (!storedKeyMatchesProfile(storedKey, pid)) return
+        val db = WatchHistoryDatabase.getInstanceScoped(context)
+        if (currentProfileId() != pid) return
+        val key = unscopedKey(storedKey)
+        val remote = row.payload
+        val remoteUpdated = ImageOverrideRowRules.updatedAt(remote)
+
+        // A write this device has queued for the same key is the newer one when
+        // its stamp is not older - the same test pullHistory applies to a
+        // pending tombstone, so a slow flush cannot be walked back by a pull
+        // that raced it.
+        val queued = outbox.pending(TABLE_OVERRIDES, KEY_OVERRIDES, storedKey)
+        if (queued != null && ImageOverrideRowRules.updatedAt(queued.payload) >= remoteUpdated) {
+            return
+        }
+
+        val dao = db.imageOverrideDao()
+        val local = dao.getAll().firstOrNull { it.key == key }
+
+        val deletedAt = ImageOverrideRowRules.deletedAt(remote)
+        if (deletedAt != null) {
+            // A reset is a tombstone, not a delete: a row deleted only on the
+            // device that asked for it is invisible to this one, which would
+            // keep drawing the still the viewer just rejected.
+            if (local != null) dao.clear(local.tmdbId, local.type, local.screen)
+        } else {
+            val entity = ImageOverrideRowRules.entity(key, remote) ?: return
+            if (local?.imagePath == entity.imagePath) return
+            dao.set(entity)
+        }
+        // Republish the in-memory mirror the surfaces read, so the choice
+        // appears live instead of after the screen is rebuilt.
+        ImageOverrides.refresh(context)
+    }
+
     private suspend fun applyWatchedRow(row: SyncRowDto) {
         val context = appContextRef?.get() ?: return
         val remote = row.payload
@@ -2300,6 +2527,32 @@ object SupabaseSync {
      * no-op when no account has ever signed in on this device: there is nothing
      * to attribute the delete to, and no cloud copy it could be wrong about.
      */
+    /**
+     * Stages a signed-out RESET of poster/backdrop overrides, the override twin
+     * of [stageSignedOutDelete]: the account's cloud rows still exist, so
+     * dropping the reset would let the next same-account sign-in pull the still
+     * straight back.
+     */
+    private fun stageSignedOutOverrideClear(keys: List<String>, profileId: String?) {
+        val context = appContextRef?.get() ?: return
+        val accountId = SyncDeferredDeletes.lastAccountId(context) ?: return
+        val now = System.currentTimeMillis()
+        keys.forEach { key ->
+            SyncDeferredDeletes.stage(
+                context,
+                SyncDeferredDeletes.Staged(
+                    accountId = accountId,
+                    table = TABLE_OVERRIDES,
+                    keyColumn = KEY_OVERRIDES,
+                    key = scopedKey(key, profileId),
+                    payloadJson = ImageOverrideRowRules.tombstone(key, now).toString(),
+                    enqueuedAtMs = now
+                )
+            )
+        }
+        Log.i(TAG, "staged ${keys.size} signed-out artwork reset(s) for $accountId")
+    }
+
     private fun stageSignedOutDelete(ids: List<String>, profileId: String?) {
         val context = appContextRef?.get() ?: return
         val accountId = SyncDeferredDeletes.lastAccountId(context) ?: return

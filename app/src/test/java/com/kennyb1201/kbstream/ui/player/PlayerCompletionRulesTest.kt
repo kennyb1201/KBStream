@@ -228,6 +228,91 @@ class PlayerCompletionRulesTest {
         )
     }
 
+    // --- completionFiled: a completion that was WRITTEN is never re-decided ---
+
+    /**
+     * The report this flag exists for: pause ten minutes from the end, resume,
+     * watch past the 90% threshold (which files the completion), then move the
+     * playhead back - a rewind, or the pause/exit save that follows. Every
+     * position-based arm below the flag would call that "not finished" and let
+     * the save write the old resume point back over the watched marker; the
+     * filed completion outranks them, so the episode stays done and its resume
+     * point stays gone.
+     */
+    @Test
+    fun `a filed completion outranks a mid-episode position`() {
+        listOf(0.95, 0.90, 0.80, 0.50, 0.0).forEach { fraction ->
+            assertTrue(
+                "pos=${(duration * fraction).toLong()} must stay completed: the " +
+                    "completion was already filed this session",
+                shouldRecordCompletion(
+                    playbackEnded = false,
+                    endPanelsShown = false,
+                    positionMs = (duration * fraction).toLong(),
+                    durationMs = duration,
+                    played = true,
+                    completionFiled = true
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `a filed completion does not need a known duration`() {
+        assertTrue(
+            shouldRecordCompletion(
+                playbackEnded = false,
+                endPanelsShown = false,
+                positionMs = 0L,
+                durationMs = 0L,
+                played = true,
+                completionFiled = true
+            )
+        )
+    }
+
+    @Test
+    fun `a filed completion still cannot complete a session that never played`() {
+        // The flag is a fact about a session that played; a caller that set it
+        // on a session which never produced a frame is wrong, and the "nothing
+        // was watched, so nothing is completed" rule still wins - this is what
+        // keeps a run of dead add-on sources from filing themselves watched.
+        assertFalse(
+            shouldRecordCompletion(
+                playbackEnded = false,
+                endPanelsShown = false,
+                positionMs = duration,
+                durationMs = duration,
+                played = false,
+                completionFiled = true
+            )
+        )
+    }
+
+    @Test
+    fun `an unfiled session is unchanged by the new arm`() {
+        // The flag defaults off, so every call site that does not pass it keeps
+        // the rule it had.
+        assertFalse(
+            shouldRecordCompletion(
+                playbackEnded = false,
+                endPanelsShown = false,
+                positionMs = duration / 2,
+                durationMs = duration,
+                played = true
+            )
+        )
+        assertTrue(
+            shouldRecordCompletion(
+                playbackEnded = true,
+                endPanelsShown = false,
+                positionMs = duration / 2,
+                durationMs = duration,
+                played = true
+            )
+        )
+    }
+
     @Test
     fun `the exit path is unchanged by the advance rule`() {
         // onStop passes no advance, so leaving a session in the credits with
