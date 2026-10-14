@@ -36,9 +36,13 @@ import org.junit.Test
  *     above it) before one does;
  *  2. `applyOptions()` sets `vo` as an OPTION before `init()`, from the
  *     device-resolved output — the session's one configuration of the output;
- *  3. `surfaceCreated()` attaches the surface and then re-opens `vo` as a
- *     PROPERTY from that same resolution — which is what re-initializes the
- *     output against the surface that was just attached;
+ *  3. `surfaceCreated()` attaches the surface and then takes ONE of the
+ *     reference player's two branches, decided by the pending load: a first
+ *     creation starts that load and leaves `vo` alone (the OPTION already
+ *     configured it), and a recreation — no load waiting, because
+ *     `surfaceDestroyed()` ran — re-opens `vo` as a PROPERTY from that same
+ *     resolution, which is what re-initializes the output against the surface
+ *     that was just attached;
  *  4. `surfaceDestroyed()` nulls `vo`, drops forced rendering and detaches, in
  *     that order: the output is torn down while its surface still exists;
  *  5. `release()`'s final `vo=null` before `destroy()` stays, so a dead instance
@@ -46,8 +50,12 @@ import org.junit.Test
  *     `applyOptions()` on a fresh instance — with the holder callback removed
  *     first, the reference player's `destroy()` order.
  *
- * Only the OPTION is "set once per instance"; the property is cycled with the
- * surface, which is the distinction the earlier pin had backwards.
+ * Only the OPTION is "set once per instance", and the property is what the
+ * cycle owns on the way back in. Setting that property on EVERY create was the
+ * third wrong answer: on a first creation the output is re-initialized against
+ * a surface mpv has only just been handed, and the black screen comes back —
+ * which is why the callback branches on the pending load, exactly as the
+ * reference does on its deferred file path.
  *
  * `profile=fast` is pinned here too: it was added for the same boxes (a 4K
  * release on this class of hardware is GPU-bound), and it is only compatible
@@ -156,7 +164,7 @@ class MpvSurfaceCycleContractTest {
         )
         assertTrue(
             "in the reference player's order - attach first, then force-window=yes, with the " +
-                "output re-opened back in surfaceCreated",
+                "output re-opened back in surfaceCreated (recreation branch)",
             attach.indexOf("MPVLib.attachSurface(surface)") <
                 attach.indexOf("MPVLib.setOptionString(\"force-window\", \"yes\")")
         )
@@ -172,7 +180,7 @@ class MpvSurfaceCycleContractTest {
     }
 
     @Test
-    fun `the surface cycle tears the video output down and re-opens it`() {
+    fun `the surface cycle tears the video output down and re-opens it only on recreation`() {
         // The reference player's cycle, both halves. This file has pinned each of
         // them wrong in turn: without the tear-down the output keeps a surface
         // that is gone, and without the re-open it never picks up the new one -
@@ -196,18 +204,56 @@ class MpvSurfaceCycleContractTest {
 
         val created = surfaceCreated()
         val attach = created.indexOf("attachSurface()")
+        val branch = created.indexOf("if (pendingLoad != null)")
         val vo = created.indexOf("setPropertyString(\"vo\", videoOutput().vo)")
         assertTrue("the surface is attached first", attach >= 0)
         assertTrue(
-            "and the output re-opened after it, or mpv never re-initializes against the new " +
-                "surface and every frame goes to the dead one - the call whose absence is the " +
-                "black screen (attach=$attach vo=$vo)",
-            vo >= 0
+            "and the branch that decides the rest of the callback comes after it - touching " +
+                "the output on EVERY create, first one included, is the black screen this " +
+                "branch removes (attach=$attach branch=$branch)",
+            branch >= 0 && attach < branch
         )
-        assertTrue("attach, then the output property", attach < vo)
+
+        // First creation: the file that was waiting goes out, and the output is
+        // left exactly as applyOptions() set it. The re-set the callback used to
+        // make here is not a no-op - it tears the video output down and
+        // re-initializes it, and on the first attach that re-initialization
+        // races the surface mpv was handed moments earlier.
+        val firstCreation = created.substring(branch).substringBefore("} else {")
+        assertTrue(
+            "the load that was waiting for the surface starts from this branch",
+            firstCreation.contains("startPendingLoad()")
+        )
+        assertFalse(
+            "and this branch must NOT set the video output: it was already configured as the " +
+                "OPTION before init(), so the only thing a set here can do is re-initialize " +
+                "the output against the surface that was just attached: $firstCreation",
+            firstCreation.contains("\"vo\"")
+        )
+
+        // Recreation: no load is waiting because surfaceDestroyed() nulled the
+        // output on the way out, so this set is what re-initializes it against
+        // the surface that was just attached.
+        val recreation = created.substringAfter("} else {")
+        assertTrue(
+            "the output is re-opened in the recreation branch, or mpv never re-initializes " +
+                "against the new surface and every frame goes to the dead one - the call " +
+                "whose absence is the black screen (attach=$attach vo=$vo)",
+            recreation.contains("setPropertyString(\"vo\", videoOutput().vo)")
+        )
+        assertTrue(
+            "as a property set after the attach, never before the branch",
+            vo >= 0 && vo > branch
+        )
         assertTrue(
             "re-opened from the resolution the session configured, not a pinned string",
-            created.contains("videoOutput().vo") && !created.contains("\"gpu\"")
+            recreation.contains("videoOutput().vo") && !recreation.contains("\"gpu\"")
+        )
+        assertEquals(
+            "and there is exactly one such set in the callback: a second would be a second " +
+                "mode decision",
+            1,
+            Regex("setPropertyString\\(\"vo\", videoOutput\\(\\)\\.vo\\)").findAll(created).count()
         )
     }
 

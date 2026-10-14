@@ -236,10 +236,11 @@ class MpvVideoOutputTest {
         // the output never nulled and never re-opened, mpv never re-initializes
         // against the newly attached surface, which is the same audio-over-black
         // picture by a different route. The reference player (BaseMPVView in
-        // mpv-android) tears the output down on teardown and re-opens it on
-        // attach, and both halves read this one resolution - what is pinned here
-        // is that the re-open is the SAME resolution the option opened on, so a
-        // surface cycle can never become a second, silent mode change.
+        // mpv-android) tears the output down on teardown and re-opens it on the
+        // way back in - on a RECREATION only: a first creation has a load
+        // waiting and leaves the option alone - and both halves read this one
+        // resolution, so a surface cycle can never become a second, silent mode
+        // change.
         // The exact call order of the cycle is MpvSurfaceCycleContractTest's.
         assertTrue(
             "the resolution is applied once, as the option applyOptions opens on",
