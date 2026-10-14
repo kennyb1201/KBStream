@@ -206,65 +206,26 @@ Unlike libass, a miss here FAILS the release: without the libraries the Kotlin
 rewrite takes over, which is a working fallback on some hardware but leaves the
 P7 → 8.1 setting producing a black screen on the boxes it exists for.
 
-### Field test: the other MPV library (Nuvio's build)
+### The MPV engine's library
 
-The MPV engine's library is chosen at BUILD time, because the two candidates
-cannot both be present: both publish the `is.xyz.mpv` classes and both ship
-`libmpv.so`, `libavcodec.so` and friends, so one classpath holding both is a
-duplicate class at dex time and a collision inside `lib/<abi>/`. There is
-therefore no settings toggle — a native library is linked, not selected — and the
-switch is a Gradle flag:
+The MPV engine links exactly one library: the Riteshp2001/mpvlibAndroid (Mpv∞)
+release AAR in `app/libs/`, fetched by `scripts/fetch_mpv_aar.sh`. It is not a
+Maven coordinate, and there is no build flag or settings toggle for it — a
+native library is linked, not selected.
 
-```sh
-# default: the Riteshp2001/mpvlibAndroid (Mpv∞) release AAR in app/libs/
-./gradlew assembleDebug
+A second library, `io.github.abdallahmehiz:mpv-android-lib` (the build Nuvio's
+GPU video output uses), was trialled for the `vo=gpu` black-screen failure and
+removed: it produced the **same** black screen (`updateAcquireFence: Did not
+find frame` repeated, the decoder rendering, no picture) on the same boxes, so
+the library was not the variable. Nothing links it now — the `-Pmpv.lib` flag,
+the `src/mpvnuvio/` arm and the `MPV_LIB` workflow input are gone with it.
 
-# test build: io.github.abdallahmehiz:mpv-android-lib:0.1.12 (Maven Central),
-# the library Nuvio's GPU video output is built on
-./gradlew assembleDebug -Pmpv.lib=nuvio
-```
-
-`MPV_LIB` in the environment or in `local.properties` works the same way. The
-test arm needs nothing fetched into `app/libs/`; the default arm still does.
-
-**No local toolchain? Let CI build it.** The `Build KBStream APK` workflow has a
-manual-dispatch input, `MPV library`, whose `nuvio` value builds this same arm:
-Actions → *Build KBStream APK* → *Run workflow* → set `MPV library` to `nuvio`.
-It runs the ordinary gates (ktlint, unit tests, lint, the debug build) against
-the test arm and uploads the APK as the artifact `kbstream-debug-nuvio`, so a
-machine with a browser is enough to get one. A `nuvio` dispatch deliberately
-skips the signed release build and the release-only 16 KB native check, and is
-gated off every publish step — it can hand a person an APK to sideload, never an
-install the test library. Everything below about "nothing ships the test
-library" therefore still holds: the default arm is what the feed and the release
-carry.
-
-Which one an APK carries is not guesswork: the engine logs it when it comes up
-(`MPV engine up · library=…`) and Settings → About → Copy diagnostics prints it
-on the `build:` line. Check that line before trusting a field-test result.
-
-What the swap is for: on `vo=gpu` the shipped library renders black over playing
-audio on the field boxes (`updateAcquireFence: Did not find frame` repeated, the
-decoder rendering, no picture), while Nuvio's GPU path works with full libass on
-the same mpv core. The matrix to run on **Fire TV Stick 4K Max** and
-**Onn 4K Plus**, with a Nuvio build installed:
-
-| Case | Expected |
-| --- | --- |
-| MPV `gpu` VO, H.264 | picture, and no `Did not find frame` in the log |
-| MPV `gpu` VO, Dolby Vision | picture, or a graceful fallback — not black over audio |
-| libass subtitles (embedded ASS/SSA) | full styling, which is the reason to want `gpu` at all |
-| `mediacodec_embed` | still plays — this is the regression check on the workaround |
-
-Riteshp2001 v1.1.2 stays the default and every released APK keeps it until the
-test proves otherwise. If the test succeeds, the follow-up is a migration spec
-(including a license re-check: the wrapper is MIT but the FFmpeg inside it is
-GPLv3, the same terms the current AAR already carries). If it fails, the GPU path
-is blocked on library support and `mediacodec_embed` remains the workaround.
-
-`MpvLibrarySwapContractTest` pins the swap from the JVM side: the engine names no
-library, the two arms expose the same facade, exactly one of them is ever
-compiled, the default build is the AAR, and no pipeline links the test library.
+Which library an APK carries is still named in the log: the engine writes
+`MPV engine up · library=…` when it comes up. The GPU path's outstanding work is
+the surface lifecycle, not the library (see `MpvSurfaceCycleContractTest`), and
+`MpvAbiConstantsTest` pins the seam from the JVM side: the engine names no
+library, `MpvBackend` is the one file that wraps it, and the mpv ABI constants
+match the linked library.
 
 ## Running tests
 

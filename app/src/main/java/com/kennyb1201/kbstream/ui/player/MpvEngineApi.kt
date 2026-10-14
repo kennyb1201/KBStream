@@ -4,33 +4,19 @@ package com.kennyb1201.kbstream.ui.player
  * The MPV engine's own account of mpv: the constants, the observer interfaces and
  * the call shapes [MpvPlayerView] is written against, with no library in them.
  *
- * Why this file exists. The engine can be built against either of two mpv
- * libraries (see the `mpv.lib` flag in app/build.gradle.kts), and they are not
- * interchangeable at the source level even though both publish the
- * `is.xyz.mpv` package:
- *
- *  - the default, Riteshp2001/mpvlibAndroid (Mpv∞), exposes `MPVLib` - a Kotlin
- *    `object`, so every call reads `MPVLib.setOptionString(...)`, and its
- *    constant holders are nested types named `MpvEvent`/`MpvFormat`/
- *    `MpvLogLevel`;
- *  - io.github.abdallahmehiz:mpv-android-lib, the library Nuvio's GPU video
- *    output is built on, exposes `MPV` - a class, so the same calls read
- *    `mpv.setOptionString(...)` on an instance, and its holders are named
- *    `mpvEvent`/`mpvFormat`/`mpvLogLevel`.
- *
- * Neither name may appear in the engine, so the engine names this file and
- * [MpvBackend] instead. Each arm of the build flag supplies its own `MpvBackend`
- * from a source directory only that arm adds (`src/mpvrites`, `src/mpvnuvio`),
- * and that seam is the whole mechanism: no reflection, no second player, and no
- * second engine.
+ * Why this file exists. The engine names this file and [MpvBackend], never
+ * `is.xyz.mpv` directly, so the library stays behind one seam: [MpvBackend]
+ * wraps `MPVLib` (Riteshp2001/mpvlibAndroid, a Kotlin `object`, so every call
+ * reads `MPVLib.setOptionString(...)`) in its own member set, and this file
+ * carries the mpv call shapes and constants the engine reads. No reflection, no
+ * second player, and no second engine.
  *
  * The constants below are mpv's own C ABI values - `mpv_event_id`, `mpv_format`
  * and `mpv_log_level` - taken from BOTH libraries' compiled classes rather than
- * assumed from a header: they are identical in the two, and they are what
- * crosses the JNI boundary, so a value that drifted here would silently misread
- * every event (an `END_FILE` read as `FILE_LOADED` is a stream that never opens
- * and never reports why). `MpvLibrarySwapContractTest` pins that they still
- * match the library the build linked.
+ * assumed from a header: they are what crosses the JNI boundary, so a value that
+ * drifted here would silently misread every event (an `END_FILE` read as
+ * `FILE_LOADED` is a stream that never opens and never reports why).
+ * `MpvAbiConstantsTest` pins that they still match the linked library.
  */
 
 /**
@@ -93,13 +79,12 @@ internal object MpvLogLevel {
 /**
  * mpv's event callback, without a library's `MPVNode` in it.
  *
- * Both libraries declare seven methods on their observer interface - one
- * `event(id, node)` plus an `eventProperty` overload per property type - and the
- * two libraries' `MPVNode` classes, while they share a fully-qualified name, are
- * different classes. The engine overrode two of the seven and ignored the node
- * in both: what it reads is the event id, and each property through the typed
- * overloads below. So the node is not part of this interface, which is what
- * keeps it out of the engine's source.
+ * The library's observer interface declares seven methods - one
+ * `event(id, node)` plus an `eventProperty` overload per property type - and its
+ * payload is an `MPVNode`. The engine overrode two of the seven and ignored the
+ * node in both: what it reads is the event id, and each property through the
+ * typed overloads below. So the node is not part of this interface, which is
+ * what keeps it out of the engine's source.
  */
 internal interface MpvEventObserver {
     fun event(eventId: Int)
@@ -110,7 +95,7 @@ internal interface MpvEventObserver {
     fun eventProperty(property: String, value: String)
 }
 
-/** mpv's log callback: `prefix`, `mpv_log_level`, `text`. Identical in both libraries. */
+/** mpv's log callback: `prefix`, `mpv_log_level`, `text`. */
 internal interface MpvLogObserver {
     fun logMessage(prefix: String, level: Int, text: String)
 }

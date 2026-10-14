@@ -6,7 +6,6 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.settings.AppPreferences
@@ -266,15 +265,13 @@ class MpvPlayerView @JvmOverloads constructor(
     private var subtitleMode = SubtitleModeRules.DEFAULT
 
     /*
-     * Every call below goes through [MpvBackend], which is the one file per MPV
-     * library that knows which library this build linked - see `MpvEngineApi.kt`
-     * for why that seam exists and the `mpv.lib` flag in app/build.gradle.kts for
-     * what chooses it. There is deliberately no handle field and no accessor in
-     * this class: the default library's `create()` returns Unit against a
-     * singleton, and the seam keeps exactly that shape while the other arm owns
-     * its own `MPV` instance behind it. Lifetime is the same either way -
-     * [initialize] creates and [release] destroys, and the `initialized`/
-     * `released` guards keep a call off an engine that is not up.
+     * Every call below goes through [MpvBackend], the one file that names the
+     * MPV library this app links - see `MpvEngineApi.kt`. There is deliberately
+     * no handle field and no accessor in this class: the library's `create()`
+     * returns Unit against a singleton, and the seam keeps exactly that shape.
+     * Lifetime is the same either way - [initialize] creates and [release]
+     * destroys, and the `initialized`/`released` guards keep a call off an
+     * engine that is not up.
      */
 
     /**
@@ -329,11 +326,10 @@ class MpvPlayerView @JvmOverloads constructor(
         holder.addCallback(this)
         initialized = true
 
-        // Which MPV library this build linked, once per session, from the value
-        // the build flag stamped into BuildConfig. The choice is made at build
-        // time and is otherwise invisible on a device, and a field log has to be
-        // able to answer "was this the library the test meant to test?".
-        Log.i(TAG, "MPV engine up · library=${BuildConfig.MPV_ENGINE_LIBRARY}")
+        // Which MPV library this build linked, once per session. There is one
+        // library now (see the MPV library note in app/build.gradle.kts), named
+        // here so a field log still says which binary produced it.
+        Log.i(TAG, "MPV engine up · library=$MPV_LIBRARY")
 
         // No early attach here. `holder.surface` can be non-null AND report
         // isValid = true while the native window behind it does not exist yet,
@@ -1491,7 +1487,7 @@ class MpvPlayerView @JvmOverloads constructor(
     override fun event(eventId: Int) {
         // The event id is the whole signal here: the property values this class
         // acts on arrive through the typed `eventProperty` overloads below, and
-        // the node both libraries also hand `event` was never read. [MpvBackend]
+        // the node the library also hands `event` was never read. [MpvBackend]
         // drops it at the seam, so this override names only what it uses.
         when (eventId) {
             MpvEvent.MPV_EVENT_FILE_LOADED -> {
@@ -1778,6 +1774,14 @@ class MpvPlayerView @JvmOverloads constructor(
 
     private companion object {
         const val TAG = "PLAYER_MPV"
+
+        /**
+         * The MPV library this build links, for the once-per-session start
+         * line. There is exactly one (see the MPV library note in
+         * app/build.gradle.kts); it is named so a field log still says which
+         * binary produced it.
+         */
+        const val MPV_LIBRARY = "Riteshp2001/mpvlibAndroid mpvlib-1.1.2.aar"
 
         /** How close to the resume point counts as "already there". */
         const val RESUME_TOLERANCE_MS = 5_000L

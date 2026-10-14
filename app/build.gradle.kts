@@ -124,60 +124,21 @@ val ciVersionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
 val ciVersionName = System.getenv("VERSION_NAME")?.takeIf { it.isNotBlank() } ?: "0.1.0-dev"
 val ciGitSha = System.getenv("GIT_SHA")?.takeIf { it.isNotBlank() } ?: "local"
 
-// ── The MPV engine's library: which one this build links ───────────────────
+// ── The MPV engine's library ───────────────────────────────────────────────
 //
-// The engine has TWO possible backends and can only ever have one. Both publish
-// the same Java package (`is.xyz.mpv`) and both ship the same native libraries
-// (`libmpv.so`, `libavcodec.so`, `libswscale.so`, `libc++_shared.so`, ...), so
-// one classpath cannot hold both: it is a duplicate-class failure at dex time
-// and a collision inside the APK's lib/<abi>/ directory.
+// The engine has exactly ONE backend: the Riteshp2001/mpvlibAndroid (Mpv∞)
+// build, the `mpvlib-1.1.2.aar` release AAR fetched into app/libs/ by
+// scripts/fetch_mpv_aar.sh. An alternative library (Nuvio's
+// io.github.abdallahmehiz:mpv-android-lib) was trialled for the `vo=gpu`
+// black-screen failure and removed: it produced the SAME black screen, so the
+// library was not the variable. Nothing links it now, and no build flag selects
+// an engine library.
 //
-// A RUNTIME toggle is therefore not implementable, and a settings switch that
-// appeared to offer one would be a lie - a native library is linked, not
-// selected. The switch is this build flag, and its honest counterpart is
-// `BuildConfig.MPV_ENGINE_LIBRARY`, which names the library the installed APK
-// actually carries: the diagnostics report prints it and the engine's start
-// line logs it, so "which library produced this field log" is answerable.
-//
-//   -Pmpv.lib=rites   (default) the Riteshp2001/mpvlibAndroid (Mpv∞) release
-//                     AAR, fetched into app/libs/ - what every release ships.
-//   -Pmpv.lib=nuvio   io.github.abdallahmehiz:mpv-android-lib:0.1.12, the
-//                     library Nuvio's GPU video output is built on. A TEST
-//                     variant for the `vo=gpu` black-screen failure: the same
-//                     mpv core, a different build of it, and the one variable
-//                     the field test is meant to move. Maven Central supplies
-//                     it, so this arm needs no fetch script and no app/libs
-//                     entry.
-//
-// Both arms compile the SAME engine: `MpvPlayerView` drives
-// `ui/player/MpvEngineApi.kt` + `MpvBackend`, and each arm supplies its own
-// `MpvBackend` from a source directory only that arm adds. No reflection, no
-// second player, no second engine.
-val mpvLibraryFlag = (findProperty("mpv.lib") as String?)
-    ?: System.getenv("MPV_LIB")
-    ?: localProps.getProperty("MPV_LIB")
-    ?: "rites"
-val mpvNuvioLibrary = when (mpvLibraryFlag.trim().lowercase()) {
-    "rites", "ritesh", "riteship2001", "mpvlib", "mpvlib-1.1.2", "default" -> false
-    "nuvio", "abdallahmehiz", "mpv-android-lib", "mpv-android-lib-0.1.12" -> true
-    else -> throw GradleException(
-        "Unknown MPV library '$mpvLibraryFlag'. Pass -Pmpv.lib=nuvio " +
-            "(${libs.versions.mpv.android.lib.get()}, the build Nuvio's GPU path uses) " +
-            "or -Pmpv.lib=rites (the default: the Riteshp2001/mpvlibAndroid AAR in " +
-            "app/libs/). The two provide the same classes AND the same native " +
-            "libraries, so exactly one of them can be linked."
-    )
-}
-// What the app is told about the choice, and what every field report carries.
-val mpvLibraryLabel = if (mpvNuvioLibrary) {
-    "io.github.abdallahmehiz:mpv-android-lib:${libs.versions.mpv.android.lib.get()}"
-} else {
-    "Riteshp2001/mpvlibAndroid mpvlib-1.1.2.aar"
-}
-// The engine half that differs: one MpvBackend per arm, in a directory only that
-// arm adds to the source set. Deliberately OUTSIDE src/main, so a build that
-// picked one arm cannot see the other's file at all.
-val mpvEngineSourceDir = if (mpvNuvioLibrary) "src/mpvnuvio" else "src/mpvrites"
+// `MpvPlayerView` drives `ui/player/MpvEngineApi.kt` + `MpvBackend`, whose one
+// implementation lives in a source directory of its own (src/mpvrites),
+// deliberately OUTSIDE src/main. No reflection, no second player, no second
+// engine.
+val mpvEngineSourceDir = "src/mpvrites"
 
 android {
     namespace = "com.kennyb1201.kbstream"
@@ -213,8 +174,6 @@ android {
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
         buildConfigField("String", "GIT_SHA", "\"$ciGitSha\"")
-        // Which MPV library this APK carries (see the flag block above).
-        buildConfigField("String", "MPV_ENGINE_LIBRARY", "\"$mpvLibraryLabel\"")
     }
     buildFeatures {
         compose = true
@@ -378,11 +337,10 @@ android {
     // in the message mentions signing. Point those four variables at the debug
     // keystore to capture a profile locally - see README, "Baseline profile".
     sourceSets {
-        // Which MpvBackend the engine is compiled against (see the flag block
-        // above this `android {}`). Only this arm's directory is added, so the
-        // library the other arm links cannot leak into the engine's own source -
-        // and `kotlin { srcDir }` rather than `java`, because that is where
-        // AGP's built-in Kotlin looks for a source set's Kotlin files.
+        // MpvBackend's own directory (see the MPV library note above this
+        // `android {}`): kept outside src/main so the seam file lives with the
+        // library it wraps. `kotlin { srcDir }` rather than `java`, because that
+        // is where AGP's built-in Kotlin looks for a source set's Kotlin files.
         getByName("main") { kotlin { srcDir("$projectDir/$mpvEngineSourceDir") } }
 
         // MigrationTestHelper reads the exported schemas from ASSETS, not from
@@ -609,7 +567,7 @@ dependencies {
     // libplayer as native libraries for all four ABIs, so it needs no other
     // dependency and no app-side extraction.
     //
-    // The default backend is the Riteshp2001/mpvlibAndroid (Mpv∞) build: the
+    // The backend is the Riteshp2001/mpvlibAndroid (Mpv∞) build: the
     // same mpv core, but an actively maintained, Vulkan-capable Android build.
     // The previous `dev.jdtech.mpv:libmpv` 1.0.0 pinned here showed black video
     // over playing audio on the Onn 4K Plus, where Mpv∞ plays the same files -
@@ -629,28 +587,18 @@ dependencies {
     // Note ALSO that the AAR declares minSdk 24, below the app's floor of 26, so
     // the manifest needs no tools:overrideLibrary.
     //
-    // The other arm of the switch is the Nuvio engine's library, which IS on
-    // Maven Central and needs none of the fetch/verify machinery above; it is
-    // chosen with -Pmpv.lib=nuvio (see the flag block above). One or the other,
-    // never both: the reasons are in that block.
-    if (mpvNuvioLibrary) {
-        implementation(libs.mpv.android.lib)
-        logger.lifecycle("MPV engine: TEST build against $mpvLibraryLabel")
-    } else {
-        val mpvAar = file("libs/mpvlib-1.1.2.aar")
-        if (!mpvAar.isFile) {
-            throw GradleException(
-                "The MPV engine AAR is missing at ${mpvAar.path}. Run " +
-                    "scripts/fetch_mpv_aar.sh (it downloads mpvlib-1.1.2.aar and " +
-                    "verifies its sha256), or drop the file there from a previous " +
-                    "build. The app cannot compile without an MPV library: " +
-                    "src/mpvrites/.../MpvBackend.kt imports is.xyz.mpv.MPVLib from " +
-                    "this AAR. (To build against the other library instead, pass " +
-                    "-Pmpv.lib=nuvio.)"
-            )
-        }
-        implementation(files(mpvAar))
+    val mpvAar = file("libs/mpvlib-1.1.2.aar")
+    if (!mpvAar.isFile) {
+        throw GradleException(
+            "The MPV engine AAR is missing at ${mpvAar.path}. Run " +
+                "scripts/fetch_mpv_aar.sh (it downloads mpvlib-1.1.2.aar and " +
+                "verifies its sha256), or drop the file there from a previous " +
+                "build. The app cannot compile without an MPV library: " +
+                "src/mpvrites/.../MpvBackend.kt imports is.xyz.mpv.MPVLib from " +
+                "this AAR."
+        )
     }
+    implementation(files(mpvAar))
     implementation(libs.androidx.recyclerview)
     // Pinned to the COMMIT behind tag v0.26.4 (43f8e6ebeef4…, full hash
     // 43f8e6ebeef469db7c5328714bc5f33c9f06f092), not the tag itself: tags are

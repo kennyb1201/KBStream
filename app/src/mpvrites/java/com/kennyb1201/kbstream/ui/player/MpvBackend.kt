@@ -7,28 +7,25 @@ import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 
 /**
- * The engine's MPV library for a DEFAULT build: Riteshp2001/mpvlibAndroid
- * (Mpv∞), the `mpvlib-1.1.2.aar` release AAR in app/libs/.
+ * The engine's bridge to its MPV library: Riteshp2001/mpvlibAndroid (Mpv∞), the
+ * `mpvlib-1.1.2.aar` release AAR fetched into app/libs/.
  *
- * This is the arm that ships, and it is almost all delegation, because the
- * `MPVLib` singleton it wraps already has the call shapes [MpvPlayerView]
- * wants - `MPVLib.create(context)`, `MPVLib.setOptionString(name, value)`. What
- * this file adds is the two observer bridges at the bottom: the library's
- * `EventObserver` has seven methods and delivers its payload as `MPVNode`, while
- * the engine holds [MpvEventObserver] and reads the event id alone (see the note
- * on that interface). The bridge is where those meet, and it is why no
- * `MPVNode` appears in the engine's own source.
+ * This is almost all delegation, because the `MPVLib` singleton it wraps already
+ * has the call shapes [MpvPlayerView] wants - `MPVLib.create(context)`,
+ * `MPVLib.setOptionString(name, value)`. What this file adds is the two observer
+ * bridges at the bottom: the library's `EventObserver` has seven methods and
+ * delivers its payload as `MPVNode`, while the engine holds [MpvEventObserver]
+ * and reads the event id alone (see the note on that interface). The bridge is
+ * where those meet, and it is why no `MPVNode` appears in the engine's own
+ * source.
  *
- * The other arm is `src/mpvnuvio/.../MpvBackend.kt`, which exposes exactly this
- * member set - same names, same parameters, same returns - around an `MPV`
- * INSTANCE instead of a singleton, for
- * `io.github.abdallahmehiz:mpv-android-lib`, the library Nuvio's GPU video
- * output is built on. Exactly one of the two files is ever compiled: the
- * `mpv.lib` flag in app/build.gradle.kts adds one source directory or the other,
- * and the libraries themselves could not coexist on a classpath anyway (same
- * `is.xyz.mpv` classes, same `libmpv.so`/`libavcodec.so` sonames).
- * `MpvLibrarySwapContractTest` pins that the two member sets stay identical -
- * one arm growing a function the other lacks would compile here and fail there.
+ * A second arm (`src/mpvnuvio/.../MpvBackend.kt`) once wrapped
+ * `io.github.abdallahmehiz:mpv-android-lib` behind exactly this member set, for a
+ * library swap trialled against the `vo=gpu` black-screen failure. It was
+ * removed: it produced the SAME black screen, so the library was not the
+ * variable. This is the only implementation now, and it lives outside src/main
+ * (see the MPV library note in app/build.gradle.kts). `MpvAbiConstantsTest`
+ * pins the seam.
  */
 internal object MpvBackend {
 
