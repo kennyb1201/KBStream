@@ -785,6 +785,85 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     /**
+     * One file's technical readout, as mpv reports it: the raw material for the
+     * INFO panel's VIDEO and AUDIO rows (see [fileReport] and [MpvInfoLines]).
+     *
+     * Every field is nullable on purpose. mpv answers "no" to a property of a
+     * component the file does not have at all — an audio-only stream has no
+     * `video-format`, a stream with no audio has no channel count — and the
+     * panel has to tell "this file has no video" apart from "this build could
+     * not ask", which is exactly the difference between the value being null
+     * and the read failing. [MpvInfoLines] renders either as a dash rather than
+     * as the word "null".
+     */
+    data class FileReport(
+        /** `video-format`: mpv's own name for the codec ("h264", "hevc"). */
+        val videoFormat: String?,
+        /** `video-params/w`, in pixels; 0 while mpv has not decoded a frame. */
+        val width: Int,
+        /** `video-params/h`, in pixels; 0 while mpv has not decoded a frame. */
+        val height: Int,
+        /** `hwdec-current`: the decoder actually in use ("mediacodec"). */
+        val hwdec: String?,
+        /** `video-params/pixelformat` ("yuv420p10"). */
+        val pixelFormat: String?,
+        /** `video-params/primaries`: the colour space, HDR's `bt.2020`. */
+        val primaries: String?,
+        /** `video-params/gamma`: the transfer function, `pq` for HDR10. */
+        val gamma: String?,
+        /** `video-params/sig-peak`: the HDR peak, in nits. */
+        val sigPeak: Double?,
+        /** `video-bitrate`, bits per second; 0 until mpv has a keyframe to read. */
+        val videoBitrate: Int,
+        /** `audio-codec`: what mpv is decoding the audio with ("eac3"). */
+        val audioCodec: String?,
+        /** `audio-params/channel-count`. */
+        val audioChannels: Int?,
+        /** `audio-params/samplerate`, in Hz. */
+        val audioSampleRate: Int?,
+        /** `audio-bitrate`, bits per second; null when mpv reports none. */
+        val audioBitrate: Int?,
+        /**
+         * The selected subtitle track's label as mpv lists it, or null when
+         * nothing is selected. Read from the track list rather than from `sid`:
+         * the id names the track, and the panel has to name it to the viewer.
+         */
+        val subtitle: String?
+    )
+
+    /**
+     * Reads this file's technical properties off mpv, or null before the
+     * instance exists — reading a property off a handle that is not there yet
+     * is a native call, not a Kotlin one, and `runCatching` cannot catch that
+     * (the same reason [diagnostics] returns empty rather than a report).
+     */
+    fun fileReport(): FileReport? {
+        if (!initialized) return null
+        val selectedSubtitle = subtitleTracks().firstOrNull { it.selected }
+        return FileReport(
+            videoFormat = getPropertyStringOrNull("video-format"),
+            width = getPropertyIntOrNull("video-params/w") ?: 0,
+            height = getPropertyIntOrNull("video-params/h") ?: 0,
+            hwdec = getPropertyStringOrNull("hwdec-current"),
+            pixelFormat = getPropertyStringOrNull("video-params/pixelformat"),
+            primaries = getPropertyStringOrNull("video-params/primaries"),
+            gamma = getPropertyStringOrNull("video-params/gamma"),
+            sigPeak = getPropertyDoubleOrNull("video-params/sig-peak"),
+            videoBitrate = getPropertyIntOrNull("video-bitrate") ?: 0,
+            // The field-proven property first: `audio-codec` is what this
+            // engine's own field logs have reported since the first MPV build,
+            // with mpv's documented `audio-codec-name` as the fallback for a
+            // build where the deprecated alias has been dropped.
+            audioCodec = getPropertyStringOrNull("audio-codec")
+                ?: getPropertyStringOrNull("audio-codec-name"),
+            audioChannels = getPropertyIntOrNull("audio-params/channel-count"),
+            audioSampleRate = getPropertyIntOrNull("audio-params/samplerate"),
+            audioBitrate = getPropertyIntOrNull("audio-bitrate"),
+            subtitle = selectedSubtitle?.label
+        )
+    }
+
+    /**
      * Subtitle size / background / position, the app's three-step controls.
      * Text tracks only: an ASS track keeps the styling its author shipped (see
      * [applyOptions]).

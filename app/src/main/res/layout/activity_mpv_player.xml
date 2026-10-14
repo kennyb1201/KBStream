@@ -455,4 +455,166 @@
                 android:textSize="16sp" />
         </LinearLayout>
     </ScrollView>
+
+    <!-- Stream info panel: the main player's INFO screen on this engine. The
+         same ids, the same 520dp box, the same Oswald rows and the same
+         @drawable/info_panel_bg fill the activity replaces with the shared
+         infoPanelDrawable() - so the two engines' readouts are the same object
+         to a viewer and to the theme, and a side-by-side of the same file
+         compares like with like.
+
+         SUBTITLE is the one row the main player's panel does not carry. It is
+         worth a line here because this is the engine that typesets an embedded
+         ASS/SSA track with libass, so "which subtitle track is being drawn, or
+         none" is a question the readout should answer on the box where the
+         tracks actually differ.
+
+         focusable / focusableInTouchMode are the two additions to the main
+         player's declaration: the panel is a readout with nothing focusable
+         inside it, and it has to be able to hold the D-pad itself for OK to
+         close it (the shared settings panel in this layout sets the same
+         pair). -->
+    <ScrollView
+        android:id="@+id/info_panel"
+        android:layout_width="520dp"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/info_panel_bg"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:orientation="vertical"
+        android:padding="22dp"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:id="@+id/info_addon_icon"
+                    android:layout_width="28dp"
+                    android:layout_height="28dp"
+                    android:layout_marginEnd="10dp"
+                    android:scaleType="fitCenter"
+                    android:contentDescription="Source addon icon"
+                    android:visibility="gone" />
+
+                <TextView
+                    android:id="@+id/info_title"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="@font/oswald_medium"
+                    android:text="STREAM INFO"
+                    android:textColor="@color/kb_accent"
+                    android:textSize="16sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/info_source"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="13sp" />
+
+            <TextView
+                android:id="@+id/info_engine"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_file"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="12sp"
+                android:maxLines="2"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/info_video_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="VIDEO"
+                android:textColor="@color/kb_accent"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_video"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:lineSpacingExtra="3dp"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_audio_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="AUDIO"
+                android:textColor="@color/kb_accent"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_audio"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:lineSpacingExtra="3dp"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_subtitle_header"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="SUBTITLE"
+                android:textColor="@color/kb_accent"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_subtitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:fontFamily="@font/oswald_medium"
+                android:lineSpacingExtra="3dp"
+                android:textColor="@color/kb_text_hi"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/info_hint"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:fontFamily="@font/oswald_medium"
+                android:text="Press OK or Back to close"
+                android:textColor="@color/kb_text_lo"
+                android:textSize="11sp" />
+        </LinearLayout>
+    </ScrollView>
 </FrameLayout>

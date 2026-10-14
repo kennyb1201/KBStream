@@ -264,6 +264,24 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var pickerTitle: TextView? = null
     private var pickerList: RecyclerView? = null
 
+    // --- INFO: the main player's readout screen, on this engine -------------
+    //
+    // The same panel the main player's INFO button raises, with the same ids and
+    // filled from mpv's own properties instead of an ExoPlayer track list: what
+    // the file actually is (codec, resolution, decoder, HDR, audio layout) and
+    // which engine is playing it. This engine used to answer the button with a
+    // four-second toast built from [diagnosticsText], which could not be read at
+    // TV distance, could not be compared with the other engine's panel, and was
+    // gone before a viewer had finished reading the first line.
+    private var infoPanel: View? = null
+    private var infoAddonIcon: ImageView? = null
+    private var infoSource: TextView? = null
+    private var infoEngine: TextView? = null
+    private var infoFile: TextView? = null
+    private var infoVideo: TextView? = null
+    private var infoAudio: TextView? = null
+    private var infoSubtitle: TextView? = null
+
 
     /**
      * The list the picker shows, mirroring the main player's [PickerMode].
@@ -348,6 +366,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * addons registry by matching the source label, as the main player does.
      */
     private var currentAddonName: String? = null
+
+    /**
+     * The same addon's manifest logo, for the INFO panel's icon - the row the
+     * main player's panel carries beside the source line. Null whenever the
+     * addon has no logo, or the source is not an addon's at all (a torrent, a
+     * live channel): the panel hides the icon rather than showing a blank box.
+     */
+    private var currentAddonLogoUrl: String? = null
 
     /** The cast band's members, from the cast_json extra. */
     private var castMembers: List<PlayerCastMember> = emptyList()
@@ -1044,6 +1070,9 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                     // Back waves it away and leaves playback alone, where it used
                     // to exit the player instead.
                     when {
+                        // The readout is the newest takeover and the one the
+                        // viewer is reading: Back drops it before anything else.
+                        infoPanelVisible -> hideInfoPanel()
                         nextUpPanel?.visibility == View.VISIBLE -> dismissNextUpPanel()
                         pickerOpen -> dismissPicker()
                         settingsOpen -> hideSettingsPanel()
@@ -1432,6 +1461,36 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         pickerContainer = findViewById(R.id.mpv_picker_container)
         pickerTitle = findViewById(R.id.mpv_picker_title)
         pickerList = findViewById(R.id.mpv_picker_list)
+        // The INFO panel: the same views the main player's panel has, plus its
+        // own SUBTITLE row (see the layout). Its background is the shared
+        // infoPanelDrawable - the XML fill is only the pre-theme fallback, and
+        // this is the one surface that is meant to be READ, so it has to be
+        // opaque and follow the AMOLED toggles exactly as the main player's
+        // does.
+        infoPanel = findViewById(R.id.info_panel)
+        infoAddonIcon = findViewById(R.id.info_addon_icon)
+        infoSource = findViewById(R.id.info_source)
+        infoEngine = findViewById(R.id.info_engine)
+        infoFile = findViewById(R.id.info_file)
+        infoVideo = findViewById(R.id.info_video)
+        infoAudio = findViewById(R.id.info_audio)
+        infoSubtitle = findViewById(R.id.info_subtitle)
+        infoPanel?.background = infoPanelDrawable(this)
+        // OK/BACK close the panel and the D-pad stays inside it while it is up -
+        // verbatim the main player's rule (see NativePlayerActivity), so the two
+        // readouts dismiss the same way.
+        infoPanel?.setOnKeyListener { _, keyCode, event ->
+            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
+            when (keyCode) {
+                KeyEvent.KEYCODE_BACK,
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER -> {
+                    hideInfoPanel()
+                    true
+                }
+                else -> true
+            }
+        }
         // A RecyclerView lays out NOTHING without a layout manager, and this
         // layout declares none - the main player's picker sets one in code for
         // exactly that reason (see NativePlayerActivity). Without this the
@@ -2000,6 +2059,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // (it is what the auto-hide and key rules already read - see the field)
         // and `pickerOpen` says the picker is the one showing, since the
         // settings box must not be.
+        //
+        // INFO is the third takeover and they share the screen: the picker
+        // replaces the readout rather than opening under it (see
+        // [showInfoPanel], which does the same the other way round).
+        hideInfoPanel()
         settingsOpen = true
         pickerOpen = true
         settingsContainer?.visibility = View.GONE
@@ -2517,6 +2581,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val name = label?.trim().orEmpty()
         if (name.isEmpty()) {
             currentAddonName = null
+            currentAddonLogoUrl = null
             return
         }
         val addon = try {
@@ -2528,6 +2593,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             null
         }
         currentAddonName = addon?.displayName ?: name
+        currentAddonLogoUrl = addon?.logo
     }
 
     private fun switchToSource(stream: Stream, isAutoRecovery: Boolean = false) {
@@ -2616,7 +2682,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     /** Opens the settings side panel and puts focus inside it. */
     private fun showSettingsPanel() {
         val container = settingsContainer ?: return
-        // The picker is the other side panel: opening this one closes it.
+        // The picker is the other side panel: opening this one closes it. The
+        // INFO readout is the third takeover and goes with them - it covers the
+        // same screen and would sit on top of the rows this panel is about to
+        // draw.
+        hideInfoPanel()
         pickerOpen = false
         pickerContainer?.visibility = View.GONE
         settingsOpen = true
@@ -2641,6 +2711,101 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         setControlsVisible(View.VISIBLE)
         playPauseButton?.requestFocus()
         keepControlsVisible()
+    }
+
+    // --- INFO: the main player's readout screen, on this engine -------------
+
+    /** True while the INFO panel is the screen: it owns the remote then. */
+    private val infoPanelVisible: Boolean
+        get() = infoPanel?.visibility == View.VISIBLE
+
+    /**
+     * The INFO button. The panel is the same toggle the main player's is: press
+     * it again (or OK, or Back) and the readout goes away and the bar comes
+     * back. See [showInfoPanel] for what it replaces.
+     */
+    private fun toggleInfoPanel() {
+        if (infoPanelVisible) hideInfoPanel() else showInfoPanel()
+    }
+
+    /**
+     * Raises the INFO panel: the file's own technical readout, mpv's account of
+     * it, filled by [buildInfoPanel].
+     *
+     * It is a takeover, not a side panel: the overlay would be drawn over the
+     * rows it is made of, so the bar goes down and the panel takes the focus -
+     * which is also what makes OK close it. Whichever other takeover is up (a
+     * side panel) is closed first rather than stacked under it, exactly as the
+     * main player's INFO does: they occupy the same screen space and the same
+     * press of Back leaves both.
+     */
+    private fun showInfoPanel() {
+        val panel = infoPanel ?: return
+        // Only when one is open: both dismiss calls restore the bar and the
+        // focus on their way out, which is pointless work on the path to
+        // hiding it again a line later.
+        if (pickerOpen) dismissPicker()
+        if (settingsOpen) hideSettingsPanel()
+        buildInfoPanel()
+        panel.visibility = View.VISIBLE
+        setControlsVisible(View.GONE)
+        removeAutoHide()
+        panel.requestFocus()
+    }
+
+    /**
+     * Drops the INFO panel and hands the remote back to the bar - the same
+     * hand-off the side panels make (see [hideSettingsPanel]), so Back out of
+     * any of the three lands the viewer in the same place.
+     */
+    private fun hideInfoPanel() {
+        if (!infoPanelVisible) return
+        infoPanel?.visibility = View.GONE
+        setControlsVisible(View.VISIBLE)
+        playPauseButton?.requestFocus()
+        keepControlsVisible()
+    }
+
+    /**
+     * Fills every INFO row: this session's source state and mpv's own account
+     * of the file (see [MpvPlayerView.fileReport]).
+     *
+     * Rows are built rather than interpolated inline so that no row can come out
+     * empty or say "null": every one of them goes through [MpvInfoLines], which
+     * owns the fallbacks and is unit-tested for exactly that (a file with no
+     * video, a stream with no audio, a resolution mpv has not reported yet).
+     */
+    private fun buildInfoPanel() {
+        // Source row + addon icon, the same pair the main player's panel leads
+        // with, from the same resolution (see [resolveAddonIdentity]).
+        infoSource?.text = "Source: " + (
+            (currentAddonName ?: currentSourceLabel)?.trim()?.takeIf { it.isNotBlank() } ?: "—"
+            )
+        val logo = currentAddonLogoUrl
+        if (!logo.isNullOrBlank()) {
+            infoAddonIcon?.visibility = View.VISIBLE
+            runCatching { infoAddonIcon?.load(logo) }
+        } else {
+            infoAddonIcon?.visibility = View.GONE
+            infoAddonIcon?.setImageDrawable(null)
+        }
+        // This is the only place on screen that says which engine is drawing the
+        // picture, and on this box the picture is sometimes here because the
+        // ExoPlayer engine handed the file over - so the row says so plainly.
+        infoEngine?.text = "Engine: ${MpvInfoLines.ENGINE_LABEL}"
+        infoFile?.text = MpvInfoLines.fileRow(currentUrl, currentSourceLabel)
+
+        val report = surface?.fileReport()
+        // Null means the instance itself is not up yet (see [fileReport]); once
+        // it is, an unknown value is a dash per row rather than a missing block.
+        infoVideo?.text = report?.let { MpvInfoLines.videoBlock(it) }
+            ?: WAITING_FOR_FILE
+        infoAudio?.text = report?.let { MpvInfoLines.audioBlock(it) }
+            ?: WAITING_FOR_FILE
+        infoSubtitle?.text = MpvInfoLines.subtitleLine(
+            embedded = report?.subtitle,
+            sidecar = externalSubtitleNote()
+        )
     }
 
     private fun refreshSettings() {
@@ -4652,6 +4817,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // focus system owns the D-pad (BACK still reaches the activity, which
         // closes the panel), exactly as it does in the main player.
         if (settingsOpen) return super.dispatchKeyEvent(event)
+        // The INFO panel is the same kind of takeover as a side panel: its own
+        // key listener owns OK/BACK and swallows the D-pad (see the listener
+        // installed with the panel), so nothing below here may act on the press
+        // - an OK that fell through would toggle playback behind the readout.
+        if (infoPanelVisible) return super.dispatchKeyEvent(event)
         // A visible skip prompt owns OK while the chrome is down: pressing OK
         // during an intro should skip it, not pause underneath the prompt (the
         // same rule the main player uses). With the overlay up the prompt is an
@@ -5202,16 +5372,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     override fun onChromeOpenSettings() = showSettingsPanel()
 
-    override fun onChromeOpenInfo() {
-        // This readout is the engine's file-info screen: mpv's own account of
-        // the file (resolution, codec, bitrate, decode mode, audio codec), plus
-        // the engine name, because this is the only place on screen that says
-        // whether the picture is coming from mpv or whether the session landed
-        // here after ExoPlayer handed the file over. The overlay deliberately
-        // carries none of this any more (see updateControlsInfo); the settings
-        // panel's stream row reads the same string for a viewer already there.
-        showToast("MPV  \u2022  ${diagnosticsText()}", 4_000L)
-    }
+    override fun onChromeOpenInfo() = toggleInfoPanel()
 
     override fun onChromeSwitchPlayer() = switchToExoPlayerFromButton()
 
@@ -5242,6 +5403,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         private const val MIN_RESUME_POSITION_MS = 10_000L
         private const val SEEK_STEP_MS = 10_000L
         private const val CONTROLS_TIMEOUT_MS = 8_000L
+
+        /**
+         * What the INFO panel's VIDEO/AUDIO rows read while the engine is up
+         * but nothing has opened yet: the same words the settings panel's
+         * stream row shows in that state (see [diagnosticsText]), so the two
+         * readouts cannot describe the same moment differently.
+         */
+        private const val WAITING_FOR_FILE = "Waiting for the file to open"
 
         /**
          * Above this a [showToast] call wants the platform's longer duration.

@@ -674,9 +674,10 @@ internal fun accentButtonBackground(context: Context, focused: Boolean): Drawabl
  * on the one surface that is meant to be read: it sits over the player's own
  * translucent overlay gradient, so the two washed into each other and the rails
  * behind them showed through the codec lines. Both players use this - the main
- * player's info screen and the MPV engine's readout pill - so the two engines'
- * info looks the same and both follow the AMOLED / pure-black toggles instead of
- * a fixed panel color.
+ * player's info screen and the MPV engine's own readout panel, which takes this
+ * fill in its own activity the same way - so the two engines' info looks the
+ * same and both follow the AMOLED / pure-black toggles instead of a fixed panel
+ * color.
  */
 internal fun infoPanelDrawable(context: Context): GradientDrawable =
     roundedPanelDrawable(

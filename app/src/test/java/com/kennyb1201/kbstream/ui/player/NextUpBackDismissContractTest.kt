@@ -113,15 +113,25 @@ class NextUpBackDismissContractTest {
         val n = normalized(MPV)
         assertTrue(
             "mpv's callback must route the card to its dismissal, ahead of the exit",
-            n.contains(
-                "when {\n" +
-                    "nextUpPanel?.visibility == View.VISIBLE -> dismissNextUpPanel()\n" +
-                    "pickerOpen -> dismissPicker()"
-            )
+            n.contains("when {") &&
+                n.contains("nextUpPanel?.visibility == View.VISIBLE -> dismissNextUpPanel()") &&
+                n.contains("pickerOpen -> dismissPicker()")
         )
+        // The whole chain, in the order a viewer expects it. The card arm's own
+        // position is what this test is about; the INFO readout's is pinned with
+        // it because it now owns the first arm - it is the newest takeover, the
+        // one the viewer is looking at when they press Back (see
+        // MpvInfoPanelContractTest for that side of it).
+        val info = n.indexOf("infoPanelVisible -> hideInfoPanel()")
         val card = n.indexOf("nextUpPanel?.visibility == View.VISIBLE -> dismissNextUpPanel()")
+        val picker = n.indexOf("pickerOpen -> dismissPicker()")
+        val settings = n.indexOf("settingsOpen -> hideSettingsPanel()")
         val exit = n.indexOf("else -> exitPlayer()")
+        assertTrue("the card is in the chain", card >= 0)
         assertTrue("the card must be handled before the exit", card in 0 until exit)
+        assertTrue("and before the picker", card < picker)
+        assertTrue("the side panels are dismissed before the exit", picker < exit && settings < exit)
+        assertTrue("the readout goes first", info in 0 until card)
     }
 
     @Test
