@@ -27,7 +27,10 @@ import org.junit.Test
  *
  * The 2026-10-14 run is the step after that one. The VPS skip was in and the
  * picture was still solid green, so the `hvc1` re-advertisement itself is what
- * is left: both sites now ALSO skip the relabel while libdovi is present
+ * is left — and the reference only leaves a stripped track declared on its
+ * Matroska strip-only path, never on the MP4 / fMP4 / TS wrapper that
+ * re-advertises as `video/hevc` + `hvc1.2.4.L153.B0`: both sites now ALSO skip
+ * the relabel while libdovi is present
  * (`skipRelabel = DoviBridge.available`), keep the declared `dvhe.08.06` on the
  * format, and still run Mode.STRIP_NALS_ONLY — the sample strip stays, now the
  * Kotlin surgery (`kotlinOnly = true`) rather than the library's coarse one,
@@ -393,8 +396,10 @@ class DolbyVisionRelabelNalsStripContractTest {
 
     // ── the 2026-10-14 no-relabel trial ───────────────────────────────
     //
-    // The last difference from Nuvio's stripRpuOnly: it never re-advertises the
-    // track. Both sites now skip the relabel itself while libdovi is present,
+    // Nuvio's strip-only Matroska path never re-advertises the track; its MP4 /
+    // fMP4 / TS wrapper does (see relabelTargetFor), so this trial is the
+    // parity arm for MKV alone. Both sites now skip the relabel while libdovi
+    // is present,
     // which is a separate decision from the VPS skip and gets its own log field,
     // and the library's strip has to survive it — the strip is the half that
     // works, and a `skipRelabel` that also skipped Mode.STRIP_NALS_ONLY would

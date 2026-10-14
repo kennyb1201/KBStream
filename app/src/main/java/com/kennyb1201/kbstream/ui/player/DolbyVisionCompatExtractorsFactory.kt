@@ -515,10 +515,12 @@ private class VideoCompatTrackOutput(
                 // codec config — renders. The Kotlin fallback keeps the
                 // rewrite, because the rewrite is what closes its stall.
                 val skipVpsRewrite = DoviBridge.available
-                // The last difference from Nuvio's stripRpuOnly, on trial
-                // (2026-10-14): it never re-advertises the track, so the
-                // declared codec string stays on the format while libdovi strips
-                // the samples. Same gate as the VPS skip above.
+                // The 2026-10-14 trial: leave the track declared, so the
+                // declared codec string stays on the format while the samples
+                // are stripped. Re-read against NuvioTV `dev`, that is its MKV
+                // strip-only path alone — its MP4/fMP4/TS wrapper re-advertises
+                // as video/hevc + hvc1.2.4.L153.B0 (see [relabelTargetFor]).
+                // Same gate as the VPS skip above.
                 val skipRelabel = DoviBridge.available
                 val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite, skipRelabel = skipRelabel)
                 val relabeled =
@@ -586,9 +588,10 @@ private class VideoCompatTrackOutput(
                 // that path's samples are stripped by the Kotlin parser, which
                 // is the stall the rewrite closes.
                 val skipVpsRewrite = DoviBridge.available
-                // The same trial as the Auto branch above, on this box: Nuvio
-                // leaves the track declared, so the declared codec string stays
-                // here too while libdovi strips the samples.
+                // The same trial as the Auto branch above, on this box: the
+                // declared codec string stays here too while the samples are
+                // stripped — Nuvio's MKV strip-only path, not its MP4 wrapper,
+                // which re-advertises (see [relabelTargetFor]).
                 val skipRelabel = DoviBridge.available
                 val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite, skipRelabel = skipRelabel)
                 val relabeled =
@@ -1261,20 +1264,42 @@ internal fun relabelOutcome(skippedForLibdovi: Boolean): String =
  * caller the source format itself, which is what makes the config
  * byte-identical rather than "rebuilt with the same bytes".
  *
- * [skipRelabel] is the 2026-10-14 test, and the LAST difference from Nuvio's
- * `stripRpuOnly`: that reference never re-advertises the track, so the declared
- * `dvhe.08.06` stays on the format while the library strips the samples. The
+ * [skipRelabel] is the 2026-10-14 test: it leaves the track declared, so the
+ * declared `dvhe.08.06` stays on the format while the samples are stripped. The
  * VPS skip landed first (0.6.71, `vpsRewrite=skipped(libdovi)` in the field
- * log) and the picture still came up solid green, which leaves the `hvc1`
- * re-advertisement itself as the remaining candidate — the decoder is told
- * clean HEVC while the stripped stream still carries DV-shaped structure the
- * relabel claims is not there. It subsumes [skipVpsRewrite] rather than
- * stacking with it, because a track the app leaves declared is a track whose
- * codec config it has to leave alone too: this returns the source format
- * itself and reports [RelabelTarget.relabelSkipped], and the caller keeps the
- * library's strip. The call sites gate it on [DoviBridge.available] exactly as
- * they gate the VPS skip, and the relabel log's `relabel=` field says which of
- * the two ran.
+ * log) and the picture still came up solid green, which made the `hvc1`
+ * re-advertisement itself the remaining candidate — the decoder is told clean
+ * HEVC while the stripped stream still carries DV-shaped structure the relabel
+ * claims is not there. It subsumes [skipVpsRewrite] rather than stacking with
+ * it, because a track the app leaves declared is a track whose codec config it
+ * has to leave alone too: this returns the source format itself and reports
+ * [RelabelTarget.relabelSkipped], and the caller keeps the strip. The call
+ * sites gate it on [DoviBridge.available] exactly as they gate the VPS skip,
+ * and the relabel log's `relabel=` field says which of the two ran.
+ *
+ * The trial was introduced as Nuvio parity, on the reading that the reference
+ * never re-advertises a stripped track. Re-read against NuvioTV `dev` on
+ * 2026-10-14, that holds for one of its two paths, and the container picks
+ * which:
+ *
+ *  - MKV: `DolbyVisionMatroskaTransformer.onDolbyVisionCodecString` returns
+ *    null while `stripRpuOnly`, so the declared codec string survives the
+ *    strip. This trial is the parity arm for MKV.
+ *  - MP4 / fMP4 / TS: the wrapper's
+ *    `NativeOptimizedVideoTrackOutput.format` re-advertises on `stripDvRpu` —
+ *    `setSampleMimeType(MimeTypes.VIDEO_H265)` plus `stripDvCodecString`,
+ *    which rewrites `dvhe|dvh1.N.M` to the LITERAL `hvc1.2.4.L153.B0` — while
+ *    leaving `colorInfo` (its `hdrStaticInfo` included) and
+ *    `initializationData` alone. Parity here is the relabel, not this trial.
+ *
+ * No arm of this app has ever handed the decoder that MP4 triple at once: this
+ * one keeps `video/dolby-vision` + `dvhe.08.06` + the container's own color
+ * info, and the relabel matches the mime but advertises an SPS-derived string
+ * (`hvc1.2.4.H150.B0` in the 2026-10-11 capture, not the reference's literal)
+ * and replaces the color info with the forced HDR10 set. So which container
+ * the failing file is decides which arm is the parity arm, and
+ * [logDecoderFormat]'s line is what says which Format actually reached the
+ * decoder.
  */
 internal fun relabelTargetFor(
     format: Format,
