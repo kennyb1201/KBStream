@@ -29,16 +29,22 @@ import org.junit.Test
  *
  * What has to hold together, and is pinned here:
  *
- *  1. `applyOptions()` sets `vo` as an OPTION before `init()`, from the
+ *  1. `initialize()` sets `force-window=no` and `idle=once` AFTER `init()` and
+ *     registers the holder callback LAST — the reference player's
+ *     `initialize()` order: a surface can arrive the moment that callback goes
+ *     on, and the pair has to be in force (and out of reach of any option set
+ *     above it) before one does;
+ *  2. `applyOptions()` sets `vo` as an OPTION before `init()`, from the
  *     device-resolved output — the session's one configuration of the output;
- *  2. `surfaceCreated()` attaches the surface and then re-opens `vo` as a
+ *  3. `surfaceCreated()` attaches the surface and then re-opens `vo` as a
  *     PROPERTY from that same resolution — which is what re-initializes the
  *     output against the surface that was just attached;
- *  3. `surfaceDestroyed()` nulls `vo`, drops forced rendering and detaches, in
+ *  4. `surfaceDestroyed()` nulls `vo`, drops forced rendering and detaches, in
  *     that order: the output is torn down while its surface still exists;
- *  4. `release()`'s final `vo=null` before `destroy()` stays, so a dead instance
+ *  5. `release()`'s final `vo=null` before `destroy()` stays, so a dead instance
  *     cannot keep an output alive, and a session that starts again starts with
- *     `applyOptions()` on a fresh instance.
+ *     `applyOptions()` on a fresh instance — with the holder callback removed
+ *     first, the reference player's `destroy()` order.
  *
  * Only the OPTION is "set once per instance"; the property is cycled with the
  * surface, which is the distinction the earlier pin had backwards.
@@ -119,8 +125,7 @@ class MpvSurfaceCycleContractTest {
         // cannot acquire the frames. initialize() runs from the Activity's
         // onCreate, before any surface exists, so there is nothing for it to
         // attach to in the first place.
-        val initialize = code.substringAfter("fun initialize(): Boolean {")
-            .substringBefore("\n    }")
+        val initialize = initializeBody()
         assertFalse(
             "initialize() must not attach a surface - `isValid` is true before the " +
                 "native window exists, which is the dead-window bug: $initialize",
@@ -148,6 +153,12 @@ class MpvSurfaceCycleContractTest {
         assertTrue(
             "and forced rendering with it, or mpv decides it has no window to draw into",
             attach.contains("MPVLib.setOptionString(\"force-window\", \"yes\")")
+        )
+        assertTrue(
+            "in the reference player's order - attach first, then force-window=yes, with the " +
+                "output re-opened back in surfaceCreated",
+            attach.indexOf("MPVLib.attachSurface(surface)") <
+                attach.indexOf("MPVLib.setOptionString(\"force-window\", \"yes\")")
         )
         // The output property belongs to surfaceCreated, one line after this
         // helper returns - on the attach helper itself it would re-initialize
@@ -201,6 +212,52 @@ class MpvSurfaceCycleContractTest {
     }
 
     @Test
+    fun `initialize sets the post-init pair and registers the holder callback last`() {
+        // The reference player's initialize(): create, options, init(),
+        // postInitOptions(), `force-window=no`, `idle=once`, and only then the
+        // holder callback. When the pair lands is the point — mpv must already
+        // have been told it has no window (and must stay up with nothing to
+        // play) before the callback that can hand it one is registered — and it
+        // is set after init() so no option above it can put force-window back
+        // on. `idle=once` is what keeps mpv alive between the create and the
+        // first loadfile.
+        val initialize = initializeBody()
+        val init = initialize.indexOf("MPVLib.init()")
+        val forceOff = initialize.indexOf("MPVLib.setOptionString(\"force-window\", \"no\")")
+        val idleOnce = initialize.indexOf("MPVLib.setOptionString(\"idle\", \"once\")")
+        val callback = initialize.indexOf("holder.addCallback(this)")
+        assertTrue("initialize() has to init the engine", init >= 0)
+        assertTrue("then drop forced rendering", forceOff >= 0)
+        assertTrue("and tell mpv to idle at least once", idleOnce >= 0)
+        assertTrue(
+            "in the reference player's order: init, force-window=no, idle=once " +
+                "(init=$init forceWindow=$forceOff idle=$idleOnce)",
+            init < forceOff && forceOff < idleOnce
+        )
+        assertTrue("the holder callback is registered", callback >= 0)
+        assertTrue(
+            "LAST - a surface can arrive the moment it goes on, and the pair has to be in " +
+                "force by then (idle=$idleOnce callback=$callback)",
+            idleOnce < callback
+        )
+        assertEquals(
+            "and the pair lives in initialize() alone: an option set before init() is not " +
+                "the reference player's order",
+            1,
+            Regex("setOptionString\\(\"force-window\", \"no\"\\)").findAll(code).count()
+        )
+        assertEquals(
+            "the same for the idle value",
+            1,
+            Regex("setOptionString\\(\"idle\", \"once\"\\)").findAll(code).count()
+        )
+        assertFalse(
+            "and the pre-init idle=yes it replaced is gone with it",
+            code.contains("setOptionString(\"idle\", \"yes\")")
+        )
+    }
+
+    @Test
     fun `release still nulls the output before destroying the instance`() {
         // Not part of the cycle: a dead instance cannot re-initialize against a
         // null output, and a session that starts again re-applies applyOptions()
@@ -219,6 +276,15 @@ class MpvSurfaceCycleContractTest {
             "in the reference player's teardown order - output, then surface",
             release.indexOf("setPropertyString(\"vo\", \"null\")") <
                 release.indexOf("MPVLib.detachSurface()")
+        )
+        // BaseMPVView.destroy() removes the callback before MPVLib.destroy(),
+        // and that half is load-bearing: a surface arriving mid-teardown would
+        // otherwise attach to an instance that is being freed.
+        val removeCallback = release.indexOf("holder.removeCallback(this)")
+        assertTrue("the holder callback has to be removed", removeCallback >= 0)
+        assertTrue(
+            "before the instance is destroyed (removeCallback=$removeCallback)",
+            removeCallback < release.indexOf("MPVLib.destroy()")
         )
     }
 
@@ -241,6 +307,11 @@ class MpvSurfaceCycleContractTest {
     /** The whole callback, braces included: the cycle's own body. */
     private fun surfaceCreated(): String =
         code.substringAfter("override fun surfaceCreated(holder: SurfaceHolder) {")
+            .substringBefore("\n    }")
+
+    /** initialize()'s body only: the order of its calls is what is pinned. */
+    private fun initializeBody(): String =
+        code.substringAfter("fun initialize(): Boolean {")
             .substringBefore("\n    }")
 
     /** As above; it runs to the attach helper, which is the next declaration. */

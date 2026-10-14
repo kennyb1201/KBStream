@@ -23,7 +23,11 @@ import kotlin.math.pow
  * lives here is mpv's own lifecycle, which is order-sensitive:
  *
  *  - options are set BEFORE init() (mpv_set_option_string only accepts them
- *    pre-initialize; afterwards the same call is a runtime property change);
+ *    pre-initialize; afterwards the same call is a runtime property change),
+ *    except the pair the reference player sets AFTER it — `force-window=no`
+ *    and `idle=once` — which land between init() and the holder callback so
+ *    that nothing can force a window before a surface exists and mpv cannot
+ *    quit before the first loadfile arrives;
  *  - property observers are registered before init() too, matching the
  *    reference mpv-android player;
  *  - the video surface is attached from the SurfaceHolder callback, and the
@@ -268,13 +272,23 @@ class MpvPlayerView @JvmOverloads constructor(
             return false
         }
 
-        // applyOptions() and init() run together: create() above has already
-        // stood up the native instance, and if EITHER throws we must free it -
-        // otherwise every retry leaks another native instance, and the box runs
-        // out of them.
+        // applyOptions(), init() and the post-init pair run together: create()
+        // above has already stood up the native instance, and if ANY of them
+        // throws we must free it - otherwise every retry leaks another native
+        // instance, and the box runs out of them.
         try {
             applyOptions()
             MPVLib.init()
+            // The reference player's post-init pair, in its order and its
+            // place (`BaseMPVView.initialize`: init(), postInitOptions(), then
+            // these two, then the holder callback). `force-window=no` because
+            // forcing a window before a surface exists would mess up the video
+            // output's own init, and `idle=once` so mpv stays up with nothing
+            // to play until the first loadfile arrives. After init() so nothing
+            // above can override them, and before the holder callback below,
+            // which is the first moment a surface can appear.
+            MPVLib.setOptionString("force-window", "no")
+            MPVLib.setOptionString("idle", "once")
         } catch (t: Throwable) {
             Log.e(TAG, "libmpv could not initialize", t)
             runCatching { MPVLib.destroy() }
@@ -287,6 +301,9 @@ class MpvPlayerView @JvmOverloads constructor(
         // connection) is only ever delivered here - see [logMessage].
         MPVLib.addLogObserver(this)
         observeProperties()
+        // LAST, deliberately: a surface can arrive the moment this is
+        // registered, and [surfaceCreated] attaches it and re-opens the video
+        // output - everything above has to be in place by then.
         holder.addCallback(this)
         initialized = true
 
@@ -315,6 +332,9 @@ class MpvPlayerView @JvmOverloads constructor(
     fun release() {
         if (released) return
         released = true
+        // The reference player's destroy() order: stop the surface callbacks
+        // FIRST, so no attach can arrive against an mpv instance that is about
+        // to be destroyed.
         holder.removeCallback(this)
         if (initialized) {
             // destroy() clears the library's own observer lists too, but these
@@ -1038,9 +1058,12 @@ class MpvPlayerView @JvmOverloads constructor(
         // Playback shape. keep-open holds the last frame at EOF so the
         // activity can offer the next episode; save-position-on-quit is off
         // because watch history is the app's job, not mpv's watch_later files.
+        //
+        // `idle` and `force-window` are deliberately NOT here: they are the
+        // pair the reference player sets after init() and before the holder
+        // callback (see [initialize]), so neither is in force while the engine
+        // is still coming up.
         MPVLib.setOptionString("keep-open", "yes")
-        MPVLib.setOptionString("idle", "yes")
-        MPVLib.setOptionString("force-window", "no")
         MPVLib.setOptionString("save-position-on-quit", "no")
 
         // Preferred languages, so a multi-audio/multi-subtitle file opens on
