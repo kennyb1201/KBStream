@@ -61,6 +61,42 @@ class RandomEpisodeTest {
     }
 
     @Test
+    fun `the season count it reports excludes episodes that have not aired`() {
+        // The count is handed on as the play's `totalEpisodesInSeason`, which is
+        // what a resume row stores as its season total and what the hero's
+        // "X of Y aired episodes watched" line reads back. A season with two
+        // scheduled episodes left must report the aired number, not the size of
+        // the list the pool was filtered from.
+        val future = LocalDate.now().plusDays(7).toString()
+        val pool = listOf(
+            1 to listOf(
+                episode(1, airDate = "2019-05-05"),
+                episode(2, airDate = "2019-05-12"),
+                episode(3, airDate = future),
+                episode(4, airDate = future)
+            )
+        )
+        val pick = chooseRandomEpisode(pool, null, null, Random(1)) ?: error("expected a pick")
+        assertEquals(1, pick.season)
+        assertEquals(
+            "the two scheduled episodes are not part of the season's aired total",
+            2,
+            pick.episodeCount
+        )
+    }
+
+    @Test
+    fun `an undated episode still counts toward the season total`() {
+        // Same one-sided rule as the pick itself: a missing date never removes
+        // an episode from the count.
+        val pool = listOf(
+            1 to listOf(episode(1, airDate = null), episode(2, airDate = "2019-05-05"))
+        )
+        val pick = chooseRandomEpisode(pool, null, null, Random(1)) ?: error("expected a pick")
+        assertEquals(2, pick.episodeCount)
+    }
+
+    @Test
     fun `never repeats the episode playing now`() {
         val pool = listOf(1 to listOf(episode(1), episode(2)))
         repeat(50) { seed ->

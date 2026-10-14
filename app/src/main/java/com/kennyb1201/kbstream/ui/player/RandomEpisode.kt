@@ -12,8 +12,13 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 /**
  * A randomly chosen, already-aired episode of a show.
  *
- * [episodeCount] is the size of that season's FULL episode list (aired or not),
- * matching what the detail screen passes as `totalEpisodesInSeason`.
+ * [episodeCount] is the season's AIRED episode count - the same number the
+ * detail screen passes as `totalEpisodesInSeason`, and for the same reason: a
+ * season's full list carries episodes that have not aired, and a total built
+ * from the whole list is what made a show with scheduled episodes left read
+ * "14 of 16 aired episodes watched". A random hop stores its total on the
+ * history row exactly like any other play, so it has to agree with the count
+ * line rather than re-introduce the unaired ones.
  */
 data class RandomEpisodePick(
     val season: Int,
@@ -68,7 +73,13 @@ internal fun chooseRandomEpisode(
         name = episode.name?.takeIf { it.isNotBlank() },
         runtimeMinutes = episode.runtimeMinutes?.takeIf { it > 0 },
         streamId = episode.streamId,
-        episodeCount = seasons.firstOrNull { it.first == season }?.second?.size ?: 0
+        // The same aired rule the pool above was built with, so the count this
+        // pick reports can never describe episodes the pool excluded.
+        episodeCount = seasons
+            .firstOrNull { it.first == season }
+            ?.second
+            ?.count { episode -> !isUnaired(episode.airDate) }
+            ?: 0
     )
 }
 

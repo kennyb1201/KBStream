@@ -1013,6 +1013,29 @@ fun DetailScreen(
         }
     }
 
+    /**
+     * The loaded season's AIRED episode count - the total every episode line on
+     * this screen and every episode total this screen hands the player (and so
+     * every row it writes to history) is built from.
+     *
+     * Kept as one value rather than calling [airedEpisodeCount] at each use so
+     * the count on screen and the count stored for the same season cannot drift
+     * apart; see [airedEpisodeCount] for why the list's size is not it.
+     */
+    val airedEpisodesInSeason = remember(
+        episodes,
+        effectiveSeason,
+        seasonsWithStaleDates,
+        today
+    ) {
+        airedEpisodeCount(
+            episodes = episodes,
+            airDatesTrusted =
+                effectiveSeason == null || effectiveSeason !in seasonsWithStaleDates,
+            today = today
+        )
+    }
+
     fun seasonUnavailable(season: Int): Boolean =
         seasonPremiereDates[season]?.isAfter(today) == true
 
@@ -2680,7 +2703,7 @@ fun DetailScreen(
                                 0L
                             },
                         startFromBeginning = wantsBeginning,
-                        totalEpisodesInSeason = episodes.size,
+                        totalEpisodesInSeason = airedEpisodesInSeason,
                         runtimeMinutes = playTargetRuntimeMinutes
                     )
                 }
@@ -4077,7 +4100,7 @@ fun DetailScreen(
                                                                         resumeRow
                                                                             ?.positionMs
                                                                             ?: 0L,
-                                                                    totalEpisodesInSeason = episodes.size,
+                                                                    totalEpisodesInSeason = airedEpisodesInSeason,
                                                                     runtimeMinutes =
                                                                         resumeRow
                                                                             ?.durationMs
@@ -5716,10 +5739,7 @@ fun DetailScreen(
                                                 selected.episode,
                                             resumePositionMs = 0L,
                                             startFromBeginning = true,
-                                            totalEpisodesInSeason =
-                                                selected
-                                                    .seasonEpisodeNumbers
-                                                    .size,
+                                            totalEpisodesInSeason = airedEpisodesInSeason,
                                             runtimeMinutes =
                                                 selected.runtimeMinutes
                                                     ?.takeIf {
@@ -5783,10 +5803,7 @@ fun DetailScreen(
                                                 resumeRow
                                                     ?.positionMs
                                                     ?: 0L,
-                                            totalEpisodesInSeason =
-                                                selected
-                                                    .seasonEpisodeNumbers
-                                                    .size,
+                                            totalEpisodesInSeason = airedEpisodesInSeason,
                                             runtimeMinutes =
                                                 resumeRow
                                                     ?.durationMs
@@ -7215,6 +7232,41 @@ internal fun isEpisodeUnavailable(
     val date = episodeAirDate(airDate) ?: return false
     return date.isAfter(today)
 }
+
+/**
+ * How many of a season listing have actually aired - the total behind every
+ * "X of Y aired episodes watched" line and every per-season episode total a
+ * history row stores.
+ *
+ * The loaded season lists unaired episodes on purpose (their cards are drawn
+ * greyed rather than dropped, see [isEpisodeUnavailable]), so the list's own
+ * size is not the aired count. Counting the whole list is what made a show with
+ * two scheduled episodes left read "14 of 16 aired episodes watched" instead of
+ * "14 of 14" - and, because the same number is what a resume row stores as its
+ * season total, what kept such a show looking unfinished in Continue Watching
+ * once every aired episode had been watched.
+ *
+ * [airDatesTrusted] is false for a season whose dates are contradicted
+ * elsewhere (see `seasonsWithStaleDates`): a future date there means the ROW is
+ * stale rather than the episode unaired, so the list is left alone instead of
+ * guessed at - the same rule the season mark/unmark path applies. The rule is
+ * one-sided on purpose: an episode is only ever removed from the total when a
+ * date proves it has not aired, so a missing or unparseable date keeps its
+ * episode counted ([isEpisodeUnavailable] returns false for both).
+ *
+ * [today] is injectable so the boundary can be checked without a clock; every
+ * caller in the app takes the default.
+ */
+internal fun airedEpisodeCount(
+    episodes: List<ResolvedEpisode>,
+    airDatesTrusted: Boolean = true,
+    today: LocalDate = LocalDate.now()
+): Int =
+    if (airDatesTrusted) {
+        episodes.count { episode -> !isEpisodeUnavailable(episode.airDate, today) }
+    } else {
+        episodes.size
+    }
 
 private fun formatUsd(
     amount: Long
