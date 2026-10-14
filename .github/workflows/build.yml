@@ -22,6 +22,23 @@ on:
         description: "Ship the release even if the FFmpeg video extension is missing"
         type: boolean
         default: false
+      # The OTHER MPV library: the field-test arm of the library swap. The
+      # default ('rites', Riteshp2001/mpvlibAndroid v1.1.2) is what ships; with
+      # 'nuvio' this run links io.github.abdallahmehiz:mpv-android-lib:0.1.12
+      # instead and produces a DEBUG APK to sideload (see the mpv.lib flag block
+      # in app/build.gradle.kts for the two arms). It is a field test, not a
+      # migration, so a nuvio run deliberately does NOT build a release, does
+      # NOT run the release-only 16 KB native check, and - most importantly -
+      # NEVER reaches the publish steps: a dispatch can hand you an APK to test
+      # on a device without also handing every install a library build that has
+      # not been field tested. Everything else (ktlint, tests, lint, the debug
+      # build) is the same gate a normal run passes, just compiled against the
+      # other arm.
+      mpv_lib:
+        description: "MPV engine library (nuvio = field test only, never published)"
+        type: choice
+        options: [rites, nuvio]
+        default: rites
 
 permissions:
   contents: write
@@ -91,7 +108,17 @@ jobs:
       # version is pinned here as well as in scripts/build_dovi.sh so the cargo
       # cache key below cannot be shared with a build of a different version.
       DOVI_VERSION: "3.4.0"
-      
+
+      # Which MPV library the whole run links (see the mpv.lib flag block in
+      # app/build.gradle.kts). It is set for the job, not one build step, so the
+      # unit tests and lint compile the SAME arm the APK will carry - otherwise
+      # the nuvio backend would only ever be built by the APK task and never by
+      # the tests that are supposed to be the gate. `inputs.mpv_lib` is empty on
+      # push/tag runs, so those keep the default arm; an explicit value is what a
+      # dispatch passes. It must never be left empty: build.gradle.kts treats a
+      # blank value as an unknown library and fails the build.
+      MPV_LIB: ${{ inputs.mpv_lib || 'rites' }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -665,6 +692,7 @@ jobs:
       # or auth problem can never fail the build and block the APK. It runs
       # separately below as a best-effort step.
       - name: Build signed release APK
+        if: inputs.mpv_lib != 'nuvio'
         run: ./gradlew assembleRelease -x uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
@@ -689,6 +717,7 @@ jobs:
       # libraries Google never asks to be re-aligned - while arm64-v8a, the
       # ABI that actually matters here, was already clean.
       - name: Verify 16 KB page alignment of native libraries
+        if: inputs.mpv_lib != 'nuvio'
         run: |
           set -euo pipefail
           APK="$(ls app/build/outputs/apk/release/*.apk | head -n1)"
@@ -735,7 +764,7 @@ jobs:
       # build already started (the mapping-upload task itself is then
       # up-to-date or a short upload) instead of booting a second JVM.
       - name: Upload Sentry mappings (best-effort)
-        if: success()
+        if: success() && inputs.mpv_lib != 'nuvio'
         continue-on-error: true
         run: ./gradlew uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
@@ -745,13 +774,16 @@ jobs:
           KBSTREAM_KEY_ALIAS: ${{ secrets.KBSTREAM_KEY_ALIAS }}
           KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
 
+      # The name carries the arm so a field-test APK is never mistaken for a
+      # normal build when both land in the same run's artifacts.
       - name: Upload debug APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: kbstream-debug
+          name: ${{ inputs.mpv_lib == 'nuvio' && 'kbstream-debug-nuvio' || 'kbstream-debug' }}
           path: app/build/outputs/apk/debug/*.apk
 
       - name: Upload signed release APK
+        if: inputs.mpv_lib != 'nuvio'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: kbstream-release-signed
@@ -777,7 +809,7 @@ jobs:
       # upgrade. A publish therefore needs both a higher versionCode AND a
       # currently published commit that this commit already contains.
       - name: Guard against publishing a stale build
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && inputs.mpv_lib != 'nuvio'
         run: |
           set -euo pipefail
           HEAD_SHA="$(git rev-parse HEAD)"
@@ -820,7 +852,7 @@ jobs:
       # why - and the list is kept to a handful of entries. Full detail stays in
       # git; this file is what an update dialog shows.
       - name: Compose release notes
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && inputs.mpv_lib != 'nuvio'
         run: |
           set -euo pipefail
           HEAD_SHA="$(git rev-parse HEAD)"
@@ -870,7 +902,7 @@ jobs:
           cat "$NOTES_FILE"
 
       - name: Prepare metadata
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && inputs.mpv_lib != 'nuvio'
         run: |
           # The APK the app will download, excluding any unsigned output.
           APK="$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -1)"
@@ -885,13 +917,13 @@ jobs:
           cat metadata.json
 
       - name: Delete in-progress release tag
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && inputs.mpv_lib != 'nuvio'
         run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
         env:
           GH_TOKEN: ${{ github.token }}
 
       - name: Publish latest release (self-update feed)
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+        if: (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch') && inputs.mpv_lib != 'nuvio'
         run: |
           gh release create latest \
             --title "KBStream ${VERSION_NAME}" \

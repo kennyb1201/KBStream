@@ -227,10 +227,21 @@ switch is a Gradle flag:
 `MPV_LIB` in the environment or in `local.properties` works the same way. The
 test arm needs nothing fetched into `app/libs/`; the default arm still does.
 
+**No local toolchain? Let CI build it.** The `Build KBStream APK` workflow has a
+manual-dispatch input, `MPV library`, whose `nuvio` value builds this same arm:
+Actions → *Build KBStream APK* → *Run workflow* → set `MPV library` to `nuvio`.
+It runs the ordinary gates (ktlint, unit tests, lint, the debug build) against
+the test arm and uploads the APK as the artifact `kbstream-debug-nuvio`, so a
+machine with a browser is enough to get one. A `nuvio` dispatch deliberately
+skips the signed release build and the release-only 16 KB native check, and is
+gated off every publish step — it can hand a person an APK to sideload, never an
+install the test library. Everything below about "nothing ships the test
+library" therefore still holds: the default arm is what the feed and the release
+carry.
+
 Which one an APK carries is not guesswork: the engine logs it when it comes up
 (`MPV engine up · library=…`) and Settings → About → Copy diagnostics prints it
-on the `build:` line. **Nothing in CI sets the flag**, so a tag push can never
-ship the test library — only a local build can produce one.
+on the `build:` line. Check that line before trusting a field-test result.
 
 What the swap is for: on `vo=gpu` the shipped library renders black over playing
 audio on the field boxes (`updateAcquireFence: Did not find frame` repeated, the
