@@ -24,6 +24,15 @@ import org.junit.Test
  * and the mutating strip below keeps its rewrite, because that path's samples
  * are stripped by the Kotlin parser the rewrite was written for. The gate and
  * the log field are pinned here.
+ *
+ * The 2026-10-14 run is the step after that one. The VPS skip was in and the
+ * picture was still solid green, so the `hvc1` re-advertisement itself is what
+ * is left: both sites now ALSO skip the relabel while libdovi is present
+ * (`skipRelabel = DoviBridge.available`), keep the declared `dvhe.08.06` on the
+ * format, and still run Mode.STRIP_NALS_ONLY — the library's strip is the part
+ * that works and is deliberately untouched. Both gates, both log fields and the
+ * "strip anyway" half are pinned here, because a pin on the log alone would not
+ * notice the strip being dropped along with the relabel.
  * Dropping the RPU as well as the SEI is
  * what the reference player's "Always Strip DV" plays this chipset with, and the earlier arm
  * that kept the RPU only ever ran with the wrong codec string — see the source
@@ -98,7 +107,11 @@ class DolbyVisionRelabelNalsStripContractTest {
         assertTrue(
             "the relabel must be built through relabelTargetFor — the libdovi verdict has " +
                 "to reach the relabel from somewhere, and this is where",
-            branch.contains("relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)")
+            branch.contains(RELABEL_CALL)
+        )
+        assertTrue(
+            "and the no-relabel trial travels the same call, not a second path of its own",
+            branch.contains("val skipRelabel = DoviBridge.available")
         )
         assertTrue(
             "and that gate is the bridge's own availability, not a copy of its state — a " +
@@ -214,7 +227,11 @@ class DolbyVisionRelabelNalsStripContractTest {
         )
         assertTrue(
             "and be built through the same gated relabelTargetFor as the Auto branch",
-            reroute.contains("relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)")
+            reroute.contains(RELABEL_CALL)
+        )
+        assertTrue(
+            "with the same no-relabel trial as the Auto branch",
+            reroute.contains("val skipRelabel = DoviBridge.available")
         )
         assertTrue(
             "with this branch reading the same libdovi gate off the bridge",
@@ -269,16 +286,17 @@ class DolbyVisionRelabelNalsStripContractTest {
         // metadata was the missing piece), "absent" means this encode carries
         // none and the hypothesis is untestable on it, and "preserved" with no
         // picture means the difference is not in the format. Both call sites
-        // must report it, and the value is read off the format that was
-        // actually built rather than assumed from the source.
+        // must report it, and the value is read off the format that is actually
+        // handed to the decoder rather than assumed from the source — which,
+        // under the 2026-10-14 no-relabel trial, is the source format itself.
         assertEquals(
             "the RELABEL_ONLY branch and the DV-hardware reroute must both report it",
             2,
             count(source, " codecSrc=\$codecSrc hdrStaticInfo=\$hdrStatic")
         )
         assertTrue(
-            "the outcome must be read off the relabeled format, not assumed",
-            source.contains("relabeled.format.colorInfo?.hdrStaticInfo != null")
+            "the outcome must be read off the format that goes to the decoder, not assumed",
+            source.contains("presented.colorInfo?.hdrStaticInfo != null")
         )
         assertTrue(
             "and it must distinguish exactly the two field outcomes",
@@ -351,7 +369,7 @@ class DolbyVisionRelabelNalsStripContractTest {
             "both relabel sites — Auto's RELABEL_ONLY branch and the DV-hardware reroute — " +
                 "must pass the gate",
             2,
-            count(source, "relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)")
+            count(source, RELABEL_CALL)
         )
         assertEquals(
             "and each must read it off the bridge itself",
@@ -362,6 +380,71 @@ class DolbyVisionRelabelNalsStripContractTest {
             "so a field log says which of the two paths the VPS took",
             2,
             count(source, "vpsRewrite=\${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)}")
+        )
+    }
+
+    // ── the 2026-10-14 no-relabel trial ───────────────────────────────
+    //
+    // The last difference from Nuvio's stripRpuOnly: it never re-advertises the
+    // track. Both sites now skip the relabel itself while libdovi is present,
+    // which is a separate decision from the VPS skip and gets its own log field,
+    // and the library's strip has to survive it — the strip is the half that
+    // works, and a `skipRelabel` that also skipped Mode.STRIP_NALS_ONLY would
+    // undo the 2026-10-13 fix instead of testing one variable at a time.
+
+    @Test
+    fun `every relabel site skips the relabel itself while libdovi is present`() {
+        assertEquals(
+            "both sites must read the no-relabel gate off the bridge, not off a copy of its state",
+            2,
+            count(source, "val skipRelabel = DoviBridge.available")
+        )
+        assertEquals(
+            "and neither may build a relabel on that path: the skip is decided before the attempt",
+            2,
+            count(
+                source,
+                "if (relabel.relabelSkipped) null else relabelDvFormat(relabel.format, relabelCodec)"
+            )
+        )
+        assertEquals(
+            "so a field log says which of the two paths the codec string took",
+            2,
+            count(source, "relabel=\${relabelOutcome(relabel.relabelSkipped)}")
+        )
+        assertTrue(
+            "and the two verdicts the field run greps for are the ones it prints",
+            source.contains("\"skipped(libdovi-test)\"")
+        )
+    }
+
+    @Test
+    fun `a skipped relabel still strips with the library and hands the track on declared`() {
+        // Both sites, because the trial is only meaningful if the two paths stay
+        // comparable: the skipped arm must hand over the un-relabeled format and
+        // still ask for the metadata strip.
+        assertEquals(
+            "both sites must take the strip path on the skipped arm too",
+            2,
+            count(source, "if (relabeled != null || relabel.relabelSkipped) {")
+        )
+        assertEquals(
+            "and hand the decoder the un-relabeled format when there is no relabel",
+            2,
+            count(source, "val presented = relabeled?.format ?: relabel.format")
+        )
+        assertEquals(
+            "which is what reaches the decoder",
+            2,
+            count(source, "delegate.format(presented)")
+        )
+        assertTrue(
+            "while the samples are still libdovi's: Mode.STRIP_NALS_ONLY on both sites",
+            source.contains("mode = Mode.STRIP_NALS_ONLY")
+        )
+        assertTrue(
+            "and the log stops claiming a relabel that did not happen",
+            source.contains("keeping the declared codec \${format.codecs ?: \"?\"} (no relabel)")
         )
     }
 
@@ -379,5 +462,9 @@ class DolbyVisionRelabelNalsStripContractTest {
     private companion object {
         const val EXTRACTOR =
             "com/kennyb1201/kbstream/ui/player/DolbyVisionCompatExtractorsFactory.kt"
+
+        /** The shared gated relabel construction, as it must read at both sites. */
+        const val RELABEL_CALL =
+            "relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite, skipRelabel = skipRelabel)"
     }
 }

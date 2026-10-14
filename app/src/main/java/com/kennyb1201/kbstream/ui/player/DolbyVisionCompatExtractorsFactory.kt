@@ -480,32 +480,49 @@ private class VideoCompatTrackOutput(
                 // codec config — renders. The Kotlin fallback keeps the
                 // rewrite, because the rewrite is what closes its stall.
                 val skipVpsRewrite = DoviBridge.available
-                val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)
-                val relabeled = relabelDvFormat(relabel.format, relabelCodec)
-                if (relabeled != null) {
-                    // Reported from the format that was actually built, not from
-                    // the source: the field test reads this to tell whether the
-                    // container even carried HDR10 static metadata.
+                // The last difference from Nuvio's stripRpuOnly, on trial
+                // (2026-10-14): it never re-advertises the track, so the
+                // declared codec string stays on the format while libdovi strips
+                // the samples. Same gate as the VPS skip above.
+                val skipRelabel = DoviBridge.available
+                val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite, skipRelabel = skipRelabel)
+                val relabeled =
+                    if (relabel.relabelSkipped) null else relabelDvFormat(relabel.format, relabelCodec)
+                if (relabeled != null || relabel.relabelSkipped) {
+                    // Reported from the format that is actually handed to the
+                    // decoder, not from the source: the field test reads this to
+                    // tell whether the container even carried HDR10 static
+                    // metadata.
+                    val presented = relabeled?.format ?: relabel.format
                     val hdrStatic =
-                        if (relabeled.format.colorInfo?.hdrStaticInfo != null) "preserved"
+                        if (presented.colorInfo?.hdrStaticInfo != null) "preserved"
                         else "absent"
+                    val advertised = if (relabeled != null) {
+                        "re-advertising as hvc1 $relabelCodec " +
+                            "(${relabeled.attempt.name.lowercase()} relabel)"
+                    } else {
+                        "keeping the declared codec ${format.codecs ?: "?"} (no relabel)"
+                    }
                     Log.i(
                         "PLAYER_DV",
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV box, non-DV " +
-                            "display: re-advertising as hvc1 $relabelCodec " +
-                            "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
+                            "display: $advertised, samples: HDR10+ SEI " +
                             "stripped, RPU dropped, " +
+                            "relabel=${relabelOutcome(relabel.relabelSkipped)} " +
                             "vpsRewrite=${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)} " +
                             "vpsRewritten=${relabel.vpsRewritten} " +
                             "(config VPS only, SPS/PPS untouched) " +
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
-                    delegate.format(relabeled.format)
+                    delegate.format(presented)
                     // The relabel is bit-exact and the removal is in-place:
                     // the only parameter set touched is the codec config's VPS,
                     // rewritten by relabelTargetFor above (see
-                    // Mode.STRIP_NALS_ONLY for the sample side).
+                    // Mode.STRIP_NALS_ONLY for the sample side) — or, while the
+                    // 2026-10-14 no-relabel test is on, none at all: the track
+                    // and its codec config reach the decoder exactly as the
+                    // container declared them and only the samples changed.
                     mode = Mode.STRIP_NALS_ONLY
                 } else {
                     mode = Mode.NORMAL
@@ -532,25 +549,37 @@ private class VideoCompatTrackOutput(
                 // that path's samples are stripped by the Kotlin parser, which
                 // is the stall the rewrite closes.
                 val skipVpsRewrite = DoviBridge.available
-                val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite)
-                val relabeled = relabelDvFormat(relabel.format, relabelCodec)
-                if (relabeled != null) {
+                // The same trial as the Auto branch above, on this box: Nuvio
+                // leaves the track declared, so the declared codec string stays
+                // here too while libdovi strips the samples.
+                val skipRelabel = DoviBridge.available
+                val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite, skipRelabel = skipRelabel)
+                val relabeled =
+                    if (relabel.relabelSkipped) null else relabelDvFormat(relabel.format, relabelCodec)
+                if (relabeled != null || relabel.relabelSkipped) {
+                    val presented = relabeled?.format ?: relabel.format
                     val hdrStatic =
-                        if (relabeled.format.colorInfo?.hdrStaticInfo != null) "preserved"
+                        if (presented.colorInfo?.hdrStaticInfo != null) "preserved"
                         else "absent"
+                    val advertised = if (relabeled != null) {
+                        "re-advertising as hvc1 $relabelCodec " +
+                            "(${relabeled.attempt.name.lowercase()} relabel)"
+                    } else {
+                        "keeping the declared codec ${format.codecs ?: "?"} (no relabel)"
+                    }
                     Log.i(
                         "PLAYER_DV",
                         "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV-decoder " +
-                            "hardware: re-advertising as hvc1 $relabelCodec " +
-                            "(${relabeled.attempt.name.lowercase()} relabel), samples: HDR10+ SEI " +
+                            "hardware: $advertised, samples: HDR10+ SEI " +
                             "stripped, RPU dropped, " +
+                            "relabel=${relabelOutcome(relabel.relabelSkipped)} " +
                             "vpsRewrite=${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)} " +
                             "vpsRewritten=${relabel.vpsRewritten} " +
                             "(config VPS only, SPS/PPS untouched) " +
                             "(the mutating strip is field-dead here)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
-                    delegate.format(relabeled.format)
+                    delegate.format(presented)
                     mode = Mode.STRIP_NALS_ONLY
                 } else {
                     mode = Mode.NORMAL
@@ -1104,8 +1133,19 @@ internal enum class RelabelAttempt { FULL, MINIMAL }
 internal class RelabelOutcome(val format: Format, val attempt: RelabelAttempt)
 
 /** What the relabel is handed: the source format (or its VPS-rewritten form)
- * plus whether that rewrite happened, for the success log. */
-internal class RelabelTarget(val format: Format, val vpsRewritten: Boolean)
+ * plus whether that rewrite happened, for the success log — and whether the
+ * relabel itself is being skipped, which is the 2026-10-14 test (see
+ * [relabelTargetFor]). */
+internal class RelabelTarget(
+    val format: Format,
+    val vpsRewritten: Boolean,
+    /**
+     * True when the whole relabel is skipped: [format] is the source format
+     * exactly as it arrived, declared codec string included, and the caller
+     * must not hand it to [relabelDvFormat].
+     */
+    val relabelSkipped: Boolean = false
+)
 
 /**
  * The relabel log's verdict on the codec config's VPS, for the field log.
@@ -1122,6 +1162,20 @@ internal fun vpsRewriteOutcome(skippedForLibdovi: Boolean, rewritten: Boolean): 
     rewritten -> "applied"
     else -> "not-needed"
 }
+
+/**
+ * The relabel log's verdict on the codec-string relabel, for the field log.
+ *
+ * The 2026-10-14 field run reads this field to tell which path ran: the
+ * declared `dvhe.08.06` left on the format because libdovi did the strip and
+ * nothing re-advertised the track, or the `hvc1` relabel this app has always
+ * shipped. It is a separate field from `vpsRewrite` because the two are
+ * independent decisions — the VPS skip already ran on its own (0.6.71) and the
+ * picture was still solid green, which is what leaves the relabel itself as
+ * the candidate this test is bisecting.
+ */
+internal fun relabelOutcome(skippedForLibdovi: Boolean): String =
+    if (skippedForLibdovi) "skipped(libdovi-test)" else "applied"
 
 /**
  * The format the relabel is built from: [format] with the Dolby Vision VPS
@@ -1151,14 +1205,33 @@ internal fun vpsRewriteOutcome(skippedForLibdovi: Boolean, rewritten: Boolean): 
  * and every caller on the Kotlin fallback keeps it. Skipping it hands the
  * caller the source format itself, which is what makes the config
  * byte-identical rather than "rebuilt with the same bytes".
+ *
+ * [skipRelabel] is the 2026-10-14 test, and the LAST difference from Nuvio's
+ * `stripRpuOnly`: that reference never re-advertises the track, so the declared
+ * `dvhe.08.06` stays on the format while the library strips the samples. The
+ * VPS skip landed first (0.6.71, `vpsRewrite=skipped(libdovi)` in the field
+ * log) and the picture still came up solid green, which leaves the `hvc1`
+ * re-advertisement itself as the remaining candidate — the decoder is told
+ * clean HEVC while the stripped stream still carries DV-shaped structure the
+ * relabel claims is not there. It subsumes [skipVpsRewrite] rather than
+ * stacking with it, because a track the app leaves declared is a track whose
+ * codec config it has to leave alone too: this returns the source format
+ * itself and reports [RelabelTarget.relabelSkipped], and the caller keeps the
+ * library's strip. The call sites gate it on [DoviBridge.available] exactly as
+ * they gate the VPS skip, and the relabel log's `relabel=` field says which of
+ * the two ran.
  */
 internal fun relabelTargetFor(
     format: Format,
     rewriteVps: (List<ByteArray>) -> List<ByteArray> = {
         DolbyVisionCompat.rewriteVpsInInitData(it)
     },
-    skipVpsRewrite: Boolean = false
+    skipVpsRewrite: Boolean = false,
+    skipRelabel: Boolean = false
 ): RelabelTarget {
+    // One decision, not two flags that could ever disagree: a declared track
+    // keeps its declared codec config.
+    if (skipRelabel) return RelabelTarget(format, false, relabelSkipped = true)
     if (format.initializationData.isEmpty()) return RelabelTarget(format, false)
     if (skipVpsRewrite) {
         // Nuvio parity: the VPS/SPS/PPS stay byte-identical and only the samples

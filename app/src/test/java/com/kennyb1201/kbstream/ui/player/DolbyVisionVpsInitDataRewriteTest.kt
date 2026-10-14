@@ -271,7 +271,7 @@ class DolbyVisionVpsInitDataRewriteTest {
         // rather than a bad picture.
         val format = dvFormat(listOf(lengthDelimited(dvVps, sps, pps)))
 
-        // Named, not a trailing lambda: skipVpsRewrite is the last parameter on
+        // Named, not a trailing lambda: the gate parameters are the last ones on
         // purpose (the gate is the call site's own decision), so the rewrite has
         // to be addressed by name.
         val target = relabelTargetFor(
@@ -356,6 +356,90 @@ class DolbyVisionVpsInitDataRewriteTest {
             "skipping outranks whatever the rewrite would have reported",
             "skipped(libdovi)",
             vpsRewriteOutcome(skippedForLibdovi = true, rewritten = true)
+        )
+    }
+
+    // ── behavioral: the 2026-10-14 no-relabel trial ──────────────────────
+    //
+    // The VPS skip landed first (0.6.71) and the field picture was still solid
+    // green, which leaves the `hvc1` re-advertisement itself as the last
+    // difference from Nuvio's stripRpuOnly: it never re-advertises the track.
+    // [relabelTargetFor] is where that decision lives, so it is pinned here;
+    // the two call sites — and the DoviBridge gate they read it through — are
+    // pinned by DolbyVisionRelabelNalsStripContractTest.
+
+    @Test
+    fun `skipRelabel hands the declared track over untouched and reports the skip`() {
+        val format = dvFormat(listOf(lengthDelimited(dvVps, sps, pps)))
+
+        val target = relabelTargetFor(format, skipRelabel = true)
+
+        assertTrue(
+            "the field log reads this as skipped(libdovi-test), so the target has to say so",
+            target.relabelSkipped
+        )
+        assertFalse(
+            "and a track left as declared cannot report a config rewrite",
+            target.vpsRewritten
+        )
+        assertSame(
+            "the source format itself - declared dvhe.08.06 and all - is what reaches the decoder",
+            format,
+            target.format
+        )
+        assertEquals("the declared codec string is the whole point", "dvhe.08.06", target.format.codecs)
+        assertSame(
+            "and the codec config is the container's own, byte for byte",
+            format.initializationData,
+            target.format.initializationData
+        )
+    }
+
+    @Test
+    fun `skipRelabel never invokes the rewrite at all`() {
+        val format = dvFormat(listOf(lengthDelimited(dvVps, sps, pps)))
+        var consulted = false
+
+        val target = relabelTargetFor(
+            format,
+            rewriteVps = { consulted = true; it },
+            skipRelabel = true
+        )
+
+        assertFalse("a skipped relabel may not even enter the rewrite", consulted)
+        assertSame(format, target.format)
+    }
+
+    @Test
+    fun `skipRelabel outranks skipVpsRewrite so the two gates can never disagree`() {
+        // Both flags are the same DoviBridge.available at the call sites, and the
+        // no-relabel arm is the stronger decision of the pair: leaving the track
+        // declared and rewriting its config would be neither arm.
+        val format = dvFormat(listOf(lengthDelimited(dvVps, sps, pps)))
+
+        val target = relabelTargetFor(
+            format,
+            rewriteVps = { error("the no-relabel arm may not rewrite anything") },
+            skipVpsRewrite = false,
+            skipRelabel = true
+        )
+
+        assertTrue(target.relabelSkipped)
+        assertFalse(target.vpsRewritten)
+        assertSame(format, target.format)
+    }
+
+    @Test
+    fun `the log's relabel verdict names the trial arm`() {
+        assertEquals(
+            "the 2026-10-14 field run reads this to tell which path ran",
+            "skipped(libdovi-test)",
+            relabelOutcome(skippedForLibdovi = true)
+        )
+        assertEquals(
+            "and the relabel the app has always shipped is still named applied",
+            "applied",
+            relabelOutcome(skippedForLibdovi = false)
         )
     }
 }
