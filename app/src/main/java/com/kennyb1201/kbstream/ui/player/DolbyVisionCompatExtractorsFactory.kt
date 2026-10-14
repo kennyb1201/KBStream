@@ -293,6 +293,38 @@ private class VideoCompatTrackOutput(
     private var initDataRewritten = false
     private val scratch = ParsableByteArray()
 
+    /**
+     * Dumps the Format the decoder is about to be configured with — the one
+     * window onto the negotiated decoder config this class has.
+     *
+     * It exists because of the 2026-10-14 byte-diff: the strip itself is proven
+     * correct (our output is bit-identical to the reference player's), yet this
+     * chipset still stalls on Strip All (`bitrate=0`, decoder gets input, never
+     * emits) — so the remaining difference has to be a Format field, not a
+     * sample. It is called at EVERY emit, not only the stripping ones, so the
+     * capture also shows when the intended path did NOT engage (a passthrough
+     * line where a stripped one was expected is itself the finding).
+     *
+     * Emitted from `format()`, which the extractor calls before any sample is
+     * handed over, so it always precedes the decoder's own first-input-frame
+     * line in the capture.
+     *
+     * [Format] carries no `hdrStaticInfo` field of its own — Media3 puts it on
+     * [ColorInfo] — so the presence flag reads through `colorInfo`, and
+     * `csd0size` is the first codec-config block (`hvcC` / Annex-B parameter
+     * sets) the decoder is initialised from.
+     */
+    private fun logDecoderFormat(format: Format) {
+        Log.i(
+            "PLAYER_DV",
+            "decoder format: mime=${format.sampleMimeType} " +
+                "codecs=${format.codecs ?: "?"} " +
+                "hdrStaticInfo=${if (format.colorInfo?.hdrStaticInfo != null) "present" else "absent"} " +
+                "colorInfo=${format.colorInfo} " +
+                "csd0size=${format.initializationData.getOrNull(0)?.size}"
+        )
+    }
+
     override fun durationUs(durationUs: Long) = delegate.durationUs(durationUs)
 
     override fun format(format: Format) {
@@ -341,7 +373,9 @@ private class VideoCompatTrackOutput(
             builder = builder.setInitializationData(
                 rewriteInitData(format.initializationData)
             )
-            delegate.format(builder.build())
+            val converted = builder.build()
+            logDecoderFormat(converted)
+            delegate.format(converted)
             mode = Mode.STRIPPING
             return
         }
@@ -430,6 +464,7 @@ private class VideoCompatTrackOutput(
                         "(no strip — HDR10-base profiles play natively)"
                 )
                 mode = Mode.NORMAL
+                logDecoderFormat(format)
                 delegate.format(format)
                 return
             }
@@ -515,6 +550,7 @@ private class VideoCompatTrackOutput(
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
+                    logDecoderFormat(presented)
                     delegate.format(presented)
                     // The relabel is bit-exact and the removal is in-place:
                     // the only parameter set touched is the codec config's VPS,
@@ -526,6 +562,7 @@ private class VideoCompatTrackOutput(
                     mode = Mode.STRIP_NALS_ONLY
                 } else {
                     mode = Mode.NORMAL
+                    logDecoderFormat(format)
                     delegate.format(format)
                 }
                 return
@@ -579,10 +616,12 @@ private class VideoCompatTrackOutput(
                             "(the mutating strip is field-dead here)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
+                    logDecoderFormat(presented)
                     delegate.format(presented)
                     mode = Mode.STRIP_NALS_ONLY
                 } else {
                     mode = Mode.NORMAL
+                    logDecoderFormat(format)
                     delegate.format(format)
                 }
                 return
@@ -635,6 +674,7 @@ private class VideoCompatTrackOutput(
             }
             val strippedFormat = stripped.getOrNull()
             if (strippedFormat != null) {
+                logDecoderFormat(strippedFormat)
                 delegate.format(strippedFormat)
                 mode = Mode.STRIPPING
             } else {
@@ -648,6 +688,7 @@ private class VideoCompatTrackOutput(
                     stripped.exceptionOrNull()
                 )
                 mode = Mode.NORMAL
+                logDecoderFormat(format)
                 delegate.format(format)
             }
             return
@@ -719,8 +760,11 @@ private class VideoCompatTrackOutput(
             // because the pixel data is still ICtCp, not Rec.2020 PQ, but
             // forcing HDR10 metadata at least avoids an SDR fallback with
             // fully washed-out colors.
-            delegate.format(rewritten.buildUpon().setColorInfo(hdr10ColorInfo).build())
+            val withColor = rewritten.buildUpon().setColorInfo(hdr10ColorInfo).build()
+            logDecoderFormat(withColor)
+            delegate.format(withColor)
         } else {
+            logDecoderFormat(format)
             delegate.format(format)
         }
     }
@@ -836,7 +880,10 @@ private class VideoCompatTrackOutput(
                             "Re-emitting format with rewritten single-layer HDR10 codec config " +
                                 "(codecs=${fmt.codecs ?: "?"})"
                         )
-                        delegate.format(fmt.buildUpon().setInitializationData(rewrittenInit).build())
+                        val reEmitted =
+                            fmt.buildUpon().setInitializationData(rewrittenInit).build()
+                        logDecoderFormat(reEmitted)
+                        delegate.format(reEmitted)
                     }
                 }
                 // Fall through and strip this very sample: samples that contain
