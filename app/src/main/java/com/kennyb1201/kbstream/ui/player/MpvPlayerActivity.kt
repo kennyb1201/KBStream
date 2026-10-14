@@ -2652,7 +2652,19 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // is safe; onProgress repopulates it with the new source's position.
         positionMs = 0L
         endedHandled = false
-        completionFiled = false
+        // [completionFiled] deliberately SURVIVES a source switch, unlike
+        // [endedHandled] beside it. The switch replaces the FILE being read, not
+        // the episode: the session's history id, parent id and episode identity
+        // are untouched. `endedHandled` is therefore false again - this file has
+        // not ended - while "the episode was marked watched" is still true, and
+        // clearing it here re-opened exactly the race the flag exists to close:
+        // a switch taken after the threshold completion (the automatic rebuffer
+        // downshift is one, and it fires on a source this viewer may then back
+        // out of while it is still low), followed by any save below 90%,
+        // re-decided the episode from the playhead and filed a resume row over
+        // the watched marker. A viewer who wants to watch a finished episode
+        // again replays it, which starts a new activity (and a fresh flag).
+        //
         // The end-of-episode cards and their countdown go with the source being
         // replaced: see hideEndPanels. endPanelsShown is reset there, and so is
         // bywDismissed - the replacement file reaches its own end, and the

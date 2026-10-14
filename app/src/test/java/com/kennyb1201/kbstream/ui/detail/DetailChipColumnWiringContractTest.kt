@@ -176,7 +176,9 @@ class DetailChipColumnWiringContractTest {
     @Test
     fun `every vertical press between the rails goes through the one rule`() {
         // The definition, the chip lookup in the chain's focusRow, the reveal
-        // helper's own single call, and the Media row's two asks for its OWN
+        // helper's own single call, the present-but-unready retry the chain's
+        // focusRow spends before it steps over a row that is there, and the
+        // Media row's two asks for its OWN
         // card - its tab strip's DOWN, which is not a neighbour decision at
         // all: the rail it enters is the row it is already standing in, which
         // is why it asks directly instead of scrolling the row it is in to the
@@ -187,7 +189,7 @@ class DetailChipColumnWiringContractTest {
         // the count below is the whole of it: any further site is a change
         // someone has to make deliberately.
         assertEquals(
-            5,
+            6,
             Regex("focusChipColumn\\(").findAll(source).count()
         )
         assertTrue(

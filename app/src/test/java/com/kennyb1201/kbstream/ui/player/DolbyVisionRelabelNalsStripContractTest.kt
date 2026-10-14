@@ -29,10 +29,12 @@ import org.junit.Test
  * picture was still solid green, so the `hvc1` re-advertisement itself is what
  * is left: both sites now ALSO skip the relabel while libdovi is present
  * (`skipRelabel = DoviBridge.available`), keep the declared `dvhe.08.06` on the
- * format, and still run Mode.STRIP_NALS_ONLY — the library's strip is the part
- * that works and is deliberately untouched. Both gates, both log fields and the
- * "strip anyway" half are pinned here, because a pin on the log alone would not
- * notice the strip being dropped along with the relabel.
+ * format, and still run Mode.STRIP_NALS_ONLY — the sample strip stays, now the
+ * Kotlin surgery (`kotlinOnly = true`) rather than the library's coarse one,
+ * since the 2026-10-14 no-relabel run pinned libdovi's whole-SEI drop as the
+ * green-screen cause. Both gates, both log fields and the "strip anyway" half
+ * are pinned here, because a pin on the log alone would not notice the strip
+ * being dropped along with the relabel.
  * Dropping the RPU as well as the SEI is
  * what the reference player's "Always Strip DV" plays this chipset with, and the earlier arm
  * that kept the RPU only ever ran with the wrong codec string — see the source
@@ -156,6 +158,12 @@ class DolbyVisionRelabelNalsStripContractTest {
             "the handler must drop the HDR10+ SEI (the stream is presented as static " +
                 "HDR10), dropping the RPU/EL",
             handler.contains("stripHdr10Plus = true")
+        )
+        assertEquals(
+            "and it must run the Kotlin surgery (Nuvio parity), not libdovi's coarse " +
+                "whole-SEI drop",
+            2,
+            Regex("kotlinOnly = true,").findAll(handler).count()
         )
         assertFalse(
             "the handler must be pure removal, never the in-sample transform",

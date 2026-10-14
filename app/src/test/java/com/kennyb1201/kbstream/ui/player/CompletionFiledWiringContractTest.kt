@@ -171,6 +171,34 @@ class CompletionFiledWiringContractTest {
         )
     }
 
+    /**
+     * A source switch replaces the FILE, not the episode - the session's
+     * history id, parent id and episode identity are untouched - so the filed
+     * completion outlives it. Clearing it there re-opened the race the flag
+     * exists to close, through the automatic rebuffer downshift: a switch taken
+     * after the threshold completion, followed by a save below 90% (the viewer
+     * backing out of the new source while it is still low), re-decided the
+     * episode from the playhead and put the resume point back.
+     */
+    @Test
+    fun `a source switch does not un-file the completion`() {
+        val source = read("com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt")
+        assertTrue(
+            "nothing but the declaration may set the flag back to false, so a " +
+                "source switch cannot un-file a completion",
+            occurrences(source, "completionFiled = false") == 1
+        )
+        assertTrue(
+            "and the only other writer is the save that files a completion",
+            source.contains("if (completed) completionFiled = true")
+        )
+        // The switch's own state reset must still clear what a NEW file means.
+        assertTrue(
+            "while the ended-this-file flag is still reset with the file",
+            source.contains("endedHandled = false")
+        )
+    }
+
     // ── the BYW panel asserts the episode is marked watched ────────────────
 
     @Test

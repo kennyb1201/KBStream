@@ -28,12 +28,19 @@ class ExoScrubFollowContractTest {
     // ── the pause wrapper ───────────────────────────────────────────────
 
     @Test
-    fun `a scrub pauses the player and captures the play state`() {
+    fun `a scrub pauses the player and captures the viewer's intent`() {
         val body = functionBody(NATIVE, "private fun beginScrubPause() {")
         assertTrue(
-            "the play state must be captured before the pause",
-            body.indexOf("wasPlayingBeforeScrub = player.isPlaying") in
+            "the intent must be captured before the pause, and it is " +
+                "playWhenReady rather than isPlaying: isPlaying is false while the " +
+                "player is buffering, so a scrub taken during a rebuffer or a slow " +
+                "seek used to come back paused and the viewer had to press play",
+            body.indexOf("wasPlayingBeforeScrub = player.playWhenReady") in
                 0 until body.indexOf("player.pause()")
+        )
+        assertFalse(
+            "and never the momentary state, which is what dropped the resume",
+            body.contains("wasPlayingBeforeScrub = player.isPlaying")
         )
         assertTrue(
             "an unseekable item (live has no duration) is never paused",

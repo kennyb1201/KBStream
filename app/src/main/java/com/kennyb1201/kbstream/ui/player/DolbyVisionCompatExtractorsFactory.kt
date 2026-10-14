@@ -915,14 +915,20 @@ private class VideoCompatTrackOutput(
             // re-advertise the codec before their samples arrive here. The
             // stripping is identical for the two, so the log below names no
             // codec source — the format line above it says which ran. The
-            // removal itself is libdovi's now (see
-            // [DolbyVisionCompat.stripAnnexB]), which the log's "(via libdovi)"
-            // marker below records.
+            // removal itself is the Kotlin parser's now (`kotlinOnly = true`):
+            // libdovi's HDR10+ strip is coarse and drops a whole SEI NAL, which
+            // on the 2026-10-14 field file took the HDR10 static metadata with
+            // it and green-screened the picture — Nuvio never strips that NAL.
+            // The Kotlin surgery keeps the NAL and removes only the HDR10+
+            // message, and drops the enhancement layer by `layerId > 0` the way
+            // Nuvio's HevcDvRpuStripper does. The log's "(via kotlin)" marker
+            // below records which ran.
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
                         pendingBuf, sampleEnd, stripDv = true, // drop RPU/EL, like the reference
                         stripHdr10Plus = true,
+                        kotlinOnly = true,
                         accounting = accounting
                     )
                 NalFraming.LENGTH_DELIMITED ->
@@ -930,6 +936,7 @@ private class VideoCompatTrackOutput(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
                         stripDv = true, // drop RPU/EL, like the reference
                         stripHdr10Plus = true,
+                        kotlinOnly = true,
                         accounting = accounting
                     )
             }
@@ -948,8 +955,9 @@ private class VideoCompatTrackOutput(
                         "sei=${accounting?.summary()?.ifEmpty { "none" } ?: "none"}" +
                         // Which stripper produced these bytes: libdovi reports
                         // no per-NAL detail, so its entries are categories and
-                        // the marker is what says so.
-                        if (accounting?.viaLibdovi == true) " (via libdovi)" else ""
+                        // the marker is what says so. Strip All is Kotlin
+                        // (`kotlinOnly`), with real per-NAL sizes and actions.
+                        if (accounting?.viaLibdovi == true) " (via libdovi)" else " (via kotlin)"
                 )
             }
             // No parameter set is rewritten here: this mode is the sample-side

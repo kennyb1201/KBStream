@@ -9,20 +9,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The Strip All path runs through libdovi: [DolbyVisionCompat.stripAnnexB] and
- * [DolbyVisionCompat.stripLengthDelimited] hand the whole sample to
- * [DoviBridge.stripSample] first, and the Kotlin NAL parser below them is the
- * fallback for a build without the `.so` (every local build, and any CI run
- * where the native step failed).
+ * [DolbyVisionCompat.stripAnnexB] and [DolbyVisionCompat.stripLengthDelimited]
+ * hand the whole sample to [DoviBridge.stripSample] first, and the Kotlin NAL
+ * parser below them is the fallback for a build without the `.so` (every local
+ * build, and any CI run where the native step failed). Strip All is the
+ * exception: it passes `kotlinOnly = true` and never reaches the bridge, because
+ * libdovi's HDR10+ strip is coarse — it drops a whole SEI NAL — and that NAL
+ * carried HDR10 static metadata on the 2026-10-14 field file (Nuvio's stripper
+ * never touches it). Every other caller keeps the native strip.
  *
- * Two things are pinned here. First the routing, because the Kotlin scan is the
- * code that stalls the MediaTek decoder on every variant of the full strip —
- * the reference player hands the same file to libdovi and renders — so a change
- * that quietly put the Kotlin scan back in front would be invisible in a JVM
- * test and fatal in the field. Second the fallback itself: with no library in
- * this process, which is exactly the state a local build is in, both functions
- * have to behave precisely as they did before the routing existed, including
- * the -1 that means "nothing was removed".
+ * Two things are pinned here. First the routing, including Strip All's opt-out,
+ * because a change that quietly dropped the native strip for the other callers
+ * would be invisible in a JVM test and costly in the field. Second the fallback
+ * itself: with no library in this process, which is exactly the state a local
+ * build is in, both functions have to behave precisely as they did before the
+ * routing existed, including the -1 that means "nothing was removed".
  *
  * `DoviBridge.available` is false in a JVM unit test by construction (there is
  * no Android device and no `.so`), so the behavioral tests below exercise the
@@ -99,13 +100,13 @@ class DolbyVisionLibdoviStripContractTest {
         // reach it: the gate has to appear on both entry points, and the Kotlin
         // body has to still be there behind it.
         assertEquals(
-            "both strip functions gate the native path on dropRpuNal",
+            "both strip functions gate the native path on dropRpuNal and kotlinOnly",
             2,
-            occurrences(compat, "if (!dropRpuNal) {")
+            occurrences(compat, "if (!dropRpuNal && !kotlinOnly) {")
         )
         val annexB = compat.substringAfter("fun stripAnnexB(")
             .substringBefore("fun stripLengthDelimited(")
-        val gateAt = annexB.indexOf("if (!dropRpuNal) {")
+        val gateAt = annexB.indexOf("if (!dropRpuNal && !kotlinOnly) {")
         val kotlinScanAt = annexB.indexOf("if (length < 5) return -1")
         assertTrue("the gate not found in stripAnnexB", gateAt >= 0)
         assertTrue(
@@ -117,7 +118,7 @@ class DolbyVisionLibdoviStripContractTest {
         assertTrue(
             "the length-delimited fallback is still there too",
             lengthDelimited.indexOf("val fieldLen = nalLengthFieldLength.coerceIn(1, 4)") >
-                lengthDelimited.indexOf("if (!dropRpuNal) {")
+                lengthDelimited.indexOf("if (!dropRpuNal && !kotlinOnly) {")
         )
         assertTrue(
             "and the surgical SEI parser the fallback uses is untouched",
@@ -169,8 +170,18 @@ class DolbyVisionLibdoviStripContractTest {
             occurrences(handler, "stripDv = true,")
         )
         assertTrue("and both drop the HDR10+ SEI", handler.contains("stripHdr10Plus = true"))
+        // Strip All opts out of the native strip on both framings: libdovi's
+        // HDR10+ strip is coarse and dropped the HDR10 static metadata with the
+        // whole SEI NAL on the 2026-10-14 field file. The Kotlin surgery keeps
+        // the NAL and removes only the HDR10+ message.
+        assertEquals(
+            "both framing branches run the Kotlin surgery, not the library",
+            2,
+            occurrences(handler, "kotlinOnly = true,")
+        )
         // Which stripper produced the bytes: the native path's entries are
-        // categories with no sizes, so the log says so.
+        // categories with no sizes, so the log says so; the Kotlin arm prints
+        // its own marker so the field run can grep for it.
         assertTrue(
             "the first-sample line has to consult the marker",
             flat(handler).contains("accounting?.viaLibdovi==true")
@@ -178,6 +189,10 @@ class DolbyVisionLibdoviStripContractTest {
         assertTrue(
             "and print it",
             flat(handler).contains("(vialibdovi)")
+        )
+        assertTrue(
+            "with the Kotlin arm's own label, which Strip All now takes",
+            flat(handler).contains("(viakotlin)")
         )
         assertTrue(
             "the field run greps this label for what was removed",

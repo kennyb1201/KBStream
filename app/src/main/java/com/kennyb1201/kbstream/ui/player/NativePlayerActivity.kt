@@ -1010,6 +1010,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * turn into the stall an unthrottled scrub of PLAYING 4K did. The flag is
      * per-scrub - a scrub that never started never resumes - and it is cleared
      * the moment it is honoured (see [endScrubPause]).
+     *
+     * What is captured is the viewer's INTENT (`playWhenReady`), not the
+     * momentary state: `isPlaying` is false while the player is buffering
+     * (`playbackState != STATE_READY`), so a scrub taken during a rebuffer or a
+     * slow seek restored a paused player and the viewer had to press play - the
+     * "sometimes it resumes, sometimes it does not" field report.
      */
     private var wasPlayingBeforeScrub = false
 
@@ -8180,7 +8186,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     }
 
     /**
-     * Begins a scrub: remembers whether playback was running - so it can be put
+     * Begins a scrub: remembers whether the viewer was playing - so it can be put
      * back exactly, see [endScrubPause] - then pauses.
      *
      * The pause is what lets the video follow the bar. A paused seek has no
@@ -8189,11 +8195,19 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * storms nor stalls the way an unthrottled scrub of a PLAYING 4K release did.
      * Live has no seekable timeline (its duration is unset) and a scrub never
      * starts there, so live playback is never paused.
+     *
+     * The captured state is `playWhenReady` - the user's intent - not
+     * `isPlaying`. `isPlaying` is true only when `playWhenReady` AND the player
+     * is READY, so capturing it dropped the resume whenever the scrub began
+     * during a rebuffer or a slow seek: the viewer was watching, scrubbed, and
+     * playback stayed paused until they pressed play. `playWhenReady` is what
+     * [endScrubPause]'s `play()` restores, and it stays false for a viewer who
+     * had explicitly paused, so that case still resumes nothing.
      */
     private fun beginScrubPause() {
         val player = exoPlayer ?: return
         if (player.duration <= 0L) return
-        wasPlayingBeforeScrub = player.isPlaying
+        wasPlayingBeforeScrub = player.playWhenReady
         player.pause()
     }
 

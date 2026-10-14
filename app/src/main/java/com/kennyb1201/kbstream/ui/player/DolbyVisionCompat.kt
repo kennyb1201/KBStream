@@ -493,6 +493,15 @@ internal object DolbyVisionCompat {
      * on this chipset with Dolby Vision disabled. It leaves the EL (63), the parameter
      * sets and every other NAL alone. Default false = every existing caller
      * byte-for-byte unchanged.
+     *
+     * [kotlinOnly] skips the native strip even when one is available and runs
+     * the Kotlin parser below. Strip All needs it: libdovi's HDR10+ strip is
+     * coarse — it drops a whole SEI NAL — where the Kotlin surgery keeps the NAL
+     * and removes only the ST 2094-40 message, and on the 2026-10-14 field file
+     * the NAL libdovi dropped also carried the HDR10 static metadata the decoder
+     * needs (Nuvio never strips that NAL at all). The Kotlin arm is also the one
+     * that drops the enhancement layer by `layerId > 0`, matching Nuvio's
+     * `HevcDvRpuStripper` (libdovi drops it too, via the same rule).
      */
     fun stripAnnexB(
         buf: ByteArray,
@@ -500,29 +509,23 @@ internal object DolbyVisionCompat {
         stripDv: Boolean,
         stripHdr10Plus: Boolean,
         dropRpuNal: Boolean = false,
+        kotlinOnly: Boolean = false,
         accounting: SeiStripAccounting? = null
     ): Int {
         // Prefer libdovi's native strip; fall back to the Kotlin parser below.
         //
-        // The Kotlin scan is the code that stalls the MediaTek decoder on every
-        // variant of the full strip, while libdovi parses the RPU NALs instead
-        // of pattern-matching them and the reference player renders the same
-        // file on the same chipset through it. So the whole "Strip All" path is
-        // libdovi's now, and the Kotlin parser below is the fallback for a
-        // build without the .so.
+        // The 2026-10-14 field run found the one place the native strip is
+        // wrong: its HDR10+ strip is coarse, dropping a whole SEI NAL where the
+        // Kotlin surgery below removes only the ST 2094-40 message and keeps
+        // every other message sharing the NAL. On that file the NAL also
+        // carried HDR10 static metadata, so the coarse drop green-screened the
+        // picture. [kotlinOnly] is how the Strip All path reaches the surgery —
+        // Nuvio parity — while every other caller keeps the native strip.
         //
-        // The `dropRpuNal` callers stay on Kotlin: libdovi has no RPU-only arm
-        // (its strip_dovi_rpu drops the RPU and the enhancement layer
+        // The `dropRpuNal` callers stay on Kotlin too: libdovi has no RPU-only
+        // arm (its strip_dovi_rpu drops the RPU and the enhancement layer
         // together), so those keep the exact code they run today.
-        //
-        // NOTE: libdovi's HDR10+ strip is coarse (the whole SEI NAL goes); the
-        // Kotlin surgery below is finer (it keeps the NAL and every other
-        // message sharing it). For Strip All on DV content the coarse form is
-        // the point — the output is plain HEVC and an SEI NAL is supplemental —
-        // and it is what the reference transformer does. See
-        // [stripHdr10PlusMessagesInPlace] for the fine one, which is also the
-        // fallback here.
-        if (!dropRpuNal) {
+        if (!dropRpuNal && !kotlinOnly) {
             DoviBridge.stripSample(
                 buf,
                 length,
@@ -571,7 +574,9 @@ internal object DolbyVisionCompat {
                 val b1 = buf[header + 1].toInt() and 0xFF
                 val nalType = (b0 ushr 1) and 0x3F
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
-                if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
+                if (stripDv &&
+                    (nalType == NAL_DV_RPU || nalType == NAL_DV_EL || layerId > 0)
+                ) {
                     keep = false
                     // Recorded like the SEI drops below: the first-sample log
                     // has to be able to say the RPU/EL were removed, not merely
@@ -658,6 +663,9 @@ internal object DolbyVisionCompat {
      *
      * [dropRpuNal] is [stripAnnexB]'s RPU-drop arm — RPU dropped with the
      * HDR10+ SEI kept — in an MP4/fMP4 sample as in Annex-B.
+     *
+     * [kotlinOnly] is [stripAnnexB]'s skip-the-native-strip flag, for the same
+     * 2026-10-14 coarse-SEI reason.
      */
     fun stripLengthDelimited(
         buf: ByteArray,
@@ -666,14 +674,16 @@ internal object DolbyVisionCompat {
         stripDv: Boolean,
         stripHdr10Plus: Boolean,
         dropRpuNal: Boolean = false,
+        kotlinOnly: Boolean = false,
         accounting: SeiStripAccounting? = null
     ): Int {
         // Prefer libdovi's native strip; fall back to the Kotlin parser below.
         // Same contract and same trade as [stripAnnexB], in an MP4/fMP4 shape:
         // every NAL the native side keeps is copied verbatim, length field
         // included, so a sample it matched nothing in comes back
-        // byte-identical and is reported as unchanged (-1).
-        if (!dropRpuNal) {
+        // byte-identical and is reported as unchanged (-1). [kotlinOnly] forces
+        // the Kotlin surgery for the same reason as [stripAnnexB].
+        if (!dropRpuNal && !kotlinOnly) {
             DoviBridge.stripSample(
                 buf,
                 length,
@@ -714,7 +724,9 @@ internal object DolbyVisionCompat {
                 val b1 = buf[payload + 1].toInt() and 0xFF
                 val nalType = (b0 ushr 1) and 0x3F
                 val layerId = ((b0 and 0x01) shl 5) or ((b1 and 0xF8) ushr 3)
-                if (stripDv && (nalType == NAL_DV_RPU || nalType == NAL_DV_EL)) {
+                if (stripDv &&
+                    (nalType == NAL_DV_RPU || nalType == NAL_DV_EL || layerId > 0)
+                ) {
                     keep = false
                     accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
                 }

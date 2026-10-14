@@ -293,10 +293,11 @@ class DetailFocusChainWiringContractTest {
                 )
         )
         assertTrue(
-            "and the reveal hangs off that answer, so an always-true " +
-                "focusChipColumn is exactly what leaves it unreachable",
+            "and the retry and the reveal both hang off that answer, so an " +
+                "always-true focusChipColumn is exactly what leaves them unreachable",
             detail.contains(
-                "focusChipColumn(targetKey, fromColumn) -> true anchorKey != null " +
+                "focusChipColumn(targetKey, fromColumn) -> true present && " +
+                    "retryChipColumn(targetKey, fromColumn) -> true anchorKey != null " +
                     "&& revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true"
             )
         )
@@ -420,6 +421,53 @@ class DetailFocusChainWiringContractTest {
             "which is what lets the caller's fallback to the header actually run: " +
                 "with an always-true left side it never did",
             detail.contains("DetailRow.EPISODES -> focusSeasonOrEpisode() || focusTopOfPage()")
+        )
+    }
+
+    @Test
+    fun `a row this page has is retried once before the press steps over it`() {
+        // The 2026-10-14 field race: the keywords rail was present and on
+        // screen, but its chips had not finished registering, so the first ask
+        // failed and the press skipped a row that was there. A row the page HAS
+        // now gets one more ask a frame later, gated on presence so a row that
+        // is genuinely not there is still stepped over with no wait.
+        val start = detail.indexOf("val targetKey = detailRowKey(target)")
+        val end = detail.indexOf("suspend fun focusMediaStrip")
+        assertTrue("the chip-row arm not found", start >= 0 && end > start)
+        val arm = detail.substring(start, end)
+        val direct = arm.indexOf("focusChipColumn(targetKey, fromColumn)")
+        val retry = arm.indexOf("present && retryChipColumn(targetKey, fromColumn)")
+        val reveal = arm.indexOf("revealAndFocusChipColumn(targetKey, anchorKey, fromColumn)")
+        val next = arm.indexOf(
+            "val nextTarget = DetailFocusChain.nextRow(target, direction, presence)"
+        )
+        assertTrue("the direct ask comes first", direct >= 0)
+        assertTrue(
+            "a present-but-unready row is asked again before the walk moves on",
+            retry > direct
+        )
+        assertTrue(
+            "the retry is gated on the row's own presence, which is what tells a " +
+                "row that is there from one that is not",
+            detail.contains("val present = DetailFocusChain.exists(target, presence)")
+        )
+        assertTrue("the disposed-rail reveal is still there", reveal > retry)
+        assertTrue(
+            "and only after the retry and the reveal does the press walk on",
+            next > reveal
+        )
+        assertTrue(
+            "the retry is one frame then one more ask, and nothing else",
+            detail.contains(
+                "suspend fun retryChipColumn(rowKey: String, fromColumn: Int): Boolean"
+            ) &&
+                detail.contains("delay(RETRY_CHIP_DELAY_MS)") &&
+                detail.contains("private const val RETRY_CHIP_DELAY_MS = 50L")
+        )
+        assertTrue(
+            "a failed ask on a row that was there is logged as a retry, so the " +
+                "field log says which cause it was",
+            detail.contains("focusRow(KEYWORDS) failed") && detail.contains("on retry")
         )
     }
 

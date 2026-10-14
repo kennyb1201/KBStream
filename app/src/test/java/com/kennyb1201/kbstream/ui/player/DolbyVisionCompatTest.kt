@@ -358,6 +358,75 @@ class DolbyVisionCompatTest {
         assertArrayEquals("parameter sets and VCL must be byte-identical", expected, buf.copyOf(newLen))
     }
 
+    // ── the enhancement layer is dropped by layer id, like Nuvio ──────────
+    //
+    // Nuvio's HevcDvRpuStripper drops every NAL with `layerId > 0` in addition
+    // to types 62/63. The enhancement layer's own parameter sets and slices
+    // carry a non-zero layer id and are not type 63, so the Kotlin parser,
+    // which knew only 62/63, let them ride into an output now advertised as
+    // single-layer HDR10. These pin the drop on both framings.
+
+    /** Annex-B: 4-byte start code, a 2-byte HEVC header carrying [layerId], [payload]. */
+    private fun nalOnLayer(type: Int, layerId: Int, payload: ByteArray): ByteArray =
+        byteArrayOf(0, 0, 0, 1) +
+            byteArrayOf(
+                ((type shl 1) and 0x7E).toByte(),
+                (((layerId and 0x1F) shl 3) or 0x01).toByte()
+            ) + payload
+
+    /** Length-delimited: a 4-byte length, a 2-byte HEVC header carrying [layerId], [payload]. */
+    private fun ldNalOnLayer(type: Int, layerId: Int, payload: ByteArray): ByteArray {
+        val body = byteArrayOf(
+            ((type shl 1) and 0x7E).toByte(),
+            (((layerId and 0x1F) shl 3) or 0x01).toByte()
+        ) + payload
+        return byteArrayOf(
+            ((body.size ushr 24) and 0xFF).toByte(),
+            ((body.size ushr 16) and 0xFF).toByte(),
+            ((body.size ushr 8) and 0xFF).toByte(),
+            (body.size and 0xFF).toByte()
+        ) + body
+    }
+
+    @Test
+    fun `stripAnnexB drops an enhancement-layer NAL by its layer id`() {
+        val vps = nal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
+        val sps = nal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
+        val rpu = nal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        // Layer 1 carries its own PPS (type 34) and slice (type 20); neither is
+        // type 63, so only the layer-id rule removes them.
+        val elPps = nalOnLayer(34, 1, byteArrayOf(0x0D, 0x0E, 0x0F))
+        val elVcl = nalOnLayer(20, 1, byteArrayOf(0x55, 0x66))
+        val baseVcl = nal(19, byteArrayOf(0x77, 0x88.toByte()))
+
+        val au = vps + sps + elPps + rpu + elVcl + baseVcl
+        val buf = au.copyOf()
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = true, stripHdr10Plus = false
+        )
+
+        assertTrue("the enhancement-layer NALs must have been removed", newLen >= 0)
+        assertArrayEquals("only the base layer remains", vps + sps + baseVcl, buf.copyOf(newLen))
+    }
+
+    @Test
+    fun `stripLengthDelimited drops an enhancement-layer NAL by its layer id`() {
+        val vps = ldNal(32, byteArrayOf(0x0C, 0x01, 0x0A, 0x0B))
+        val sps = ldNal(33, byteArrayOf(0x01, 0x02, 0x03, 0x04, 0x05))
+        val rpu = ldNal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val elVcl = ldNalOnLayer(20, 1, byteArrayOf(0x55, 0x66))
+        val baseVcl = ldNal(19, byteArrayOf(0x77, 0x88.toByte()))
+
+        val sample = vps + sps + rpu + elVcl + baseVcl
+        val buf = sample.copyOf()
+        val newLen = DolbyVisionCompat.stripLengthDelimited(
+            buf, sample.size, 4, stripDv = true, stripHdr10Plus = false
+        )
+
+        assertTrue("the enhancement-layer NAL must have been removed", newLen >= 0)
+        assertArrayEquals("only the base layer remains", vps + sps + baseVcl, buf.copyOf(newLen))
+    }
+
     /**
      * The keep-RPU shape of the strip — `stripAnnexB(stripDv = false,
      * stripHdr10Plus = true)`: only the HDR10+ SEI goes and the DV RPU rides
@@ -741,6 +810,39 @@ class DolbyVisionCompatTest {
         assertArrayEquals(
             "the NAL and the non-HDR10+ message must be byte-identical",
             expectedSei + vcl,
+            buf.copyOf(newLen)
+        )
+    }
+
+    @Test
+    fun `the Strip All surgery keeps a shared SEI NAL's HDR10 static metadata`() {
+        // The 2026-10-14 green screen: libdovi's HDR10+ strip is coarse and took
+        // the whole SEI NAL, including the HDR10 static metadata (a mastering
+        // display message, payload 137) it shared with the HDR10+ message. The
+        // Strip All call shape now runs the Kotlin surgery (`kotlinOnly`), which
+        // removes only the HDR10+ message and keeps the NAL — Nuvio never strips
+        // this NAL at all.
+        val hdr10Plus = t35Message(HDR10_PLUS_HEADER)
+        val static = byteArrayOf(0x89.toByte(), 0x03) + byteArrayOf(0x01, 0x02, 0x03)
+        val sei = nal(39, hdr10Plus + static + byteArrayOf(0x80.toByte()))
+        val vps = nal(32, byteArrayOf(0x0C, 0x01))
+        val rpu = nal(62, byteArrayOf(0x11, 0x22, 0x33, 0x44))
+        val el = nalOnLayer(20, 1, byteArrayOf(0x0A, 0x0B))
+        val vcl = nal(19, byteArrayOf(0x55, 0x66))
+
+        val au = vps + rpu + el + sei + vcl
+        val buf = au.copyOf()
+        val newLen = DolbyVisionCompat.stripAnnexB(
+            buf, au.size, stripDv = true, stripHdr10Plus = true, kotlinOnly = true
+        )
+
+        assertTrue("the RPU and the enhancement layer must have been removed", newLen >= 0)
+        // The SEI NAL survives, shrunk to the static-metadata message plus its
+        // trailing bits; the RPU and the enhancement layer are gone.
+        val expectedSei = nal(39, static + byteArrayOf(0x80.toByte()))
+        assertArrayEquals(
+            "static metadata preserved, RPU/EL dropped",
+            vps + expectedSei + vcl,
             buf.copyOf(newLen)
         )
     }

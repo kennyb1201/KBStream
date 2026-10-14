@@ -263,6 +263,15 @@ private const val RETURN_FOCUS_STEPS = 15
 private const val RETURN_FOCUS_DELAY_MS = 40L
 
 /**
+ * The one-frame wait before [retryChipColumn] asks a present-but-unready row
+ * again: the 2026-10-14 GENRE -> KEYWORDS race, where
+ * the rail is on screen but its chips have not registered yet. Long enough for
+ * a frame to be laid out, short enough that a row which is genuinely not there
+ * is still stepped over without a felt pause.
+ */
+private const val RETRY_CHIP_DELAY_MS = 50L
+
+/**
  * Scrolls the detail list until the item keyed [rowKey] is on screen, trying
  * [hintIndex] first and then stepping outwards from it.
  *
@@ -756,6 +765,22 @@ fun DetailScreen(
         val column = DetailChipColumns.columnFor(fromColumn, slots.size) ?: return false
         val requester = slots[column] ?: return false
         return runCatching { requester.requestFocus() }.getOrDefault(false)
+    }
+
+    /**
+     * [focusChipColumn], asked once more a frame later.
+     *
+     * The 2026-10-14 field race: a rail this page HAS can be composed on screen
+     * while its chips are still registering, so the first ask fails and the
+     * press used to step straight over a row that was there - the reported
+     * "GENRE -> KEYWORDS looked like a skip". One frame is the whole point: the
+     * chips either register or the row really cannot answer, and the caller
+     * then walks on. Only [focusRow]'s present-but-unanswered arm calls it, so a
+     * row that is not on this page is still stepped over with no wait at all.
+     */
+    suspend fun retryChipColumn(rowKey: String, fromColumn: Int): Boolean {
+        delay(RETRY_CHIP_DELAY_MS)
+        return focusChipColumn(rowKey, fromColumn)
     }
 
     /**
@@ -1823,6 +1848,13 @@ fun DetailScreen(
      * top of the page, which is a move nobody asked for and, from the bottom of
      * a long page, a disorienting one. The walk is bounded by the chain's own
      * row list and ends in the top-of-page arm.
+     *
+     * A rail this page HAS but that did not answer is asked ONE more time a
+     * frame later ([retryChipColumn]) before the walk moves on: the 2026-10-14
+     * field race, where the row is on screen but its chips are still
+     * registering, so the first ask fails and the press looked like it skipped
+     * a row that was there. [presence] is what tells that apart from a row the
+     * page does not have, which is stepped over with no wait.
      */
     suspend fun focusRow(
         target: DetailRow,
@@ -1844,23 +1876,36 @@ fun DetailScreen(
         DetailRow.MEDIA -> {
             val targetKey = detailRowKey(target)
             val anchorKey = detailRowKey(from)
+            // Does this page actually have the row the press aims at? A row
+            // that is not there is stepped over by the chain already, but the
+            // answer also decides whether an unanswered ask is a race worth a
+            // retry or a row that simply is not on this page.
+            val present = DetailFocusChain.exists(target, presence)
             when {
                 targetKey == null -> focusTopOfPage()
                 focusChipColumn(targetKey, fromColumn) -> true
+                // Present but not ready: the rail is on screen but its chips
+                // have not finished registering, so the first ask failed. One
+                // more ask a frame later, then the reveal, then the walk - a
+                // row that is there is never mistaken for one that is not.
+                present && retryChipColumn(targetKey, fromColumn) -> true
                 anchorKey != null &&
                     revealAndFocusChipColumn(targetKey, anchorKey, fromColumn) -> true
                 else -> {
-                    // The row exists, is even on screen, and still would not
-                    // take the focus. Field report: GENRE -> KEYWORDS looked
-                    // like a skip, and static reading cannot tell a row that is
-                    // not there from one that is there and cannot answer. So
-                    // the state is logged here, where the failure is.
+                    // The row is not there, or it is and still would not take
+                    // the focus even after the retry. Field report: GENRE ->
+                    // KEYWORDS looked like a skip, and static reading cannot
+                    // tell a row that is not there from one that is there and
+                    // cannot answer. So the state is logged here, where the
+                    // failure is, naming whether a retry was spent.
                     if (target == DetailRow.KEYWORDS) {
                         Log.w(
                             TAG,
-                            "focusRow(KEYWORDS) failed: hasKeywordsRow=" +
-                                "${presence.hasKeywordsRow}, column=$fromColumn, " +
-                                "from=$from, direction=$direction, visibleKeys=" +
+                            "focusRow(KEYWORDS) failed" +
+                                (if (present) " on retry" else "") +
+                                ": hasKeywordsRow=${presence.hasKeywordsRow}, " +
+                                "column=$fromColumn, from=$from, direction=$direction, " +
+                                "visibleKeys=" +
                                 detailListState.layoutInfo.visibleItemsInfo.map { it.key }
                         )
                     }
