@@ -37,12 +37,12 @@ import org.junit.Test
  *  2. `applyOptions()` sets `vo` as an OPTION before `init()`, from the
  *     device-resolved output — the session's one configuration of the output;
  *  3. `surfaceCreated()` attaches the surface and then takes ONE of the
- *     reference player's two branches, decided by the pending load: a first
- *     creation starts that load and leaves `vo` alone (the OPTION already
- *     configured it), and a recreation — no load waiting, because
- *     `surfaceDestroyed()` ran — re-opens `vo` as a PROPERTY from that same
- *     resolution, which is what re-initializes the output against the surface
- *     that was just attached;
+ *     reference player's two branches, decided by whether this is the FIRST
+ *     create (`surfaceCreatedOnce`): a first creation starts any waiting load
+ *     and leaves `vo` alone (the OPTION already configured it), and a
+ *     recreation — which always follows `surfaceDestroyed()` — re-opens `vo` as
+ *     a PROPERTY from that same resolution, which is what re-initializes the
+ *     output against the surface that was just attached;
  *  4. `surfaceDestroyed()` nulls `vo`, drops forced rendering and detaches, in
  *     that order: the output is torn down while its surface still exists;
  *  5. `release()`'s final `vo=null` before `destroy()` stays, so a dead instance
@@ -54,8 +54,13 @@ import org.junit.Test
  * cycle owns on the way back in. Setting that property on EVERY create was the
  * third wrong answer: on a first creation the output is re-initialized against
  * a surface mpv has only just been handed, and the black screen comes back —
- * which is why the callback branches on the pending load, exactly as the
- * reference does on its deferred file path.
+ * which is why the callback branches, as the reference does on its deferred
+ * file path. The branch is decided by the explicit first-creation flag, NOT by
+ * the pending load: this view's SurfaceView is in the layout, so its surface is
+ * created during activity startup and `load()` runs after it, leaving
+ * `pendingLoad` null on a first creation — a pending-load test took the
+ * recreation branch there and re-set the output, the `vo="gpu"` before
+ * `start-file` the 0.6.71 field log shows.
  *
  * `profile=fast` is pinned here too: it was added for the same boxes (a 4K
  * release on this class of hardware is GPU-bound), and it is only compatible
@@ -204,7 +209,7 @@ class MpvSurfaceCycleContractTest {
 
         val created = surfaceCreated()
         val attach = created.indexOf("attachSurface()")
-        val branch = created.indexOf("if (pendingLoad != null)")
+        val branch = created.indexOf("if (!surfaceCreatedOnce)")
         val vo = created.indexOf("setPropertyString(\"vo\", videoOutput().vo)")
         assertTrue("the surface is attached first", attach >= 0)
         assertTrue(
@@ -214,7 +219,7 @@ class MpvSurfaceCycleContractTest {
             branch >= 0 && attach < branch
         )
 
-        // First creation: the file that was waiting goes out, and the output is
+        // First creation: any file that was waiting goes out, and the output is
         // left exactly as applyOptions() set it. The re-set the callback used to
         // make here is not a no-op - it tears the video output down and
         // re-initializes it, and on the first attach that re-initialization
@@ -231,7 +236,7 @@ class MpvSurfaceCycleContractTest {
             firstCreation.contains("\"vo\"")
         )
 
-        // Recreation: no load is waiting because surfaceDestroyed() nulled the
+        // Recreation: it always follows surfaceDestroyed(), which nulled the
         // output on the way out, so this set is what re-initializes it against
         // the surface that was just attached.
         val recreation = created.substringAfter("} else {")
@@ -254,6 +259,56 @@ class MpvSurfaceCycleContractTest {
                 "mode decision",
             1,
             Regex("setPropertyString\\(\"vo\", videoOutput\\(\\)\\.vo\\)").findAll(created).count()
+        )
+    }
+
+    @Test
+    fun `the first creation is the creation flag's call, never the pending load's`() {
+        // The exact bug this flag replaces, from the field log of build 0.6.71
+        // (sha c350dced): the output is re-set BEFORE `start-file` on a first
+        // launch, i.e. the recreation branch taken on the first create. The
+        // SurfaceView is in the layout, so `surfaceCreated` runs during activity
+        // startup and `load()` — the only writer of `pendingLoad` — runs after
+        // it. `pendingLoad` is therefore null on that first create, and
+        // deciding on it reads first creation as recreation.
+        val created = surfaceCreated()
+        val branch = created.indexOf("if (!surfaceCreatedOnce)")
+        assertTrue(
+            "the callback has to branch on the explicit first-creation flag: $created",
+            branch >= 0
+        )
+        assertTrue(
+            "and nothing above the branch may have touched the flag, or the first creation " +
+                "would take the recreation path on something other than a create having " +
+                "happened",
+            !created.substring(0, branch).contains("surfaceCreatedOnce")
+        )
+        val pendingTest = created.indexOf("if (pendingLoad != null)")
+        assertTrue(
+            "a pending load may still decide whether to START one inside a branch, but it " +
+                "may not be what PICKS the branch: on a first creation there is no pending " +
+                "load to read (pending=$pendingTest branch=$branch)",
+            pendingTest > branch
+        )
+        assertTrue(
+            "the first branch is the flag's own half, and it is what claims the first " +
+                "creation",
+            created.substring(branch).substringBefore("} else")
+                .contains("surfaceCreatedOnce = true")
+        )
+        assertTrue(
+            "the flag is a plain field that starts false, so a fresh view has never created " +
+                "a surface",
+            code.contains("private var surfaceCreatedOnce = false")
+        )
+        // Release is one-way: the Activity never re-initializes a released view
+        // (see its onStop), so the flag needs no reset — and resetting it there
+        // would be worse than useless, since a re-create of a released view
+        // would then take the recreation path with no output left to re-open.
+        val release = code.substringAfter("fun release()").substringBefore("fun togglePause()")
+        assertFalse(
+            "release() does not reset the flag: a new MpvPlayerView starts with a fresh one",
+            release.contains("surfaceCreatedOnce")
         )
     }
 

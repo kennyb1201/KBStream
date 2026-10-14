@@ -32,9 +32,11 @@ import kotlin.math.pow
  *    reference mpv-android player;
  *  - the video surface is attached from the SurfaceHolder callback, and the
  *    video output is cycled with it in the reference player's order     *    (`BaseMPVView` in mpv-android, the view Nuvio's working engine is built
-     *    on): attach the surface and `force-window=yes`, then either load the
-     *    pending file (first creation — the output is already configured as the
-     *    option, so it is left alone) or `vo=<resolved output>` (recreation) —
+ *    on): attach the surface and `force-window=yes`, then either load the
+ *    pending file (a FIRST creation, which is what [surfaceCreatedOnce] says —
+ *    not whether a load is waiting, because the surface arrives before
+ *    [load] does here — and the output is already configured as the option,
+ *    so it is left alone) or `vo=<resolved output>` (recreation) —
      *    and on teardown `vo=null`, `force-window=no`, detachSurface, in that
      *    order. `vo=null` tears the output down while its surface still exists,
      *    and the property set on the next attach is what re-initializes the output
@@ -131,6 +133,23 @@ class MpvPlayerView @JvmOverloads constructor(
 
     /** Set by [load] before the surface exists; consumed by [surfaceCreated]. */
     private var pendingLoad: LoadRequest? = null
+
+    /**
+     * True after the FIRST [surfaceCreated], which is what separates the first
+     * attach from a recreation.
+     *
+     * Deliberately not `pendingLoad != null`. This view is created with the
+     * Activity, so its surface arrives during startup and `load()` — the only
+     * writer of [pendingLoad] — runs after it; on a first creation the pending
+     * load is therefore still null, and a test on it reads first creation as
+     * recreation. That is the `Set property: vo="gpu"` before `start-file` in
+     * the field log of build 0.6.71 (sha c350dced).
+     *
+     * Not reset by [release()]: release is one-way — the Activity never
+     * re-initializes a released view — and a NEW MpvPlayerView starts with this
+     * flag false.
+     */
+    private var surfaceCreatedOnce = false
 
     /**
      * Resume position still to be applied after the file opens.
@@ -1333,31 +1352,39 @@ class MpvPlayerView @JvmOverloads constructor(
     override fun surfaceCreated(holder: SurfaceHolder) {
         if (!initialized || released) return
         attachSurface()
-        // The two halves of the reference player's branch, and which one runs is
-        // what the pending load says. A first creation has a file waiting (see
-        // [load]): the surface is attached, forced rendering is on, and the
-        // loadfile goes out — and the output is NOT re-set, because
+        // The two halves of the reference player's branch. Which one runs is
+        // decided by whether this is the FIRST create ([surfaceCreatedOnce]),
+        // not by whether a load is waiting: the surface is created during
+        // activity startup, before [load] runs, so on a first creation there is
+        // no pending load to read. That test read a first creation as a
+        // recreation and re-set the output on it — the `vo="gpu"` line ahead
+        // of `start-file` in the field log — which is exactly the re-init this
+        // branch exists to avoid.
+        //
+        // A first creation attaches, forces rendering and starts the load if
+        // one is waiting — and does NOT re-set the output, because
         // [applyOptions] already configured it as the OPTION before init().
-        // Setting the same output again here is not a no-op: it tears the
-        // video output down and re-initializes it, and on the first attach that
+        // Setting the same output again is not a no-op: it tears the video
+        // output down and re-initializes it, and on the first attach that
         // re-initialization races the surface mpv has only just been handed,
         // which is the black screen this branch exists to remove.
         //
-        // A recreation has no file waiting, which means [surfaceDestroyed] ran
-        // and nulled the output on the way out. This set is then what
-        // re-initializes it against the new surface — without it the output
-        // still points at the surface that was destroyed (or at nothing), and
-        // mpv decodes with nowhere to present: the track list and
-        // `video-format` populate, the decoder renders, and every frame is
-        // thrown away, which reads as "audio plays over a black screen" rather
-        // than "playback failed".
-        if (pendingLoad != null) {
+        // Every later creation follows [surfaceDestroyed], which nulled the
+        // output on the way out. This set is then what re-initializes it against
+        // the new surface — without it the output still points at the surface
+        // that was destroyed (or at nothing), and mpv decodes with nowhere to
+        // present: the track list and `video-format` populate, the decoder
+        // renders, and every frame is thrown away, which reads as "audio plays
+        // over a black screen" rather than "playback failed".
+        if (!surfaceCreatedOnce) {
             // First creation: attach, force-window, load. Do NOT re-set VO —
             // it was already configured via options.
-            startPendingLoad()
+            surfaceCreatedOnce = true
+            if (pendingLoad != null) startPendingLoad()
         } else {
             // Recreation (surface destroyed/recreated): re-enable the VO.
             runCatching { MPVLib.setPropertyString("vo", videoOutput().vo) }
+            if (pendingLoad != null) startPendingLoad()
         }
     }
 
