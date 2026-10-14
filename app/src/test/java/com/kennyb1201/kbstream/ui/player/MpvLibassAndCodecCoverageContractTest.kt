@@ -40,7 +40,7 @@ class MpvLibassAndCodecCoverageContractTest {
             "sub-ass-override must be explicitly `no`: mpv's default is `scale`, under which a " +
                 "future --sub-ass-* option would silently restyle a fansub's karaoke, signs and " +
                 "positioning",
-            view.contains("MPVLib.setOptionString(\"sub-ass-override\", \"no\")")
+            view.contains("MpvBackend.setOptionString(\"sub-ass-override\", \"no\")")
         )
         assertFalse(
             "and it must not be `scale` (or any override mode) - the whole point is no overrides",
@@ -53,7 +53,7 @@ class MpvLibassAndCodecCoverageContractTest {
         assertTrue(
             "ass-shaper=complex is the HarfBuzz path; pinning it makes a build without HarfBuzz " +
                 "fail loudly at the option check rather than silently shaping wrong",
-            view.contains("MPVLib.setOptionString(\"ass-shaper\", \"complex\")")
+            view.contains("MpvBackend.setOptionString(\"ass-shaper\", \"complex\")")
         )
     }
 
@@ -62,7 +62,7 @@ class MpvLibassAndCodecCoverageContractTest {
         assertTrue(
             "hwdec-codecs must be `all`, not an allowlist: an allowlist only narrows the set of " +
                 "codecs that get a hardware attempt at all",
-            view.contains("MPVLib.setOptionString(\"hwdec-codecs\", \"all\")")
+            view.contains("MpvBackend.setOptionString(\"hwdec-codecs\", \"all\")")
         )
         assertFalse(
             "the old allowlist constant must be gone so the two cannot drift",
@@ -82,7 +82,7 @@ class MpvLibassAndCodecCoverageContractTest {
         )
         assertTrue(
             "and applyOptions still installs that chain as the hwdec value",
-            view.contains("MPVLib.setOptionString(\"hwdec\", HWDEC_HW)")
+            view.contains("MpvBackend.setOptionString(\"hwdec\", HWDEC_HW)")
         )
     }
 

@@ -6,12 +6,11 @@ import android.util.AttributeSet
 import android.util.Log
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.io.File
-import `is`.xyz.mpv.MPVLib
-import `is`.xyz.mpv.MPVNode
 import java.util.Locale
 import kotlin.math.pow
 
@@ -57,7 +56,7 @@ class MpvPlayerView @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : SurfaceView(context, attrs, defStyleAttr), SurfaceHolder.Callback,
-    MPVLib.EventObserver, MPVLib.LogObserver {
+    MpvEventObserver, MpvLogObserver {
 
     /** A stream to play, with everything mpv needs to open it. */
     data class LoadRequest(
@@ -267,13 +266,15 @@ class MpvPlayerView @JvmOverloads constructor(
     private var subtitleMode = SubtitleModeRules.DEFAULT
 
     /*
-     * [MPVLib] is the mpvlibAndroid (Mpv∞) singleton: an `object` whose
-     * functions are the same native calls the old `dev.jdtech.mpv` artifact
-     * exposed as an instance. There is deliberately no handle field and no
-     * accessor any more - `create()` returns Unit and every call below goes
-     * straight to `MPVLib.`. Lifetime is still the same: [initialize] creates
-     * and [release] destroys, and the `initialized`/`released` guards keep a
-     * call off a singleton that is not up.
+     * Every call below goes through [MpvBackend], which is the one file per MPV
+     * library that knows which library this build linked - see `MpvEngineApi.kt`
+     * for why that seam exists and the `mpv.lib` flag in app/build.gradle.kts for
+     * what chooses it. There is deliberately no handle field and no accessor in
+     * this class: the default library's `create()` returns Unit against a
+     * singleton, and the seam keeps exactly that shape while the other arm owns
+     * its own `MPV` instance behind it. Lifetime is the same either way -
+     * [initialize] creates and [release] destroys, and the `initialized`/
+     * `released` guards keep a call off an engine that is not up.
      */
 
     /**
@@ -285,7 +286,7 @@ class MpvPlayerView @JvmOverloads constructor(
     fun initialize(): Boolean {
         if (initialized) return true
         try {
-            MPVLib.create(context.applicationContext)
+            MpvBackend.create(context.applicationContext)
         } catch (t: Throwable) {
             Log.e(TAG, "libmpv could not be loaded", t)
             onEngineFailed?.invoke("The MPV engine could not start on this device.")
@@ -298,7 +299,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // instance, and the box runs out of them.
         try {
             applyOptions()
-            MPVLib.init()
+            MpvBackend.init()
             // The reference player's post-init pair, in its order and its
             // place (`BaseMPVView.initialize`: init(), postInitOptions(), then
             // these two, then the holder callback). `force-window=no` because
@@ -307,19 +308,19 @@ class MpvPlayerView @JvmOverloads constructor(
             // to play until the first loadfile arrives. After init() so nothing
             // above can override them, and before the holder callback below,
             // which is the first moment a surface can appear.
-            MPVLib.setOptionString("force-window", "no")
-            MPVLib.setOptionString("idle", "once")
+            MpvBackend.setOptionString("force-window", "no")
+            MpvBackend.setOptionString("idle", "once")
         } catch (t: Throwable) {
             Log.e(TAG, "libmpv could not initialize", t)
-            runCatching { MPVLib.destroy() }
+            runCatching { MpvBackend.destroy() }
             onEngineFailed?.invoke("The MPV engine could not start on this device.")
             return false
         }
 
-        MPVLib.addObserver(this)
+        MpvBackend.addObserver(this)
         // mpv's own account of a failed open (an HTTP status, a refused
         // connection) is only ever delivered here - see [logMessage].
-        MPVLib.addLogObserver(this)
+        MpvBackend.addLogObserver(this)
         observeProperties()
         // LAST, deliberately: a surface can arrive the moment this is
         // registered, and [surfaceCreated] attaches it from there (and, on a
@@ -327,6 +328,12 @@ class MpvPlayerView @JvmOverloads constructor(
         // in place by then.
         holder.addCallback(this)
         initialized = true
+
+        // Which MPV library this build linked, once per session, from the value
+        // the build flag stamped into BuildConfig. The choice is made at build
+        // time and is otherwise invisible on a device, and a field log has to be
+        // able to answer "was this the library the test meant to test?".
+        Log.i(TAG, "MPV engine up · library=${BuildConfig.MPV_ENGINE_LIBRARY}")
 
         // No early attach here. `holder.surface` can be non-null AND report
         // isValid = true while the native window behind it does not exist yet,
@@ -361,15 +368,15 @@ class MpvPlayerView @JvmOverloads constructor(
             // destroy() clears the library's own observer lists too, but these
             // explicit removals stay: harmless, and they keep this class's
             // teardown legible next to the create side above.
-            runCatching { MPVLib.removeObserver(this) }
-            runCatching { MPVLib.removeLogObserver(this) }
+            runCatching { MpvBackend.removeObserver(this) }
+            runCatching { MpvBackend.removeLogObserver(this) }
             // Detach the surface before destroying the instance: mpv's
             // renderer must stop using the window first.
             runCatching {
-                MPVLib.setPropertyString("vo", "null")
-                MPVLib.detachSurface()
+                MpvBackend.setPropertyString("vo", "null")
+                MpvBackend.detachSurface()
             }
-            runCatching { MPVLib.destroy() }
+            runCatching { MpvBackend.destroy() }
         }
         initialized = false
     }
@@ -378,12 +385,12 @@ class MpvPlayerView @JvmOverloads constructor(
 
     fun togglePause() {
         if (!initialized) return
-        runCatching { MPVLib.command("cycle", "pause") }
+        runCatching { MpvBackend.command("cycle", "pause") }
     }
 
     fun setPaused(paused: Boolean) {
         if (!initialized) return
-        runCatching { MPVLib.setPropertyBoolean("pause", paused) }
+        runCatching { MpvBackend.setPropertyBoolean("pause", paused) }
     }
 
     fun seekTo(positionMs: Long) {
@@ -393,13 +400,13 @@ class MpvPlayerView @JvmOverloads constructor(
         // index mpv has only partially built, and an exact seek on those makes
         // the demuxer decode forward from the file start (or from nothing at
         // all). Landing on the preceding keyframe of a 10s GOP is invisible.
-        runCatching { MPVLib.command("seek", seconds.toString(), "absolute+keyframes") }
+        runCatching { MpvBackend.command("seek", seconds.toString(), "absolute+keyframes") }
         endNotified = false
     }
 
     fun seekBy(deltaMs: Long) {
         if (!initialized) return
-        runCatching { MPVLib.command("seek", "${deltaMs / 1000.0}", "relative+keyframes") }
+        runCatching { MpvBackend.command("seek", "${deltaMs / 1000.0}", "relative+keyframes") }
         endNotified = false
     }
 
@@ -419,7 +426,7 @@ class MpvPlayerView @JvmOverloads constructor(
     fun setHardwareDecoding(enabled: Boolean) {
         if (!initialized) return
         hwdecValue = if (enabled) HWDEC_HW else HWDEC_SW
-        runCatching { MPVLib.setPropertyString("hwdec", hwdecValue) }
+        runCatching { MpvBackend.setPropertyString("hwdec", hwdecValue) }
         Log.i(TAG, "hwdec set to $hwdecValue (hardware=$enabled)")
     }
 
@@ -438,7 +445,7 @@ class MpvPlayerView @JvmOverloads constructor(
             PlayerAudioTuning.DOWNMIX_SURROUND -> "5.1"
             else -> "auto-safe"
         }
-        runCatching { MPVLib.setPropertyString("audio-channels", layout) }
+        runCatching { MpvBackend.setPropertyString("audio-channels", layout) }
             .onFailure { Log.w(TAG, "audio-channels=$layout rejected", it) }
     }
 
@@ -492,8 +499,8 @@ class MpvPlayerView @JvmOverloads constructor(
             else VOLUME_NORMAL * 10.0.pow(volumeBoostDb / 20.0)
         val percent = boost * outputGain
         runCatching {
-            MPVLib.setPropertyDouble("volume-max", VOLUME_MAX)
-            MPVLib.setPropertyDouble("volume", percent)
+            MpvBackend.setPropertyDouble("volume-max", VOLUME_MAX)
+            MpvBackend.setPropertyDouble("volume", percent)
         }.onFailure { Log.w(TAG, "volume=$percent rejected", it) }
     }
 
@@ -516,7 +523,7 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     fun addExternalSubtitle(uri: String) {
         if (!initialized) return
-        runCatching { MPVLib.command("sub-add", uri, "select") }
+        runCatching { MpvBackend.command("sub-add", uri, "select") }
             .onFailure { Log.w(TAG, "sub-add failed for $uri", it) }
     }
 
@@ -547,8 +554,8 @@ class MpvPlayerView @JvmOverloads constructor(
         subtitleLanguage = preferredLanguage(subtitle).orEmpty()
         if (!initialized) return
         runCatching {
-            MPVLib.setPropertyString("alang", audioLanguage)
-            MPVLib.setPropertyString("slang", subtitleLanguage)
+            MpvBackend.setPropertyString("alang", audioLanguage)
+            MpvBackend.setPropertyString("slang", subtitleLanguage)
         }
     }
 
@@ -563,13 +570,13 @@ class MpvPlayerView @JvmOverloads constructor(
         if (!initialized) return
         runCatching {
             when (subtitleMode) {
-                SubtitleModeRules.OFF -> MPVLib.setPropertyString("sid", "no")
+                SubtitleModeRules.OFF -> MpvBackend.setPropertyString("sid", "no")
                 SubtitleModeRules.FORCED -> {
                     // Both of the other modes have something to undo: OFF left
                     // `sid` deselected, and a FORCED mode with no track selected
                     // shows nothing. "auto" is mpv's own default selection.
-                    MPVLib.setPropertyString("sid", "auto")
-                    MPVLib.setPropertyString("sub-forced-only", "yes")
+                    MpvBackend.setPropertyString("sid", "auto")
+                    MpvBackend.setPropertyString("sub-forced-only", "yes")
                 }
                 else -> {
                     // ON has to undo BOTH: the forced-only flag AND OFF's
@@ -577,8 +584,8 @@ class MpvPlayerView @JvmOverloads constructor(
                     // deselected, so a runtime OFF -> ON came back silent while
                     // the open-time option path looked identical - the same
                     // mode, two behaviours. "auto" is mpv's default selection.
-                    MPVLib.setPropertyString("sub-forced-only", "no")
-                    MPVLib.setPropertyString("sid", "auto")
+                    MpvBackend.setPropertyString("sub-forced-only", "no")
+                    MpvBackend.setPropertyString("sid", "auto")
                 }
             }
         }
@@ -587,19 +594,19 @@ class MpvPlayerView @JvmOverloads constructor(
     /** Playback speed; 1.0 is normal. */
     fun setSpeed(speed: Double) {
         if (!initialized) return
-        runCatching { MPVLib.setPropertyDouble("speed", speed) }
+        runCatching { MpvBackend.setPropertyDouble("speed", speed) }
     }
 
     /** Audio delay in ms (`audio-delay` is kept in seconds). */
     fun setAudioDelayMs(ms: Int) {
         if (!initialized) return
-        runCatching { MPVLib.setPropertyDouble("audio-delay", ms / 1000.0) }
+        runCatching { MpvBackend.setPropertyDouble("audio-delay", ms / 1000.0) }
     }
 
     /** Subtitle delay in ms (`sub-delay`). */
     fun setSubtitleDelayMs(ms: Int) {
         if (!initialized) return
-        runCatching { MPVLib.setPropertyDouble("sub-delay", ms / 1000.0) }
+        runCatching { MpvBackend.setPropertyDouble("sub-delay", ms / 1000.0) }
     }
 
     /**
@@ -623,13 +630,13 @@ class MpvPlayerView @JvmOverloads constructor(
     fun selectAudioLanguage(language: String): Boolean {
         if (!initialized) return false
         if (language.isBlank()) {
-            runCatching { MPVLib.setPropertyString("aid", "auto") }
+            runCatching { MpvBackend.setPropertyString("aid", "auto") }
             return true
         }
         val tracks = audioTracks()
         val match = tracks.firstOrNull { LanguageMatch.matches(language, it.language) }
         if (match != null) {
-            runCatching { MPVLib.setPropertyInt("aid", match.id) }
+            runCatching { MpvBackend.setPropertyInt("aid", match.id) }
             return true
         }
         val fallback = LanguageMatch.fallbackTrackIndex(tracks.map { it.language }, language)
@@ -645,7 +652,7 @@ class MpvPlayerView @JvmOverloads constructor(
             return false
         }
         val chosen = tracks[fallback]
-        runCatching { MPVLib.setPropertyInt("aid", chosen.id) }
+        runCatching { MpvBackend.setPropertyInt("aid", chosen.id) }
         Log.i(
             TAG,
             "no '$language' audio track; picked track ${chosen.id} (" +
@@ -663,7 +670,7 @@ class MpvPlayerView @JvmOverloads constructor(
     fun selectSubtitleLanguage(language: String): Boolean {
         if (!initialized) return false
         if (language.isBlank()) {
-            runCatching { MPVLib.setPropertyString("sid", "auto") }
+            runCatching { MpvBackend.setPropertyString("sid", "auto") }
             return true
         }
         val match = subtitleTracks().firstOrNull { LanguageMatch.matches(language, it.language) }
@@ -671,24 +678,24 @@ class MpvPlayerView @JvmOverloads constructor(
             clearSubtitles()
             return false
         }
-        runCatching { MPVLib.setPropertyInt("sid", match.id) }
+        runCatching { MpvBackend.setPropertyInt("sid", match.id) }
         return true
     }
 
     /** Picks one specific audio track, for the panel's "this file" list. */
     fun selectAudioTrack(id: Int) {
         if (!initialized) return
-        runCatching { MPVLib.setPropertyInt("aid", id) }
+        runCatching { MpvBackend.setPropertyInt("aid", id) }
     }
 
     fun selectSubtitleTrack(id: Int) {
         if (!initialized) return
-        runCatching { MPVLib.setPropertyInt("sid", id) }
+        runCatching { MpvBackend.setPropertyInt("sid", id) }
     }
 
     fun clearSubtitles() {
         if (!initialized) return
-        runCatching { MPVLib.setPropertyString("sid", "no") }
+        runCatching { MpvBackend.setPropertyString("sid", "no") }
     }
 
     /** True while a subtitle track is selected, for the panel's state. */
@@ -717,7 +724,7 @@ class MpvPlayerView @JvmOverloads constructor(
                     (channels <= 0 || it.channels == channels)
             }
             ?: return false
-        runCatching { MPVLib.setPropertyInt("aid", match.id) }
+        runCatching { MpvBackend.setPropertyInt("aid", match.id) }
         return true
     }
 
@@ -735,7 +742,7 @@ class MpvPlayerView @JvmOverloads constructor(
         val match = tracks.firstOrNull { it.signature == signature }
             ?: tracks.firstOrNull { LanguageMatch.matches(language, it.language) }
             ?: return false
-        runCatching { MPVLib.setPropertyInt("sid", match.id) }
+        runCatching { MpvBackend.setPropertyInt("sid", match.id) }
         return true
     }
 
@@ -749,32 +756,32 @@ class MpvPlayerView @JvmOverloads constructor(
             when (index) {
                 // Zoom: keep the ratio, fill the frame, crop the overflow.
                 1 -> {
-                    MPVLib.setPropertyString("video-aspect-override", "no")
-                    MPVLib.setPropertyBoolean("keepaspect", true)
-                    MPVLib.setPropertyDouble("panscan", 1.0)
+                    MpvBackend.setPropertyString("video-aspect-override", "no")
+                    MpvBackend.setPropertyBoolean("keepaspect", true)
+                    MpvBackend.setPropertyDouble("panscan", 1.0)
                 }
                 // Fill: stretch to the screen, ratio be damned.
                 2 -> {
-                    MPVLib.setPropertyString("video-aspect-override", "no")
-                    MPVLib.setPropertyBoolean("keepaspect", false)
-                    MPVLib.setPropertyDouble("panscan", 0.0)
+                    MpvBackend.setPropertyString("video-aspect-override", "no")
+                    MpvBackend.setPropertyBoolean("keepaspect", false)
+                    MpvBackend.setPropertyDouble("panscan", 0.0)
                 }
                 // Forced ratios, for streams whose flagged size is wrong.
                 3 -> forceAspect("16:9")
                 4 -> forceAspect("4:3")
                 else -> {
-                    MPVLib.setPropertyString("video-aspect-override", "no")
-                    MPVLib.setPropertyBoolean("keepaspect", true)
-                    MPVLib.setPropertyDouble("panscan", 0.0)
+                    MpvBackend.setPropertyString("video-aspect-override", "no")
+                    MpvBackend.setPropertyBoolean("keepaspect", true)
+                    MpvBackend.setPropertyDouble("panscan", 0.0)
                 }
             }
         }
     }
 
     private fun forceAspect(ratio: String) {
-        MPVLib.setPropertyBoolean("keepaspect", true)
-        MPVLib.setPropertyDouble("panscan", 0.0)
-        MPVLib.setPropertyString("video-aspect-override", ratio)
+        MpvBackend.setPropertyBoolean("keepaspect", true)
+        MpvBackend.setPropertyDouble("panscan", 0.0)
+        MpvBackend.setPropertyString("video-aspect-override", ratio)
     }
 
     /**
@@ -948,18 +955,18 @@ class MpvPlayerView @JvmOverloads constructor(
      * VALUE is not, because a header field can carry a Cookie or a token.
      */
     private fun setStreamOption(name: String, value: String) {
-        val code = runCatching { MPVLib.setOptionString(name, value) }.getOrDefault(-1)
+        val code = runCatching { MpvBackend.setOptionString(name, value) }.getOrDefault(-1)
         if (code == 0) return
-        runCatching { MPVLib.command("set", name, value) }
+        runCatching { MpvBackend.command("set", name, value) }
         Log.w(TAG, "mpv refused the $name option (code $code); set it as a property instead")
     }
 
     /** A subtitle style option before init, the same thing as a property after. */
     private fun styleOption(name: String, value: String) {
         if (initialized) {
-            runCatching { MPVLib.setPropertyString(name, value) }
+            runCatching { MpvBackend.setPropertyString(name, value) }
         } else {
-            runCatching { MPVLib.setOptionString(name, value) }
+            runCatching { MpvBackend.setOptionString(name, value) }
         }
     }
 
@@ -1018,14 +1025,14 @@ class MpvPlayerView @JvmOverloads constructor(
     private fun applyOptions() {
         // No user config: this is a fallback engine, and an mpv.conf picked up
         // from the device would change behavior between boxes.
-        MPVLib.setOptionString("config", "no")
-        MPVLib.setOptionString("terminal", "no")
-        MPVLib.setOptionString("ytdl", "no")
+        MpvBackend.setOptionString("config", "no")
+        MpvBackend.setOptionString("terminal", "no")
+        MpvBackend.setOptionString("ytdl", "no")
         // mpv's own UI is off: these controls are the app's.
-        MPVLib.setOptionString("osc", "no")
-        MPVLib.setOptionString("osd-level", "0")
-        MPVLib.setOptionString("input-default-bindings", "no")
-        MPVLib.setOptionString("input-vo-keyboard", "no")
+        MpvBackend.setOptionString("osc", "no")
+        MpvBackend.setOptionString("osd-level", "0")
+        MpvBackend.setOptionString("input-default-bindings", "no")
+        MpvBackend.setOptionString("input-vo-keyboard", "no")
 
         // Playback speed over scaler quality, from mpv's own built-in profile -
         // bilinear scaling, no dithering, no downscaling correction, no sigmoid
@@ -1035,7 +1042,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // so the device-resolved output below still decides those. Set before
         // them because a profile applies the options it names at the moment it
         // is set, and this one only ever fills in knobs nothing here sets.
-        MPVLib.setOptionString("profile", "fast")
+        MpvBackend.setOptionString("profile", "fast")
 
         // Android video output, resolved for THIS device and the stored
         // override rather than pinned (see [MpvVideoOutput]): the 6.51
@@ -1048,16 +1055,16 @@ class MpvPlayerView @JvmOverloads constructor(
         // Surface directly, and naming one is the mismatch the stalled boxes
         // choke on.
         val vo = videoOutput()
-        MPVLib.setOptionString("vo", vo.vo)
-        vo.gpuContext?.let { MPVLib.setOptionString("gpu-context", it) }
+        MpvBackend.setOptionString("vo", vo.vo)
+        vo.gpuContext?.let { MpvBackend.setOptionString("gpu-context", it) }
         // Only name the API when the resolver resolved one. When null the GPU
         // path's gpuApi is left unset, so mpv resolves gpu-api on its own from
         // the context — leave it on the default rather than handing mpv a value
         // it could override away from what the driver picks. The guard already
         // makes this correct: the new OPENGL settings surface no gpuApi, so
         // neither applyOptions nor attachSurface sets gpu-api.
-        vo.gpuApi?.let { MPVLib.setOptionString("gpu-api", it) }
-        if (vo.openglEs) MPVLib.setOptionString("opengl-es", "yes")
+        vo.gpuApi?.let { MpvBackend.setOptionString("gpu-api", it) }
+        if (vo.openglEs) MpvBackend.setOptionString("opengl-es", "yes")
         // The field test's line: which mode was stored, which device it was
         // resolved on, and what that came out as.
         Log.i(
@@ -1069,7 +1076,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // Decoding: try MediaCodec zero-copy, then copy-back, then software.
         // The trailing `no` is the whole point of this engine — a file the
         // box's decoders cannot give us still plays.
-        MPVLib.setOptionString("hwdec", HWDEC_HW)
+        MpvBackend.setOptionString("hwdec", HWDEC_HW)
         // `all`, not an allowlist. An allowlist only ever narrows the ATTEMPT
         // set: a codec the box's MediaCodec exposes but the list omits (VP9
         // Profile 2 10-bit, AV1 film grain, VC-1, extra DV profiles, codecs
@@ -1078,12 +1085,12 @@ class MpvPlayerView @JvmOverloads constructor(
         // box cannot do in hardware still falls through mediacodec →
         // mediacodec-copy → software → `no`, which is the same failure mode
         // every codec had before. Mpv∞ sets this too.
-        MPVLib.setOptionString("hwdec-codecs", "all")
+        MpvBackend.setOptionString("hwdec-codecs", "all")
 
         // Audio: MediaPlayer-style role so a TV or receiver treats this like
         // any other media session.
-        MPVLib.setOptionString("ao", "audiotrack,opensles")
-        MPVLib.setOptionString("audio-set-media-role", "yes")
+        MpvBackend.setOptionString("ao", "audiotrack,opensles")
+        MpvBackend.setOptionString("audio-set-media-role", "yes")
 
         // Networking. A dead host should fail in half a minute instead of
         // sitting on a spinner, and TLS is verified against the BUNDLED Mozilla
@@ -1094,13 +1101,13 @@ class MpvPlayerView @JvmOverloads constructor(
         // unverified playback beats no playback.
         val caFile = prepareTlsCaFile()
         if (caFile != null) {
-            MPVLib.setOptionString("tls-ca-file", caFile)
-            MPVLib.setOptionString("tls-verify", "yes")
+            MpvBackend.setOptionString("tls-ca-file", caFile)
+            MpvBackend.setOptionString("tls-verify", "yes")
         } else {
             Log.w(TAG, "no CA bundle available; disabling mpv TLS verification")
-            MPVLib.setOptionString("tls-verify", "no")
+            MpvBackend.setOptionString("tls-verify", "no")
         }
-        MPVLib.setOptionString("network-timeout", "30")
+        MpvBackend.setOptionString("network-timeout", "30")
 
         // The identity the app plays as. mpv asks as `mpv/<version>` by
         // default, which the hosts this app streams from routinely refuse -
@@ -1108,7 +1115,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // same stream played in the main player and failed here, presenting as
         // "this stream could not be played" on every press of Switch Player.
         // A source that names its own agent overrides this per load.
-        MPVLib.setOptionString("user-agent", StreamUserAgent.DEFAULT)
+        MpvBackend.setOptionString("user-agent", StreamUserAgent.DEFAULT)
 
         // Caching: mpv's defaults are sized for a desktop; 64 MB matches what
         // the reference Android player uses. Low Latency (the panel's own
@@ -1124,14 +1131,14 @@ class MpvPlayerView @JvmOverloads constructor(
         // When the cache runs thin, pause briefly and refill instead of
         // stuttering through it. In low-latency mode above `cache=no`, so there
         // is nothing to pause on and live behavior is as it was.
-        MPVLib.setOptionString("cache-pause", "yes")
-        MPVLib.setOptionString("cache-pause-wait", "2")
+        MpvBackend.setOptionString("cache-pause", "yes")
+        MpvBackend.setOptionString("cache-pause-wait", "2")
         // HLS: adapt the variant to the network instead of pinning the heaviest
         // and stalling when it cannot keep up.
-        MPVLib.setOptionString("hls-bitrate", "no")
+        MpvBackend.setOptionString("hls-bitrate", "no")
         // Recover boundedly from transient HTTP/TLS disconnects.
         // demuxer-lavf-o covers demuxer-internal opens (HLS/DASH segments) ...
-        MPVLib.setOptionString(
+        MpvBackend.setOptionString(
             "demuxer-lavf-o",
             "http_persistent=0,reconnect=1,reconnect_on_network_error=1," +
                 "reconnect_streamed=1,reconnect_delay_max=5,reconnect_max_retries=5," +
@@ -1144,7 +1151,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // why through the mpv log observer - instead of retrying forever, and a
         // legitimate VOD EOF is untouched (this is reconnect-on-error, not
         // reconnect-at-eof).
-        MPVLib.setOptionString(
+        MpvBackend.setOptionString(
             "stream-lavf-o",
             "reconnect=1,reconnect_on_network_error=1,reconnect_on_http_error=5xx," +
                 "reconnect_streamed=1,reconnect_delay_max=5,reconnect_max_retries=5," +
@@ -1153,7 +1160,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // When the renderer cannot keep up, drop the late frames instead of
         // building up long-term jitter. `vo` only drops frames the video output
         // was already going to miss - it is never pre-emptive.
-        MPVLib.setOptionString("framedrop", "vo")
+        MpvBackend.setOptionString("framedrop", "vo")
 
         // Playback shape. keep-open holds the last frame at EOF so the
         // activity can offer the next episode; save-position-on-quit is off
@@ -1163,8 +1170,8 @@ class MpvPlayerView @JvmOverloads constructor(
         // pair the reference player sets after init() and before the holder
         // callback (see [initialize]), so neither is in force while the engine
         // is still coming up.
-        MPVLib.setOptionString("keep-open", "yes")
-        MPVLib.setOptionString("save-position-on-quit", "no")
+        MpvBackend.setOptionString("keep-open", "yes")
+        MpvBackend.setOptionString("save-position-on-quit", "no")
 
         // Preferred languages, so a multi-audio/multi-subtitle file opens on
         // the right tracks without a press: what the session asked for (a
@@ -1173,7 +1180,7 @@ class MpvPlayerView @JvmOverloads constructor(
         val wantedAudio = audioLanguage.ifBlank {
             preferredLanguage(AppPreferences.getPreferredAudioLanguage(context)).orEmpty()
         }
-        if (wantedAudio.isNotBlank()) MPVLib.setOptionString("alang", wantedAudio)
+        if (wantedAudio.isNotBlank()) MpvBackend.setOptionString("alang", wantedAudio)
         val wantedSubtitles = subtitleLanguage.ifBlank {
             preferredLanguage(AppPreferences.getPreferredSubtitleLanguage(context)).orEmpty()
         }
@@ -1181,17 +1188,17 @@ class MpvPlayerView @JvmOverloads constructor(
             // Off: mpv opens with the subtitle track deselected. Left to its
             // own selection it would arm a default track - the same "cannot
             // actually turn subtitles off" the main player had.
-            SubtitleModeRules.OFF -> MPVLib.setOptionString("sid", "no")
+            SubtitleModeRules.OFF -> MpvBackend.setOptionString("sid", "no")
 
             // Forced: only the signs / foreign-dialogue cues, whichever track
             // carries them. runCatching guards an mpv build without the option
             // (it is ignored rather than failing the file).
             SubtitleModeRules.FORCED -> {
-                runCatching { MPVLib.setOptionString("sub-forced-only", "yes") }
-                if (wantedSubtitles.isNotBlank()) MPVLib.setOptionString("slang", wantedSubtitles)
+                runCatching { MpvBackend.setOptionString("sub-forced-only", "yes") }
+                if (wantedSubtitles.isNotBlank()) MpvBackend.setOptionString("slang", wantedSubtitles)
             }
 
-            else -> if (wantedSubtitles.isNotBlank()) MPVLib.setOptionString("slang", wantedSubtitles)
+            else -> if (wantedSubtitles.isNotBlank()) MpvBackend.setOptionString("slang", wantedSubtitles)
         }
 
         // Subtitle look, from the same global defaults the main player's
@@ -1212,7 +1219,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // guards an mpv build without the filter (it is ignored rather than
         // failing the file), the same way sub-forced-only is guarded above.
         if (AppPreferences.getCleanSdhCaptions(context)) {
-            runCatching { MPVLib.setOptionString("sub-filter-sdh", "yes") }
+            runCatching { MpvBackend.setOptionString("sub-filter-sdh", "yes") }
         }
 
         // ASS/SSA tracks render exactly as the fansub authored them — karaoke,
@@ -1225,12 +1232,12 @@ class MpvPlayerView @JvmOverloads constructor(
         // --sub-* (not --sub-ass-*) options, so they never reached ASS tracks
         // anyway: nothing a viewer sees changes for ASS, and text (SRT/VTT)
         // subtitles keep full appearance control.
-        MPVLib.setOptionString("sub-ass-override", "no")
+        MpvBackend.setOptionString("sub-ass-override", "no")
         // Complex text shaping (HarfBuzz) for Arabic, Indic, and other complex
         // scripts — the default when libass is built with HarfBuzz, pinned so a
         // build without it fails loudly at the option check instead of silently
         // shaping wrong.
-        MPVLib.setOptionString("ass-shaper", "complex")
+        MpvBackend.setOptionString("ass-shaper", "complex")
     }
 
     /**
@@ -1247,15 +1254,15 @@ class MpvPlayerView @JvmOverloads constructor(
         val backBytes = if (lowLatency) 0 else CACHE_MB * 1024 * 1024
         runCatching {
             if (initialized) {
-                MPVLib.setPropertyBoolean("cache", !lowLatency)
-                MPVLib.setPropertyInt("demuxer-max-bytes", maxBytes)
-                MPVLib.setPropertyInt("demuxer-max-back-bytes", backBytes)
-                if (lowLatency) MPVLib.setPropertyInt("demuxer-readahead-secs", 0)
+                MpvBackend.setPropertyBoolean("cache", !lowLatency)
+                MpvBackend.setPropertyInt("demuxer-max-bytes", maxBytes)
+                MpvBackend.setPropertyInt("demuxer-max-back-bytes", backBytes)
+                if (lowLatency) MpvBackend.setPropertyInt("demuxer-readahead-secs", 0)
             } else {
-                MPVLib.setOptionString("cache", if (lowLatency) "no" else "yes")
-                MPVLib.setOptionString("demuxer-max-bytes", maxBytes.toString())
-                MPVLib.setOptionString("demuxer-max-back-bytes", backBytes.toString())
-                if (lowLatency) MPVLib.setOptionString("demuxer-readahead-secs", "0")
+                MpvBackend.setOptionString("cache", if (lowLatency) "no" else "yes")
+                MpvBackend.setOptionString("demuxer-max-bytes", maxBytes.toString())
+                MpvBackend.setOptionString("demuxer-max-back-bytes", backBytes.toString())
+                if (lowLatency) MpvBackend.setOptionString("demuxer-readahead-secs", "0")
             }
         }.onFailure { Log.w(TAG, "cache profile $mode rejected", it) }
     }
@@ -1275,7 +1282,7 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     private fun applyDialogueFilter() {
         val spec = dialogueFilterSpec(dialogueBoost, audioChannelCount())
-        runCatching { MPVLib.setPropertyString("af", spec.orEmpty()) }
+        runCatching { MpvBackend.setPropertyString("af", spec.orEmpty()) }
             .onFailure { Log.w(TAG, "af rejected: $spec", it) }
         if (spec != null) {
             val applied = getPropertyStringOrNull("af").orEmpty()
@@ -1331,20 +1338,20 @@ class MpvPlayerView @JvmOverloads constructor(
         }
 
     private fun observeProperties() {
-        MPVLib.observeProperty("time-pos", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
-        MPVLib.observeProperty("duration", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
-        MPVLib.observeProperty("duration/full", MPVLib.MpvFormat.MPV_FORMAT_DOUBLE)
-        MPVLib.observeProperty("pause", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
-        MPVLib.observeProperty("paused-for-cache", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
-        MPVLib.observeProperty("eof-reached", MPVLib.MpvFormat.MPV_FORMAT_FLAG)
-        MPVLib.observeProperty("media-title", MPVLib.MpvFormat.MPV_FORMAT_STRING)
+        MpvBackend.observeProperty("time-pos", MpvFormat.MPV_FORMAT_DOUBLE)
+        MpvBackend.observeProperty("duration", MpvFormat.MPV_FORMAT_DOUBLE)
+        MpvBackend.observeProperty("duration/full", MpvFormat.MPV_FORMAT_DOUBLE)
+        MpvBackend.observeProperty("pause", MpvFormat.MPV_FORMAT_FLAG)
+        MpvBackend.observeProperty("paused-for-cache", MpvFormat.MPV_FORMAT_FLAG)
+        MpvBackend.observeProperty("eof-reached", MpvFormat.MPV_FORMAT_FLAG)
+        MpvBackend.observeProperty("media-title", MpvFormat.MPV_FORMAT_STRING)
         // Bare observation (no format): we only need to know it changed, then
         // read the parts we care about through mpv's property paths.
-        MPVLib.observeProperty("track-list", MPVLib.MpvFormat.MPV_FORMAT_NONE)
+        MpvBackend.observeProperty("track-list", MpvFormat.MPV_FORMAT_NONE)
         // The dialogue filter is built for the channel count, so it has to be
         // rebuilt whenever a new file (or another track) brings a different
         // one.
-        MPVLib.observeProperty("audio-params/channel-count", MPVLib.MpvFormat.MPV_FORMAT_INT64)
+        MpvBackend.observeProperty("audio-params/channel-count", MpvFormat.MPV_FORMAT_INT64)
     }
 
     // --- Surface lifecycle --------------------------------------------------
@@ -1383,7 +1390,7 @@ class MpvPlayerView @JvmOverloads constructor(
             if (pendingLoad != null) startPendingLoad()
         } else {
             // Recreation (surface destroyed/recreated): re-enable the VO.
-            runCatching { MPVLib.setPropertyString("vo", videoOutput().vo) }
+            runCatching { MpvBackend.setPropertyString("vo", videoOutput().vo) }
             if (pendingLoad != null) startPendingLoad()
         }
     }
@@ -1391,7 +1398,7 @@ class MpvPlayerView @JvmOverloads constructor(
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (!initialized || released) return
         // mpv sizes its output from this, not from the Surface itself.
-        runCatching { MPVLib.setPropertyString("android-surface-size", "${width}x$height") }
+        runCatching { MpvBackend.setPropertyString("android-surface-size", "${width}x$height") }
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -1403,16 +1410,16 @@ class MpvPlayerView @JvmOverloads constructor(
         // re-initialize against, and the surface it would have used is already
         // dead by then.
         runCatching {
-            MPVLib.setPropertyString("vo", "null")
-            MPVLib.setPropertyString("force-window", "no")
-            MPVLib.detachSurface()
+            MpvBackend.setPropertyString("vo", "null")
+            MpvBackend.setPropertyString("force-window", "no")
+            MpvBackend.detachSurface()
         }
     }
 
     private fun attachSurface() {
         val surface = holder.surface ?: return
         runCatching {
-            MPVLib.attachSurface(surface)
+            MpvBackend.attachSurface(surface)
             // The `vo` reset deliberately does NOT live here: this helper only
             // attaches the surface and asks for forced rendering, so the order
             // stays legible as the reference player's — attach and
@@ -1424,7 +1431,7 @@ class MpvPlayerView @JvmOverloads constructor(
             //
             // Forces mpv to render video/subtitles into our surface even when
             // it would otherwise decide it has no window to draw into.
-            MPVLib.setOptionString("force-window", "yes")
+            MpvBackend.setOptionString("force-window", "yes")
         }.onFailure { Log.e(TAG, "could not attach the MPV surface", it) }
     }
 
@@ -1466,27 +1473,28 @@ class MpvPlayerView @JvmOverloads constructor(
         setStreamOption("http-header-fields", fields)
         // Resume position: applied by the demuxer at open time, so playback
         // starts there instead of seeking after a flash of the opening frames.
-        MPVLib.setOptionString("start", "${request.startPositionMs.coerceAtLeast(0L) / 1000.0}")
+        MpvBackend.setOptionString("start", "${request.startPositionMs.coerceAtLeast(0L) / 1000.0}")
 
-        runCatching { MPVLib.command("loadfile", request.url, "replace") }
+        runCatching { MpvBackend.command("loadfile", request.url, "replace") }
             .onFailure { Log.e(TAG, "loadfile failed", it) }
 
         // Adaptive split stream: the video URL carries no audio, so the
         // separate track is added as an additional audio file.
         request.audioUrl?.takeIf { it.isNotBlank() }?.let { audioUrl ->
-            runCatching { MPVLib.command("audio-add", audioUrl) }
+            runCatching { MpvBackend.command("audio-add", audioUrl) }
                 .onFailure { Log.w(TAG, "audio-add failed", it) }
         }
     }
 
     // --- mpv events ---------------------------------------------------------
 
-    override fun event(eventId: Int, data: MPVNode) {
-        // `data` is ignored: this EventObserver reads what it needs through the
-        // property observers below, exactly as before. mpvlibAndroid added the
-        // node to the callback; the event id is the whole signal here.
+    override fun event(eventId: Int) {
+        // The event id is the whole signal here: the property values this class
+        // acts on arrive through the typed `eventProperty` overloads below, and
+        // the node both libraries also hand `event` was never read. [MpvBackend]
+        // drops it at the seam, so this override names only what it uses.
         when (eventId) {
-            MPVLib.MpvEvent.MPV_EVENT_FILE_LOADED -> {
+            MpvEvent.MPV_EVENT_FILE_LOADED -> {
                 fileLoaded = true
                 applyPendingSeek()
                 // The container's rate is known from here, so a panel switch
@@ -1500,7 +1508,7 @@ class MpvPlayerView @JvmOverloads constructor(
                 post { onFileLoaded?.invoke(title) }
             }
 
-            MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
+            MpvEvent.MPV_EVENT_END_FILE -> {
                 // A file that never opened is a failure; one that reached its
                 // end is handled by eof-reached (keep-open pauses there).
                 if (!fileLoaded) {
@@ -1532,7 +1540,7 @@ class MpvPlayerView @JvmOverloads constructor(
                 }
             }
 
-            MPVLib.MpvEvent.MPV_EVENT_VIDEO_RECONFIG -> {
+            MpvEvent.MPV_EVENT_VIDEO_RECONFIG -> {
                 Log.i(TAG, "MPV video reconfigured: ${loadedFileDiagnostics()}")
                 // Second chance: a stream whose headers carried no rate reports
                 // one once the first frames have been decoded.
@@ -1542,8 +1550,6 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     override fun eventProperty(property: String) = Unit
-
-    override fun eventProperty(property: String, value: MPVNode) = Unit
 
     /**
      * mpv's log, kept at error and warning level.
@@ -1562,7 +1568,7 @@ class MpvPlayerView @JvmOverloads constructor(
         // load FAILED, so a successful session's warnings never reach the
         // notice; and MpvErrorReason.pick still prefers a named cause over a
         // later warning.
-        if (level > MPVLib.MpvLogLevel.MPV_LOG_LEVEL_WARN) return
+        if (level > MpvLogLevel.MPV_LOG_LEVEL_WARN) return
 
         val line = MpvErrorReason.format(prefix, text)
         if (line.isEmpty()) return
@@ -1656,7 +1662,7 @@ class MpvPlayerView @JvmOverloads constructor(
         if (kotlin.math.abs(lastPositionMs - resume) <= RESUME_TOLERANCE_MS) return
         Log.i(TAG, "applying resume position ${resume}ms after load")
         runCatching {
-            MPVLib.command("seek", (resume / 1000.0).toString(), "absolute+keyframes")
+            MpvBackend.command("seek", (resume / 1000.0).toString(), "absolute+keyframes")
         }.onFailure { Log.w(TAG, "resume seek failed", it) }
     }
 
@@ -1692,16 +1698,16 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     private fun getPropertyIntOrNull(name: String): Int? =
-        runCatching { MPVLib.getPropertyInt(name) }.getOrNull()
+        runCatching { MpvBackend.getPropertyInt(name) }.getOrNull()
 
     private fun getPropertyStringOrNull(name: String): String? =
-        runCatching { MPVLib.getPropertyString(name) }.getOrNull()?.takeIf { it.isNotBlank() }
+        runCatching { MpvBackend.getPropertyString(name) }.getOrNull()?.takeIf { it.isNotBlank() }
 
     private fun getPropertyBooleanOrNull(name: String): Boolean? =
-        runCatching { MPVLib.getPropertyBoolean(name) }.getOrNull()
+        runCatching { MpvBackend.getPropertyBoolean(name) }.getOrNull()
 
     private fun getPropertyDoubleOrNull(name: String): Double? =
-        runCatching { MPVLib.getPropertyDouble(name) }.getOrNull()
+        runCatching { MpvBackend.getPropertyDouble(name) }.getOrNull()
 
     /**
      * The video track's frame rate in fps, or null when mpv has reported none
@@ -1757,7 +1763,7 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     fun addChapter(delta: Int) {
         if (!initialized || released) return
-        runCatching { MPVLib.command("add", "chapter", delta.toString()) }
+        runCatching { MpvBackend.command("add", "chapter", delta.toString()) }
             .onFailure { Log.w(TAG, "chapter step failed", it) }
     }
 

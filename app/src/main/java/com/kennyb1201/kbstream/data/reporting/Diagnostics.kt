@@ -60,8 +60,15 @@ object Diagnostics {
 
         report.appendLine("KBStream diagnostics")
         report.appendLine("generated: ${DateFormats.now(DateFormats.DATE_TIME_SECONDS)}")
+        // The build's own facts, and one of them is not obvious from the APK:
+        // which MPV library it linked. That choice is a build flag (see the
+        // `mpv.lib` block in app/build.gradle.kts) and there are two possible
+        // libraries with the same package and the same native sonames, so a
+        // report from the GPU test has to say which one produced it - otherwise
+        // "the picture worked" and "the picture was black" are two statements
+        // about two different binaries with nothing to tell them apart.
         report.appendLine("build: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) " +
-            "sha ${BuildConfig.GIT_SHA.take(7)}")
+            "sha ${BuildConfig.GIT_SHA.take(7)} mpv=${BuildConfig.MPV_ENGINE_LIBRARY}")
 
         report.appendLine(deviceLine(app))
         report.appendLine(memoryLine())

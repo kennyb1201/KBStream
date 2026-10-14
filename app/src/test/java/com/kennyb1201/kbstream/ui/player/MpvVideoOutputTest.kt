@@ -214,7 +214,7 @@ class MpvVideoOutputTest {
         )
         assertTrue(
             "and vo/gpu-context/gpu-api must come from that resolution",
-            view.contains("MPVLib.setOptionString(\"vo\", vo.vo)")
+            view.contains("MpvBackend.setOptionString(\"vo\", vo.vo)")
         )
         assertTrue(
             "the field test reads this line, so it has to carry the mode and the device",
@@ -245,11 +245,11 @@ class MpvVideoOutputTest {
         assertTrue(
             "the resolution is applied once, as the option applyOptions opens on",
             view.contains("val vo = videoOutput()") &&
-                view.contains("MPVLib.setOptionString(\"vo\", vo.vo)")
+                view.contains("MpvBackend.setOptionString(\"vo\", vo.vo)")
         )
         assertTrue(
             "and the surface cycle re-opens that same resolution as a property",
-            view.contains("MPVLib.setPropertyString(\"vo\", videoOutput().vo)")
+            view.contains("MpvBackend.setPropertyString(\"vo\", videoOutput().vo)")
         )
         assertFalse(
             "never a pinned output: the cycle re-opens what this device resolved",

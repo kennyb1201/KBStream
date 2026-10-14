@@ -104,7 +104,7 @@ class SdhCaptionCleanerTest {
         )
         assertTrue(
             "and it must be set as an option, before init() applies the subtitle filter",
-            view.contains("MPVLib.setOptionString(\"sub-filter-sdh\", \"yes\")")
+            view.contains("MpvBackend.setOptionString(\"sub-filter-sdh\", \"yes\")")
         )
     }
 

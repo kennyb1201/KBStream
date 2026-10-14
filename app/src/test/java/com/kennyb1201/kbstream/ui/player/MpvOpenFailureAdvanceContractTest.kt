@@ -80,7 +80,7 @@ class MpvOpenFailureAdvanceContractTest {
             1,
             view.split("onPlaybackError?.invoke(").size - 1
         )
-        val endFile = view.substringAfter("MPVLib.MpvEvent.MPV_EVENT_END_FILE ->")
+        val endFile = view.substringAfter("MpvEvent.MPV_EVENT_END_FILE ->")
         assertTrue(
             "and only from the branch that saw END_FILE without a file to end",
             endFile.substring(0, endFile.indexOf("MPV_EVENT_VIDEO_RECONFIG"))

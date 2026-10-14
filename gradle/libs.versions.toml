@@ -42,6 +42,12 @@ coil = "3.6.3"
 
 # --- Playback / sync / reporting ---
 media3 = "1.11.1"
+# The MPV library Nuvio's GPU video output is built on, published on Maven
+# Central. It is NOT the engine's default: it is linked only when the build is
+# asked for it (`-Pmpv.lib=nuvio`, see app/build.gradle.kts), because it and the
+# Riteshp2001 AAR below ship the same classes and the same native libraries and
+# therefore cannot both be on one classpath.
+mpv-android-lib = "0.1.12"
 newpipe-extractor = "43f8e6ebeef4"
 sentry = "8.59.0"
 supabase = "3.8.0"
@@ -114,6 +120,13 @@ media3-datasource-okhttp = { module = "androidx.media3:media3-datasource-okhttp"
 # consumed as a file dependency (see app/build.gradle.kts and
 # scripts/fetch_mpv_aar.sh). The `libmpv` alias dev.jdtech.mpv:libmpv used to
 # live here and is deliberately retired - nothing may point back at it.
+# The swap the note above describes: the same MPV engine, a different build of
+# it, chosen at build time and never linked alongside the AAR. `mpv-android-lib`
+# is resolved from mavenCentral() (see settings.gradle.kts), is 67 MB of native
+# libraries for all four ABIs, and carries the same `is.xyz.mpv` package with a
+# different API (`MPV`, an instance, instead of `MPVLib`, a singleton) - which is
+# why `MpvBackend` exists as the seam between it and the engine.
+mpv-android-lib = { module = "io.github.abdallahmehiz:mpv-android-lib", version.ref = "mpv-android-lib" }
 newpipe-extractor = { module = "com.github.TeamNewPipe:NewPipeExtractor", version.ref = "newpipe-extractor" }
 
 # --- Coil ---

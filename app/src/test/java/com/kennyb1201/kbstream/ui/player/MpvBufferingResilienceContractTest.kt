@@ -47,11 +47,11 @@ class MpvBufferingResilienceContractTest {
         assertTrue(
             "cache-pause makes a marginal network ride through a thin cache as one brief pause " +
                 "instead of a stutter loop",
-            view.contains("MPVLib.setOptionString(\"cache-pause\", \"yes\")")
+            view.contains("MpvBackend.setOptionString(\"cache-pause\", \"yes\")")
         )
         assertTrue(
             "and the pause is bounded to a couple of seconds",
-            view.contains("MPVLib.setOptionString(\"cache-pause-wait\", \"2\")")
+            view.contains("MpvBackend.setOptionString(\"cache-pause-wait\", \"2\")")
         )
     }
 
@@ -60,7 +60,7 @@ class MpvBufferingResilienceContractTest {
         assertTrue(
             "hls-bitrate=no lets the variant be adapted; pinning the top one stalls when the " +
                 "network cannot keep up",
-            view.contains("MPVLib.setOptionString(\"hls-bitrate\", \"no\")")
+            view.contains("MpvBackend.setOptionString(\"hls-bitrate\", \"no\")")
         )
     }
 
@@ -70,7 +70,7 @@ class MpvBufferingResilienceContractTest {
             "stream-lavf-o is the option covering the primary open; without it one dropped " +
                 "connection or failed seek-reopen stalls network playback forever",
             flat.contains(
-                "MPVLib.setOptionString( \"stream-lavf-o\", " +
+                "MpvBackend.setOptionString( \"stream-lavf-o\", " +
                     "\"reconnect=1,reconnect_on_network_error=1," +
                     "reconnect_on_http_error=5xx,reconnect_streamed=1," +
                     "reconnect_delay_max=5,reconnect_max_retries=5," +
@@ -84,7 +84,7 @@ class MpvBufferingResilienceContractTest {
         assertTrue(
             "demuxer-lavf-o covers the segment opens the demuxer makes on its own",
             flat.contains(
-                "MPVLib.setOptionString( \"demuxer-lavf-o\", " +
+                "MpvBackend.setOptionString( \"demuxer-lavf-o\", " +
                     "\"http_persistent=0,reconnect=1,reconnect_on_network_error=1," +
                     "reconnect_streamed=1,reconnect_delay_max=5," +
                     "reconnect_max_retries=5,reconnect_delay_total_max=20\" )"
@@ -96,7 +96,7 @@ class MpvBufferingResilienceContractTest {
     fun `recovery from a dead source stays bounded rather than retrying forever`() {
         listOf("stream-lavf-o", "demuxer-lavf-o").forEach { option ->
             val value = flat
-                .substringAfter("MPVLib.setOptionString( \"$option\", \"")
+                .substringAfter("MpvBackend.setOptionString( \"$option\", \"")
                 .substringBefore("\")")
             assertTrue("$option must cap the retry count, or a dead URL spins forever",
                 value.contains("reconnect_max_retries=5"))
@@ -112,7 +112,7 @@ class MpvBufferingResilienceContractTest {
         assertTrue(
             "framedrop=vo drops only the frames the VO was already going to miss - never " +
                 "pre-emptively",
-            view.contains("MPVLib.setOptionString(\"framedrop\", \"vo\")")
+            view.contains("MpvBackend.setOptionString(\"framedrop\", \"vo\")")
         )
     }
 
@@ -125,16 +125,16 @@ class MpvBufferingResilienceContractTest {
         )
         assertTrue(
             "network-timeout is unchanged",
-            view.contains("MPVLib.setOptionString(\"network-timeout\", \"30\")")
+            view.contains("MpvBackend.setOptionString(\"network-timeout\", \"30\")")
         )
         assertTrue(
             "and the low-latency branch still disables the cache",
-            view.contains("MPVLib.setOptionString(\"cache\", if (lowLatency) \"no\" else \"yes\")")
+            view.contains("MpvBackend.setOptionString(\"cache\", if (lowLatency) \"no\" else \"yes\")")
         )
         assertFalse(
             "no reconnect option may be gated behind the buffer mode: the spinner does not care " +
                 "which profile is selected",
-            view.contains("if (!lowLatency) MPVLib.setOptionString(\"stream-lavf-o\"")
+            view.contains("if (!lowLatency) MpvBackend.setOptionString(\"stream-lavf-o\"")
         )
     }
 

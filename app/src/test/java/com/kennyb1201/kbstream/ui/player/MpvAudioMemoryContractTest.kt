@@ -122,7 +122,7 @@ class MpvAudioMemoryContractTest {
         )
         assertTrue(
             "and a hit is applied through mpv's own aid",
-            apply.contains("MPVLib.setPropertyInt(\"aid\", match.id)")
+            apply.contains("MpvBackend.setPropertyInt(\"aid\", match.id)")
         )
     }
 

@@ -10,6 +10,7 @@ code shipped in the APK and the licenses its authors publish it under.
 | --- | --- | --- |
 | NewPipeExtractor | `com.github.TeamNewPipe:NewPipeExtractor`, pinned to commit `43f8e6eb` (tag `v0.26.4`) | GPL-3.0-or-later |
 | mpv (libmpv) | the `mpvlib-1.1.2.aar` release AAR from [`Riteshp2001/mpvlibAndroid`](https://github.com/Riteshp2001/mpvlibAndroid) (release `v1.1.2`, sha256 `2bee300d…`), fetched into `app/libs/` by `scripts/fetch_mpv_aar.sh` — this replaced the old `dev.jdtech.mpv:libmpv` Maven artifact, which is no longer a dependency of anything | The AAR's own Android wrapper is MIT (the mpv-android project, © 2016 Ilya Zhuravlev and sfan5). The `libmpv.so` and FFmpeg native libraries bundled inside it are **GPL-3.0-or-later**: the release builds its FFmpeg with `--enable-gpl` and `--enable-version3` (`buildscripts/scripts/ffmpeg.sh` at tag `v1.1.2`), which selects FFmpeg's GPLv3 terms rather than its default LGPL. mpv's own `-Dgpl` is left at its default, so libmpv links a GPLv3 FFmpeg. This is why the AAR's shipped native code is described here as GPLv3, not LGPL. |
+| mpv (libmpv), test build | `io.github.abdallahmehiz:mpv-android-lib` from Maven Central, linked **only** when a build is asked for it (`-Pmpv.lib=nuvio`, see the `mpv.lib` block in `app/build.gradle.kts`). No release links it: nothing in CI sets `MPV_LIB`. | The wrapper is MIT. The `libmpv.so` and FFmpeg shared libraries bundled inside the AAR are **GPL-3.0-or-later** on exactly the reasoning in the row above - the project's FFmpeg script also builds with `--enable-gpl --enable-version3` - so this library, like the one it is swapped for, is under the app's own license. |
 | FFmpeg | the video-enabled `media3-ffmpeg-decoder.aar` built by `scripts/build_ffmpeg_video.sh` (this repo's own FFmpeg), and the FFmpeg linked into libmpv | LGPL-2.1-or-later for the media3 extension built here (that build script enables only LGPL-compatible components). The FFmpeg inside libmpv is a different, separately built FFmpeg and is GPL-3.0-or-later — see the mpv row above. |
 | libass | linked into libmpv (subtitle typesetting) | ISC |
 | libass | also linked into `libassjni.so`, built by `scripts/build_libass.sh`, which is what typesets an `.ass` SIDECAR on the ExoPlayer engine | ISC |
@@ -53,7 +54,9 @@ apart from attribution, impose no distribution obligations:
 
 The authoritative list is the `dependencies` block of `app/build.gradle.kts`,
 plus the native components that are not dependencies at all: the mpvlibAndroid
-AAR fetched by `scripts/fetch_mpv_aar.sh` (its license follows the build recipe
+AAR fetched by `scripts/fetch_mpv_aar.sh` (and the second MPV library that block
+can link instead, `io.github.abdallahmehiz:mpv-android-lib`, in the version
+`gradle/libs.versions.toml` pins) (its license follows the build recipe
 in that release, not the repo's own MIT wrapper), the FFmpeg AAR produced by
 `scripts/build_ffmpeg_video.sh`, the libass/FreeType/HarfBuzz/fontconfig/
 FriBidi/expat set linked into `libassjni.so` by `scripts/build_libass.sh`, and

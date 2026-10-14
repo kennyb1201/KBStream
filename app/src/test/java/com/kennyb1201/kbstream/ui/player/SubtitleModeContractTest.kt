@@ -101,11 +101,11 @@ class SubtitleModeContractTest {
         )
         assertTrue(
             "off must deselect subtitles in mpv",
-            view.contains("SubtitleModeRules.OFF -> MPVLib.setOptionString(\"sid\", \"no\")")
+            view.contains("SubtitleModeRules.OFF -> MpvBackend.setOptionString(\"sid\", \"no\")")
         )
         assertTrue(
             "forced must ask mpv for forced cues only",
-            view.contains("MPVLib.setOptionString(\"sub-forced-only\", \"yes\")")
+            view.contains("MpvBackend.setOptionString(\"sub-forced-only\", \"yes\")")
         )
     }
 
@@ -120,11 +120,11 @@ class SubtitleModeContractTest {
         val runtime = view
             .substringAfter("fun setSubtitleMode(mode: Int)")
             .substringBefore("fun setSpeed(")
-        val restored = "MPVLib.setPropertyString(\"sid\", \"auto\")"
+        val restored = "MpvBackend.setPropertyString(\"sid\", \"auto\")"
 
         assertTrue(
             "off must still deselect at runtime",
-            runtime.contains("MPVLib.setPropertyString(\"sid\", \"no\")")
+            runtime.contains("MpvBackend.setPropertyString(\"sid\", \"no\")")
         )
         assertTrue(
             "forced needs a selected track for its forced cues to appear",

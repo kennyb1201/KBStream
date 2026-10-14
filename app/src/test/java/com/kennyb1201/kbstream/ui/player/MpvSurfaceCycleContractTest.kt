@@ -102,7 +102,7 @@ class MpvSurfaceCycleContractTest {
 
     @Test
     fun `the video output is an option set once, before init`() {
-        val applications = Regex("MPVLib\\.setOptionString\\(\"vo\"[^)]*\\)").findAll(code).toList()
+        val applications = Regex("MpvBackend\\.setOptionString\\(\"vo\"[^)]*\\)").findAll(code).toList()
         assertEquals(
             "the OPTION is the session's single configuration of the output: a second " +
                 "setOptionString would be a second mode decision, and it is the property that " +
@@ -121,11 +121,11 @@ class MpvSurfaceCycleContractTest {
         val initialize = code.substringAfter("fun initialize()")
             .substringBefore("private fun ")
         val options = initialize.indexOf("applyOptions()")
-        val init = initialize.indexOf("MPVLib.init()")
+        val init = initialize.indexOf("MpvBackend.init()")
         assertTrue("initialize() has to apply the options", options >= 0)
         assertTrue("and initialize the engine", init >= 0)
         assertTrue(
-            "applyOptions() must run before MPVLib.init()",
+            "applyOptions() must run before MpvBackend.init()",
             options < init
         )
     }
@@ -161,17 +161,17 @@ class MpvSurfaceCycleContractTest {
             .substringBefore("private fun startPendingLoad()")
         assertTrue(
             "the surface still has to be attached",
-            attach.contains("MPVLib.attachSurface(surface)")
+            attach.contains("MpvBackend.attachSurface(surface)")
         )
         assertTrue(
             "and forced rendering with it, or mpv decides it has no window to draw into",
-            attach.contains("MPVLib.setOptionString(\"force-window\", \"yes\")")
+            attach.contains("MpvBackend.setOptionString(\"force-window\", \"yes\")")
         )
         assertTrue(
             "in the reference player's order - attach first, then force-window=yes, with the " +
                 "output re-opened back in surfaceCreated (recreation branch)",
-            attach.indexOf("MPVLib.attachSurface(surface)") <
-                attach.indexOf("MPVLib.setOptionString(\"force-window\", \"yes\")")
+            attach.indexOf("MpvBackend.attachSurface(surface)") <
+                attach.indexOf("MpvBackend.setOptionString(\"force-window\", \"yes\")")
         )
         // The output property belongs to surfaceCreated, one line after this
         // helper returns - on the attach helper itself it would re-initialize
@@ -194,7 +194,7 @@ class MpvSurfaceCycleContractTest {
         val destroyed = surfaceDestroyed()
         val nullVo = destroyed.indexOf("setPropertyString(\"vo\", \"null\")")
         val forceOff = destroyed.indexOf("setPropertyString(\"force-window\", \"no\")")
-        val detach = destroyed.indexOf("MPVLib.detachSurface()")
+        val detach = destroyed.indexOf("MpvBackend.detachSurface()")
         assertTrue(
             "teardown must tear the video output down, not just detach the surface",
             nullVo >= 0
@@ -323,9 +323,9 @@ class MpvSurfaceCycleContractTest {
         // on. `idle=once` is what keeps mpv alive between the create and the
         // first loadfile.
         val initialize = initializeBody()
-        val init = initialize.indexOf("MPVLib.init()")
-        val forceOff = initialize.indexOf("MPVLib.setOptionString(\"force-window\", \"no\")")
-        val idleOnce = initialize.indexOf("MPVLib.setOptionString(\"idle\", \"once\")")
+        val init = initialize.indexOf("MpvBackend.init()")
+        val forceOff = initialize.indexOf("MpvBackend.setOptionString(\"force-window\", \"no\")")
+        val idleOnce = initialize.indexOf("MpvBackend.setOptionString(\"idle\", \"once\")")
         val callback = initialize.indexOf("holder.addCallback(this)")
         assertTrue("initialize() has to init the engine", init >= 0)
         assertTrue("then drop forced rendering", forceOff >= 0)
@@ -371,21 +371,21 @@ class MpvSurfaceCycleContractTest {
         )
         assertTrue(
             "and has to be paired with destroy(), which is what makes it final",
-            release.contains("MPVLib.destroy()")
+            release.contains("MpvBackend.destroy()")
         )
         assertTrue(
             "in the reference player's teardown order - output, then surface",
             release.indexOf("setPropertyString(\"vo\", \"null\")") <
-                release.indexOf("MPVLib.detachSurface()")
+                release.indexOf("MpvBackend.detachSurface()")
         )
-        // BaseMPVView.destroy() removes the callback before MPVLib.destroy(),
+        // BaseMPVView.destroy() removes the callback before MpvBackend.destroy(),
         // and that half is load-bearing: a surface arriving mid-teardown would
         // otherwise attach to an instance that is being freed.
         val removeCallback = release.indexOf("holder.removeCallback(this)")
         assertTrue("the holder callback has to be removed", removeCallback >= 0)
         assertTrue(
             "before the instance is destroyed (removeCallback=$removeCallback)",
-            removeCallback < release.indexOf("MPVLib.destroy()")
+            removeCallback < release.indexOf("MpvBackend.destroy()")
         )
     }
 
@@ -395,13 +395,13 @@ class MpvSurfaceCycleContractTest {
             .substringBefore("private fun ")
         assertTrue(
             "the profile must be mpv's own built-in `fast`",
-            applyOptions.contains("MPVLib.setOptionString(\"profile\", \"fast\")")
+            applyOptions.contains("MpvBackend.setOptionString(\"profile\", \"fast\")")
         )
         assertTrue(
             "set before the video output: a profile applies the options it names the moment " +
                 "it is set, and this one has to stay underneath the device-resolved vo",
-            applyOptions.indexOf("MPVLib.setOptionString(\"profile\", \"fast\")") <
-                applyOptions.indexOf("MPVLib.setOptionString(\"vo\"")
+            applyOptions.indexOf("MpvBackend.setOptionString(\"profile\", \"fast\")") <
+                applyOptions.indexOf("MpvBackend.setOptionString(\"vo\"")
         )
     }
 
