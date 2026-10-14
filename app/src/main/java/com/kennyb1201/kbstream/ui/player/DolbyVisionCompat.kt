@@ -69,6 +69,21 @@ internal fun dvPassthroughSuppressed(
 internal fun hdrTypesIncludeDv(types: IntArray?): Boolean =
     types?.contains(Display.HdrCapabilities.HDR_TYPE_DOLBY_VISION) ?: true
 
+/**
+ * A [ByteArrayOutputStream] whose backing array can be borrowed without a copy.
+ *
+ * The Dolby Vision stripper hands this array straight to libdovi as its output
+ * buffer and reads back at most the input length, so one instance per extractor
+ * thread is a scratch buffer that is allocated once and then reused for every
+ * sample instead of a fresh `ByteArray(length)` per frame. `backingArray()` is
+ * the exposed buffer itself: only its first N bytes are ever valid, and the
+ * caller must consume them before the next sample overwrites them.
+ */
+internal class ExposedByteArrayOutputStream(size: Int) : ByteArrayOutputStream(size) {
+    /** The internal buffer itself, not a copy. */
+    fun backingArray(): ByteArray = buf
+}
+
 internal object DolbyVisionCompat {
 
     // Dual-layer Profile 7 (Blu-ray remuxes) is the DV flavor that routinely
@@ -493,6 +508,32 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * Reusable output buffer for the native strip hand-off.
+     *
+     * The strip only ever removes bytes, so libdovi writes at most `length`
+     * bytes for one sample. Handing it a per-thread scratch instead of a fresh
+     * `ByteArray(length)` per frame keeps the stripper from allocating (and the
+     * runtime from collecting) a new buffer on every sample. Thread-local
+     * because the strip runs on the extractor threads, which cannot share one.
+     */
+    private val stripScratch = ThreadLocal.withInitial {
+        ExposedByteArrayOutputStream(STRIP_SCRATCH_INITIAL_BYTES)
+    }
+
+    /** The calling thread's scratch buffer, grown to at least [length] bytes. */
+    private fun stripScratchFor(length: Int): ByteArray {
+        val current = stripScratch.get().backingArray()
+        if (current.size >= length) return current
+        // Grow once to the largest sample seen; every later sample reuses it.
+        val grown = ExposedByteArrayOutputStream(length)
+        stripScratch.set(grown)
+        return grown.backingArray()
+    }
+
+    /** Starting size of [stripScratch]; it grows to fit the largest sample. */
+    private const val STRIP_SCRATCH_INITIAL_BYTES = 1024 * 1024
+
+    /**
      * Strips RPU / enhancement-layer NAL units (and optionally HDR10+ SEI) from
      * an Annex-B HEVC access unit, compacting in place. Returns the new length,
      * or -1 when nothing was removed / the unit was too short to parse.
@@ -551,29 +592,35 @@ internal object DolbyVisionCompat {
         // arm (its strip_dovi_rpu drops the RPU and the enhancement layer
         // together), so those keep the exact code they run today.
         if (!dropRpuNal && !kotlinOnly) {
-            DoviBridge.stripSample(
+            // Zero-allocation: the native strip writes into a per-thread scratch
+            // buffer instead of a fresh ByteArray(length) per sample.
+            val out = stripScratchFor(length)
+            val written = DoviBridge.stripSampleInto(
                 buf,
                 length,
                 DoviBridge.NAL_FORMAT_ANNEX_B,
                 0,
                 stripDv,
-                stripHdr10Plus
-            )?.let { stripped ->
-                // "Nothing was removed" is -1 in this function's contract and
-                // callers act on it — the sniff path locks its strip mode and
-                // logs "HDR10+ SEI detected" off this answer — so a sample that
-                // came back whole must not look stripped. libdovi forwards an
-                // unmatched sample byte-for-byte, so `length` back means no NAL
-                // was dropped and the caller's buffer is already correct.
-                if (stripped.size == length) return -1
-                System.arraycopy(stripped, 0, buf, 0, stripped.size)
+                stripHdr10Plus,
+                out
+            )
+            // A negative answer is "no libdovi in this build" (or the native
+            // call failed): the Kotlin parser below is the fallback. A sample
+            // the native strip forwarded whole comes back as `length`, and
+            // "nothing was removed" is -1 in this function's contract - callers
+            // act on it (the sniff path locks its strip mode and logs "HDR10+
+            // SEI detected" off this answer) - so it must not look stripped.
+            // libdovi forwards an unmatched sample byte-for-byte.
+            if (written >= 0) {
+                if (written == length) return -1
+                System.arraycopy(out, 0, buf, 0, written)
                 // Accounting: the native path drops RPU/EL + HDR10+ SEI NALs
-                // without reporting them one by one — record the categories
+                // without reporting them one by one - record the categories
                 // the first-sample log names (see recordNativeStripAccounting).
                 if (accounting != null) {
                     recordNativeStripAccounting(accounting, stripDv, stripHdr10Plus)
                 }
-                return stripped.size
+                return written
             }
         }
         if (length < 5) return -1
@@ -716,20 +763,26 @@ internal object DolbyVisionCompat {
         // byte-identical and is reported as unchanged (-1). [kotlinOnly] forces
         // the Kotlin surgery for the same reason as [stripAnnexB].
         if (!dropRpuNal && !kotlinOnly) {
-            DoviBridge.stripSample(
+            // Same zero-allocation hand-off as [stripAnnexB]: a per-thread
+            // scratch buffer, written into by the native strip and reused for
+            // every sample.
+            val out = stripScratchFor(length)
+            val written = DoviBridge.stripSampleInto(
                 buf,
                 length,
                 DoviBridge.NAL_FORMAT_LENGTH_DELIMITED,
                 nalLengthFieldLength,
                 stripDv,
-                stripHdr10Plus
-            )?.let { stripped ->
-                if (stripped.size == length) return -1
-                System.arraycopy(stripped, 0, buf, 0, stripped.size)
+                stripHdr10Plus,
+                out
+            )
+            if (written >= 0) {
+                if (written == length) return -1
+                System.arraycopy(out, 0, buf, 0, written)
                 if (accounting != null) {
                     recordNativeStripAccounting(accounting, stripDv, stripHdr10Plus)
                 }
-                return stripped.size
+                return written
             }
         }
         val fieldLen = nalLengthFieldLength.coerceIn(1, 4)

@@ -227,6 +227,35 @@ internal object DoviBridge {
         if (length <= 0) return null
         // Stripping only removes bytes; output cannot exceed input.
         val out = ByteArray(length)
+        val written = stripSampleInto(
+            buf, length, nalFormat, nalLengthFieldLength, stripDv, stripHdr10Plus, out
+        )
+        if (written < 0) return null
+        return out.copyOf(written)
+    }
+
+    /**
+     * [stripSample] into a caller-owned buffer: writes the stripped sample into
+     * `out` and returns the number of bytes written, or -1 when this build has
+     * no libdovi (or the native call failed) - which every caller reads as "run
+     * the Kotlin stripper instead". No array is allocated.
+     *
+     * [DolbyVisionCompat]'s strip functions use this with a reusable per-thread
+     * scratch, so a session never allocates a fresh output buffer per sample.
+     * `out` must be at least [length] bytes; stripping only removes bytes, so
+     * the result is at most [length].
+     */
+    fun stripSampleInto(
+        buf: ByteArray,
+        length: Int,
+        nalFormat: Int,
+        nalLengthFieldLength: Int,
+        stripDv: Boolean,
+        stripHdr10Plus: Boolean,
+        out: ByteArray
+    ): Int {
+        if (!available) return -1
+        if (length <= 0 || out.size < length) return -1
         val written = runCatching {
             nativeProcessVideoSample(
                 sample = buf,
@@ -242,13 +271,13 @@ internal object DoviBridge {
             )
         }.getOrElse {
             Log.w(TAG, "libdovi strip failed; keeping the Kotlin stripper", it)
-            return null
+            return -1
         }
         if (written < 0) {
             Log.w(TAG, "libdovi strip returned $written; keeping the Kotlin stripper")
-            return null
+            return -1
         }
-        return out.copyOf(written)
+        return written
     }
 
     private val DV_PROFILE_REGEX = Regex("^(dvhe|dvav|dvh1|dva1)\\.(\\d+)\\.")

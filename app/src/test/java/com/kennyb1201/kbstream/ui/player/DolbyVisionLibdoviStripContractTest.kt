@@ -10,7 +10,7 @@ import org.junit.Test
 
 /**
  * [DolbyVisionCompat.stripAnnexB] and [DolbyVisionCompat.stripLengthDelimited]
- * hand the whole sample to [DoviBridge.stripSample] first, and the Kotlin NAL
+ * hand the whole sample to [DoviBridge.stripSampleInto] first, and the Kotlin NAL
  * parser below them is the fallback for a build without the `.so` (every local
  * build, and any CI run where the native step failed). Strip All is the
  * exception: it passes `kotlinOnly = true` and never reaches the bridge, because
@@ -74,22 +74,49 @@ class DolbyVisionLibdoviStripContractTest {
         assertEquals(
             "one libdovi strip per strip function",
             2,
-            occurrences(compat, "DoviBridge.stripSample(")
+            occurrences(compat, "DoviBridge.stripSampleInto(")
         )
         val flat = flat(compat)
         assertTrue(
-            "the Annex-B strip asks for the Annex-B walk",
+            "the Annex-B strip asks for the Annex-B walk, into the reusable scratch",
             flat.contains(
-                "DoviBridge.stripSample(buf,length,DoviBridge.NAL_FORMAT_ANNEX_B,0," +
-                    "stripDv,stripHdr10Plus)"
+                "DoviBridge.stripSampleInto(buf,length,DoviBridge.NAL_FORMAT_ANNEX_B,0," +
+                    "stripDv,stripHdr10Plus,out)"
             )
         )
         assertTrue(
             "and the length-delimited one for the length-delimited walk",
             flat.contains(
-                "DoviBridge.stripSample(buf,length,DoviBridge.NAL_FORMAT_LENGTH_DELIMITED," +
-                    "nalLengthFieldLength,stripDv,stripHdr10Plus)"
+                "DoviBridge.stripSampleInto(buf,length,DoviBridge.NAL_FORMAT_LENGTH_DELIMITED," +
+                    "nalLengthFieldLength,stripDv,stripHdr10Plus,out)"
             )
+        )
+    }
+
+    @Test
+    fun `the native strip reuses a per-thread scratch instead of allocating per sample`() {
+        // The 2026-10-14 field log showed the stripper's heap growing under
+        // playback: every sample built a fresh output array. The native strip
+        // now writes into a per-thread scratch that is allocated once and
+        // reused, so both entry points have to fetch it before the call and
+        // the old per-call `?.let { stripped -> }` wrapper has to be gone.
+        assertEquals(
+            "one reusable scratch per strip function",
+            2,
+            occurrences(flat(compat), "valout=stripScratchFor(length)")
+        )
+        assertTrue(
+            "the scratch is one per extractor thread",
+            compat.contains("private val stripScratch = ThreadLocal.withInitial {")
+        )
+        assertTrue(
+            "and its backing array is exposed without a copy",
+            compat.contains("fun backingArray(): ByteArray = buf")
+        )
+        assertEquals(
+            "the native hand-off no longer wraps a per-call array",
+            0,
+            occurrences(compat, "let { stripped ->")
         )
     }
 
@@ -132,11 +159,11 @@ class DolbyVisionLibdoviStripContractTest {
         // on it (it locks its strip mode and logs "HDR10+ SEI detected" off a
         // non-negative answer). Passing back the input length instead would make
         // every clean sample of a non-DV track look stripped.
-        val nativeResult = compat.substringAfter("let { stripped ->")
-            .substringBefore("System.arraycopy(stripped, 0, buf, 0, stripped.size)")
+        val nativeResult = compat.substringAfter("val written = DoviBridge.stripSampleInto(")
+            .substringBefore("System.arraycopy(out, 0, buf, 0, written)")
         assertTrue(
             "the unchanged case has to be turned into the Kotlin answer, not the native one",
-            nativeResult.contains("if (stripped.size == length) return -1")
+            nativeResult.contains("if (written == length) return -1")
         )
     }
 
