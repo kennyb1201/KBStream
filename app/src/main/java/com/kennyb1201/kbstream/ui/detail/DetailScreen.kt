@@ -1013,29 +1013,6 @@ fun DetailScreen(
         }
     }
 
-    /**
-     * The loaded season's AIRED episode count - the total every episode line on
-     * this screen and every episode total this screen hands the player (and so
-     * every row it writes to history) is built from.
-     *
-     * Kept as one value rather than calling [airedEpisodeCount] at each use so
-     * the count on screen and the count stored for the same season cannot drift
-     * apart; see [airedEpisodeCount] for why the list's size is not it.
-     */
-    val airedEpisodesInSeason = remember(
-        episodes,
-        effectiveSeason,
-        seasonsWithStaleDates,
-        today
-    ) {
-        airedEpisodeCount(
-            episodes = episodes,
-            airDatesTrusted =
-                effectiveSeason == null || effectiveSeason !in seasonsWithStaleDates,
-            today = today
-        )
-    }
-
     fun seasonUnavailable(season: Int): Boolean =
         seasonPremiereDates[season]?.isAfter(today) == true
 
@@ -1306,6 +1283,33 @@ fun DetailScreen(
                 ?: vmLoadedSeason?.takeIf { it in seasons }
                 ?: seasons.firstOrNull { !seasonUnavailable(it) }.takeIf { !isLoading }
         }
+    }
+
+    /**
+     * The loaded season's AIRED episode count - the total every episode line on
+     * this screen and every episode total this screen hands the player (and so
+     * every row it writes to history) is built from.
+     *
+     * Kept as one value rather than calling [airedEpisodeCount] at each use so
+     * the count on screen and the count stored for the same season cannot drift
+     * apart; see [airedEpisodeCount] for why the list's size is not it.
+     *
+     * Declared here, after [effectiveSeason], because that is the first point
+     * the season being shown is known: `seasons.firstOrNull { !seasonUnavailable
+     * (it) }` above is what picks it when the caller names no season.
+     */
+    val airedEpisodesInSeason = remember(
+        episodes,
+        effectiveSeason,
+        seasonsWithStaleDates,
+        today
+    ) {
+        airedEpisodeCount(
+            episodes = episodes,
+            airDatesTrusted =
+                effectiveSeason == null || effectiveSeason !in seasonsWithStaleDates,
+            today = today
+        )
     }
 
     // A season can name itself: American Horror Story's "Coven", Monster's
