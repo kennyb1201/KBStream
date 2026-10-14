@@ -80,6 +80,54 @@ class SeasonChainWiringContractTest {
             2,
             Regex("airedNextEpisodeTarget\\(").findAll(source(EXO)).count()
         )
+        // MPV's NEXT button is the second one there: it used to call its own
+        // arithmetic target straight into launchNextEpisode, so a caught-up
+        // show could still be sent to the invented season-end episode by one
+        // press, one press after the panel had correctly offered the
+        // recommendations instead.
+        assertEquals(
+            "MPV chains from the panel decision and its Next button",
+            2,
+            Regex("airedNextEpisodeTarget\\(").findAll(source(MPV)).count()
+        )
+        assertTrue(
+            "and the Next button is one of them",
+            source(MPV).substringAfter("override fun onChromeNext() {")
+                .substringBefore("override fun onChromeOpenSourcePicker")
+                .contains("airedNextEpisodeTarget(")
+        )
+    }
+
+    @Test
+    fun `every engine tells the gate which season the session is in`() {
+        // The gate has to distinguish the invented season-end jump from a chain
+        // inside the season playing, and only the caller knows which season
+        // that is: the target itself cannot say ((19, 1) is the fabrication for
+        // a session in S18 and an ordinary random pick for one in S1). A call
+        // site that forgets it silently loses the check.
+        listOf(EXO, MPV, EXTERNAL).forEach { path ->
+            val src = source(path)
+            val calls = Regex("airedNextEpisodeTarget\\(").findAll(src).count()
+            val seasons = Regex("sessionSeason = season").findAll(src).count()
+            assertEquals(
+                "$path passes the session's season at every gate call",
+                calls,
+                seasons
+            )
+        }
+    }
+
+    @Test
+    fun `every engine still invents the jump, so the gate stays the only thing confirming it`() {
+        // The arithmetic is deliberate and stays in the players - it is where
+        // `episode 1` comes from - and what makes it safe is that each engine
+        // hands it to the gate with its own season before using the result.
+        listOf(EXO, MPV, EXTERNAL).forEach { path ->
+            assertTrue(
+                "$path no longer computes the season-end jump",
+                source(path).contains("+ 1) to 1")
+            )
+        }
     }
 
     private companion object {

@@ -4750,7 +4750,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // on an episode that has not aired yet must not resolve a stream
             // that does not exist.
             val target = airedNextEpisodeTarget(
-                this@NativePlayerActivity, rawTarget, resolveParentTmdbId(), parentId
+                this@NativePlayerActivity, rawTarget, resolveParentTmdbId(), parentId,
+                // The session's own season, so the gate can tell the invented
+                // season-end jump from a chain inside the season playing (see
+                // isSeasonBoundaryTarget).
+                sessionSeason = season
             )
             if (target == null) {
                 // The next episode exists but is not out: say so rather than
@@ -10053,7 +10057,8 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 parentId, parentType, season, episode
             )?.let {
                 airedNextEpisodeTarget(
-                    this@NativePlayerActivity, it, resolveParentTmdbId(), parentId
+                    this@NativePlayerActivity, it, resolveParentTmdbId(), parentId,
+                    sessionSeason = season
                 )
             }
             when {

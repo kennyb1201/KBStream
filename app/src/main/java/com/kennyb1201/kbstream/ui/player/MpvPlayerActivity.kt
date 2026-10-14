@@ -1476,21 +1476,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         infoAudio = findViewById(R.id.info_audio)
         infoSubtitle = findViewById(R.id.info_subtitle)
         infoPanel?.background = infoPanelDrawable(this)
-        // OK/BACK close the panel and the D-pad stays inside it while it is up -
-        // verbatim the main player's rule (see NativePlayerActivity), so the two
-        // readouts dismiss the same way.
-        infoPanel?.setOnKeyListener { _, keyCode, event ->
-            if (event.action != KeyEvent.ACTION_DOWN) return@setOnKeyListener false
-            when (keyCode) {
-                KeyEvent.KEYCODE_BACK,
-                KeyEvent.KEYCODE_DPAD_CENTER,
-                KeyEvent.KEYCODE_ENTER -> {
-                    hideInfoPanel()
-                    true
-                }
-                else -> true
-            }
-        }
+        // OK closes the panel from the activity's own key path (see the
+        // infoPanelVisible gate in dispatchKeyEvent), and Back through the
+        // registered Back callback (the first arm of the chain below).
+        // Deliberately NOT an OnKeyListener on the panel: it would have to name
+        // KEYCODE_BACK to let Back through - swallowing it in a view is what
+        // android's GestureBackNavigation check flags - and a listener that
+        // swallows the D-pad would swallow Back with it, leaving the press with
+        // nothing but this activity's callback to reach anyway.
         // A RecyclerView lays out NOTHING without a layout manager, and this
         // layout declares none - the main player's picker sets one in code for
         // exactly that reason (see NativePlayerActivity). Without this the
@@ -3265,7 +3258,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 context = this@MpvPlayerActivity,
                 target = nextEpisodeTarget(),
                 tmdbId = runCatchingCancellable { tmdbId() }.getOrNull(),
-                showId = parentId
+                showId = parentId,
+                sessionSeason = season
             )
             when {
                 target != null && AppPreferences.getNextEpisodePopup(this@MpvPlayerActivity) ->
@@ -4817,11 +4811,27 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // focus system owns the D-pad (BACK still reaches the activity, which
         // closes the panel), exactly as it does in the main player.
         if (settingsOpen) return super.dispatchKeyEvent(event)
-        // The INFO panel is the same kind of takeover as a side panel: its own
-        // key listener owns OK/BACK and swallows the D-pad (see the listener
-        // installed with the panel), so nothing below here may act on the press
-        // - an OK that fell through would toggle playback behind the readout.
-        if (infoPanelVisible) return super.dispatchKeyEvent(event)
+        // The INFO panel is the same kind of takeover as a side panel: while it
+        // is up nothing below here may act on a press - an OK that fell through
+        // would toggle playback behind the readout. OK/ENTER close it, and every
+        // other key goes to the view tree: Back in particular is NOT consumed
+        // here, so it reaches the activity's registered Back callback, whose
+        // first arm is the readout (see the callback's own chain). Handling it
+        // as a key is what android's GestureBackNavigation check flags, and the
+        // callback is where that press belongs.
+        if (infoPanelVisible) {
+            val confirm = event.action == KeyEvent.ACTION_DOWN &&
+                (
+                    event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER ||
+                        event.keyCode == KeyEvent.KEYCODE_ENTER ||
+                        event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+                    )
+            if (confirm) {
+                hideInfoPanel()
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
         // A visible skip prompt owns OK while the chrome is down: pressing OK
         // during an intro should skip it, not pause underneath the prompt (the
         // same rule the main player uses). With the overlay up the prompt is an
@@ -5356,8 +5366,29 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // The scheme-aware target, not `episode + 1`: on a show whose files hold
         // two segments each, adding one lands on the middle of a file the viewer
         // is already inside.
-        val target = nextEpisodeTarget() ?: return
-        launchNextEpisode(target.first, target.second)
+        val rawTarget = nextEpisodeTarget() ?: return
+        // The same air-date gate the end-of-playback panel goes through, and
+        // the same one the main player's Next button has had since the unaired
+        // episode report: an UNGATED press is how a show that is caught up
+        // launched the invented season-end episode - S19E1 for a series whose
+        // last season is S18 - straight into stream resolution, one press after
+        // the panel had (correctly) offered the recommendations instead.
+        lifecycleScope.launch {
+            val target = airedNextEpisodeTarget(
+                context = this@MpvPlayerActivity,
+                target = rawTarget,
+                tmdbId = runCatchingCancellable { tmdbId() }.getOrNull(),
+                showId = parentId,
+                sessionSeason = season
+            )
+            if (target == null) {
+                // Out of episodes: the same words the main player uses, rather
+                // than a Next button that looks broken.
+                showToast("Next episode hasn't aired yet")
+                return@launch
+            }
+            launchNextEpisode(target.first, target.second)
+        }
     }
 
     override fun onChromeOpenSourcePicker() = showPicker(PickerMode.SOURCE)

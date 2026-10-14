@@ -145,14 +145,31 @@ class MpvInfoPanelContractTest {
     }
 
     @Test
-    fun `OK and Back close the panel from inside it`() {
-        val listener = activity.substringAfter("infoPanel?.setOnKeyListener {")
+    fun `OK closes the panel from the activity's key path`() {
+        // The same press the main player answers with, by this file's own route:
+        // the panel is a takeover, so OK lands on the activity's key handling
+        // rather than on anything behind it.
+        val gate = activity.substringAfter("if (infoPanelVisible) {")
             .substringBefore("\n        }")
-        assertTrue("the panel installs a key listener", listener.isNotBlank())
-        assertTrue("Back closes it", listener.contains("KeyEvent.KEYCODE_BACK"))
-        assertTrue("so does OK", listener.contains("KeyEvent.KEYCODE_DPAD_CENTER"))
-        assertTrue("and ENTER with it", listener.contains("KeyEvent.KEYCODE_ENTER"))
-        assertTrue("by hiding the panel", listener.contains("hideInfoPanel()"))
+        assertTrue("the gate closes the readout on OK", gate.contains("KeyEvent.KEYCODE_DPAD_CENTER"))
+        assertTrue("and on ENTER", gate.contains("KeyEvent.KEYCODE_ENTER"))
+        assertTrue("by hiding the panel", gate.contains("hideInfoPanel()"))
+        assertTrue("and consuming the press", gate.contains("return true"))
+    }
+
+    @Test
+    fun `the panel does not intercept Back itself`() {
+        // Android's GestureBackNavigation check rejects Back handled as a key in
+        // a view listener, and the reason is real rather than stylistic: a
+        // listener that swallows the D-pad swallows Back with it, so the press
+        // would never reach the activity's registered callback - which is where
+        // the readout's arm lives (see the Back-order test above). This engine's
+        // INFO panel therefore installs no OnKeyListener at all, deliberately,
+        // and that is what keeps the publish-check lint gate green.
+        assertFalse(
+            "the panel must not install a key listener (it would have to name Back)",
+            activity.contains("infoPanel?.setOnKeyListener")
+        )
     }
 
     @Test
@@ -169,8 +186,15 @@ class MpvInfoPanelContractTest {
     @Test
     fun `no key reaches playback while the readout is up`() {
         val settingsGate = activity.indexOf("if (settingsOpen) return super.dispatchKeyEvent(event)")
-        val infoGate = activity.indexOf("if (infoPanelVisible) return super.dispatchKeyEvent(event)")
+        val infoGate = activity.indexOf("if (infoPanelVisible) {")
         assertTrue("the panel gates the key path", infoGate > settingsGate)
+        val gate = activity.substringAfter("if (infoPanelVisible) {")
+            .substringBefore("\n        }")
+        assertTrue(
+            "and every press that is not OK falls through to the view tree - Back " +
+                "included, which is what lets the registered callback close the readout",
+            gate.contains("return super.dispatchKeyEvent(event)")
+        )
     }
 
     @Test

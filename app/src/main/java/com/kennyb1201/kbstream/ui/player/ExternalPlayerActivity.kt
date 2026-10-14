@@ -935,7 +935,8 @@ class ExternalPlayerActivity : ComponentActivity() {
                 context = this@ExternalPlayerActivity,
                 target = nextEpisodeTarget(),
                 tmdbId = runCatchingCancellable { tmdbId() }.getOrNull(),
-                showId = parentId
+                showId = parentId,
+                sessionSeason = season
             )
             when {
                 target != null && AppPreferences.getNextEpisodePopup(this@ExternalPlayerActivity) ->

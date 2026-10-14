@@ -31,6 +31,23 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
  * episode and treating a gap as "not out yet" would dead-end chains that
  * work today.
  *
+ * THE SEASON-END JUMP is the one target the player INVENTS, and it used to be
+ * offered without checking that the season exists. The reported case
+ * (2026-10-13): finishing S18E10 of a show that has no S19 raised
+ * "Play next: Season 19 Episode 1" instead of the recommendations row. That
+ * target is `nextEpisodeTarget()`'s `(s + 1) to 1` branch, and this gate —
+ * which does know how to check a season — let it through: TMDB answers a
+ * season that does not exist with a 404, `getSeasonEpisodes` THROWS on it, and
+ * the "unknown is not unaired" rule below reads an unreadable listing as
+ * "cannot check, keep the chain". Two different situations were sharing one
+ * answer. They are separated now: an unreadable listing still keeps a
+ * MID-SEASON chain (unchanged - a transport hiccup must not lose the panel),
+ * while a target in a season AFTER the session's own, which is only ever the
+ * invented jump, has to be CONFIRMED. No id to ask with, or a listing that
+ * will not load, answers null there - the because-you-watched row. A missing
+ * "Play next" is a far better answer than an episode that does not exist, and
+ * the viewer can still reach a real season by hand.
+ *
  * THE SEASON BOUNDARY is also decided here, because the player cannot decide
  * it alone. Its own `(s + 1) episode 1` branch needs
  * `totalEpisodesInSeason`, and that count only reaches the player through the
@@ -64,13 +81,21 @@ suspend fun airedNextEpisodeTarget(
     context: Context,
     target: Pair<Int, Int>?,
     tmdbId: Int?,
-    showId: String
+    showId: String,
+    sessionSeason: Int? = null
 ): Pair<Int, Int>? {
     if (target == null) return null
 
-    // Nothing to ask TMDB about: keep the existing behavior rather than
-    // drop a chain we cannot check.
-    if (tmdbId == null || tmdbId <= 0) return target
+    // Is this the invented jump? See [isSeasonBoundaryTarget]: the caller's own
+    // season is what tells a target in an unlisted season from any other one,
+    // and it is the difference between "cannot check" and "nothing to check".
+    val boundary = isSeasonBoundaryTarget(target, sessionSeason)
+
+    // Nothing to ask TMDB about: keep the existing behavior rather than drop a
+    // chain we cannot check — except a boundary target, which is the one thing
+    // this may not assume, and an id the player could not resolve is one of the
+    // two ways the fabricated S19E1 reached the panel.
+    if (tmdbId == null || tmdbId <= 0) return unverifiableTarget(target, boundary)
 
     val (season, episode) = target
 
@@ -78,21 +103,56 @@ suspend fun airedNextEpisodeTarget(
     // throws on a missing key / network failure, and answering false there
     // would turn a transport hiccup into a missing Up next panel. The call
     // itself is cached (memory + disk) by the repository, so a season the
-    // detail page already loaded costs nothing.
-    val seasonEpisodes = seasonEpisodesOrNull(context, tmdbId, season, showId) ?: return target
+    // detail page already loaded costs nothing. [airedChainTarget] decides
+    // what that unreadable listing means for THIS target.
+    val seasonEpisodes = seasonEpisodesOrNull(context, tmdbId, season, showId)
 
     // The second lookup is owed only at a season boundary — when the episode
-    // the arithmetic asked for is not in this season's listing at all. A
-    // listed episode decides on its own, so the ordinary mid-season chain
-    // still makes exactly one request.
+    // the arithmetic asked for is not in this season's listing at all (or when
+    // there is no listing to ask). A listed episode decides on its own, so the
+    // ordinary mid-season chain still makes exactly one request.
     val nextSeasonEpisodes =
-        if (seasonEpisodes.any { it.episodeNumber == episode }) {
+        if (seasonEpisodes == null || seasonEpisodes.any { it.episodeNumber == episode }) {
             null
         } else {
             seasonEpisodesOrNull(context, tmdbId, season + 1, showId)
         }
-    return airedChainTarget(target, seasonEpisodes, nextSeasonEpisodes)
+    return airedChainTarget(target, seasonEpisodes, nextSeasonEpisodes, boundary = boundary)
 }
+
+/**
+ * True when [target] is in a season the player has not listed: a season LATER
+ * than [sessionSeason], the session's own.
+ *
+ * Forward is the only direction the player invents. `nextEpisodeTarget()`
+ * derives every mid-season target from the scheme's own arithmetic over the
+ * season that is playing, and the one it makes up out of nothing is the
+ * season-end jump, `(s + 1)` episode 1 - the target nobody has listed and the
+ * reason this gate exists. A target in an EARLIER season is not invented at
+ * all: random mode and PREVIOUS pick from listings they have already read, so
+ * an unreadable lookup for one of those is a hiccup like any other (see
+ * [airedChainTarget]).
+ *
+ * [sessionSeason] is a parameter rather than something read from the target
+ * because the target cannot say which season it came from: `(19, 1)` is the
+ * fabricated jump for a session in S18 and an ordinary random pick for a
+ * session in S1.
+ */
+internal fun isSeasonBoundaryTarget(target: Pair<Int, Int>, sessionSeason: Int?): Boolean =
+    sessionSeason != null && target.first > sessionSeason
+
+/**
+ * What the gate answers when it cannot check [target] at all — no TMDB id to
+ * ask with, or a listing that would not load.
+ *
+ * A MID-SEASON chain is kept: unknown is not unaired, and a transport hiccup
+ * must not take the panel away from a viewer who has an episode to watch. A
+ * [boundary] target is dropped: it is the one target nothing has confirmed the
+ * existence of, so "cannot check" and "does not exist" are the same answer to
+ * the only question that matters — is there an episode there to play.
+ */
+internal fun unverifiableTarget(target: Pair<Int, Int>, boundary: Boolean): Pair<Int, Int>? =
+    if (boundary) null else target
 
 /** One season's listing, or null when the lookup failed (see [airedChainTarget]). */
 private suspend fun seasonEpisodesOrNull(
@@ -134,11 +194,16 @@ internal fun airedChainTarget(
     target: Pair<Int, Int>,
     seasonEpisodes: List<ResolvedEpisode>?,
     nextSeasonEpisodes: List<ResolvedEpisode>?,
-    today: LocalDate = LocalDate.now()
+    today: LocalDate = LocalDate.now(),
+    boundary: Boolean = false
 ): Pair<Int, Int>? {
-    // A failed lookup is "unknown", not "unaired" (unchanged): keep the chain
-    // rather than turn a transport hiccup into a missing panel.
-    if (seasonEpisodes == null) return target
+    // A failed lookup is "unknown", not "unaired" for a chain the scheme
+    // produced (unchanged): keep it rather than turn a transport hiccup into a
+    // missing panel. For the invented season-end jump this IS the fabricated
+    // case — TMDB 404s a season that does not exist, so "the lookup failed" is
+    // what a missing season looks like from here — and it answers null (see
+    // [unverifiableTarget]).
+    if (seasonEpisodes == null) return unverifiableTarget(target, boundary)
     val (season, episode) = target
     val exact = seasonEpisodes.firstOrNull { it.episodeNumber == episode }
     if (exact != null) return if (!isUnaired(exact.airDate, today)) target else null

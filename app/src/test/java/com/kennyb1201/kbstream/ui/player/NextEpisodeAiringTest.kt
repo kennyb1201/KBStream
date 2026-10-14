@@ -174,6 +174,90 @@ class NextEpisodeAiringTest {
         )
     }
 
+    // ── the invented season-end jump ───────────────────────────────────────
+    //
+    // Field report 2026-10-13: a caught-up show (last aired episode of its last
+    // season) offered "Play next: Season 19 Episode 1" instead of the
+    // recommendations. The target is the player's own `(s + 1) to 1`
+    // arithmetic, and the gate let it through because a season the show does
+    // not have is a TMDB 404 - a lookup that FAILED, which the rule above
+    // deliberately reads as "cannot check, keep the chain". The two cases have
+    // to come apart: an unreadable listing keeps a chain the scheme produced,
+    // and never confirms one the player invented.
+
+    @Test
+    fun `a season the show does not have is never chained into`() {
+        // S18E10 was the last aired episode, so the player asks for (19, 1) and
+        // the gate asks TMDB about season 19. There is no such season: the
+        // request 404s (getSeasonEpisodes throws, so the listing arrives null)
+        // or the season answers empty. Both are the same answer here - the
+        // because-you-watched row, not an episode nobody can play.
+        assertNull(
+            "a listing that will not load is not evidence S19 exists",
+            airedChainTarget(19 to 1, null, null, today, boundary = true)
+        )
+        assertNull(
+            "and an empty listing is the same answer",
+            airedChainTarget(19 to 1, emptyList(), emptyList(), today, boundary = true)
+        )
+        assertNull(
+            "...as is having no TMDB id to ask with at all",
+            unverifiableTarget(19 to 1, boundary = true)
+        )
+    }
+
+    @Test
+    fun `the jump still chains when the next season really is there`() {
+        assertEquals(
+            "S19 exists and its opener has aired, so the chain is real",
+            19 to 1,
+            airedChainTarget(19 to 1, airedSeason(19, count = 1), null, today, boundary = true)
+        )
+    }
+
+    @Test
+    fun `a next season whose opener has not aired is not chained into`() {
+        assertNull(
+            "the S2E2 rule, at a season boundary",
+            airedChainTarget(
+                19 to 1,
+                listOf(episode(1, "2026-10-05", season = 19)),
+                null,
+                today,
+                boundary = true
+            )
+        )
+    }
+
+    @Test
+    fun `only a target that leaves the session's own season is a boundary`() {
+        assertTrue("(s + 1) episode 1 is the invented jump", isSeasonBoundaryTarget(19 to 1, 18))
+        assertTrue("forward is the only direction it invents", isSeasonBoundaryTarget(19 to 4, 18))
+        assertFalse("a mid-season target stays inside the season", isSeasonBoundaryTarget(18 to 2, 18))
+        assertFalse(
+            "...including the second half of a split episode, whose label is 1 again",
+            isSeasonBoundaryTarget(18 to 1, 18)
+        )
+        assertFalse("an earlier season was not invented", isSeasonBoundaryTarget(14 to 1, 18))
+        assertFalse(
+            "and with no session season to compare against, nothing is assumed",
+            isSeasonBoundaryTarget(19 to 1, null)
+        )
+    }
+
+    @Test
+    fun `a mid-season hiccup still keeps its chain`() {
+        // The rule the boundary case must not break: an unreadable listing for a
+        // target inside the season playing is a transport problem, and losing a
+        // panel that has an episode to offer is worse than chaining blind.
+        assertEquals(4 to 5, unverifiableTarget(4 to 5, boundary = false))
+        assertEquals(
+            "and the chain's own path agrees",
+            4 to 5,
+            airedChainTarget(4 to 5, null, null, today, boundary = false)
+        )
+    }
+
     @Test
     fun `the reported scenario end to end`() {
         // Watched S2E1, S2E2 is not out yet: the player must not chain.
