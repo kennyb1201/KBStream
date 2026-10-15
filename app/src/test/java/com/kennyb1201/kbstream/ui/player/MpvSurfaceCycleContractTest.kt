@@ -11,10 +11,22 @@ import org.junit.Test
  *
  * Field history, because this file has had to change sides twice:
  *
- *  - the engine rendered on NO video output (audio over black) because the
- *    surface was attached before it had a native window — `initialize()`
- *    attached from `isValid`, which is true first. The fix for that is
- *    `surfaceCreated()` as the one attach point, and it stands;
+ *  - an early build attached from `initialize()` on `isValid`, and the engine
+ *    rendered on NO video output (audio over black). Pulling that attach out
+ *    left the callback as the one attach point, and that stands — but it also
+ *    removed the only path that could attach a surface which is ALREADY up when
+ *    `initialize()` runs, and a holder does not replay a create that already
+ *    happened. mpv was then handed nothing at all (`wid` stays 0) while the
+ *    file still opened, which is the field log's `Both surface and
+ *    native_window are NULL` on the `vo=mediacodec_embed` path — frames
+ *    decoding (`Got First Frame Ready`) over a black screen. The attach is the
+ *    callback's plus that one case, and a load now waits for it
+ *    (`surfaceAttached`). The line that removal rested on — "Could not find
+ *    corresponding native window for surface" — turned out not to be mpv's at
+ *    all: it is absent from `mpvlib-1.1.2.aar`'s libmpv and its FFmpeg, and it
+ *    shows up in the logcat of Fire OS apps that use neither, so it is the
+ *    platform's and says nothing about this attach. When mpv itself cannot
+ *    resolve a window it says "Failed to create ANativeWindow";
  *  - the next run also stopped touching `vo` on the cycle, on the theory that
  *    the runtime re-initialization was the black screen. That theory was wrong:
  *    with the output never nulled and never re-opened, mpv never re-initializes
@@ -131,27 +143,89 @@ class MpvSurfaceCycleContractTest {
     }
 
     @Test
-    fun `the surface is attached only from the callback, never from initialize`() {
-        // A Surface that reports isValid can still have NO native window behind
-        // it, so attaching one from initialize() hands mpv a dead window: it
-        // reconfigures to `video=audio-only`, the decoder renders anyway and mpv
-        // cannot acquire the frames. initialize() runs from the Activity's
-        // onCreate, before any surface exists, so there is nothing for it to
-        // attach to in the first place.
+    fun `the surface is attached from the callback, and at init only for a surface already up`() {
+        // The create the holder will not replay. On a box whose surface is up
+        // before initialize() runs, SurfaceHolder delivers no surfaceCreated for
+        // it, so the callback alone leaves mpv with no `wid` at all while the
+        // file still opens - the black screen with a running decoder this tree's
+        // field log shows. NuvioTV's engine calls the same helper in the same
+        // place.
         val initialize = initializeBody()
+        assertTrue(
+            "initialize() has to cover the surface the holder already has: $initialize",
+            initialize.contains("ensureSurfaceAttachedIfAlreadyAvailable()")
+        )
         assertFalse(
-            "initialize() must not attach a surface - `isValid` is true before the " +
-                "native window exists, which is the dead-window bug: $initialize",
+            "and only through that helper: a bare attach or isValid test here would be a " +
+                "second copy of the check the helper owns: $initialize",
             initialize.contains("attachSurface()") || initialize.contains("isValid")
         )
+        // The helper is the callback's own path, behind the live-surface check
+        // that makes an attach from here safe - it attaches nothing itself.
+        val ensure = ensureHelper()
         assertTrue(
-            "surfaceCreated is the one point where the surface is really backed, so it " +
-                "is where the attach happens",
+            "the helper has to establish that the surface is really there first: $ensure",
+            ensure.contains("surface?.isValid != true") || ensure.contains("surface?.isValid == true")
+        )
+        assertTrue(
+            "and it must re-use the callback's attach path rather than attach on its own",
+            ensure.contains("surfaceCreated(holder") || ensure.contains("surfaceCreated(liveHolder")
+        )
+        assertFalse(
+            "with no attach of its own to drift from the callback's: $ensure",
+            ensure.contains("MpvBackend.attachSurface")
+        )
+        assertTrue(
+            "surfaceCreated is still where the attach happens",
             surfaceCreated().contains("attachSurface()")
         )
         assertTrue(
             "and a load that was waiting for the surface starts from there too",
             surfaceCreated().contains("startPendingLoad()")
+        )
+    }
+
+    @Test
+    fun `a load waits for the attach, never for the holder's own isValid`() {
+        // `isValid` describes the Surface; it says nothing about mpv having been
+        // handed it. Gating the load on it is what let the file open against an
+        // mpv whose `wid` was still 0 - the black screen with a running decoder
+        // (and `Both surface and native_window are NULL` on the mediacodec_embed
+        // path) this rule exists to stop coming back.
+        val load = code.substringAfter("fun load(request: LoadRequest) {")
+            .substringBefore("fun release()")
+        assertTrue(
+            "the load has to start once mpv holds the surface: $load",
+            load.contains("if (surfaceAttached) startPendingLoad()")
+        )
+        assertFalse(
+            "and never on the holder's Surface, which can report valid while mpv has none: $load",
+            load.contains("isValid")
+        )
+        // ...and the flag has to be moved by the two calls that really move it.
+        val attach = code.substringAfter("private fun attachSurface()")
+            .substringBefore("private fun startPendingLoad()")
+        assertTrue(
+            "the attach is what records mpv as holding the surface: $attach",
+            attach.contains("MpvBackend.attachSurface(surface)") &&
+                attach.contains("surfaceAttached = true")
+        )
+        assertTrue(
+            "inside the same guarded block as the call it describes, so a throwing attach " +
+                "cannot claim it",
+            attach.indexOf("MpvBackend.attachSurface(surface)") <
+                attach.indexOf("surfaceAttached = true")
+        )
+        val destroyed = surfaceDestroyed()
+        assertTrue(
+            "and the teardown takes it back, or a load arriving after it would run against " +
+                "an mpv with no surface: $destroyed",
+            destroyed.contains("surfaceAttached = false")
+        )
+        assertTrue(
+            "after the detach it describes",
+            destroyed.indexOf("MpvBackend.detachSurface()") <
+                destroyed.indexOf("surfaceAttached = false")
         )
     }
 
@@ -341,6 +415,22 @@ class MpvSurfaceCycleContractTest {
                 "force by then (idle=$idleOnce callback=$callback)",
             idleOnce < callback
         )
+        // `initialized` goes up BEFORE the registration, not after it: the
+        // holder can deliver a create from that very call, and surfaceCreated()
+        // returns early while the flag is down. A dropped create is a surface
+        // mpv never gets.
+        val armed = initialize.indexOf("initialized = true")
+        assertTrue("initialize() has to mark itself up", armed >= 0)
+        assertTrue(
+            "before the holder callback goes on, or a create delivered by the " +
+                "registration itself is thrown away (armed=$armed callback=$callback)",
+            armed < callback
+        )
+        assertTrue(
+            "and the holder's already-live surface is covered right after it - the create " +
+                "no callback will deliver",
+            callback < initialize.indexOf("ensureSurfaceAttachedIfAlreadyAvailable()")
+        )
         assertEquals(
             "and the pair lives in initialize() alone: an option set before init() is not " +
                 "the reference player's order",
@@ -419,6 +509,11 @@ class MpvSurfaceCycleContractTest {
     private fun surfaceDestroyed(): String =
         code.substringAfter("override fun surfaceDestroyed(holder: SurfaceHolder)")
             .substringBefore("private fun attachSurface()")
+
+    /** The already-live-surface helper's body only. */
+    private fun ensureHelper(): String =
+        code.substringAfter("private fun ensureSurfaceAttachedIfAlreadyAvailable()")
+            .substringBefore("\n    }")
 
     private fun read(relative: String): String {
         val file = File(findSourceRoot(), relative)

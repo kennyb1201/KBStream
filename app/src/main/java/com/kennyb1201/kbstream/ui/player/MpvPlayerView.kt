@@ -28,24 +28,30 @@ import kotlin.math.pow
  *    quit before the first loadfile arrives;
  *  - property observers are registered before init() too, matching the
  *    reference mpv-android player;
- *  - the video surface is attached from the SurfaceHolder callback, and the
- *    video output is cycled with it in the reference player's order     *    (`BaseMPVView` in mpv-android, the view Nuvio's working engine is built
- *    on): attach the surface and `force-window=yes`, then either load the
- *    pending file (a FIRST creation, which is what [surfaceCreatedOnce] says —
- *    not whether a load is waiting, because the surface arrives before
- *    [load] does here — and the output is already configured as the option,
- *    so it is left alone) or `vo=<resolved output>` (recreation) —
-     *    and on teardown `vo=null`, `force-window=no`, detachSurface, in that
-     *    order. `vo=null` tears the output down while its surface still exists,
-     *    and the property set on the next attach is what re-initializes the output
-     *    against the new one; with neither, mpv keeps decoding while every frame
-     *    goes to a surface that is gone — audio over a black screen, the frame
-     *    count still climbing (see [surfaceCreated] and [surfaceDestroyed]). The
-     *    `vo` OPTION in [applyOptions] is still what chooses the output, once,
-     *    before init();
- *  - loadfile() is deferred until the surface is up. Loading first can leave
- *    mpv with a video track it never gets an output for, which on this stack
- *    means audio playing over a black screen.
+ *  - the video surface is attached from the SurfaceHolder callback — and, when
+ *    the holder already has a live surface by the time [initialize] registers
+ *    it, from [ensureSurfaceAttachedIfAlreadyAvailable], because a holder does
+ *    not replay a create that already happened (NuvioTV's engine covers the
+ *    same case the same way) — and the video output is cycled with it in the
+ *    reference player's order (`BaseMPVView` in mpv-android, the view Nuvio's
+ *    working engine is built on): attach the surface and `force-window=yes`,
+ *    then either load the pending file (a FIRST creation, which is what
+ *    [surfaceCreatedOnce] says — not whether a load is waiting, because the
+ *    surface arrives before [load] does here — and the output is already
+ *    configured as the option, so it is left alone) or `vo=<resolved output>`
+ *    (recreation) — and on teardown `vo=null`, `force-window=no`,
+ *    detachSurface, in that order. `vo=null` tears the output down while its
+ *    surface still exists, and the property set on the next attach is what
+ *    re-initializes the output against the new one; with neither, mpv keeps
+ *    decoding while every frame goes to a surface that is gone — audio over a
+ *    black screen, the frame count still climbing (see [surfaceCreated] and
+ *    [surfaceDestroyed]). The `vo` OPTION in [applyOptions] is still what
+ *    chooses the output, once, before init();
+ *  - loadfile() is deferred until the surface is ATTACHED ([surfaceAttached]),
+ *    not merely until the holder has one: a load that runs while mpv has no
+ *    `wid` leaves mpv with a video track it never gets an output for, which on
+ *    this stack is audio over a black screen with the decoder still running
+ *    (`Both surface and native_window are NULL` — see [load]).
  *
  * mpv's callbacks arrive on its own event thread. Everything this class
  * forwards is posted to the main thread, because every listener updates views.
@@ -148,6 +154,21 @@ class MpvPlayerView @JvmOverloads constructor(
      * flag false.
      */
     private var surfaceCreatedOnce = false
+
+    /**
+     * True while mpv holds this view's surface: [attachSurface] has run and no
+     * [surfaceDestroyed] (or [release]) has taken it back.
+     *
+     * This, not `holder.surface.isValid`, is what [load] waits on. `isValid`
+     * describes the Surface; it says nothing about whether mpv was ever handed
+     * it, and the two come apart exactly when the attach is skipped — which is
+     * what a holder that does not replay `surfaceCreated` produces. A load that
+     * runs then opens the file against an mpv with `wid` still 0, and on the
+     * `vo=mediacodec_embed` path mpv passes FFmpeg a null surface (`Both
+     * surface and native_window are NULL`): frames decode (`Got First Frame
+     * Ready`), nothing reaches the screen.
+     */
+    private var surfaceAttached = false
 
     /**
      * Resume position still to be applied after the file opens.
@@ -319,38 +340,49 @@ class MpvPlayerView @JvmOverloads constructor(
         // connection) is only ever delivered here - see [logMessage].
         MpvBackend.addLogObserver(this)
         observeProperties()
+        // `initialized` FIRST, and the holder callback LAST.
+        //
+        // The order is load-bearing. `holder.addCallback` can deliver a
+        // `surfaceCreated` synchronously when the holder already has a surface,
+        // and [surfaceCreated] opens with an `initialized` guard (it has to:
+        // MpvBackend would throw against an instance that is not up). Setting
+        // the flag after the registration drops exactly that callback, and a
+        // dropped create is a surface mpv is never handed.
+        initialized = true
         // LAST, deliberately: a surface can arrive the moment this is
         // registered, and [surfaceCreated] attaches it from there (and, on a
         // recreation, re-opens the video output) - everything above has to be
         // in place by then.
         holder.addCallback(this)
-        initialized = true
+        // ...and the case the callback cannot cover: a surface that is ALREADY
+        // up when this runs, for which the holder delivers no create at all
+        // (see the helper). NuvioTV's engine calls the same thing in the same
+        // place.
+        ensureSurfaceAttachedIfAlreadyAvailable()
 
         // Which MPV library this build linked, once per session. There is one
         // library now (see the MPV library note in app/build.gradle.kts), named
         // here so a field log still says which binary produced it.
         Log.i(TAG, "MPV engine up · library=$MPV_LIBRARY")
-
-        // No early attach here. `holder.surface` can be non-null AND report
-        // isValid = true while the native window behind it does not exist yet,
-        // which is the log's "Could not find corresponding native window for
-        // surface": attaching that Surface leaves mpv with no window at all.
-        // It reconfigures to `video=audio-only`, the decoder still renders
-        // ("Got First Frame Render") and every frame is then unacquirable
-        // ("Did not find frame"). The callback is the only point at which the
-        // surface is known to be backed, so [surfaceCreated] is the only place
-        // that attaches.
         return true
     }
 
     /**
      * Plays [request]. Safe to call before the surface exists — the load is
-     * held back until [surfaceCreated] (see the class comment).
+     * held back until the surface is ATTACHED ([surfaceAttached]), which happens
+     * in [surfaceCreated] or, for a surface the holder already had, at
+     * [initialize] (see the class comment).
      */
     fun load(request: LoadRequest) {
         if (!initialized || released) return
         pendingLoad = request
-        if (holder.surface?.isValid == true) startPendingLoad()
+        // The ATTACH, not the holder's own view of the Surface. `isValid`
+        // describes the Surface and says nothing about mpv having been handed
+        // it (see [surfaceAttached]); waiting on it here is what let the file
+        // open against an mpv with `wid` still 0. This is the one condition
+        // that makes "mpv has the surface whenever a file opens" hold on every
+        // path.
+        if (surfaceAttached) startPendingLoad()
     }
 
     fun release() {
@@ -372,6 +404,9 @@ class MpvPlayerView @JvmOverloads constructor(
                 MpvBackend.setPropertyString("vo", "null")
                 MpvBackend.detachSurface()
             }
+            // mpv holds no surface from here on, so a load cannot be started
+            // against this instance without one.
+            surfaceAttached = false
             runCatching { MpvBackend.destroy() }
         }
         initialized = false
@@ -1352,6 +1387,43 @@ class MpvPlayerView @JvmOverloads constructor(
 
     // --- Surface lifecycle --------------------------------------------------
 
+    /**
+     * Attaches the surface the holder ALREADY has — the create the callback
+     * cannot cover.
+     *
+     * This view is created with the Activity, so on a box whose surface is up
+     * before [initialize] runs, `SurfaceHolder` delivers no `surfaceCreated`
+     * for it: a holder does not replay a create that already happened. Without
+     * this, mpv is never handed that surface at all — `wid` stays 0 — and the
+     * file opens against it: on the `vo=mediacodec_embed` path FFmpeg is given
+     * a null surface (`Both surface and native_window are NULL`), the decoder
+     * still runs (`Got First Frame Ready`) and every frame goes nowhere.
+     * NuvioTV's engine covers the same case with the same call in the same
+     * place (`NuvioMpvSurfaceView.ensureSurfaceAttachedIfAlreadyAvailable`),
+     * behind the same `isValid` test.
+     *
+     * The `isValid` test is the only evidence available here that the surface
+     * is backed, and it is NOT what made an attach from here look wrong before:
+     * the line that reasoning rested on ("Could not find corresponding native
+     * window for surface") is not mpv's. It is absent from the shipped
+     * `mpvlib-1.1.2.aar`'s libmpv and its FFmpeg, and it appears in the logcat
+     * of Fire OS apps that use neither — it is the platform's, and it says
+     * nothing about this attach. What mpv itself logs when it cannot resolve a
+     * window is "Failed to create ANativeWindow", from `vo_android_init`.
+     *
+     * Re-uses the callback's own attach path rather than attaching here, so
+     * there is exactly one sequence: attach, `force-window=yes`, then the
+     * first-creation branch. This IS the first creation, so that branch is the
+     * right one — and any file already waiting goes out with it.
+     */
+    private fun ensureSurfaceAttachedIfAlreadyAvailable() {
+        if (!initialized || released || surfaceAttached) return
+        val liveHolder = holder
+        if (liveHolder.surface?.isValid != true) return
+        runCatching { surfaceCreated(liveHolder) }
+            .onFailure { Log.w(TAG, "could not attach the surface the holder already had", it) }
+    }
+
     override fun surfaceCreated(holder: SurfaceHolder) {
         if (!initialized || released) return
         attachSurface()
@@ -1410,12 +1482,20 @@ class MpvPlayerView @JvmOverloads constructor(
             MpvBackend.setPropertyString("force-window", "no")
             MpvBackend.detachSurface()
         }
+        // mpv holds no surface from here on, so nothing may load until the next
+        // create attaches one (see [surfaceAttached]).
+        surfaceAttached = false
     }
 
     private fun attachSurface() {
         val surface = holder.surface ?: return
         runCatching {
             MpvBackend.attachSurface(surface)
+            // mpv holds this surface from the call above (it is `wid` on the
+            // native side), and that is what [load] gates on. Marked in the
+            // same guarded block as the call it describes: an attach that threw
+            // must not leave mpv recorded as holding a surface it never got.
+            surfaceAttached = true
             // The `vo` reset deliberately does NOT live here: this helper only
             // attaches the surface and asks for forced rendering, so the order
             // stays legible as the reference player's — attach and
