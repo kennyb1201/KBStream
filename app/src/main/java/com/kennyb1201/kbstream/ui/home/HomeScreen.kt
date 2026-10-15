@@ -2387,6 +2387,27 @@ private fun BuiltinContinueWatchingRail(
      * by hand (see the landing below).
      */
     landOnHeadSignal: Int = 0,
+    /**
+     * Whether this composition of Home is a FRESH entry: cold start, or any
+     * entry with no Detail-return focus-restore target (see
+     * [com.kennyb1201.kbstream.ui.home.HomeViewModel.lastFocusedRailItemKey],
+     * which is non-null exactly when there is one). Only then may the landing
+     * below complete itself on this rail's head (see
+     * [continueWatchingLandsOnFreshEntry]); a return from Detail has a restore
+     * target and the ViewModel's own restore owns focus there.
+     */
+    isFreshEntry: Boolean = false,
+    /**
+     * Whether D-pad focus is still on a Browse chip row - where home entry
+     * leaves it, since that row composes first.
+     *
+     * This is the fresh-entry landing's licence: focus on the chip row means
+     * the viewer has pressed nothing, so the chip is the framework's default
+     * rather than a choice (see [continueWatchingLandsOnFreshEntry]). Focus
+     * anywhere else is the viewer having navigated, and this rail leaves it
+     * where it is.
+     */
+    chipRowHasFocus: Boolean = false,
     // Non-null only when this rail is the one Home draws first (see
     // [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
@@ -2426,11 +2447,26 @@ private fun BuiltinContinueWatchingRail(
     // the rail themselves.
     var answeredLandingSignal by remember { mutableStateOf(landOnHeadSignal) }
 
+    // One shot for the life of this composition. The fresh-entry landing below
+    // is Home completing the landing it owed the viewer on entry, not a thing
+    // to redo on every load that follows. Deliberately NOT reset by
+    // [landOnHeadSignal]: a card deleted mid-session is that signal's own
+    // landing, and it has to be able to run even after this one has fired.
+    var initialLandingDone by remember { mutableStateOf(false) }
+
     // Continue Watching lands on its head (the reported bug: the rail finished
     // loading with focus on the card that WAS first, and the new first card off
     // to the left). Also keyed on [railHasFocus] so a load that arrives while
     // the viewer is elsewhere is corrected the moment they enter the rail,
     // instead of leaving them on a rail anchored away from its own first card.
+    //
+    // The fresh-entry branch reads [chipRowHasFocus] from the body rather than
+    // the key list: on a fresh entry the chip row composes first and takes
+    // focus, and this effect already re-runs on the update that matters - the
+    // head appearing (headId). Adding the flag as a key would also land on data
+    // that arrived before anything had focus, which the report is not about and
+    // which has nothing stable to hand focus to (see
+    // [continueWatchingLandsOnFreshEntry]'s edge cases).
     LaunchedEffect(headId, railHasFocus, landOnHeadSignal) {
         // No cards left at all: there is nothing in this row to land on, and
         // asking a detached requester only burns the budget. The framework's
@@ -2443,6 +2479,19 @@ private fun BuiltinContinueWatchingRail(
             // has been deleted, so this landing is their new place rather than
             // a load moving focus out from under them.
             viewerWalkedRail = false
+        } else if (
+            continueWatchingLandsOnFreshEntry(
+                isFreshEntry = isFreshEntry,
+                initialLandingDone = initialLandingDone,
+                chipRowHasFocus = chipRowHasFocus,
+                viewerWalkedRail = viewerWalkedRail
+            )
+        ) {
+            // Fresh entry, data has arrived, and focus is still on the chip row
+            // the framework put it on: the chip is a default, not a choice, so
+            // moving is finishing the landing rather than stealing focus from
+            // the viewer. One shot - every later load takes the gate below.
+            initialLandingDone = true
         } else if (!continueWatchingLandsOnHead(railHasFocus, viewerWalkedRail)) {
             return@LaunchedEffect
         }
@@ -3267,6 +3316,19 @@ fun HomeScreen(
         mutableStateOf(0)
     }
 
+    // Which Browse chip row currently holds D-pad focus, by its index in the
+    // merged arrangement, or null for none. Home entry leaves focus on the first
+    // chip of the first browse row (that row composes first, out of local data),
+    // and that is the one place the Continue Watching rail may finish its own
+    // landing from: focus still there means the viewer pressed nothing, so the
+    // chip is the framework's default rather than their choice (see
+    // continueWatchingLandsOnFreshEntry). Held by ROW rather than as a plain
+    // boolean so the row that is losing focus cannot clear the one that is just
+    // taking it, whichever order their callbacks arrive in.
+    var focusedBrowseChipRowIndex by remember {
+        mutableStateOf<Int?>(null)
+    }
+
     var lastFocusedItemKey by remember {
         mutableStateOf<String?>(null)
     }
@@ -3859,6 +3921,11 @@ fun HomeScreen(
                         selectContinueWatchingHero(hero, item)
                     },
                     landOnHeadSignal = continueWatchingLandOnHeadSignal,
+                    // A return from Detail has a restore target (the ViewModel
+                    // seed) and its own restore; a null one is a fresh entry,
+                    // which is the only case the landing below completes.
+                    isFreshEntry = viewModel.lastFocusedRailItemKey == null,
+                    chipRowHasFocus = focusedBrowseChipRowIndex != null,
                     onUpPressed = upHook
                 )
             } else if (
@@ -4206,6 +4273,18 @@ fun HomeScreen(
                                             },
                                             onFocusedCardRequester = { requester ->
                                                 focusedCardRequester = requester
+                                            },
+                                            // Reported by ROW index, so the row
+                                            // that loses focus cannot clear one
+                                            // that has just taken it, whichever
+                                            // callback arrives first.
+                                            onRowFocusChanged = { hasFocus ->
+                                                focusedBrowseChipRowIndex = when {
+                                                    hasFocus -> entryIndex
+                                                    focusedBrowseChipRowIndex == entryIndex ->
+                                                        null
+                                                    else -> focusedBrowseChipRowIndex
+                                                }
                                             },
                                             onUpPressed = topRailUpHook(entryIndex)
                                         )

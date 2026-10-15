@@ -1306,6 +1306,36 @@ internal fun continueWatchingLandsOnHead(
 ): Boolean = railHasFocus && !viewerWalkedRail
 
 /**
+ * Whether Continue Watching may complete Home's INITIAL landing on its head
+ * card.
+ *
+ * Reported (field, 2026-10-15): on fresh entry the rail's data arrives second -
+ * the genre browse chip row composes first out of fast local data - and the
+ * landing above never ran, because it is gated on [railHasFocus] and focus was
+ * on the chip. The gate's intent is right ("a load that lands while the viewer
+ * is in the top bar or on another rail must leave focus alone"); it simply
+ * cannot tell the chip the viewer never left from one they chose. The viewer was
+ * left scrolling up to reach the rail they had come for.
+ *
+ * [chipRowHasFocus] supplies the missing distinction: focus still on the chip
+ * row means the viewer has pressed nothing, so the chip is where the framework
+ * put focus rather than a choice, and moving on completes the landing the rail
+ * was always meant to make. [isFreshEntry] keeps it out of the Detail return,
+ * where the ViewModel seeds a focus-restore target and the existing restore owns
+ * the landing (see HomeViewModel.lastFocusedRailItemKey); [initialLandingDone]
+ * makes it a one-shot per composition, because the head card being deleted
+ * mid-session is the remove signal's own landing and must still be able to run;
+ * and [viewerWalkedRail] keeps a rail the viewer entered and left theirs.
+ */
+internal fun continueWatchingLandsOnFreshEntry(
+    isFreshEntry: Boolean,
+    initialLandingDone: Boolean,
+    chipRowHasFocus: Boolean,
+    viewerWalkedRail: Boolean
+): Boolean =
+    isFreshEntry && !initialLandingDone && chipRowHasFocus && !viewerWalkedRail
+
+/**
  * One row in the Home "Upcoming" rail: a show's next unaired episode,
  * derived for free from the Continue Watching enrichment (the TMDB detail
  * it already fetches carries next_episode_to_air). No extra network calls.
