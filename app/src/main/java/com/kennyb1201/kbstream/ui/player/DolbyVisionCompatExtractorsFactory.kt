@@ -1228,6 +1228,20 @@ private class VideoCompatTrackOutput(
             // null, so the steady state pays nothing for this.
             val accounting =
                 if (firstSample) DolbyVisionCompat.SeiStripAccounting() else null
+            // Fix A-D instrumentation, ahead of the strip: three read-only lines
+            // so the field run attributes each fix on its own - the audit's own
+            // instruction is per-fix logging, never one bundle. Pre-strip on
+            // purpose: the stripper compacts this buffer in place, and the
+            // question is what the container handed us.
+            if (firstSample) {
+                logFirstSampleAudits(
+                    length = sampleEnd,
+                    annexB = framing == NalFraming.ANNEX_B,
+                    nalLengthFieldLength = nalLengthFieldLength,
+                    rewritesInSampleParamSets = false,
+                    dvSuffixSeiRuleActive = true
+                )
+            }
             // Pure removal — stripAnnexB/stripLengthDelimited never rewrite
             // parameter sets. The RPU/EL (stripDv) and the HDR10+ SEI
             // (stripHdr10Plus) are BOTH dropped, which is the combination the
@@ -1252,13 +1266,19 @@ private class VideoCompatTrackOutput(
             // message, and drops the enhancement layer by `layerId > 0` the way
             // Nuvio's HevcDvRpuStripper does. The log's "(via kotlin)" marker
             // below records which ran.
+            // Both callers of this mode reached it from a container that
+            // DECLARED Dolby Vision, which is what arms the suffix-SEI (40)
+            // audit in the stripper (Fix A) - so this flag is passed as true on
+            // both calls below. The in-band path never passes it, so its NAL 40
+            // handling is unchanged.
             val stripped = when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.stripAnnexB(
                         pendingBuf, sampleEnd, stripDv = true, // drop RPU/EL, like the reference
                         stripHdr10Plus = true,
                         kotlinOnly = true,
-                        accounting = accounting
+                        accounting = accounting,
+                        declaredDv = true
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
@@ -1266,7 +1286,8 @@ private class VideoCompatTrackOutput(
                         stripDv = true, // drop RPU/EL, like the reference
                         stripHdr10Plus = true,
                         kotlinOnly = true,
-                        accounting = accounting
+                        accounting = accounting,
+                        declaredDv = true
                     )
             }
             if (firstSample) {
@@ -1305,6 +1326,22 @@ private class VideoCompatTrackOutput(
         // decoder would have seen untouched.
         val inventory =
             if (!stripReported) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
+        if (!stripReported) {
+            // The same three audit lines on the mutating path, which is the one
+            // that DOES rewrite the in-sample parameter sets: the playing in-band
+            // file and a stalled declared-DV one then compare line for line,
+            // which is what makes H12-H15 answerable from a field log. The
+            // suffix-SEI rule is NOT armed on this call: this transform is the
+            // in-band path too, and the audit's rule is explicitly not to touch
+            // NAL 40 handling where it already plays.
+            logFirstSampleAudits(
+                length = sampleEnd,
+                annexB = framing == NalFraming.ANNEX_B,
+                nalLengthFieldLength = nalLengthFieldLength,
+                rewritesInSampleParamSets = true,
+                dvSuffixSeiRuleActive = false
+            )
+        }
         // Every rewrite this file performs — the plain strip to HDR10 AND the
         // Profile 8.1 conversion — outputs a single layer of static metadata,
         // so HDR10+ (ST 2094-40) SEI NALs are dropped unconditionally: keeping
@@ -1373,6 +1410,60 @@ private class VideoCompatTrackOutput(
 
         if (carrySize > 0) System.arraycopy(pendingBuf, sampleEnd, pendingBuf, 0, carrySize)
         pendingLen = carrySize
+    }
+
+    /**
+     * One line per audit fix for the first processed sample, read-only: the NAL
+     * boundaries (Fix C), the SEI payload types this file actually carries (Fix
+     * A/B), and the parameter sets against what the HDR10 rewrite would make of
+     * them (Fix D).
+     *
+     * [rewritesInSampleParamSets] is whether the calling mode writes those
+     * rewritten bytes into the stream (the mutating strip does; the relabel modes
+     * deliberately do not - their codec config carries the rewrite), so a
+     * difference between a stalled file's line and a playing file's line is
+     * attributed to the mode instead of misread as a failed transform.
+     *
+     * [dvSuffixSeiRuleActive] says which side of the declared-DV suffix-SEI rule
+     * this sample was processed by, so the two files' lines say whether NAL 40
+     * was a candidate for removal at all.
+     *
+     * Diagnostic only, and it must never be able to break playback: a helper that
+     * throws is logged and swallowed.
+     */
+    private fun logFirstSampleAudits(
+        length: Int,
+        annexB: Boolean,
+        nalLengthFieldLength: Int,
+        rewritesInSampleParamSets: Boolean,
+        dvSuffixSeiRuleActive: Boolean
+    ) {
+        runCatching {
+            Log.i(
+                "PLAYER_DV",
+                "NALS-bounds (Fix C): " +
+                    DolbyVisionCompat.auditNalBounds(
+                        pendingBuf, length, annexB, nalLengthFieldLength
+                    )
+            )
+            Log.i(
+                "PLAYER_DV",
+                "SEI-INVENTORY (Fix A/B dvSuffixSeiRule=$dvSuffixSeiRuleActive): " +
+                    DolbyVisionCompat.seiPayloadInventory(
+                        pendingBuf, length, annexB, nalLengthFieldLength
+                    )
+            )
+            Log.i(
+                "PLAYER_DV",
+                "PARAM-AUDIT (Fix D applied=$rewritesInSampleParamSets): " +
+                    DolbyVisionCompat.auditParameterSets(
+                        pendingBuf, length, annexB, nalLengthFieldLength,
+                        rewriteApplied = rewritesInSampleParamSets
+                    )
+            )
+        }.onFailure {
+            Log.w("PLAYER_DV", "first-sample audit failed: ${it.message}")
+        }
     }
 
     /** Rewrites codec-private VPS/SPS to single-layer HDR10, tracking whether

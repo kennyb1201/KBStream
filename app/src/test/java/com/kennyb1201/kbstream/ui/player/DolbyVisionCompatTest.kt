@@ -1016,7 +1016,9 @@ class DolbyVisionCompatTest {
         // NAL bytes excluding the start code, the size describeNals prints.
         assertEquals(sei.size - 4, entry.originalSize)
         assertEquals(DolbyVisionCompat.SeiStripAccounting.Action.DROPPED, entry.action)
-        assertEquals("39:${sei.size - 4}->dropped", accounting.summary())
+        // The payload types ride along now (the declared-DV audit's field
+        // comparison, Fix B), so a wholesale drop still says WHAT it dropped.
+        assertEquals("39:${sei.size - 4}->dropped[pt=4]", accounting.summary())
     }
 
     @Test
@@ -1081,7 +1083,11 @@ class DolbyVisionCompatTest {
         // The recorded new size is the NAL's real new size (its framing
         // included), so the log can be read against what the decoder is handed.
         assertEquals(kept.size, entry.newSize)
-        assertEquals("39:${sei.size - 4}->shrunk=${kept.size}", accounting.summary())
+        assertEquals(
+            "the shrunk NAL names both messages it carried, and the size it was left at",
+            "39:${sei.size - 4}->shrunk=${kept.size}[pt=4,5]",
+            accounting.summary()
+        )
     }
 
     @Test
@@ -1115,7 +1121,7 @@ class DolbyVisionCompatTest {
             assertArrayEquals("$name: the sample must be bit-exact", au, buf)
             assertEquals(
                 "$name: the NAL is recorded as kept, at its own size, flagged as a legacy drop",
-                "39:${sei.size - 4}->kept,legacyDrop",
+                "39:${sei.size - 4}->kept,legacyDrop[pt=4]",
                 accounting.summary()
             )
             assertTrue(
@@ -1171,9 +1177,17 @@ class DolbyVisionCompatTest {
                 entry.legacyDrop
             )
             assertEquals(
-                "$name: the summary renders the flag only when it is set",
-                "39:${sei.size - 4}->kept" + if (flagged) ",legacyDrop" else "",
+                "$name: the summary renders the flag only when it is set, then the types",
+                "39:${sei.size - 4}->kept" +
+                    (if (flagged) ",legacyDrop" else "") +
+                    "[pt=${entry.payloadTypes.joinToString(",")}]",
                 accounting.summary()
+            )
+            assertEquals(
+                "$name: registered ITU-T T35 is type 4, unregistered user data is type 5 - " +
+                    "the types the declared-DV audit's field comparison reads",
+                if (flagged) listOf(4) else listOf(5),
+                entry.payloadTypes
             )
         }
     }
@@ -1200,7 +1214,7 @@ class DolbyVisionCompatTest {
             entry.action
         )
         assertFalse("a drop is not flagged", entry.legacyDrop)
-        assertEquals("39:${sei.size - 4}->dropped", accounting.summary())
+        assertEquals("39:${sei.size - 4}->dropped[pt=4]", accounting.summary())
     }
 
     @Test
@@ -1441,7 +1455,7 @@ class DolbyVisionCompatTest {
         // NAL bytes excluding the 4-byte length field.
         assertEquals(sei.size - 4, entry.originalSize)
         assertEquals(DolbyVisionCompat.SeiStripAccounting.Action.DROPPED, entry.action)
-        assertEquals("39:${sei.size - 4}->dropped", accounting.summary())
+        assertEquals("39:${sei.size - 4}->dropped[pt=4]", accounting.summary())
     }
 
     @Test

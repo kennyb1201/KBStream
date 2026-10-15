@@ -101,6 +101,68 @@ class DolbyVisionRelabelNalsStripContractTest {
     }
 
     @Test
+    fun `the declared-DV suffix SEI rule is armed at the relabel modes' strip calls`() {
+        assertEquals(
+            "one per framing, and only where the container declared Dolby Vision",
+            2,
+            count(source, "declaredDv = true")
+        )
+        assertFalse(
+            "the parameter has to default to off: the in-band path shares this stripper, " +
+                "and the audit's rule is explicitly not to touch its NAL 40 handling",
+            source.contains("declaredDv: Boolean = true")
+        )
+    }
+
+    @Test
+    fun `each first-sample audit line is emitted with its fix named`() {
+        assertEquals(
+            "two call sites (the relabel modes' strip, the in-band transform) plus the " +
+                "definition",
+            3,
+            count(source, "logFirstSampleAudits(")
+        )
+        assertEquals(
+            "the mode that rewrites the in-sample parameter sets is labelled as such",
+            1,
+            count(source, "rewritesInSampleParamSets = true")
+        )
+        assertEquals(1, count(source, "rewritesInSampleParamSets = false"))
+        assertEquals(
+            "and exactly one of the two paths arms the suffix-SEI rule",
+            1,
+            count(source, "dvSuffixSeiRuleActive = true")
+        )
+        assertEquals(1, count(source, "dvSuffixSeiRuleActive = false"))
+        listOf(
+            "NALS-bounds (Fix C)",
+            "SEI-INVENTORY (Fix A/B",
+            "PARAM-AUDIT (Fix D"
+        ).forEach { tag ->
+            assertTrue(
+                "each fix has to be attributable on its own line: $tag",
+                source.contains(tag)
+            )
+        }
+    }
+
+    @Test
+    fun `both relabel arms force the relabel and the VPS rewrite`() {
+        // H11 / Fix E, on both arms rather than the Auto one alone: the skip
+        // parameters exist but no site takes them, and in particular nothing
+        // gates on the native library being present - that rationale is stale,
+        // because these arms' samples are the Kotlin stripper's now.
+        assertEquals("one per arm", 2, count(source, "val skipRelabel = false"))
+        assertEquals("one per arm", 2, count(source, "val skipVpsRewrite = false"))
+        assertFalse("no arm may skip the relabel any more", source.contains("skipRelabel = true"))
+        assertFalse("nor the VPS rewrite", source.contains("skipVpsRewrite = true"))
+        assertFalse(
+            "and the native library's presence may not decide it",
+            source.contains("skipRelabel = DoviBridge.available")
+        )
+    }
+
+    @Test
     fun `the new mode exists and the relabel branch engages it`() {
         assertTrue(
             "Mode.STRIP_NALS_ONLY must exist so the experiment cannot be silently " +

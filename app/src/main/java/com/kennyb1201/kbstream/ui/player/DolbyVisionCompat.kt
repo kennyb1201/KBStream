@@ -568,6 +568,17 @@ internal object DolbyVisionCompat {
      * needs (Nuvio never strips that NAL at all). The Kotlin arm is also the one
      * that drops the enhancement layer by `layerId > 0`, matching Nuvio's
      * `HevcDvRpuStripper` (libdovi drops it too, via the same rule).
+     *
+     * [declaredDv] is the container's own answer, and it gates the one rule that
+     * reads it: a SUFFIX SEI (40) on a stream whose container declared Dolby
+     * Vision is audited message by message and dropped when every message in it
+     * is vendor data (see [HevcSeiAudit]). The 2026-10-15 stall's two field files
+     * differ in exactly that NAL, and nothing a decoder needs for the picture
+     * rides in a suffix SEI, so a vendor-only one is Dolby Vision signalling
+     * left behind once the RPU NAL is gone. A suffix SEI carrying any
+     * decoder-relevant message - film grain, mastering display, content light,
+     * timing - is forwarded bit-exact. Default false, and the in-band path never
+     * sets it: NAL 40 handling there is byte-for-byte what it was.
      */
     fun stripAnnexB(
         buf: ByteArray,
@@ -576,7 +587,8 @@ internal object DolbyVisionCompat {
         stripHdr10Plus: Boolean,
         dropRpuNal: Boolean = false,
         kotlinOnly: Boolean = false,
-        accounting: SeiStripAccounting? = null
+        accounting: SeiStripAccounting? = null,
+        declaredDv: Boolean = false
     ): Int {
         // Prefer libdovi's native strip; fall back to the Kotlin parser below.
         //
@@ -668,12 +680,47 @@ internal object DolbyVisionCompat {
                         nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
                     )
                 }
+                // Fix A: a suffix SEI on a declared-DV stream is audited message
+                // by message, and dropped when it carries nothing but vendor
+                // data - the one NAL the stalled field file has and the playing
+                // one does not. Kept (bit-exact) when a decoder-relevant message
+                // rides in it, or when the walk could not be completed: a parse
+                // failure never removes a NAL.
+                val declaredDvSuffixSei = stripDv && declaredDv && nalType == NAL_SUFFIX_SEI
+                var seiWalk: HevcSeiAudit.Walk? = null
+                if (keep && isHdr10PlusSeiNal(nalType) &&
+                    (accounting != null || declaredDvSuffixSei)
+                ) {
+                    // One walk serves both the drop below and the payload types
+                    // the first-sample log prints (Fix B). Its cost is a header
+                    // walk of one small NAL, and only where a caller asked.
+                    seiWalk = HevcSeiAudit.walk(buf, header + 2, nalEnd)
+                }
+                if (keep && declaredDvSuffixSei) {
+                    val walk = seiWalk ?: HevcSeiAudit.walk(buf, header + 2, nalEnd)
+                    if (walk.complete && HevcSeiAudit.isVendorOnly(walk.types)) {
+                        keep = false
+                        accounting?.record(
+                            nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED,
+                            payloadTypes = walk.types,
+                            reason = HevcSeiAudit.DROP_REASON_VENDOR_ONLY
+                        )
+                    }
+                }
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType)) {
                     // Diagnostic only, computed only when someone is listening:
                     // would the 14:04 picture build's subsequence detector have
                     // dropped this NAL? (See [seiWouldLegacyDrop].)
                     val legacyDrop = accounting != null &&
                         seiWouldLegacyDrop(buf, header + 2, nalEnd)
+                    // The suffix-SEI audit's verdict, when this IS that NAL: kept
+                    // because a decoder-relevant message rides in it, or because
+                    // the walk was truncated.
+                    val seiTypes = seiWalk?.types.orEmpty()
+                    val seiReason = if (declaredDvSuffixSei) {
+                        if (seiWalk?.complete == true) HevcSeiAudit.KEEP_REASON_DECODER_RELEVANT
+                        else HevcSeiAudit.TRUNCATED_REASON
+                    } else null
                     if (!seiCarriesHdr10Plus(buf, header + 2, nalEnd)) {
                         // The detector did not fire: this SEI NAL is forwarded
                         // bit-exact, which is a third thing the first-sample log
@@ -682,7 +729,7 @@ internal object DolbyVisionCompat {
                         // nothing".
                         accounting?.record(
                             nalType, nalEnd - header, SeiStripAccounting.Action.KEPT,
-                            legacyDrop = legacyDrop
+                            legacyDrop = legacyDrop, payloadTypes = seiTypes, reason = seiReason
                         )
                     } else {
                         // Surgical removal: only the HDR10+ messages go, the SEI
@@ -700,12 +747,13 @@ internal object DolbyVisionCompat {
                         ) {
                             SEI_STRIP_UNTOUCHED -> accounting?.record(
                                 nalType, nalEnd - header, SeiStripAccounting.Action.KEPT,
-                                legacyDrop = legacyDrop
+                                legacyDrop = legacyDrop, payloadTypes = seiTypes, reason = seiReason
                             )
                             SEI_STRIP_DROP -> {
                                 keep = false
                                 accounting?.record(
-                                    nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
+                                    nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED,
+                                    payloadTypes = seiTypes
                                 )
                             }
                             else -> {
@@ -713,7 +761,8 @@ internal object DolbyVisionCompat {
                                 keep = false
                                 accounting?.record(
                                     nalType, nalEnd - header, SeiStripAccounting.Action.SHRUNK,
-                                    newSize = codeLen + 2 + res
+                                    newSize = codeLen + 2 + res,
+                                    payloadTypes = seiTypes, reason = seiReason
                                 )
                             }
                         }
@@ -745,6 +794,10 @@ internal object DolbyVisionCompat {
      *
      * [kotlinOnly] is [stripAnnexB]'s skip-the-native-strip flag, for the same
      * 2026-10-14 coarse-SEI reason.
+     *
+     * [declaredDv] is [stripAnnexB]'s declared-DV gate for the suffix-SEI (40)
+     * audit, in this framing: a NAL whose every message is vendor data is
+     * dropped, one carrying a decoder-relevant message is forwarded bit-exact.
      */
     fun stripLengthDelimited(
         buf: ByteArray,
@@ -754,7 +807,8 @@ internal object DolbyVisionCompat {
         stripHdr10Plus: Boolean,
         dropRpuNal: Boolean = false,
         kotlinOnly: Boolean = false,
-        accounting: SeiStripAccounting? = null
+        accounting: SeiStripAccounting? = null,
+        declaredDv: Boolean = false
     ): Int {
         // Prefer libdovi's native strip; fall back to the Kotlin parser below.
         // Same contract and same trade as [stripAnnexB], in an MP4/fMP4 shape:
@@ -820,16 +874,41 @@ internal object DolbyVisionCompat {
                     keep = false
                     accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
                 }
+                // Same declared-DV suffix-SEI audit as [stripAnnexB], in this
+                // framing (Fix A).
+                val declaredDvSuffixSei = stripDv && declaredDv && nalType == NAL_SUFFIX_SEI
+                var seiWalk: HevcSeiAudit.Walk? = null
+                if (keep && isHdr10PlusSeiNal(nalType) &&
+                    (accounting != null || declaredDvSuffixSei)
+                ) {
+                    seiWalk = HevcSeiAudit.walk(buf, payload + 2, payload + nal)
+                }
+                if (keep && declaredDvSuffixSei) {
+                    val walk = seiWalk ?: HevcSeiAudit.walk(buf, payload + 2, payload + nal)
+                    if (walk.complete && HevcSeiAudit.isVendorOnly(walk.types)) {
+                        keep = false
+                        accounting?.record(
+                            nalType, nal, SeiStripAccounting.Action.DROPPED,
+                            payloadTypes = walk.types,
+                            reason = HevcSeiAudit.DROP_REASON_VENDOR_ONLY
+                        )
+                    }
+                }
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) && nal >= 4) {
                     // Diagnostic only, computed only when someone is listening:
                     // would the 14:04 picture build's subsequence detector have
                     // dropped this NAL? (See [seiWouldLegacyDrop].)
                     val legacyDrop = accounting != null &&
                         seiWouldLegacyDrop(buf, payload + 2, payload + nal)
+                    val seiTypes = seiWalk?.types.orEmpty()
+                    val seiReason = if (declaredDvSuffixSei) {
+                        if (seiWalk?.complete == true) HevcSeiAudit.KEEP_REASON_DECODER_RELEVANT
+                        else HevcSeiAudit.TRUNCATED_REASON
+                    } else null
                     if (!seiCarriesHdr10Plus(buf, payload + 2, payload + nal)) {
                         accounting?.record(
                             nalType, nal, SeiStripAccounting.Action.KEPT,
-                            legacyDrop = legacyDrop
+                            legacyDrop = legacyDrop, payloadTypes = seiTypes, reason = seiReason
                         )
                     } else {
                         val dest = write + fieldLen + 2
@@ -843,11 +922,14 @@ internal object DolbyVisionCompat {
                         ) {
                             SEI_STRIP_UNTOUCHED -> accounting?.record(
                                 nalType, nal, SeiStripAccounting.Action.KEPT,
-                                legacyDrop = legacyDrop
+                                legacyDrop = legacyDrop, payloadTypes = seiTypes, reason = seiReason
                             )
                             SEI_STRIP_DROP -> {
                                 keep = false
-                                accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
+                                accounting?.record(
+                                    nalType, nal, SeiStripAccounting.Action.DROPPED,
+                                    payloadTypes = seiTypes
+                                )
                             }
                             else -> {
                                 writeLength(buf, write, res + 2, fieldLen)
@@ -855,7 +937,8 @@ internal object DolbyVisionCompat {
                                 keep = false
                                 accounting?.record(
                                     nalType, nal, SeiStripAccounting.Action.SHRUNK,
-                                    newSize = 2 + res
+                                    newSize = 2 + res,
+                                    payloadTypes = seiTypes, reason = seiReason
                                 )
                             }
                         }
@@ -948,7 +1031,24 @@ internal object DolbyVisionCompat {
             /** Meaningful only for SHRUNK: the NAL's new size. */
             val newSize: Int = 0,
             /** Only meaningful for KEPT: the 14:04 subsequence detector would have dropped this NAL. */
-            val legacyDrop: Boolean = false
+            val legacyDrop: Boolean = false,
+            /**
+             * The SEI payload types a 39/40 NAL carried, in order. Empty for a
+             * NAL that is not an SEI, for one whose message walk was truncated,
+             * and for the libdovi path (categories, not measurements). Printed
+             * as `[pt=137,144]`, which is the field side of the declared-DV
+             * suffix-SEI audit (see [HevcSeiAudit]).
+             */
+            val payloadTypes: List<Int> = emptyList(),
+            /**
+             * Why an entry came out the way it did when the plain
+             * RPU/EL/HDR10+ rule does not explain it - e.g.
+             * [HevcSeiAudit.DROP_REASON_VENDOR_ONLY] for a declared-DV suffix
+             * SEI. Printed as `(reason)`, so the removal is attributable from
+             * the first-sample line alone (the audit runs A-E are attributed
+             * per fix, never bundled).
+             */
+            val reason: String? = null
         )
         val entries = mutableListOf<Entry>()
         fun record(
@@ -956,19 +1056,29 @@ internal object DolbyVisionCompat {
             originalSize: Int,
             action: Action,
             newSize: Int = 0,
-            legacyDrop: Boolean = false
+            legacyDrop: Boolean = false,
+            payloadTypes: List<Int> = emptyList(),
+            reason: String? = null
         ) {
-            entries.add(Entry(nalType, originalSize, action, newSize, legacyDrop))
+            entries.add(Entry(nalType, originalSize, action, newSize, legacyDrop, payloadTypes, reason))
         }
         /**
-         * Compact logcat rendering, e.g. "39:69->dropped,39:30->kept,40:35->shrunk=22".
+         * Compact logcat rendering, e.g.
+         * "39:69->kept[pt=137,144],40:35->dropped(dvVendorSei)[pt=5]".
          * Entries recorded by libdovi ([viaLibdovi]) print with a size of 0,
          * which is "not measured", not "empty".
          */
         fun summary(): String = entries.joinToString(",") { e ->
-            "${e.nalType}:${e.originalSize}->${e.action.name.lowercase()}" +
-                if (e.action == Action.SHRUNK) "=${e.newSize}" else "" +
-                if (e.action == Action.KEPT && e.legacyDrop) ",legacyDrop" else ""
+            buildString {
+                append(e.nalType).append(':').append(e.originalSize)
+                append("->").append(e.action.name.lowercase())
+                if (e.action == Action.SHRUNK) append('=').append(e.newSize)
+                if (e.action == Action.KEPT && e.legacyDrop) append(",legacyDrop")
+                e.reason?.let { append('(').append(it).append(')') }
+                if (e.payloadTypes.isNotEmpty()) {
+                    append("[pt=").append(e.payloadTypes.joinToString(",")).append(']')
+                }
+            }
         }
     }
 
@@ -2362,6 +2472,280 @@ internal object DolbyVisionCompat {
         }
     }
 
+    // ── First-sample audits (the 2026-10-15 declared-DV stall) ────────────────
+    // The register behind these three lines, the fix each one answers, and what
+    // the field run does with them:
+    //   auditNalBounds      Fix C  H14  is the stalled file's 1572-byte NAL 19 a
+    //                                   real picture NAL or a framing artifact?
+    //   seiPayloadInventory Fix A/B H12/H13  which SEI payload types does the
+    //                                   stalled file carry that the playing one
+    //                                   does not?
+    //   auditParameterSets  Fix D  H15  do the two files' rewritten VPS/SPS
+    //                                   bytes actually agree?
+    // Every one of them is read-only: they report, they never rewrite a byte,
+    // and they run on the first processed sample only.
+
+    /** How many NALs [auditNalBounds] prints before it stops listing them. */
+    private const val MAX_BOUNDS_NALS = 24
+
+    /** A picture NAL smaller than this is not a 4K frame (see [auditNalBounds]). */
+    private const val SHORT_PICTURE_BYTES = 1024
+
+    /** One NAL as the boundary audit sees it: [from, to) is the payload. */
+    private class NalSpan(val offset: Int, val from: Int, val to: Int, val type: Int)
+
+    /**
+     * Splits [buf] into NAL spans WITHOUT modifying it, plus a framing note.
+     *
+     * This is the independent parse the boundary audit needs: the stripper's
+     * walk compacts the buffer as it goes, so it cannot be asked "what did the
+     * container actually hand us?". Nothing here is shared with it except
+     * [indexOfStartCode] and [readLength], the two primitives that define where
+     * a start code or a length prefix is at all.
+     *
+     * For Annex-B the note is `leading=<bytes before the first start code>`; for
+     * length-delimited framing it is `framingOk` or `MALFORMED at=<offset>
+     * nal=<length> consumed=<n>/<total>`, which is the answer to "is the disputed
+     * picture NAL a truncation?" before any strip logic runs.
+     */
+    private fun spanNals(
+        buf: ByteArray,
+        length: Int,
+        annexB: Boolean,
+        nalLengthFieldLength: Int
+    ): Pair<List<NalSpan>, String> {
+        val spans = mutableListOf<NalSpan>()
+        if (length <= 0 || length > buf.size) return spans to "bad-length"
+        if (annexB) {
+            var read = 0
+            var leading = -1
+            while (read < length) {
+                val code = indexOfStartCode(buf, read, length)
+                if (code < 0) break
+                if (leading < 0) leading = code
+                val codeLen =
+                    if (code + 3 < length && buf[code + 2].toInt() == 0 &&
+                        buf[code + 3].toInt() == 1
+                    ) 4 else 3
+                val from = code + codeLen
+                var to = indexOfStartCode(buf, from, length)
+                if (to < 0) to = length
+                val type =
+                    if (to - from >= 2) ((buf[from].toInt() and 0xFF) ushr 1) and 0x3F else -1
+                spans += NalSpan(code, from, to, type)
+                read = to
+            }
+            return spans to "leading=" + leading.coerceAtLeast(0)
+        }
+        val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
+        var p = 0
+        while (p + fieldLen <= length) {
+            val nal = readLength(buf, p, fieldLen)
+            if (nal <= 0 || p + fieldLen + nal > length) {
+                return spans to "MALFORMED at=$p nal=$nal consumed=$p/$length"
+            }
+            val from = p + fieldLen
+            val to = from + nal
+            val type = if (nal >= 2) ((buf[from].toInt() and 0xFF) ushr 1) and 0x3F else -1
+            spans += NalSpan(p, from, to, type)
+            p = to
+        }
+        return spans to if (p == length) "framingOk" else "MALFORMED consumed=$p/$length"
+    }
+
+    /**
+     * An INDEPENDENT read of one sample's NAL boundaries - every NAL's type and
+     * its offset plus payload length, re-derived by [spanNals] rather than by
+     * the stripper's compacting walk - for the first processed sample (Fix C,
+     * H14). A stalled stream and a playing one then print the same shape and
+     * can be compared line against line.
+     *
+     * `shortPicture=` names every picture NAL (16..21) whose payload is under
+     * [SHORT_PICTURE_BYTES]: a 4K IDR is hundreds of kilobytes, so a 1.5 KB one
+     * is the field signal that the container's framing, not the decoder, is what
+     * needs looking at. `none` means every picture NAL is plausibly sized.
+     */
+    fun auditNalBounds(
+        buf: ByteArray,
+        length: Int,
+        annexB: Boolean,
+        nalLengthFieldLength: Int
+    ): String {
+        val (spans, note) = spanNals(buf, length, annexB, nalLengthFieldLength)
+        val shortPicture = spans
+            .filter { it.type in 16..21 && it.to - it.from < SHORT_PICTURE_BYTES }
+            .joinToString(",") { "${it.type}:${it.to - it.from}" }
+        return buildString {
+            append("framing=").append(if (annexB) "annexb" else "length-delimited")
+            append(" length=").append(length).append(" count=").append(spans.size)
+            append(' ').append(note)
+            if (spans.size > MAX_BOUNDS_NALS) {
+                append(" (first ").append(MAX_BOUNDS_NALS).append(" of ")
+                    .append(spans.size).append(" shown)")
+            }
+            append(" nals=")
+            append(
+                spans.take(MAX_BOUNDS_NALS)
+                    .joinToString(",") { "${it.type}@${it.offset}+${it.to - it.from}" }
+            )
+            append(" shortPicture=").append(shortPicture.ifEmpty { "none" })
+        }
+    }
+
+    /**
+     * Every SEI NAL (39/40) in one sample with the payload types it carries, and
+     * the union of the types no decoder consumes - `suspect=` (Fix A/B, H12/H13).
+     *
+     * This is the field side of the declared-DV suffix-SEI rule: run on both a
+     * stalled declared-DV file and a playing in-band one, the two `suspect=`
+     * sets are the comparison the audit asks for, and the pair also says which
+     * types [HevcSeiAudit.DECODER_RELEVANT_TYPES] is missing if a file turns out
+     * to carry something benign that is not in it. Log-only: no byte is changed.
+     *
+     * `suffixHex=` carries the ACTUAL BYTES of each suffix SEI (NAL 40), payload
+     * from its 2-byte header, capped at [SUFFIX_SEI_DUMP_BYTES] with a "+n" tail
+     * - the audit's Fix A step 1 asks for the honest bytes of the one NAL the two
+     * field files differ in, because a payload-type verdict is a claim about them
+     * and this is the thing itself. It rides in the same read-only line rather
+     * than a second one, so the bytes and the types they were read from can never
+     * be attributed to different samples.
+     */
+    fun seiPayloadInventory(
+        buf: ByteArray,
+        length: Int,
+        annexB: Boolean,
+        nalLengthFieldLength: Int
+    ): String {
+        val (spans, _) = spanNals(buf, length, annexB, nalLengthFieldLength)
+        val sei = spans.filter { it.type == NAL_PREFIX_SEI || it.type == NAL_SUFFIX_SEI }
+        val suspect = sortedSetOf<Int>()
+        var truncated = 0
+        val rendered = sei.take(MAX_SEI_INVENTORY).joinToString(",") { s ->
+            val walk = HevcSeiAudit.walk(buf, s.from + 2, s.to)
+            walk.types.filterNot { it in HevcSeiAudit.DECODER_RELEVANT_TYPES }
+                .forEach { suspect += it }
+            if (!walk.complete) truncated++
+            "${s.type}:[${HevcSeiAudit.describe(walk.types)}" +
+                if (walk.complete) "]" else "+trunc]"
+        }
+        val suffixHex = spans.filter { it.type == NAL_SUFFIX_SEI }
+            .take(MAX_SUFFIX_DUMP)
+            .joinToString(";") { HevcSeiAudit.hex(buf, it.from, it.to, SUFFIX_SEI_DUMP_BYTES) }
+        return buildString {
+            append("sei=").append(rendered.ifEmpty { "none" })
+            append(" suspect=")
+            append(if (suspect.isEmpty()) "none" else suspect.joinToString(","))
+            if (sei.size > MAX_SEI_INVENTORY) append(" (>$MAX_SEI_INVENTORY sei nals)")
+            if (truncated > 0) append(" truncated=$truncated")
+            append(" suffixHex=").append(suffixHex.ifEmpty { "none" })
+        }
+    }
+
+    /** How many suffix SEI (40) NALs [seiPayloadInventory] dumps bytes for. */
+    private const val MAX_SUFFIX_DUMP = 4
+
+    /** How many bytes of each suffix SEI [seiPayloadInventory] prints. */
+    private const val SUFFIX_SEI_DUMP_BYTES = 96
+
+    /** How many SEI NALs [seiPayloadInventory] lists before it summarizes. */
+    private const val MAX_SEI_INVENTORY = 8
+
+    /** First 8 hex characters of the SHA-256 of [bytes] - a byte-compare shorthand. */
+    private fun shortDigest(bytes: ByteArray): String =
+        runCatching {
+            java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+        }.getOrNull()?.take(4)?.joinToString("") { b ->
+            val v = b.toInt() and 0xFF
+            "0123456789abcdef"[v ushr 4].toString() + "0123456789abcdef"[v and 0x0F]
+        } ?: "unavailable"
+
+    /**
+     * A byte audit of one sample's parameter sets: the VPS (32) and SPS (33) as
+     * the sample carries them, what the HDR10 rewrite produces for each, and the
+     * SHA-256 prefix of both (Fix D, H15).
+     *
+     * The point is the comparison, not the transform: run on a stalled
+     * declared-DV file and on a playing in-band one, the two rewritten VPS byte
+     * strings either agree or they do not, and the fix is the difference.
+     *
+     * [rewriteApplied] says whether the caller's mode writes those rewritten
+     * bytes back into the stream - the mutating strip does, while
+     * Mode.STRIP_NALS_ONLY deliberately does not (its CODE CONFIG carries the
+     * rewrite instead, because mutating in-sample sets is what stalls this
+     * chipset) - so a difference between the two lines is attributed to the mode
+     * and never misread as a failed transform.
+     */
+    fun auditParameterSets(
+        buf: ByteArray,
+        length: Int,
+        annexB: Boolean,
+        nalLengthFieldLength: Int,
+        rewriteApplied: Boolean
+    ): String {
+        val (spans, _) = spanNals(buf, length, annexB, nalLengthFieldLength)
+        val vps = spans.firstOrNull { it.type == NAL_VPS }
+        val sps = spans.firstOrNull { it.type == NAL_SPS }
+        return buildString {
+            append("paramSets applied=").append(rewriteApplied)
+            if (vps == null) {
+                append(" vps=absent")
+            } else {
+                val payload = buf.copyOfRange(vps.from, vps.to)
+                append(" vps=").append(vps.to - vps.from).append(':')
+                    .append(HevcSeiAudit.hex(buf, vps.from, vps.to))
+                    .append(":").append(shortDigest(payload))
+                // `from + 2` is the offset every other caller passes: the NAL
+                // header is not part of the RBSP, and handing it to the parser
+                // is what made this audit report failed(reserved-3bits) on a
+                // VPS the strip itself rewrites happily.
+                append(" vpsRewrite=").append(
+                    renderOutcome(
+                        if (vps.to - vps.from >= 4) {
+                            rewriteVpsToHdr10(buf, vps.from + 2, vps.to)
+                        } else {
+                            VpsRewriteOutcome.Failed("short-nal")
+                        }
+                    )
+                )
+            }
+            if (sps == null) {
+                append(" sps=absent")
+            } else {
+                val payload = buf.copyOfRange(sps.from, sps.to)
+                append(" sps=").append(sps.to - sps.from).append(':')
+                    .append(HevcSeiAudit.hex(buf, sps.from, sps.to))
+                    .append(":").append(shortDigest(payload))
+                append(" spsRewrite=").append(
+                    renderOutcome(
+                        if (sps.to - sps.from >= 4) {
+                            rewriteSpsToHdr10(buf, sps.from + 2, sps.to)
+                        } else {
+                            SpsRewriteOutcome.Failed("short-nal")
+                        }
+                    )
+                )
+            }
+        }
+    }
+
+    /** One parameter-set rewrite outcome, with the rewritten bytes when there are any. */
+    private fun renderOutcome(outcome: VpsRewriteOutcome): String = when (outcome) {
+        is VpsRewriteOutcome.Rewritten ->
+            "rewritten(" + outcome.rbsp.size + "):" + shortDigest(outcome.rbsp) +
+                ":" + HevcSeiAudit.hex(outcome.rbsp, 0, outcome.rbsp.size)
+        VpsRewriteOutcome.NoDvExtension -> "noDvExtension"
+        is VpsRewriteOutcome.Failed -> "failed(" + outcome.reason + ")"
+    }
+
+    /** [renderOutcome] for an SPS attempt. */
+    private fun renderOutcome(outcome: SpsRewriteOutcome): String = when (outcome) {
+        is SpsRewriteOutcome.Rewritten ->
+            "rewritten(" + outcome.rbsp.size + "):" + shortDigest(outcome.rbsp) +
+                ":" + HevcSeiAudit.hex(outcome.rbsp, 0, outcome.rbsp.size)
+        SpsRewriteOutcome.NoDvExtension -> "noDvExtension"
+        is SpsRewriteOutcome.Failed -> "failed(" + outcome.reason + ")"
+    }
+
     /**
      * One-line inventory of an Annex-B sample's NAL units (type:bytes pairs),
      * used by the extractor's first-sample diagnostics.
@@ -2491,6 +2875,130 @@ internal object DolbyVisionCompat {
             value = (value shl 8) or (buf[offset + i].toInt() and 0xFF)
         }
         return value
+    }
+
+    /**
+     * The SEI payload-type audit behind the declared-DV P8 stall of 2026-10-15
+     * (K83 / NORViNE, `dvhe.08.06`, Strip All on a MediaTek box).
+     *
+     * The stalled file and the playing in-band file differ in ONE NAL: the
+     * stalled one carries a suffix SEI (NAL 40, 35 bytes) the working one does
+     * not, while the RPU (62) is removed on both (H12 in the audit's register).
+     * A suffix SEI sits AFTER the slice data, so nothing a decoder needs for
+     * that picture rides there - which is what makes a vendor message in it the
+     * shape of Dolby Vision signalling left behind once the RPU NAL is gone.
+     *
+     * [walk] parses the message headers exactly the way [seiCarriesHdr10Plus]
+     * does (0xFF continuation on payload type and size), so the two agree about
+     * where a message ends. [isVendorOnly] is the rule the declared-DV NAL-40
+     * drop reads: a NAL whose every message falls outside
+     * [DECODER_RELEVANT_TYPES] carries nothing the decoder consumes and is
+     * dropped like the RPU; a NAL carrying even one decoder-relevant message is
+     * forwarded bit-exact - film grain, the mastering-display / content-light
+     * static metadata, and the timing messages all live in types that set.
+     *
+     * The rule never decides a drop from a truncated walk ([Walk.complete]), and
+     * the payload types it found are what the first-sample log prints, so the
+     * field run can say which types a file actually carries instead of trusting
+     * this set (H12 / H13).
+     */
+    internal object HevcSeiAudit {
+        /**
+         * SEI payload types a picture decoder consumes, or that change the
+         * picture: 0 buffering period, 1 picture timing, 2 pan-scan rect,
+         * 3 filler, 6 recovery point, 19 film grain characteristics,
+         * 137 mastering display colour volume, 144 content light level,
+         * 145 alternative transfer characteristics, 147 ambient viewing
+         * environment.
+         *
+         * The two user-data types are deliberately NOT here - 4
+         * (registered ITU-T T35) and 5 (unregistered) are where a vendor
+         * message rides, which is exactly what the declared-DV audit is
+         * looking for.
+         */
+        val DECODER_RELEVANT_TYPES = setOf(0, 1, 2, 3, 6, 19, 137, 144, 145, 147)
+
+        /** Recorded on the declared-DV suffix SEI this rule drops. */
+        const val DROP_REASON_VENDOR_ONLY = "dvVendorSei"
+
+        /** Recorded on a declared-DV suffix SEI this rule keeps. */
+        const val KEEP_REASON_DECODER_RELEVANT = "decoderRelevantSei"
+
+        /** Recorded when the message walk could not be completed. */
+        const val TRUNCATED_REASON = "seiWalkTrunc"
+
+        /**
+         * One SEI NAL's message walk: [types] in order, and whether the walk
+         * consumed the NAL exactly. An incomplete walk carries no opinion - a
+         * NAL is never dropped on a parse failure.
+         */
+        internal data class Walk(val types: List<Int>, val complete: Boolean)
+
+        /** The payload types of every SEI message in [from, to), in order. */
+        fun walk(buf: ByteArray, from: Int, to: Int): Walk {
+            val end = minOf(to, buf.size)
+            val types = mutableListOf<Int>()
+            var pos = from
+            while (pos + 1 <= end) {
+                var payloadType = 0
+                var b: Int
+                do {
+                    if (pos >= end) return Walk(types, false)
+                    b = buf[pos].toInt() and 0xFF
+                    payloadType += b
+                    pos++
+                } while (b == 0xFF)
+                var payloadSize = 0
+                do {
+                    if (pos >= end) return Walk(types, false)
+                    b = buf[pos].toInt() and 0xFF
+                    payloadSize += b
+                    pos++
+                } while (b == 0xFF)
+                if (payloadSize > end - pos) return Walk(types, false)
+                types += payloadType
+                pos += payloadSize
+            }
+            return Walk(types, pos == end)
+        }
+
+        /** "137,144", or "none" when nothing parsed. */
+        fun describe(types: List<Int>): String =
+            if (types.isEmpty()) "none" else types.joinToString(",")
+
+        /** True when at least one message is one a decoder consumes. */
+        fun isDecoderRelevant(types: List<Int>): Boolean =
+            types.any { it in DECODER_RELEVANT_TYPES }
+
+        /**
+         * True when the NAL carries messages and none of them is decoder
+         * relevant - the vendor-only shape the declared-DV drop fires on. An
+         * empty list answers false.
+         */
+        fun isVendorOnly(types: List<Int>): Boolean =
+            types.isNotEmpty() && !isDecoderRelevant(types)
+
+        /** The types in [types] that no decoder consumes (`4,5`), or "none". */
+        fun vendorTypes(types: List<Int>): String {
+            val vendor = types.filterNot { it in DECODER_RELEVANT_TYPES }
+            return if (vendor.isEmpty()) "none" else vendor.joinToString(",")
+        }
+
+        /** Uppercase hex of [from, to), capped at [cap] bytes with a "+n" tail. */
+        fun hex(buf: ByteArray, from: Int, to: Int, cap: Int = 64): String {
+            val end = minOf(to, buf.size)
+            val shown = minOf(end - from, cap)
+            if (shown <= 0) return "-"
+            val sb = StringBuilder(shown * 2 + 6)
+            for (i in from until from + shown) {
+                val v = buf[i].toInt() and 0xFF
+                sb.append(HEX[v ushr 4]).append(HEX[v and 0x0F])
+            }
+            if (end - from > shown) sb.append('+').append(end - from - shown)
+            return sb.toString()
+        }
+
+        private const val HEX = "0123456789ABCDEF"
     }
 
     /**
