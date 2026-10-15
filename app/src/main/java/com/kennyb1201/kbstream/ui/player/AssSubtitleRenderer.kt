@@ -99,7 +99,7 @@ internal class AssSubtitleRenderer {
         handle = created
 
         for (font in fonts) {
-            runCatching { AssNative.nativeAddFont(handle, font.name, font.readBytes()) }
+            runCatching { AssNative.nativeAddFont(handle, font.name, fontBytes(font)) }
                 .onFailure { Log.w(TAG, "could not attach font ${font.name}", it) }
         }
         if (fonts.isNotEmpty()) Log.i(TAG, "attached ${fonts.size} font(s) to libass")
@@ -185,8 +185,53 @@ internal class AssSubtitleRenderer {
         frame = null
     }
 
+    /**
+     * The bytes of one font file, kept across attaches.
+     *
+     * `font.readBytes()` used to run for every font on every attach, and an
+     * attach is not a rare event: it happens per subtitle selection, per player
+     * rebuild (the DV strip, an engine swap, a resolution change) and per
+     * embedded-track re-create, over up to 32 files at once. The fonts are
+     * read-only files on disk (bundled assets, or a per-title extraction), so
+     * their content cannot change under us, and the attach is a copy into
+     * libass - re-reading them is repeated I/O and heap churn on the playback
+     * path, which is exactly where the field logs show the churn.
+     *
+     * The cache is access-ordered and bounded (see [FONT_CACHE_MAX]) so a
+     * stream carrying its own font files cannot grow it without bound, and it
+     * is shared by every renderer instance because the files are.
+     */
+    private fun fontBytes(font: File): ByteArray {
+        val key = font.absolutePath
+        synchronized(fontCache) {
+            fontCache[key]?.let { return it }
+            // The read itself happens outside the lock: two renderers may
+            // attach the same font at once (an engine swap overlaps the
+            // outgoing and incoming ones), and a duplicate read is cheaper than
+            // holding a lock through I/O.
+        }
+        val bytes = font.readBytes()
+        synchronized(fontCache) { fontCache[key] = bytes }
+        return bytes
+    }
+
     companion object {
         private const val TAG = "AssRenderer"
+
+        /**
+         * Attached font bytes by absolute path, most-recently-used last.
+         *
+         * Above the largest attach (32 files) so one attach can never evict
+         * the font it is about to use, and low enough that a pathological
+         * stream's own fonts stay a few MB rather than a leak.
+         */
+        private const val FONT_CACHE_MAX = 64
+
+        private val fontCache =
+            object : LinkedHashMap<String, ByteArray>(16, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ByteArray>?) =
+                    size > FONT_CACHE_MAX
+            }
 
         /** Whether this build carries libassjni.so at all. */
         val available: Boolean get() = AssNative.available

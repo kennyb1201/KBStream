@@ -29,10 +29,22 @@ internal object AutoSubtitleRules {
     ): SubtitleSearchResult? {
         if (results.isEmpty()) return null
         val want = languagePrefix(preferredLanguage)
-        if (want != null) {
-            results.firstOrNull { languagePrefix(it.language) == want }?.let { return it }
+        // A stated preference is a REQUIREMENT, not a hint. Falling back to the
+        // most-downloaded hit drew a foreign track over the picture - the one
+        // visible wrong thing an automatic fetch can do, and the viewer's only
+        // clue was the subtitles themselves. Attaching nothing hides nothing:
+        // the picker still lists every row the search returned. (No preference
+        // at all keeps the old rule: the most downloaded row wins.)
+        val eligible = if (want == null) {
+            results
+        } else {
+            results.filter { languagePrefix(it.language) == want }
         }
-        return results.maxByOrNull { it.downloads } ?: results.first()
+        // ...and among the rows that qualify, downloads still decide, which is
+        // what "preferring a language match, then downloads" has always meant:
+        // the old shape returned the FIRST match in API order, so a barely
+        // downloaded row could beat a well-used one sitting below it.
+        return eligible.maxByOrNull { it.downloads }
     }
 
     /**

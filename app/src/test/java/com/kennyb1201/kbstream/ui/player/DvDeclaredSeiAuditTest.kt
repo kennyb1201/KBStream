@@ -19,7 +19,14 @@ import org.junit.Test
  *    which is what keeps NAL 40 handling on the in-band path byte-for-byte what
  *    it was,
  *  - that the first-sample audits (Fix B's payload types, Fix C's boundaries,
- *    Fix D's parameter-set bytes) report rather than rewrite.
+ *    Fix D's parameter-set bytes) report rather than rewrite,
+ *  - that the same suffix-SEI rule is armed on the MUTATING strip (Fix F8, the
+ *    2026-10-15 K83 / NORViNE arrival: a declared `dvhe.08.06` track on a box
+ *    with no DV decoder) and only for a track whose container declared Dolby
+ *    Vision, and
+ *  - that the parameter-set audit answers the F2 question - does a DV-flagged
+ *    VPS/SPS survive into the bytes the decoder is handed, and so re-arm DV
+ *    mode mid-stream?
  *
  * The strip assertions are exact-byte on purpose: a NAL is either in the output
  * or it is not, and a "kept" NAL has to ride through unmodified.
@@ -495,5 +502,203 @@ class DvDeclaredSeiAuditTest {
         assertTrue(line, line.contains("applied=true"))
         assertTrue(line, line.contains("vps=absent"))
         assertTrue(line, line.contains("sps=absent"))
+    }
+
+    // ── Fix F8: the same rule on the mutating strip ────────────────────────
+    //
+    // The mutating strip is where a DECLARED `dvhe.08.06` track lands on a box
+    // with no Dolby Vision decoder - the K83 / NORViNE stall - and it is the one
+    // strip that rewrites the in-sample parameter sets, which is exactly why the
+    // audit's NAL-40 rule was left off it. These cases pin that the rule now runs
+    // there for a declared-DV track and still cannot reach an in-band one.
+
+    @Test
+    fun `the mutating strip drops a declared-DV vendor-only suffix SEI`() {
+        val sample = concat(idr, prefSei, vendorSuffix, rpu)
+        val stats = DolbyVisionCompat.StripStats()
+
+        val newLen = DolbyVisionCompat.transformAnnexB(
+            sample, sample.size, stripHdr10Plus = true, stats = stats, declaredDv = true
+        )
+
+        // The vendor-only suffix SEI goes the way of the RPU; the prefix SEI
+        // (which carries the mastering-display type) and the picture NAL stay.
+        val expected = concat(idr, prefSei)
+        assertTrue("something must have been removed", newLen >= 0)
+        assertEquals(expected.size, newLen)
+        assertArrayEquals(expected, sample.copyOf(newLen))
+        assertEquals("the field line has to be able to attribute it", 1, stats.dvVendorSeiNals)
+        assertEquals(payloadSize(vendorSuffix), stats.dvVendorSeiBytes)
+    }
+
+    @Test
+    fun `the mutating strip keeps the same suffix SEI on the in-band path`() {
+        // declaredDv defaults to false: this is the path whose NAL 40 handling
+        // the rule must not change at all.
+        val sample = concat(idr, vendorSuffix, rpu)
+        val stats = DolbyVisionCompat.StripStats()
+
+        val newLen = DolbyVisionCompat.transformAnnexB(
+            sample, sample.size, stripHdr10Plus = true, stats = stats
+        )
+
+        val expected = concat(idr, vendorSuffix)
+        assertEquals(expected.size, newLen)
+        assertArrayEquals(expected, sample.copyOf(newLen))
+        assertEquals("and nothing was attributed to a rule that never ran", 0, stats.dvVendorSeiNals)
+    }
+
+    @Test
+    fun `a decoder-relevant suffix SEI survives the mutating strip`() {
+        val mastering = seiNal(40, seiMessage(137, vendorBody(20)))
+        val sample = concat(idr, mastering, rpu)
+        val stats = DolbyVisionCompat.StripStats()
+
+        val newLen = DolbyVisionCompat.transformAnnexB(
+            sample, sample.size, stripHdr10Plus = true, stats = stats, declaredDv = true
+        )
+
+        val expected = concat(idr, mastering)
+        assertEquals(expected.size, newLen)
+        assertArrayEquals(expected, sample.copyOf(newLen))
+        assertEquals(0, stats.dvVendorSeiNals)
+    }
+
+    @Test
+    fun `a truncated suffix SEI is never dropped by the mutating strip`() {
+        val truncated = seiNal(40, byteArrayOf(0x05, 0x20, 0x5A))
+        val sample = concat(idr, truncated, rpu)
+        val stats = DolbyVisionCompat.StripStats()
+
+        val newLen = DolbyVisionCompat.transformAnnexB(
+            sample, sample.size, stripHdr10Plus = true, stats = stats, declaredDv = true
+        )
+
+        val expected = concat(idr, truncated)
+        assertEquals(expected.size, newLen)
+        assertArrayEquals(expected, sample.copyOf(newLen))
+        assertEquals("an unfinished walk decides nothing", 0, stats.dvVendorSeiNals)
+    }
+
+    @Test
+    fun `the mutating strip never drops a prefix SEI by the suffix rule`() {
+        val vendorPrefix = seiNal(39, seiMessage(5, vendorBody(10)))
+        val sample = concat(idr, vendorPrefix, rpu)
+
+        val newLen = DolbyVisionCompat.transformAnnexB(
+            sample, sample.size, stripHdr10Plus = true, stats = null, declaredDv = true
+        )
+
+        val expected = concat(idr, vendorPrefix)
+        assertEquals(expected.size, newLen)
+        assertArrayEquals(expected, sample.copyOf(newLen))
+    }
+
+    @Test
+    fun `the mutating strip follows the same rule in the length-delimited framing`() {
+        val withVendorSei = lengthDelimited(ldIdr, ldVendorSuffix, ldRpu)
+        val declaredBuf = withVendorSei.copyOf()
+        val stats = DolbyVisionCompat.StripStats()
+
+        val dropped = DolbyVisionCompat.transformLengthDelimited(
+            declaredBuf, declaredBuf.size, 4,
+            stripHdr10Plus = true, stats = stats, declaredDv = true
+        )
+
+        val expectedDropped = lengthDelimited(ldIdr)
+        assertEquals(expectedDropped.size, dropped)
+        assertArrayEquals(expectedDropped, declaredBuf.copyOf(dropped))
+        assertEquals(1, stats.dvVendorSeiNals)
+        assertEquals(ldVendorSuffix.size, stats.dvVendorSeiBytes)
+
+        val inBandBuf = withVendorSei.copyOf()
+        val inBand = DolbyVisionCompat.transformLengthDelimited(
+            inBandBuf, inBandBuf.size, 4, stripHdr10Plus = true, stats = null
+        )
+
+        val expectedInBand = lengthDelimited(ldIdr, ldVendorSuffix)
+        assertEquals("the in-band arm keeps the SEI, as it did before the rule existed", expectedInBand.size, inBand)
+        assertArrayEquals(expectedInBand, inBandBuf.copyOf(inBand))
+    }
+
+    // ── Fix F2: does a DV-flagged set survive into the decoder's bytes? ────
+
+    @Test
+    fun `a set the mutating strip rewrites away is not a survivor`() {
+        val sample = concat(nal(32, dvVpsRbsp), idr)
+
+        val line = DolbyVisionCompat.auditParameterSets(
+            sample, sample.size, annexB = true, nalLengthFieldLength = 4, rewriteApplied = true
+        )
+
+        assertTrue("the set is counted: $line", line.contains("inSampleSets=1"))
+        assertTrue(
+            "applied=true means the rewrite is written back, so no DV extension is left: $line",
+            line.contains("dvFlaggedSurviving=0")
+        )
+        assertTrue("and the verdict is that nothing can re-arm: $line", line.contains("reArm=no"))
+        assertTrue(line, line.contains("survivors=none"))
+    }
+
+    @Test
+    fun `the same set survives when the mode does not write the rewrite back`() {
+        // applied=false is the relabel modes' shape (their codec config carries
+        // the rewrite, the samples do not): the in-sample set keeps the DV
+        // extension, which is what F2 has to be able to say.
+        val sample = concat(nal(32, dvVpsRbsp), idr)
+
+        val line = DolbyVisionCompat.auditParameterSets(
+            sample, sample.size, annexB = true, nalLengthFieldLength = 4, rewriteApplied = false
+        )
+
+        assertTrue(line, line.contains("inSampleSets=1"))
+        assertTrue("the set still describes Dolby Vision: $line", line.contains("dvFlaggedSurviving=1"))
+        assertTrue("so a DV decoder can re-arm mid-stream: $line", line.contains("reArm=yes"))
+        assertTrue(
+            "and the line says which set and why: $line",
+            line.contains("survivors=vps:rewriteLeftInSample")
+        )
+    }
+
+    @Test
+    fun `a set the rewrite cannot touch survives whatever the mode does`() {
+        // 3 bytes: no profile_tier_level to rewrite, so the set is handed to the
+        // decoder as it stands on either arm - the F2 smoking gun.
+        val sample = concat(nal(32, byteArrayOf(0x11)), idr)
+
+        listOf(true, false).forEach { applied ->
+            val line = DolbyVisionCompat.auditParameterSets(
+                sample, sample.size, annexB = true, nalLengthFieldLength = 4,
+                rewriteApplied = applied
+            )
+            assertTrue(line, line.contains("inSampleSets=1"))
+            assertTrue(line, line.contains("dvFlaggedSurviving=1"))
+            assertTrue(line, line.contains("reArm=yes"))
+            assertTrue(line, line.contains("survivors=vps:rewriteFailed"))
+        }
+    }
+
+    @Test
+    fun `every in-sample set is counted, not just the first`() {
+        // A repeat (a mid-stream re-init) carries a second VPS; the audit's byte
+        // dump covers the first one, but the survival count has to cover both.
+        val sample = concat(nal(32, dvVpsRbsp), idr, nal(32, dvVpsRbsp))
+
+        val applied = DolbyVisionCompat.auditParameterSets(
+            sample, sample.size, annexB = true, nalLengthFieldLength = 4, rewriteApplied = true
+        )
+        assertTrue(applied, applied.contains("inSampleSets=2"))
+        assertTrue(applied, applied.contains("dvFlaggedSurviving=0"))
+
+        val skipped = DolbyVisionCompat.auditParameterSets(
+            sample, sample.size, annexB = true, nalLengthFieldLength = 4, rewriteApplied = false
+        )
+        assertTrue(skipped, skipped.contains("inSampleSets=2"))
+        assertTrue(skipped, skipped.contains("dvFlaggedSurviving=2"))
+        assertEquals(
+            "both sets are named, in sample order",
+            "vps:rewriteLeftInSample,vps:rewriteLeftInSample",
+            skipped.substringAfter("survivors=").trim()
+        )
     }
 }

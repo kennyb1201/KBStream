@@ -101,11 +101,18 @@ class DolbyVisionRelabelNalsStripContractTest {
     }
 
     @Test
-    fun `the declared-DV suffix SEI rule is armed at the relabel modes' strip calls`() {
+    fun `the declared-DV suffix SEI rule is armed at every strip call that declared Dolby Vision`() {
         assertEquals(
             "one per framing, and only where the container declared Dolby Vision",
             2,
             count(source, "declaredDv = true")
+        )
+        assertEquals(
+            "and the MUTATING strip takes the same rule, one call per framing, gated on the " +
+                "track the container flagged - Fix F8, for the 2026-10-15 K83 / NORViNE file, " +
+                "which is the declared-DV arrival at that mode and never reached the relabel",
+            2,
+            count(source, "declaredDv = mutatingStripDeclaredDv")
         )
         assertFalse(
             "the parameter has to default to off: the in-band path shares this stripper, " +
@@ -129,11 +136,28 @@ class DolbyVisionRelabelNalsStripContractTest {
         )
         assertEquals(1, count(source, "rewritesInSampleParamSets = false"))
         assertEquals(
-            "and exactly one of the two paths arms the suffix-SEI rule",
+            "the relabel modes' strip call arms the suffix-SEI rule unconditionally: that " +
+                "container declared Dolby Vision by definition",
             1,
             count(source, "dvSuffixSeiRuleActive = true")
         )
-        assertEquals(1, count(source, "dvSuffixSeiRuleActive = false"))
+        assertEquals(
+            "and the mutating path arms it on the same fact (Fix F8), so the in-band sniff " +
+                "still reads false through the same flag",
+            1,
+            count(source, "dvSuffixSeiRuleActive = mutatingStripDeclaredDv")
+        )
+        assertFalse(
+            "no call site may hard-code the rule off any more: that is exactly what left a " +
+                "declared-DV mutating strip without it",
+            source.contains("dvSuffixSeiRuleActive = false")
+        )
+        assertEquals(
+            "and the strip's own first-sample line reports the F8 count, so a field log says " +
+                "whether the rule ran and matched anything",
+            1,
+            count(source, "dvSei=")
+        )
         listOf(
             "NALS-bounds (Fix C)",
             "SEI-INVENTORY (Fix A/B",

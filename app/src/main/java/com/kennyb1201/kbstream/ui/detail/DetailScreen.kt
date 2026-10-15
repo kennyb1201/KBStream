@@ -608,6 +608,22 @@ fun DetailScreen(
     }
     var selectedReview by remember { mutableStateOf<TmdbReview?>(null) }
 
+    // The review tile that raised the fullscreen ReviewOverlay. Same rule as the
+    // long-press menus (see [dismissPosterMenu]): the overlay is a focus group
+    // drawn OVER the page, so closing it without a hand-back left the D-pad
+    // focused on a disposed node, which the framework answers by restarting at
+    // the top of the screen.
+    var lastReviewTileFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissReviewOverlay() {
+        selectedReview = null
+        lastReviewTileFocusRequester?.requestFocus()
+    }
+
     // Long-press context menu for More Like This / collection rail posters.
     var posterMenu by remember {
         mutableStateOf<PosterMenuTarget?>(
@@ -1212,6 +1228,20 @@ fun DetailScreen(
 
     // The backdrop a press opened fullscreen, or null (see BackdropOverlay).
     var selectedBackdrop by remember { mutableStateOf<String?>(null) }
+
+    // The Media card that raised that fullscreen still, for the same hand-back
+    // as the review overlay above - this is the page's only destination-less
+    // zoom, so closing it is the only way back to the row that opened it.
+    var lastBackdropCardFocusRequester by remember {
+        mutableStateOf<FocusRequester?>(
+            null
+        )
+    }
+
+    fun dismissBackdropOverlay() {
+        selectedBackdrop = null
+        lastBackdropCardFocusRequester?.requestFocus()
+    }
 
     /**
      * The image choices the viewer has made, and the TMDB id they are filed
@@ -4756,6 +4786,8 @@ fun DetailScreen(
                                         ReviewCard(
                                             review = review,
                                             onClick = {
+                                                lastReviewTileFocusRequester =
+                                                    reviewFocusRequester
                                                 selectedReview = it
                                             },
                                             modifier = Modifier
@@ -5199,6 +5231,8 @@ fun DetailScreen(
                                                 if (video != null) {
                                                     playTrailer(context, video)
                                                 } else {
+                                                    lastBackdropCardFocusRequester =
+                                                        requester
                                                     selectedBackdrop =
                                                         card.fullImageUrl
                                                 }
@@ -5262,7 +5296,7 @@ fun DetailScreen(
                 selectedBackdrop?.let { backdrop ->
                     BackdropOverlay(
                         imageUrl = backdrop,
-                        onDismiss = { selectedBackdrop = null }
+                        onDismiss = { dismissBackdropOverlay() }
                     )
                 }
 
@@ -5339,7 +5373,7 @@ fun DetailScreen(
                     ReviewOverlay(
                         review = review,
                         onDismiss = {
-                            selectedReview = null
+                            dismissReviewOverlay()
                         }
                     )
                 }

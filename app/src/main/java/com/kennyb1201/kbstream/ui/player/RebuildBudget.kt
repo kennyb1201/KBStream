@@ -15,8 +15,15 @@ package com.kennyb1201.kbstream.ui.player
  * so two different problems in one session each keep their own budget while a
  * decoder error repeating six times does not.
  *
- * The budget is only consulted by the failure ladder ([NativePlayerActivity.scheduleRetry]).
- * A live channel keeps its reconnect loop — it has no backup engine to hand to
+ * The budget is consulted by the failure ladder ([NativePlayerActivity.scheduleRetry])
+ * and spent by every rebuild that ladder performs, plus the error card's manual
+ * RETRY — which resets the budget with the rest of the ladder state AND records
+ * the rebuild it is about to do, so the press is a fresh run that is still
+ * capped rather than a silent bypass of the cap. It is reset whenever the
+ * session changes SOURCE ([NativePlayerActivity.switchToSource] and
+ * [NativePlayerActivity.adoptInitialSource]): the cause string is the same on
+ * every source, so without that reset two rebuilds on the source the viewer
+ * just left left the next one with none. A live channel keeps its reconnect loop — it has no backup engine to hand to
  * and its screen is most often left running overnight — and the one-shot
  * recoveries (the Dolby Vision strip, the P5 reroute) are not counted against
  * it, because each of those happens at most once per session by construction.

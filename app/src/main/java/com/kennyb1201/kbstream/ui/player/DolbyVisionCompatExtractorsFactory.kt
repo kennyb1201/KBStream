@@ -262,6 +262,21 @@ private class VideoCompatTrackOutput(
 
     private var mode = Mode.NORMAL
     private var sniffRemaining = 0
+
+    /**
+     * Whether the track taking the MUTATING strip ([Mode.STRIPPING], the path
+     * that rewrites the in-sample parameter sets) is one whose container
+     * DECLARED Dolby Vision.
+     *
+     * Two arrivals share that mode: a declared-DV track on a box with no DV
+     * decoder (the 2026-10-15 K83 / NORViNE file), and a plain-HEVC track whose
+     * DV signalling only exists in-band (the sniff path, which reaches the mode
+     * from [sample] instead of [format]). Only the first is allowed to arm the
+     * NAL 40 rule (Fix F8), so the fact lives here rather than being inferred
+     * from the codec string at sample time - the sniff path's own log line says
+     * its track declared no Dolby Vision at all.
+     */
+    private var mutatingStripDeclaredDv = false
     private var currentCodecs: String? = null
     // The format the decoder was configured with last: the track's original
     // format until a rewrite branch re-advertises it, and that re-advertised
@@ -536,6 +551,9 @@ private class VideoCompatTrackOutput(
         pendingLen = 0
         deferredFormat = null
         hdr10StaticProvideChecked = false
+        // A (re)emitted format is a fresh answer about the container, and this
+        // one is re-earned below only by the declared-DV strip branch.
+        mutatingStripDeclaredDv = false
         // 8.1 conversion is per-profile: only declared P5/P7 streams whose
         // toggle is on are rewritten — the codec stays in the dvhe/dvh1 family
         // (so the Dolby Vision pipeline still engages) with the profile digits
@@ -923,6 +941,10 @@ private class VideoCompatTrackOutput(
             val strippedFormat = stripped.getOrNull()
             if (strippedFormat != null) {
                 mode = Mode.STRIPPING
+                // This is the one arrival at the mutating strip that saw a
+                // container declare Dolby Vision, so it is the one that arms the
+                // declared-DV NAL 40 rule on its samples (Fix F8).
+                mutatingStripDeclaredDv = true
                 logDecoderFormat(strippedFormat)
                 if (!deferHdr10StaticFormat(strippedFormat)) delegate.format(strippedFormat)
                 // This branch re-advertises the track too (mime + codec +
@@ -1331,15 +1353,16 @@ private class VideoCompatTrackOutput(
             // that DOES rewrite the in-sample parameter sets: the playing in-band
             // file and a stalled declared-DV one then compare line for line,
             // which is what makes H12-H15 answerable from a field log. The
-            // suffix-SEI rule is NOT armed on this call: this transform is the
-            // in-band path too, and the audit's rule is explicitly not to touch
-            // NAL 40 handling where it already plays.
+            // suffix-SEI rule (Fix F8) is armed on this call exactly when the
+            // track declared Dolby Vision - the K83 / NORViNE file is the
+            // declared-DV arrival at this mode - and stays off for the in-band
+            // sniff, whose NAL 40 handling is byte-for-byte what it was.
             logFirstSampleAudits(
                 length = sampleEnd,
                 annexB = framing == NalFraming.ANNEX_B,
                 nalLengthFieldLength = nalLengthFieldLength,
                 rewritesInSampleParamSets = true,
-                dvSuffixSeiRuleActive = false
+                dvSuffixSeiRuleActive = mutatingStripDeclaredDv
             )
         }
         // Every rewrite this file performs — the plain strip to HDR10 AND the
@@ -1377,12 +1400,16 @@ private class VideoCompatTrackOutput(
             when (framing) {
                 NalFraming.ANNEX_B ->
                     DolbyVisionCompat.transformAnnexB(
-                        pendingBuf, sampleEnd, stripHdr10Plus = effectiveStripHdr10Plus, stats = stats
+                        pendingBuf, sampleEnd, stripHdr10Plus = effectiveStripHdr10Plus, stats = stats,
+                        // Fix F8: the same mutating rule the NAL-40 audit runs
+                        // above, on the one track that declared Dolby Vision.
+                        declaredDv = mutatingStripDeclaredDv
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.transformLengthDelimited(
                         pendingBuf, sampleEnd, nalLengthFieldLength,
-                        stripHdr10Plus = effectiveStripHdr10Plus, stats = stats
+                        stripHdr10Plus = effectiveStripHdr10Plus, stats = stats,
+                        declaredDv = mutatingStripDeclaredDv
                     )
             }
         }
@@ -1401,6 +1428,12 @@ private class VideoCompatTrackOutput(
                 } else {
                     "First stripped sample (codecs=${currentCodecs ?: "?"}) — " +
                         "dropped RPU=${stats.rpuBytes}B EL=${stats.elBytes}B HDR10+SEI=${stats.hdr10PlusBytes}B " +
+                        // Fix F8's own count, so a field log says whether the
+                        // rule ran and matched anything here (0/0B with the rule
+                        // armed is "ran, found none"; the SEI-INVENTORY line
+                        // above is where a file's suffix SEIs are named either
+                        // way).
+                        "dvSei=${stats.dvVendorSeiNals}nal(s)/${stats.dvVendorSeiBytes}B " +
                         "vpsRewritten=${stats.vpsRewritten}$vpsFail initDataRewritten=$initDataRewritten " +
                         "spsRewritten=${stats.spsRewritten}$spsFail nals=$inventory"
                 }

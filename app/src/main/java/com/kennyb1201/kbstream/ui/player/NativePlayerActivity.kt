@@ -4113,6 +4113,18 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // over on its first failure this time.
             decoderFailureRetried = false
             errorMessageStr = null
+            // The rebuild budget is part of that ladder state and is reset with
+            // it (see [RebuildBudget]). It used not to be, which is the press
+            // that looked broken: the ladder started over, spent ONE rebuild,
+            // hit the still-spent cap and dropped straight back onto the same
+            // card.
+            rebuildBudget.reset()
+            // ...and the rebuild this press is about to do is COUNTED, so the
+            // fresh run is still capped instead of the cap being bypassed
+            // silently by pressing the button again: the ladder behind the
+            // press gets what is left of the allowance, not a new one.
+            PlaybackRecoveryRules.failureCauseKey(lastPlaybackError)
+                ?.let { rebuildBudget.record(it) }
             manualRetryToken++
             recreatePlayer()
         }
@@ -12122,6 +12134,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         resolveAddonIdentity(currentSourceLabel)
         currentUrl = newUrl
         currentAudioUrl = stream.audioUrl
+        // A different source is a different question, so the rebuild budget
+        // starts over with it (see [RebuildBudget]). It is keyed by the FAILURE
+        // cause, which is the same string on every source: two decoder-resource
+        // rebuilds on the source the viewer just left used to leave the next
+        // one with zero — the ladder gave up on a file it had never tried, and
+        // the only lever left was the viewer pressing RETRY.
+        rebuildBudget.reset()
         // The switched source brings its OWN request headers. These used to
         // stay at whatever the activity launched with, so a host gated on a
         // Referer / User-Agent answered the new request with the previous
@@ -12431,6 +12450,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun adoptInitialSource(stream: Stream) {
         val url = stream.url ?: return
         currentUrl = url
+        // Nothing has spent the budget yet at this point, but the adoption is
+        // the same "the source changed" fact the switch above resets on, and it
+        // is where a session that opens a DIFFERENT source than it launched
+        // with (the pinned-candidate path, a picker choice) lands.
+        rebuildBudget.reset()
         currentAudioUrl = stream.audioUrl
         streamHeaders = stream.requestHeaders
         currentSourceLabel = stream.displayLabel()

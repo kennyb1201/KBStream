@@ -352,11 +352,26 @@ class KBContentLoader(context: android.content.Context) {
             .firstOrNull { it.id == addonId && it.enabled }
             ?: return emptyList()
 
-        val metas: List<MetaPreview> = addonRepository.getCatalog(
+        val catalog: List<MetaPreview> = addonRepository.getCatalog(
             baseUrl = addon.manifestUrl,
             type = type,
             catalogId = catalogId
         )
+
+        // The kids ceiling, on the provider branch that had none.
+        //
+        // Every TMDB rail on this screen is filtered in the data layer by the
+        // repository call that fetched it, so a kids profile could not see an
+        // over-ceiling title there - but an ADDON catalog comes back from a
+        // third party as raw metas and was mapped straight to rows, which made
+        // this the one provider hole in the screen. Same call the Home addon
+        // rails and Search make, so the same title is hidden here as there (a
+        // catalog meta is keyed by its own IMDB / "tmdb:" id, which is what
+        // [TmdbRepository.kidsFilterMetas] resolves). A no-op for a profile with
+        // no ceiling, and an id the ceiling cannot resolve is kept only on the
+        // loosest (PG-13) ceiling and dropped on the strict ones - the shared
+        // rule, not a second one invented here.
+        val metas = tmdbRepository.kidsFilterMetas(catalog)
 
         return metas.map { meta ->
             meta.toContentItem()

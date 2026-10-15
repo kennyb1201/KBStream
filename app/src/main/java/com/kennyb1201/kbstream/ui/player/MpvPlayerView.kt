@@ -8,6 +8,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.kennyb1201.kbstream.data.player.LanguageMatch
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import java.io.File
 import java.util.Locale
@@ -2009,7 +2010,16 @@ class MpvPlayerView @JvmOverloads constructor(
             MpvErrorReason.pick(recentErrorLines)
         }
 
-        Log.w(TAG, "mpv: $line")
+        // Scrubbed on the way to logcat, not only on the way to Sentry: mpv
+        // logs the URL it could not open, and a debrid/stream URL carries its
+        // signature in the query string (and sometimes its credentials in the
+        // user-info). [Redaction] masks the shapes a credential takes - the
+        // sensitive field names, URL user-info, bare bearer tokens - and leaves
+        // the rest of the line readable, which is what makes this channel worth
+        // keeping at all. Best effort by construction: a signature carried in a
+        // path segment, with no field name to key on, is not something a
+        // pattern can find.
+        Log.w(TAG, "mpv: ${Redaction.text(line)}")
     }
 
     override fun eventProperty(property: String, value: Long) {

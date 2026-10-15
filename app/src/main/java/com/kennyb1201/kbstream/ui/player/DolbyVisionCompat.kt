@@ -1000,6 +1000,16 @@ internal object DolbyVisionCompat {
         var vpsRewriteFailedReason: String? = null
         var spsRewriteFailedReason: String? = null
         var rpuRewritten = 0
+
+        /**
+         * Fix F8: the suffix SEI (40) NALs a declared-DV mutating strip dropped
+         * because every message in them was vendor data (see [HevcSeiAudit]),
+         * and their NAL bytes. Zero on every other caller, and zero when the
+         * rule never fired - which is what makes "the rule ran and nothing
+         * matched" distinguishable from "the rule was not armed".
+         */
+        var dvVendorSeiNals = 0
+        var dvVendorSeiBytes = 0
     }
 
     /**
@@ -2152,17 +2162,56 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * Fix F8, one predicate: is this NAL the declared-DV suffix SEI (40) whose
+     * every message is vendor data - the NAL both mutating-strip transforms
+     * drop (see [transformAnnexB])?
+     *
+     * Split out of the two `when` blocks that read it because they are separate
+     * copies of the same walk, and the rule has to be the same one in both: an
+     * unarmed caller (the in-band / no-DV-marker path, [declaredDv] false) and
+     * a non-suffix NAL answer false without parsing anything, and a walk that
+     * could not be completed never decides a drop.
+     */
+    private fun dvSuffixSeiVendorOnly(
+        buf: ByteArray,
+        nalType: Int,
+        payloadStart: Int,
+        nalEnd: Int,
+        longEnough: Boolean,
+        declaredDv: Boolean
+    ): Boolean {
+        if (!declaredDv || nalType != NAL_SUFFIX_SEI || !longEnough) return false
+        val walk = HevcSeiAudit.walk(buf, payloadStart, nalEnd)
+        return walk.complete && HevcSeiAudit.isVendorOnly(walk.types)
+    }
+
+    /**
      * DV-strip transform for Annex-B samples: rewrites the VPS to plain
      * single-layer HDR10, drops RPU (62) / EL (63 and any layerId &gt; 0) NALs,
      * and removes HDR10+ prefix SEIs when [stripHdr10Plus]. Returns the new
      * length, or -1 when nothing changed. This is dovi_tool's `remove` plus the
      * VPS rewrite that keeps DV-signaled decoders from stalling.
+     *
+     * [declaredDv] is [stripAnnexB]'s declared-DV gate, and it arms the same
+     * suffix-SEI (40) rule there: a NAL 40 whose every SEI message is vendor
+     * data is dropped, and one carrying any decoder-relevant message is
+     * forwarded bit-exact (see [HevcSeiAudit]). The 2026-10-15 K83 / NORViNE
+     * stall is what puts the rule here: that file is a DECLARED `dvhe.08.06`
+     * track on a box with no Dolby Vision decoder, so it takes this mutating
+     * strip - the one path that rewrites the in-sample parameter sets - while
+     * the audit's NAL-40 drop had only ever been armed on Mode.STRIP_NALS_ONLY.
+     * A vendor-only suffix SEI is Dolby Vision signalling left behind once the
+     * RPU NAL is gone, on this path exactly as on the relabel one.
+     *
+     * Default false, and the in-band sniff path never sets it: a plain-HEVC / no
+     * DV-marker track's NAL 40 handling stays byte-for-byte what it was.
      */
     fun transformAnnexB(
         buf: ByteArray,
         length: Int,
         stripHdr10Plus: Boolean,
-        stats: StripStats?
+        stats: StripStats?,
+        declaredDv: Boolean = false
     ): Int {
         if (length < 5) return -1
         var write = 0
@@ -2230,6 +2279,24 @@ internal object DolbyVisionCompat {
                         keep = false
                         changed = true
                         if (stats != null) stats.elBytes += nalBytes
+                    }
+                    // Fix F8: the declared-DV NAL-40 rule, armed on THIS strip
+                    // as it already is on Mode.STRIP_NALS_ONLY (see
+                    // [dvSuffixSeiVendorOnly] and [HevcSeiAudit]). It runs
+                    // before the HDR10+ branch because a vendor-only NAL 40
+                    // carries no HDR10+ message at all - that branch would let
+                    // it through - while one that does carry decoder-relevant
+                    // messages falls to it exactly as before.
+                    dvSuffixSeiVendorOnly(
+                        buf, nalType, header + 2, nalEnd,
+                        longEnough = nalBytes >= 4, declaredDv = declaredDv
+                    ) -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) {
+                            stats.dvVendorSeiNals += 1
+                            stats.dvVendorSeiBytes += nalBytes
+                        }
                     }
                     isHdr10PlusSeiNal(nalType) && stripHdr10Plus &&
                         seiCarriesHdr10Plus(buf, header + 2, nalEnd) -> {
@@ -2364,7 +2431,8 @@ internal object DolbyVisionCompat {
         length: Int,
         nalLengthFieldLength: Int,
         stripHdr10Plus: Boolean,
-        stats: StripStats?
+        stats: StripStats?,
+        declaredDv: Boolean = false
     ): Int {
         val fieldLen = nalLengthFieldLength.coerceIn(1, 4)
         if (length <= fieldLen) return -1
@@ -2430,6 +2498,19 @@ internal object DolbyVisionCompat {
                         keep = false
                         changed = true
                         if (stats != null) stats.elBytes += nal
+                    }
+                    // Fix F8 in this framing: the same declared-DV NAL-40 rule
+                    // [transformAnnexB] applies (see [dvSuffixSeiVendorOnly]).
+                    dvSuffixSeiVendorOnly(
+                        buf, nalType, payload + 2, payload + nal,
+                        longEnough = nal >= 4, declaredDv = declaredDv
+                    ) -> {
+                        keep = false
+                        changed = true
+                        if (stats != null) {
+                            stats.dvVendorSeiNals += 1
+                            stats.dvVendorSeiBytes += nal
+                        }
                     }
                     isHdr10PlusSeiNal(nalType) && stripHdr10Plus && nal >= 4 &&
                         seiCarriesHdr10Plus(buf, payload + 2, payload + nal) -> {
@@ -2674,6 +2755,15 @@ internal object DolbyVisionCompat {
      * rewrite instead, because mutating in-sample sets is what stalls this
      * chipset) - so a difference between the two lines is attributed to the mode
      * and never misread as a failed transform.
+     *
+     * The tail of the line is Fix F2: `inSampleSets`/`dvFlaggedSurviving`/
+     * `reArm`/`survivors`, over EVERY VPS/SPS the sample carries (not just the
+     * first one dumped above). A set survives DV-flagged when the bytes the
+     * decoder receives still describe Dolby Vision - either the mode does not
+     * write the rewrite back ([rewriteApplied] false) or the rewrite failed - and
+     * a DV-flagged parameter set arriving in a sample is what can put a DV
+     * decoder back into DV mode after the codec config said HDR10. A set with no
+     * DV extension is not a survivor: the rewrite would be a no-op on it.
      */
     fun auditParameterSets(
         buf: ByteArray,
@@ -2685,6 +2775,10 @@ internal object DolbyVisionCompat {
         val (spans, _) = spanNals(buf, length, annexB, nalLengthFieldLength)
         val vps = spans.firstOrNull { it.type == NAL_VPS }
         val sps = spans.firstOrNull { it.type == NAL_SPS }
+        // Every in-sample VPS/SPS, not just the first: the survival question
+        // below is about the sets the decoder will actually be handed, and a
+        // stream can carry more than one (a mid-stream re-init, a repeat).
+        val paramSets = spans.filter { it.type == NAL_VPS || it.type == NAL_SPS }
         return buildString {
             append("paramSets applied=").append(rewriteApplied)
             if (vps == null) {
@@ -2725,6 +2819,24 @@ internal object DolbyVisionCompat {
                     )
                 )
             }
+            // Fix F2: of the sets this sample carries, how many still DESCRIBE
+            // Dolby Vision in the bytes the decoder receives? A set whose DV
+            // extension is not written back - because this mode does not apply
+            // the rewrite, or because the rewrite failed - survives DV-flagged,
+            // and a DV-flagged VPS/SPS arriving in a sample is what can re-arm a
+            // DV decoder MID-STREAM, after the codec config said HDR10. The
+            // audit reads the same rewrite the strip itself would run, so
+            // `applied=` plus this count is the whole answer for one sample;
+            // the strip runs on every sample with this same rule.
+            val survivors = paramSets.mapNotNull { set ->
+                dvFlaggedSurvivorReason(buf, set, rewriteApplied)?.let { why ->
+                    (if (set.type == NAL_VPS) "vps" else "sps") + ":" + why
+                }
+            }
+            append(" inSampleSets=").append(paramSets.size)
+            append(" dvFlaggedSurviving=").append(survivors.size)
+            append(" reArm=").append(if (survivors.isEmpty()) "no" else "yes")
+            append(" survivors=").append(survivors.joinToString(",").ifEmpty { "none" })
         }
     }
 
@@ -2744,6 +2856,52 @@ internal object DolbyVisionCompat {
                 ":" + HevcSeiAudit.hex(outcome.rbsp, 0, outcome.rbsp.size)
         SpsRewriteOutcome.NoDvExtension -> "noDvExtension"
         is SpsRewriteOutcome.Failed -> "failed(" + outcome.reason + ")"
+    }
+
+    /** Recorded when a set leaves its DV extension in the sample (Fix F2). */
+    private const val SURVIVOR_REWRITE_FAILED = "rewriteFailed"
+
+    /** Recorded when the rewrite exists but this mode does not apply it (Fix F2). */
+    private const val SURVIVOR_REWRITE_LEFT = "rewriteLeftInSample"
+
+    /** What the HDR10 rewrite can make of one in-sample parameter set (Fix F2). */
+    private enum class ParamSetRewrite { REWRITABLE, NO_DV_EXTENSION, NOT_REWRITABLE }
+
+    private fun paramSetRewrite(buf: ByteArray, set: NalSpan): ParamSetRewrite =
+        if (set.to - set.from < 4) {
+            // Too short to carry a profile_tier_level, let alone an extension:
+            // the strip cannot rewrite it away, so it survives as it stands.
+            ParamSetRewrite.NOT_REWRITABLE
+        } else when (set.type) {
+            NAL_VPS -> when (rewriteVpsToHdr10(buf, set.from + 2, set.to)) {
+                is VpsRewriteOutcome.Rewritten -> ParamSetRewrite.REWRITABLE
+                VpsRewriteOutcome.NoDvExtension -> ParamSetRewrite.NO_DV_EXTENSION
+                is VpsRewriteOutcome.Failed -> ParamSetRewrite.NOT_REWRITABLE
+            }
+            else -> when (rewriteSpsToHdr10(buf, set.from + 2, set.to)) {
+                is SpsRewriteOutcome.Rewritten -> ParamSetRewrite.REWRITABLE
+                SpsRewriteOutcome.NoDvExtension -> ParamSetRewrite.NO_DV_EXTENSION
+                is SpsRewriteOutcome.Failed -> ParamSetRewrite.NOT_REWRITABLE
+            }
+        }
+
+    /**
+     * Fix F2's verdict for one in-sample parameter set: the reason it survives
+     * with its DV extension intact, or null when it does not.
+     *
+     * [rewriteApplied] is the calling mode's own answer (see
+     * [auditParameterSets]). A set with NO DV extension cannot re-arm anything
+     * whatever the mode does with it - the rewrite would be a no-op - so it is
+     * not a survivor; the strip leaves such a set alone by design.
+     */
+    private fun dvFlaggedSurvivorReason(
+        buf: ByteArray,
+        set: NalSpan,
+        rewriteApplied: Boolean
+    ): String? = when (paramSetRewrite(buf, set)) {
+        ParamSetRewrite.NOT_REWRITABLE -> SURVIVOR_REWRITE_FAILED
+        ParamSetRewrite.REWRITABLE -> if (rewriteApplied) null else SURVIVOR_REWRITE_LEFT
+        ParamSetRewrite.NO_DV_EXTENSION -> null
     }
 
     /**

@@ -53,6 +53,7 @@ class KidsCeilingSurfaceContractTest {
         const val HOME = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
         const val SEARCH = "com/kennyb1201/kbstream/ui/search/SearchViewModel.kt"
         const val IPTV = "com/kennyb1201/kbstream/ui/iptv/IptvViewModel.kt"
+        const val KB = "com/kennyb1201/kbstream/data/kb/KBContentLoader.kt"
 
         val surfaces = listOf(
             Surface("TMDB discover / tag rails", TMDB, "kidsFilterPage(", 2),
@@ -67,6 +68,11 @@ class KidsCeilingSurfaceContractTest {
             // profiles; now they are vetted, which is the second
             // kidsFilterMetas call in SearchViewModel.
             Surface("search add-on rails", SEARCH, "kidsFilterMetas(", 2),
+            // The one provider branch the ceiling had never reached: a KB
+            // folder's add-on catalog rows were mapped straight to cards while
+            // every TMDB rail beside them was filtered by the repository call
+            // that fetched it.
+            Surface("KB folder add-on rails", KB, "kidsFilterMetas(", 1),
             Surface("search Collections rail", SEARCH, "kidsFilterCollections(", 1),
             Surface("Browse keyword and collection chips", SEARCH, "forMode(", 2),
             Surface("Live TV channels (lock, not a rating)", IPTV, "kidsFilterChannels(", 2)

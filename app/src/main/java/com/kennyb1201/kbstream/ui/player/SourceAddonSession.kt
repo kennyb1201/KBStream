@@ -122,13 +122,13 @@ internal object SourceAddonSession {
  */
 internal class SourcePlaybackProbe(
     private val dead: MutableSet<String>,
-    private val isServable: (url: String, headers: Map<String, String>) -> Boolean,
+    private val isServable: (url: String, headers: Map<String, String>, timeoutMs: Long) -> Boolean,
 ) {
 
     /** The production probe: a ranged GET on the shared app HTTP client. */
     constructor(dead: MutableSet<String>, client: OkHttpClient) : this(
         dead,
-        { url, headers -> rangedGetServable(client, url, headers) }
+        { url, headers, timeoutMs -> rangedGetServable(client, url, headers, timeoutMs) }
     )
 
     /**
@@ -156,8 +156,19 @@ internal class SourcePlaybackProbe(
                 val url = candidate.url
                 if (url.isNullOrBlank()) continue
                 probes += 1
-                val servable = runCatching { isServable(url, headersFor(candidate)) }
-                    .getOrDefault(false)
+                // Index 0 is the source this session is about to open - the
+                // viewer's explicit choice when they made one, since
+                // [probeCandidates] pins it to the head - so it is the one
+                // candidate probed with the larger ceiling (see
+                // [probeTimeoutMsFor]). Without that, a slow-but-alive tapped
+                // source answered just past the ranked ceiling, was read as
+                // dead, and the session opened a DIFFERENT source than the one
+                // the viewer tapped: the bug the pinning was added to fix,
+                // arriving through the timeout instead of through rank order.
+                val timeoutMs = probeTimeoutMsFor(isPinned = i == 0)
+                val servable =
+                    runCatching { isServable(url, headersFor(candidate), timeoutMs) }
+                        .getOrDefault(false)
                 if (servable) return@withContext candidate
                 SourceAddonSession.markDead(dead, addons.getOrNull(i))
             }
@@ -168,6 +179,22 @@ internal class SourcePlaybackProbe(
     companion object {
         /** Per-probe ceiling, so one hanging host cannot stall the launch. */
         const val TIMEOUT_MS = 2500L
+
+        /**
+         * The ceiling for the PINNED candidate - the source the viewer chose.
+         *
+         * The ranked ceiling above is right for a candidate the probe is
+         * choosing between: a host that has not answered in 2.5s is not worth
+         * the launch. It is wrong for the one candidate whose answer decides
+         * whether the viewer's own choice is honoured, because the failure
+         * modes it produces are false negatives rather than dead links: a cold
+         * TLS handshake plus a debrid redirect chain routinely lands between
+         * 2.5s and 4s on the first request of a session, and the box is on a
+         * home connection. A link that is genuinely dead does not answer at 4s
+         * either, so this costs the extra second and a half only in the case
+         * where the session was about to override the tap.
+         */
+        const val PINNED_TIMEOUT_MS = 4000L
 
         /** One byte proves the file is servable; nothing more is transferred. */
         private const val RANGE_VALUE = "bytes=0-0"
@@ -181,7 +208,8 @@ internal class SourcePlaybackProbe(
         fun rangedGetServable(
             client: OkHttpClient,
             url: String,
-            headers: Map<String, String>
+            headers: Map<String, String>,
+            timeoutMs: Long = TIMEOUT_MS
         ): Boolean = runCatching {
             val request = Request.Builder()
                 .url(url)
@@ -190,7 +218,7 @@ internal class SourcePlaybackProbe(
                 .get()
                 .build()
             client.newBuilder()
-                .callTimeout(TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                .callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                 .build()
                 .newCall(request)
                 .execute()
@@ -198,6 +226,18 @@ internal class SourcePlaybackProbe(
         }.getOrDefault(false)
     }
 }
+
+/**
+ * How long the probe waits for the candidate at a given position.
+ *
+ * Only the head candidate is "pinned" - [probeCandidates] puts the source this
+ * session is about to open there - and only that one gets
+ * [SourcePlaybackProbe.PINNED_TIMEOUT_MS]; every other candidate the probe is
+ * merely choosing between gets the shorter [SourcePlaybackProbe.TIMEOUT_MS].
+ * Exposed as a rule so the policy is testable without an HTTP client.
+ */
+internal fun probeTimeoutMsFor(isPinned: Boolean): Long =
+    if (isPinned) SourcePlaybackProbe.PINNED_TIMEOUT_MS else SourcePlaybackProbe.TIMEOUT_MS
 
 /**
  * The order the pre-playback probe should test sources in, for one launch.

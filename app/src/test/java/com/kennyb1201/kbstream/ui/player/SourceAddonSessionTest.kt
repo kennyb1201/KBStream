@@ -120,7 +120,7 @@ class SourceAddonSessionTest {
         val addons = listOf("A", "A", "B")
         val dead = mutableSetOf<String>()
         val answered = mapOf("u0" to false, "u1" to false, "u2" to true)
-        val probe = SourcePlaybackProbe(dead) { url, _ -> answered.getValue(url) }
+        val probe = SourcePlaybackProbe(dead) { url, _, _ -> answered.getValue(url) }
 
         val pick = runBlocking { probe.pickLiveSource(candidates, addons) { emptyMap() } }
 
@@ -133,7 +133,7 @@ class SourceAddonSessionTest {
         val candidates = listOf(stream("u0"), stream("u1"), stream("u2"))
         val addons = listOf("A", "A", "B")
         val dead = mutableSetOf<String>()
-        val probe = SourcePlaybackProbe(dead) { _, _ -> false }
+        val probe = SourcePlaybackProbe(dead) { _, _, _ -> false }
 
         val pick = runBlocking { probe.pickLiveSource(candidates, addons) { emptyMap() } }
 
@@ -147,7 +147,7 @@ class SourceAddonSessionTest {
         val addons = listOf("A", "B")
         val dead = mutableSetOf<String>()
         var calls = 0
-        val probe = SourcePlaybackProbe(dead) { _, _ ->
+        val probe = SourcePlaybackProbe(dead) { _, _, _ ->
             calls += 1
             throw SocketTimeoutException("probe timed out")
         }
@@ -165,7 +165,7 @@ class SourceAddonSessionTest {
         val addons = candidates.indices.map { "addon$it" }
         val dead = mutableSetOf<String>()
         val probed = mutableListOf<String>()
-        val probe = SourcePlaybackProbe(dead) { url, _ ->
+        val probe = SourcePlaybackProbe(dead) { url, _, _ ->
             probed += url
             false
         }
@@ -192,7 +192,7 @@ class SourceAddonSessionTest {
         val addons = listOf("A", "B")
         val dead = mutableSetOf<String>()
         var calls = 0
-        val probe = SourcePlaybackProbe(dead) { _, _ ->
+        val probe = SourcePlaybackProbe(dead) { _, _, _ ->
             calls += 1
             true
         }
@@ -208,7 +208,7 @@ class SourceAddonSessionTest {
     fun `a single source is never probed`() {
         val candidates = listOf(stream("u0"))
         var calls = 0
-        val probe = SourcePlaybackProbe(mutableSetOf()) { _, _ ->
+        val probe = SourcePlaybackProbe(mutableSetOf()) { _, _, _ ->
             calls += 1
             true
         }
@@ -225,7 +225,7 @@ class SourceAddonSessionTest {
     fun `the probe sends the source's own playback headers`() {
         val candidates = listOf(stream("u0"), stream("u1"))
         val seen = mutableListOf<Map<String, String>>()
-        val probe = SourcePlaybackProbe(mutableSetOf()) { _, headers ->
+        val probe = SourcePlaybackProbe(mutableSetOf()) { _, headers, _ ->
             seen += headers
             true
         }
@@ -257,7 +257,7 @@ class SourceAddonSessionTest {
         val (candidates, ordered) = probeCandidates(sources, addons, "B", null, emptyMap())
         assertEquals("the pinned source is probed first", listOf("B", "A"), candidates.map { it.url })
         val dead = mutableSetOf<String>()
-        val probe = SourcePlaybackProbe(dead) { _, _ -> true }
+        val probe = SourcePlaybackProbe(dead) { _, _, _ -> true }
 
         val pick = runBlocking { probe.pickLiveSource(candidates, ordered) { emptyMap() } }
 
@@ -273,11 +273,76 @@ class SourceAddonSessionTest {
         val addons = listOf("A", "B")
         val (candidates, ordered) = probeCandidates(sources, addons, "B", null, emptyMap())
         val dead = mutableSetOf<String>()
-        val probe = SourcePlaybackProbe(dead) { url, _ -> url == "A" }
+        val probe = SourcePlaybackProbe(dead) { url, _, _ -> url == "A" }
 
         val pick = runBlocking { probe.pickLiveSource(candidates, ordered) { emptyMap() } }
 
         assertEquals("the pick was dead, so rank order wins", "A", pick.url)
         assertEquals("its addon is dead for the session", setOf("b"), dead)
+    }
+
+    // ── the pinned candidate's probe budget ─────────────────────────
+    //
+    // The bug this closes: every candidate was probed under the same 2.5s
+    // ceiling, so a tapped source that was merely slow to answer (cold TLS plus
+    // a debrid redirect chain) was read as dead and the session opened a
+    // different source - the very override the pinning above exists to
+    // prevent, arriving through the timeout instead of through rank order. Only
+    // the pinned head of the probe order now gets the larger ceiling.
+
+    @Test
+    fun `only the head of the probe order gets the larger ceiling`() {
+        assertEquals(SourcePlaybackProbe.PINNED_TIMEOUT_MS, probeTimeoutMsFor(isPinned = true))
+        assertEquals(SourcePlaybackProbe.TIMEOUT_MS, probeTimeoutMsFor(isPinned = false))
+        assertTrue(
+            "patience for the viewer's own pick must exceed a ranked guess",
+            SourcePlaybackProbe.PINNED_TIMEOUT_MS > SourcePlaybackProbe.TIMEOUT_MS
+        )
+    }
+
+    @Test
+    fun `the probe spends the larger ceiling on the pinned head only`() {
+        val candidates = listOf(stream("pinned"), stream("ranked1"), stream("ranked2"))
+        val seen = mutableListOf<Pair<String, Long>>()
+        val probe = SourcePlaybackProbe(mutableSetOf()) { url, _, timeoutMs ->
+            seen += url to timeoutMs
+            false
+        }
+
+        runBlocking { probe.pickLiveSource(candidates, listOf("A", "B", "C")) { emptyMap() } }
+
+        assertEquals(
+            "the tapped source is probed with more patience than the ranked ones",
+            listOf(
+                "pinned" to SourcePlaybackProbe.PINNED_TIMEOUT_MS,
+                "ranked1" to SourcePlaybackProbe.TIMEOUT_MS,
+                "ranked2" to SourcePlaybackProbe.TIMEOUT_MS
+            ),
+            seen
+        )
+    }
+
+    @Test
+    fun `a slow but live tapped source stays chosen instead of falling through`() {
+        // The end-to-end shape of the fix. The tapped source answers later than
+        // the ranked ceiling but within its own, and the ranked candidate would
+        // have answered instantly - so without the larger pinned ceiling the
+        // probe walks past a live tap and demotes its addon.
+        val sources = listOf(stream("tapped"), stream("ranked"))
+        val (candidates, ordered) =
+            probeCandidates(sources, listOf("A", "B"), "tapped", null, emptyMap())
+        val dead = mutableSetOf<String>()
+        val probe = SourcePlaybackProbe(dead) { url, _, timeoutMs ->
+            if (url == "tapped") {
+                timeoutMs >= SourcePlaybackProbe.PINNED_TIMEOUT_MS
+            } else {
+                true
+            }
+        }
+
+        val pick = runBlocking { probe.pickLiveSource(candidates, ordered) { emptyMap() } }
+
+        assertEquals("the tapped source is what opens", "tapped", pick.url)
+        assertTrue("a source that did answer is never demoted", dead.isEmpty())
     }
 }
