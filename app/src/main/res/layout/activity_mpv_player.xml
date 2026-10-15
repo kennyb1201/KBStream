@@ -32,11 +32,19 @@
     android:layout_height="match_parent"
     android:background="@android:color/black">
 
+    <!-- NO background on the surface view itself (field, 2026-10-15). An opaque
+         background here is the window's own black painted over the region this
+         view's Surface occupies, which is the remaining layer that can sit on
+         top of a picture mpv says it is showing - the Fire TV report is "Got
+         First Frame Render" at 6864 kbps over a black panel, with the
+         MEDIA_OVERLAY z-order already in place (see MpvPlayerView's init).
+         The root frame (mpv_root) and the load splash above both keep their
+         @android:color/black, so the letterbox bands, the splash and the chrome
+         stay black exactly as before. -->
     <com.kennyb1201.kbstream.ui.player.MpvPlayerView
         android:id="@+id/mpv_surface"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:background="@android:color/black"
         android:focusable="false"
         android:focusableInTouchMode="false" />
 
