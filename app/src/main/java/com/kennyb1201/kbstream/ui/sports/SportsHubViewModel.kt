@@ -451,14 +451,32 @@ class SportsHubViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * Re-arms the tick for the tab in front of the viewer when the hub comes
-     * back. Re-aimed from the sections already held, and from the current
-     * selection, because the live set may have moved while the player was up -
-     * a game that kicked off in the meantime is polled from the first beat.
+     * Comes back to the hub after it was left: re-reads the whole slate, then
+     * lets [refresh] re-aim the tick from what came back.
+     *
+     * Re-aiming the tick alone was not enough, and the reason is the copy in
+     * hand: a game fetched as UPCOMING that kicked off and finished while the
+     * player was up is never LIVE in the held sections, so the favourite rule
+     * could not pick its league to poll and the card kept the pre-game status
+     * indefinitely (reported 2026-10-15: a Rays game watched to the end, and the
+     * favourites tab still saying it had not started). A game that was LIVE and
+     * is now FINAL had the mirror problem, and the held scores were up to a beat
+     * old everywhere else.
+     *
+     * So the return trip pays for the thing the viewer is actually asking for -
+     * a hub that is true the moment it is on screen - and [refresh] is the right
+     * vehicle for it: it reads every enabled league in one pass, keeps the cards
+     * on screen while it does (a populated hub shows no spinner and no flash),
+     * and finishes by re-arming the tick from the fresh sections. `returning` is
+     * what keeps the FIRST composition from paying for it twice: nothing has
+     * paused the hub then, so the load the ViewModel's own init started is the
+     * one the viewer waits for.
      */
     fun resumeLivePoll() {
+        // Read before clearing: the paused flag is exactly "this hub was left".
+        val returning = pollPaused
         pollPaused = false
-        syncLivePoll()
+        if (returning) refresh() else syncLivePoll()
     }
 
     /**
