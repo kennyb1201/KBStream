@@ -72,6 +72,96 @@ typedef struct DoviData {
     size_t len;
 } DoviData;
 
+/*
+ * The RPU's own HDR10 metadata — the part of a Profile 8 RPU that survives as
+ * the "static HDR10" record once the RPU itself is stripped.
+ *
+ * Level 6 is the block Dolby's spec defines as the ST 2086/HDR10 metadata
+ * fallback: max/min display mastering luminance and MaxCLL/MaxFALL. It does NOT
+ * carry the display primaries or the white point (Light Level 9/10/11 carry
+ * primaries as *indices*, not as ST 2086 chromaticities), because a Profile 8
+ * base layer is BT.2020 / D65 by definition — so a complete ST 2086 record can
+ * be built from this block plus those fixed primaries. That is what
+ * [DvHdr10StaticInfo] does on the Kotlin side.
+ *
+ * Only the path down to `dm_data.level6` is reproduced: the block lists above
+ * it (level8/9/10/11/254/255) are never read, and their absence from this
+ * struct only makes it shorter than the object libdovi allocated — the fields
+ * below keep their real offsets, which is all a read needs.
+ *
+ * Copied from the header a real build generates (cargo-c/cbindgen), the same
+ * one checked against the 3.3.2 tree the reference player ships: this part of
+ * the C ABI is identical across 3.3.2 and the 3.4.0 this repo pins (the
+ * `DoviRpuDataHeader` reproduced above matches that header field-for-field).
+ */
+typedef struct {
+    uint16_t max_display_mastering_luminance;
+    uint16_t min_display_mastering_luminance;
+    uint16_t max_content_light_level;
+    uint16_t max_frame_average_light_level;
+} DoviExtMetadataBlockLevel6;
+
+/**
+ * Level 2's block list, whose only role here is its size in [DoviDmData].
+ * The element type is a pointer list (`const DoviExtMetadataBlockLevel2 *const
+ * *`) plus a length, which is layout-identical to this on every ABI.
+ */
+typedef struct {
+    const void *const *list;
+    size_t len;
+} DoviLevel2BlockList;
+
+/** The DM metadata blocks, up to the one this app reads. */
+typedef struct {
+    uint64_t num_ext_blocks;
+    const void *level1;
+    DoviLevel2BlockList level2;
+    const void *level3;
+    const void *level4;
+    const void *level5;
+    const DoviExtMetadataBlockLevel6 *level6;
+} DoviDmData;
+
+typedef struct {
+    bool compressed;
+    uint64_t affected_dm_metadata_id;
+    uint64_t current_dm_metadata_id;
+    uint64_t scene_refresh_flag;
+    int16_t ycc_to_rgb_coef0;
+    int16_t ycc_to_rgb_coef1;
+    int16_t ycc_to_rgb_coef2;
+    int16_t ycc_to_rgb_coef3;
+    int16_t ycc_to_rgb_coef4;
+    int16_t ycc_to_rgb_coef5;
+    int16_t ycc_to_rgb_coef6;
+    int16_t ycc_to_rgb_coef7;
+    int16_t ycc_to_rgb_coef8;
+    uint32_t ycc_to_rgb_offset0;
+    uint32_t ycc_to_rgb_offset1;
+    uint32_t ycc_to_rgb_offset2;
+    int16_t rgb_to_lms_coef0;
+    int16_t rgb_to_lms_coef1;
+    int16_t rgb_to_lms_coef2;
+    int16_t rgb_to_lms_coef3;
+    int16_t rgb_to_lms_coef4;
+    int16_t rgb_to_lms_coef5;
+    int16_t rgb_to_lms_coef6;
+    int16_t rgb_to_lms_coef7;
+    int16_t rgb_to_lms_coef8;
+    uint16_t signal_eotf;
+    uint16_t signal_eotf_param0;
+    uint16_t signal_eotf_param1;
+    uint32_t signal_eotf_param2;
+    uint8_t signal_bit_depth;
+    uint8_t signal_color_space;
+    uint8_t signal_chroma_format;
+    uint8_t signal_full_range_flag;
+    uint16_t source_min_pq;
+    uint16_t source_max_pq;
+    uint16_t source_diagonal;
+    DoviDmData dm_data;
+} DoviVdrDmData;
+
 /** Parses an UNSPEC62 RPU NAL: bytes INCLUDING its 2-byte NAL header. */
 DoviRpuOpaque *dovi_parse_unspec62_nalu(const uint8_t *buf, size_t len);
 
@@ -83,6 +173,17 @@ int32_t dovi_convert_rpu_with_mode(DoviRpuOpaque *ptr, uint8_t mode);
 
 /** The converted RPU NAL (header included), or null. Free with dovi_data_free(). */
 const DoviData *dovi_write_unspec62_nalu(DoviRpuOpaque *ptr);
+
+/**
+ * The parsed RPU's DM metadata, or null. Free with dovi_rpu_free_vdr_dm_data().
+ *
+ * `dm_data.level6` is null too when the RPU carries no Level 6 block, which is
+ * the common answer for a stream whose HDR10 static metadata lives in the base
+ * layer's SEI instead.
+ */
+const DoviVdrDmData *dovi_rpu_get_vdr_dm_data(const DoviRpuOpaque *ptr);
+
+void dovi_rpu_free_vdr_dm_data(const DoviVdrDmData *ptr);
 
 /** The parse/convert error string, or null. Owned by the object - do not free. */
 const char *dovi_rpu_get_error(const DoviRpuOpaque *ptr);

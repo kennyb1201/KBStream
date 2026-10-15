@@ -280,6 +280,58 @@ internal object DoviBridge {
         return written
     }
 
+    /**
+     * The RPU's Level 6 block — Dolby's ST 2086/HDR10 metadata fallback —
+     * read out of the first UNSPEC62 NAL in a sample.
+     *
+     * Returns `[maxDisplayMasteringLuminance, minDisplayMasteringLuminance,
+     * maxContentLightLevel, maxFrameAverageLightLevel]` in the RPU's own units,
+     * or null when this build has no libdovi, the sample carries no RPU, or the
+     * RPU carries no Level 6 block (the common answer for a stream whose HDR10
+     * static metadata lives in the base layer's SEI instead).
+     *
+     * This is the one source of that metadata left once the RPU is stripped:
+     * a Profile 8 base layer has no SEI of its own in plenty of remuxes, and
+     * with the RPU gone nothing tells the display how to map the picture — see
+     * [DvHdr10StaticInfo]. Never throws: a missing library or a failed parse is
+     * "no metadata", exactly like the rest of this object.
+     */
+    fun readHdr10StaticMetadata(
+        buf: ByteArray,
+        length: Int,
+        nalFormat: Int,
+        nalLengthFieldLength: Int
+    ): IntArray? {
+        if (!available || length <= 0) return null
+        val out = IntArray(4)
+        val written = runCatching {
+            nativeReadHdr10StaticMetadata(
+                sample = buf,
+                sampleLen = length,
+                nalFormat = nalFormat,
+                nalLengthFieldLength = nalLengthFieldLength,
+                outValues = out
+            )
+        }.getOrElse {
+            Log.w(TAG, "libdovi could not read the RPU's HDR10 metadata", it)
+            return null
+        }
+        return if (written > 0) out else null
+    }
+
+    /**
+     * [readHdr10StaticMetadata]'s JNI entry point. Writes the four Level 6
+     * values into `outValues` and returns 1 when they were found, 0 when the
+     * sample (or the RPU) carries none, or a negative error code.
+     */
+    external fun nativeReadHdr10StaticMetadata(
+        sample: ByteArray,
+        sampleLen: Int,
+        nalFormat: Int,
+        nalLengthFieldLength: Int,
+        outValues: IntArray
+    ): Int
+
     private val DV_PROFILE_REGEX = Regex("^(dvhe|dvav|dvh1|dva1)\\.(\\d+)\\.")
 
     /**

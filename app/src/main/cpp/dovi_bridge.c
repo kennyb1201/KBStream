@@ -345,6 +345,161 @@ static int process_sample(
     return write;
 }
 
+/*
+ * The RPU's Level 6 block, written into out[0..3] -- Dolby's own ST 2086/HDR10
+ * metadata fallback: max/min display mastering luminance and MaxCLL/MaxFALL.
+ *
+ * Returns 1 when the block is there, 0 when the RPU parses without one, or a
+ * negative error code (DV_NOT_DOLBY_VISION when this is not an RPU NAL at all).
+ *
+ * Why the app wants it: stripping the RPU takes these values out of the stream,
+ * and a Profile 8 base layer that carries no mastering-display/content-light SEI
+ * of its own has nothing left to tell the display how to map the picture --
+ * which is a black screen on the field box, not a subtle color error. This is
+ * the one place they can still be read from once the RPU is on its way out.
+ */
+static int read_level6(const uint8_t *nal, size_t len, uint16_t out[4]) {
+    if (len < DV_NAL_HEADER_BYTES) return DV_PARSE_ERROR;
+    if (hevc_nal_type(nal, len) != NAL_TYPE_DV_RPU) return DV_NOT_DOLBY_VISION;
+
+    DoviRpuOpaque *rpu = dovi_parse_unspec62_nalu(nal, len);
+    if (rpu == NULL) return DV_PARSE_ERROR;
+
+    int result = 0;
+    const DoviVdrDmData *dm = dovi_rpu_get_vdr_dm_data(rpu);
+    if (dm != NULL) {
+        const DoviExtMetadataBlockLevel6 *level6 = dm->dm_data.level6;
+        if (level6 != NULL) {
+            out[0] = level6->max_display_mastering_luminance;
+            out[1] = level6->min_display_mastering_luminance;
+            out[2] = level6->max_content_light_level;
+            out[3] = level6->max_frame_average_light_level;
+            result = 1;
+        }
+        dovi_rpu_free_vdr_dm_data(dm);
+    }
+    dovi_rpu_free(rpu);
+    return result;
+}
+
+/*
+ * The first UNSPEC62 NAL in a framed sample: its payload offset in *nal_off and
+ * its payload length in *nal_len, or 0 when the sample carries none.
+ *
+ * The framing is the same walk process_sample() does, without the rewrite: this
+ * caller only needs to find the RPU, not rebuild the sample around it.
+ */
+static int first_rpu_nal(
+    const uint8_t *in,
+    int len,
+    int format,
+    int length_field_bytes,
+    int *nal_off,
+    int *nal_len
+) {
+    if (format == NAL_FORMAT_SINGLE_NAL) {
+        if (hevc_nal_type(in, (size_t)len) != NAL_TYPE_DV_RPU) return 0;
+        *nal_off = 0;
+        *nal_len = len;
+        return 1;
+    }
+
+    bool length_delimited = (format == NAL_FORMAT_LENGTH_DELIMITED);
+    if (length_delimited && (length_field_bytes < 1 || length_field_bytes > 4)) return 0;
+
+    int read = 0;
+    while (read < len) {
+        int header;
+        int nal_end;
+        if (length_delimited) {
+            if (read + length_field_bytes > len) return 0;
+            int nal_size = 0;
+            for (int i = 0; i < length_field_bytes; i++) {
+                nal_size = (nal_size << 8) | in[read + i];
+            }
+            if (nal_size <= 0) return 0;
+            header = read + length_field_bytes;
+            nal_end = header + nal_size;
+            if (nal_end > len) return 0;
+        } else {
+            int code = find_start_code(in, read, len);
+            if (code < 0) return 0;
+            int code_len =
+                (code + 3 < len && in[code + 2] == 0x00 && in[code + 3] == 0x01) ? 4 : 3;
+            header = code + code_len;
+            nal_end = find_start_code(in, header, len);
+            if (nal_end < 0) nal_end = len;
+        }
+
+        int nal = nal_end - header;
+        if (hevc_nal_type(in + header, (size_t)nal) == NAL_TYPE_DV_RPU) {
+            *nal_off = header;
+            *nal_len = nal;
+            return 1;
+        }
+        read = nal_end;
+    }
+    return 0;
+}
+
+/*
+ * Reads the RPU Level 6 block out of one sample and writes it to out_values as
+ * [max_luminance, min_luminance, max_cll, max_fall].
+ *
+ * Returns 1 when it was found (out_values filled), 0 when the sample carries no
+ * RPU or the RPU carries no Level 6, or a negative error code. A caller must
+ * treat "0" as "nothing to add", never as "no metadata exists".
+ */
+JNIEXPORT jint JNICALL
+Java_com_kennyb1201_kbstream_ui_player_DoviBridge_nativeReadHdr10StaticMetadata(
+    JNIEnv *env,
+    jobject thiz,
+    jbyteArray sample,
+    jint sample_len,
+    jint nal_format,
+    jint nal_length_field_length,
+    jintArray out_values
+) {
+    (void)thiz;
+    if (sample == NULL || out_values == NULL) return DV_PARSE_ERROR;
+
+    jsize in_cap = (*env)->GetArrayLength(env, sample);
+    if (sample_len <= 0) return 0;
+    if (sample_len > in_cap) sample_len = in_cap;
+
+    uint8_t *in = (uint8_t *)malloc((size_t)sample_len);
+    if (in == NULL) return DV_PARSE_ERROR;
+    (*env)->GetByteArrayRegion(env, sample, 0, sample_len, (jbyte *)in);
+
+    int nal_off = 0;
+    int nal_len = 0;
+    int result = 0;
+    uint16_t level6[4];
+    if (first_rpu_nal(
+            in,
+            (int)sample_len,
+            (int)nal_format,
+            (int)nal_length_field_length,
+            &nal_off,
+            &nal_len
+        )) {
+        result = read_level6(in + nal_off, (size_t)nal_len, level6);
+        if (result > 0) {
+            jint values[4];
+            for (int i = 0; i < 4; i++) values[i] = (jint)level6[i];
+            jsize out_cap = (*env)->GetArrayLength(env, out_values);
+            if (out_cap < 4) {
+                result = DV_BUFFER_TOO_SMALL;
+            } else {
+                (*env)->SetIntArrayRegion(env, out_values, 0, 4, values);
+            }
+        }
+    }
+
+    free(in);
+    return (jint)result;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_kennyb1201_kbstream_ui_player_DoviBridge_nativeDetectProfile(
     JNIEnv *env,

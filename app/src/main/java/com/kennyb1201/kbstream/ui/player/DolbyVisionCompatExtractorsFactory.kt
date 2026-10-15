@@ -258,19 +258,19 @@ private class VideoCompatTrackOutput(
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
     private val convertTo81 = convertP7To81 || convertP5To81
 
-    // The HDR10 color metadata every DV->HDR10 rewrite path below attaches —
-    // see [DV_HDR10_COLOR_INFO] for why it is not optional.
-    private val hdr10ColorInfo = DV_HDR10_COLOR_INFO
-
     private enum class Mode { NORMAL, SNIFFING, STRIPPING, STRIP_NALS_ONLY }
 
     private var mode = Mode.NORMAL
     private var sniffRemaining = 0
     private var currentCodecs: String? = null
-    // Original format (untouched init data) of the current track, kept so the
-    // sniff path can re-emit the format with rewritten VPS/SPS once in-band
-    // Dolby Vision is confirmed on a track whose codec config was forwarded
-    // verbatim (plain hvc1/hev1 remuxes).
+    // The format the decoder was configured with last: the track's original
+    // format until a rewrite branch re-advertises it, and that re-advertised
+    // format afterwards. The sniff path reads it to re-emit the format with
+    // rewritten VPS/SPS once in-band Dolby Vision is confirmed on a track whose
+    // codec config was forwarded verbatim (plain hvc1/hev1 remuxes), and
+    // [provideHdr10StaticMetadata] builds on it so the metadata it attaches
+    // lands on the format the decoder actually has instead of reverting the
+    // relabel (mime and codec string included).
     private var lastFormat: Format? = null
     private var isP5Content = false
     /**
@@ -285,6 +285,17 @@ private class VideoCompatTrackOutput(
     private var pendingBuf = ByteArray(0)
     private var pendingLen = 0
     private var stripReported = false
+
+    /**
+     * True once the first sample of this track has been offered the RPU's own
+     * HDR10 static metadata (see [provideHdr10StaticMetadata]).
+     *
+     * One attempt per track, not per sample: the Level 6 block is identical in
+     * every RPU of a stream, so a second read would be a second JNI parse for a
+     * value that cannot change — and a track whose first RPU has no block never
+     * grows one later.
+     */
+    private var hdr10StaticProvideChecked = false
     // True once this track's codec config (hvcC record / Annex-B parameter
     // sets) was rewritten to single-layer HDR10 at format time. MP4/fMP4
     // samples carry no VPS/SPS, so the per-sample stats below never see them;
@@ -325,6 +336,75 @@ private class VideoCompatTrackOutput(
         )
     }
 
+    /**
+     * Attaches the RPU's own HDR10 static metadata to this track's format, when
+     * nothing else supplied any.
+     *
+     * Call sites: the two in-place sample transforms below, each of which calls
+     * this immediately BEFORE it rewrites the sample — the RPU is removed from
+     * `pendingBuf` in place, so a read after the strip can only ever answer
+     * "no RPU". Attaching here still precedes the sample reaching the decoder,
+     * which is what makes a format change mid-track safe.
+     *
+     * The gap this closes: a Dolby Vision Profile 8 base layer very often has no
+     * mastering-display / content-light SEI of its own, and no container
+     * declaring the values either (Media3 reads them for Matroska only — its MP4
+     * and TS paths never set `hdrStaticInfo`), so stripping the RPU leaves a PQ
+     * picture with no mastering display at all. The field log says exactly that:
+     * `hdrStaticInfo=absent` next to a decoder that produces no frames.
+     *
+     * The RPU is the last place the values exist, so they are read from it here
+     * — on the way past, on the first sample, before it is stripped — and
+     * attached as the format's own color info, which is where the reference
+     * implementation keeps them and where `MediaFormatUtil` turns them into
+     * `MediaFormat.KEY_HDR_STATIC_INFO` for the decoder.
+     *
+     * Called immediately before each of the two in-place sample transforms —
+     * never after one, because by then the RPU it has to read is gone from
+     * `pendingBuf` — and a no-op after the first call per track, for any track
+     * whose format already carries static metadata, and for anything that is
+     * not one of the two mimes the DV rewrite paths configure the decoder with.
+     * It never throws and never blocks: without libdovi, without an RPU, or
+     * without a Level 6 block in that RPU the format is simply left as it was —
+     * the strip is not allowed to depend on this.
+     */
+    private fun provideHdr10StaticMetadata(sampleLen: Int) {
+        if (hdr10StaticProvideChecked) return
+        hdr10StaticProvideChecked = true
+        val current = lastFormat ?: return
+        // The two mimes the DV rewrite paths configure the decoder with: the
+        // relabeled / full-strip track (video/hevc), and the declared-DV track
+        // that the no-relabel trial leaves declared (`video/dolby-vision`) while
+        // its samples are stripped — the shape the 2026-10-14 field log's
+        // `hdrStaticInfo=absent` came from.
+        if (current.sampleMimeType != MimeTypes.VIDEO_H265 &&
+            current.sampleMimeType != MimeTypes.VIDEO_DOLBY_VISION
+        ) {
+            return
+        }
+        // The container, or an earlier copy of this step, already said it.
+        if (current.colorInfo?.hdrStaticInfo != null) return
+        val nalFormat =
+            if (framing == NalFraming.LENGTH_DELIMITED) {
+                DoviBridge.NAL_FORMAT_LENGTH_DELIMITED
+            } else {
+                DoviBridge.NAL_FORMAT_ANNEX_B
+            }
+        val static = staticInfoFromRpU(pendingBuf, sampleLen, nalFormat, nalLengthFieldLength)
+            ?: return
+        val withStatic = current.buildUpon()
+            .setColorInfo(dvHdr10ColorInfoWith(static))
+            .build()
+        lastFormat = withStatic
+        Log.i(
+            "PLAYER_DV",
+            "HDR10 static metadata provided from the RPU's Level 6 block " +
+                "(hdrStaticInfo=present, codecs=${current.codecs ?: "?"})"
+        )
+        logDecoderFormat(withStatic)
+        delegate.format(withStatic)
+    }
+
     override fun durationUs(durationUs: Long) = delegate.durationUs(durationUs)
 
     override fun format(format: Format) {
@@ -337,6 +417,7 @@ private class VideoCompatTrackOutput(
         )
         // A (re)emitted format starts a fresh sample window (seek / re-init).
         pendingLen = 0
+        hdr10StaticProvideChecked = false
         // 8.1 conversion is per-profile: only declared P5/P7 streams whose
         // toggle is on are rewritten — the codec stays in the dvhe/dvh1 family
         // (so the Dolby Vision pipeline still engages) with the profile digits
@@ -554,6 +635,10 @@ private class VideoCompatTrackOutput(
                     )
                     logDecoderFormat(presented)
                     delegate.format(presented)
+                    // The decoder now has `presented`, so that — not the
+                    // container's format — is what the sample-side step that
+                    // adds the RPU's HDR10 static metadata must build on.
+                    lastFormat = presented
                     // The relabel is bit-exact and the removal is in-place:
                     // the only parameter set touched is the codec config's VPS,
                     // rewritten by relabelTargetFor above (see
@@ -621,6 +706,9 @@ private class VideoCompatTrackOutput(
                     )
                     logDecoderFormat(presented)
                     delegate.format(presented)
+                    // As in the branch above: the decoder's format is now
+                    // `presented`, which a relabel may have re-advertised.
+                    lastFormat = presented
                     mode = Mode.STRIP_NALS_ONLY
                 } else {
                     mode = Mode.NORMAL
@@ -673,12 +761,16 @@ private class VideoCompatTrackOutput(
                 // output frame — this is what was actually happening on P4/P8
                 // sources, not a VPS problem (P8/P4 usually carry no VPS
                 // extension to begin with, so vpsRewritten=false here is normal).
-                builder.build().buildUpon().setColorInfo(hdr10ColorInfo).build()
+                builder.build().buildUpon().setColorInfo(dvHdr10ColorInfoFor(format)).build()
             }
             val strippedFormat = stripped.getOrNull()
             if (strippedFormat != null) {
                 logDecoderFormat(strippedFormat)
                 delegate.format(strippedFormat)
+                // This branch re-advertises the track too (mime + codec +
+                // rewritten codec config), so it is the stripped format the
+                // RPU's static metadata has to be attached to.
+                lastFormat = strippedFormat
                 mode = Mode.STRIPPING
             } else {
                 // Logged loudly and with the cause: the next capture has to show
@@ -763,7 +855,7 @@ private class VideoCompatTrackOutput(
             // because the pixel data is still ICtCp, not Rec.2020 PQ, but
             // forcing HDR10 metadata at least avoids an SDR fallback with
             // fully washed-out colors.
-            val withColor = rewritten.buildUpon().setColorInfo(hdr10ColorInfo).build()
+            val withColor = rewritten.buildUpon().setColorInfo(dvHdr10ColorInfoFor(format)).build()
             logDecoderFormat(withColor)
             delegate.format(withColor)
         } else {
@@ -887,6 +979,10 @@ private class VideoCompatTrackOutput(
                             fmt.buildUpon().setInitializationData(rewrittenInit).build()
                         logDecoderFormat(reEmitted)
                         delegate.format(reEmitted)
+                        // The decoder's format is the rewrite, so the step below
+                        // that adds the RPU's static metadata has to build on it
+                        // (and not re-arm the decoder with the DV codec config).
+                        lastFormat = reEmitted
                     }
                 }
                 // Fall through and strip this very sample: samples that contain
@@ -942,6 +1038,10 @@ private class VideoCompatTrackOutput(
         }
 
         if (mode == Mode.STRIP_NALS_ONLY) {
+            // Before the removal below: the RPU's HDR10 static metadata is read
+            // out of the sample while the RPU is still in it (see
+            // [provideHdr10StaticMetadata]).
+            provideHdr10StaticMetadata(sampleEnd)
             val firstSample = !stripReported
             val inventory =
                 if (firstSample) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
@@ -1042,6 +1142,9 @@ private class VideoCompatTrackOutput(
                     "carries static HDR10 either way, so the toggle is not consulted here)"
             )
         }
+        // Same rule as the STRIP_NALS_ONLY branch above: read the RPU's HDR10
+        // static metadata before the transform below rewrites or removes it.
+        provideHdr10StaticMetadata(sampleEnd)
         val stripped = if (strippingTo81) {
             when (framing) {
                 NalFraming.ANNEX_B ->
@@ -1183,6 +1286,40 @@ internal fun dvHdr10ColorInfoFor(format: Format): ColorInfo {
         .setHdrStaticInfo(static)
         .build()
 }
+
+/**
+ * The static metadata record for the first RPU in a sample, or null when this
+ * build has no libdovi, the sample carries no RPU, or that RPU carries no
+ * Level 6 block — every one of which means "nothing to provide", never an
+ * error: the strip path must run whether or not metadata can be recovered.
+ *
+ * [nalFormat] / [nalLengthFieldLength] are [DoviBridge]'s framing constants,
+ * the same pair the strip itself is handed.
+ */
+internal fun staticInfoFromRpU(
+    sample: ByteArray,
+    length: Int,
+    nalFormat: Int,
+    nalLengthFieldLength: Int
+): ByteArray? = dvLevel6From(
+    DoviBridge.readHdr10StaticMetadata(sample, length, nalFormat, nalLengthFieldLength)
+)?.let { hdr10StaticInfoBytes(it) }
+
+/**
+ * [DV_HDR10_COLOR_INFO] carrying [static] — the value this app attaches when the
+ * RPU supplied the HDR10 static metadata and the container declared none (see
+ * [DvHdr10StaticInfo]). The forced transfer/space/range/bitdepth are the same
+ * ones [dvHdr10ColorInfoFor] uses; only the static metadata differs.
+ */
+internal fun dvHdr10ColorInfoWith(static: ByteArray): ColorInfo =
+    ColorInfo.Builder()
+        .setColorTransfer(DV_HDR10_COLOR_INFO.colorTransfer)
+        .setColorSpace(DV_HDR10_COLOR_INFO.colorSpace)
+        .setColorRange(DV_HDR10_COLOR_INFO.colorRange)
+        .setLumaBitdepth(DV_HDR10_COLOR_INFO.lumaBitdepth)
+        .setChromaBitdepth(DV_HDR10_COLOR_INFO.chromaBitdepth)
+        .setHdrStaticInfo(static)
+        .build()
 
 /** Which relabel attempt produced the format a session will play. */
 internal enum class RelabelAttempt { FULL, MINIMAL }
