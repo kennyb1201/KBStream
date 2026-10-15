@@ -69,6 +69,33 @@ class MpvPlayerView @JvmOverloads constructor(
 ) : SurfaceView(context, attrs, defStyleAttr), SurfaceHolder.Callback,
     MpvEventObserver, MpvLogObserver {
 
+    /*
+     * The surface's place in the window's composition, raised at construction.
+     *
+     * It has to be HERE, not in [initialize]: `setZOrderMediaOverlay` is read
+     * when the Surface is created, and this view is inflated with the Activity
+     * - its surface can be up before [initialize] is even called, which is the
+     * case that method covers with [ensureSurfaceAttachedIfAlreadyAvailable].
+     * A call made after the create is a no-op.
+     *
+     * Why the flag at all. The Fire TV report is a picture the engine fully
+     * believes it is showing - mpv holds the window (`wid` non-zero), the
+     * GPU-backed output is open, frames are decoded and reported "shown" - with
+     * nothing on the panel, and it is black with software decoding too, so
+     * neither the decoder nor hwdec is the variable. What is left is where the
+     * surface lands: at the DEFAULT z-order this view's surface goes in the
+     * window's behind-the-window `MEDIA` layer, under a window that paints
+     * opaque black edge to edge here (`mpv_root`, the load splash and the chrome
+     * all do). `setZOrderMediaOverlay(true)` moves it to the `MEDIA_OVERLAY`
+     * layer - above the window's own media surfaces, still BEHIND the window
+     * itself - so the splash and the chrome keep painting over the picture.
+     * That is the point of this one and not `setZOrderOnTop`, which would put
+     * the video above this app's own controls instead.
+     */
+    init {
+        setZOrderMediaOverlay(true)
+    }
+
     /** A stream to play, with everything mpv needs to open it. */
     data class LoadRequest(
         val url: String,

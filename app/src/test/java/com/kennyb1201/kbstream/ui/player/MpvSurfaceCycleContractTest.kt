@@ -59,7 +59,11 @@ import org.junit.Test
  *  5. `release()`'s final `vo=null` before `destroy()` stays, so a dead instance
  *     cannot keep an output alive, and a session that starts again starts with
  *     `applyOptions()` on a fresh instance — with the holder callback removed
- *     first, the reference player's `destroy()` order.
+ *     first, the reference player's `destroy()` order;
+ *  6. the SurfaceView's z-order is raised at construction — in `init`, before
+ *     this view can have a Surface, because the flag is only read when one is
+ *     created — and with the MEDIA_OVERLAY flag rather than on-top: the picture
+ *     belongs behind the app's own splash and chrome, not above them.
  *
  * Only the OPTION is "set once per instance", and the property is what the
  * cycle owns on the way back in. Setting that property on EVERY create was the
@@ -575,6 +579,38 @@ class MpvSurfaceCycleContractTest {
             "and only while mpv holds the surface: before the attach there is no window for a " +
                 "size to describe",
             onSizeChangedBody().contains("!surfaceAttached")
+        )
+    }
+
+    @Test
+    fun `the surface is raised in z-order at construction, never after one exists`() {
+        // The last field theory for a black screen with a fully-up engine: mpv
+        // holds the window, the output is open, frames are decoded and reported
+        // "shown", and nothing reaches the panel - and software decoding is
+        // black as well, which rules out the decoder and hwdec. What is left is
+        // where the SurfaceView's surface is composited. The flag is read when
+        // the Surface is CREATED, so where the call sits decides whether it does
+        // anything: this view is in the layout, so its surface can be up before
+        // initialize() runs (the case ensureSurfaceAttachedIfAlreadyAvailable
+        // covers) - an initialize()-time call would be a no-op on exactly the
+        // boxes it is for.
+        val raised = Regex("setZOrderMediaOverlay\\(true\\)").findAll(code).toList()
+        assertEquals(
+            "the surface's z-order is decided once, in one place: a second call would be a " +
+                "second opinion about where the picture sits",
+            1,
+            raised.size
+        )
+        assertTrue(
+            "and it has to be the constructor's own init block - the only code that runs " +
+                "before this view can have a Surface at all, and therefore the only place the " +
+                "flag is still read",
+            code.contains("init {\n        setZOrderMediaOverlay(true)\n    }")
+        )
+        assertFalse(
+            "setZOrderOnTop is not this lever: it would place the video above this app's own " +
+                "splash and chrome instead of behind them",
+            code.contains("setZOrderOnTop")
         )
     }
 
