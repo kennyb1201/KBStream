@@ -208,26 +208,41 @@ P7 → 8.1 setting producing a black screen on the boxes it exists for.
 
 ### The MPV engine's library
 
-The MPV engine links exactly one library: the Riteshp2001/mpvlibAndroid (Mpv∞)
+The MPV engine links exactly one library: the
+[`fortunasxp/mpv-android-libdovi`](https://github.com/fortunasxp/mpv-android-libdovi)
 release AAR in `app/libs/`, fetched by `scripts/fetch_mpv_aar.sh`. It is not a
 Maven coordinate, and there is no build flag or settings toggle for it — a
 native library is linked, not selected.
 
-A second library, `io.github.abdallahmehiz:mpv-android-lib` (the build Nuvio's
-GPU video output uses), was trialled for the `vo=gpu` black-screen failure and
-removed: it produced the **same** black screen (the decoder rendering, no
-picture, `updateAcquireFence: Did not find frame` repeating — that line is the
-platform's libgui frame-timestamp bookkeeping, absent from every native library
-in the AAR, and it reports frames being queued rather than lost) on the same
-boxes, so the library was not the variable. Nothing links it now — the `-Pmpv.lib` flag,
-the `src/mpvnuvio/` arm and the `MPV_LIB` workflow input are gone with it.
+It replaced the Riteshp2001/mpvlibAndroid (Mpv∞) build for one reason: **Dolby
+Vision**. The old AAR's libplacebo had no `-Ddovi`, so a DV title could only ever
+be played as its HDR10 base layer. This one carries libplacebo with
+`-Ddovi=enabled` (DV reshape plus HDR metadata read from the RPU), libdovi 3.3.2
+statically linked, FFmpeg n8.1.1 with `dovi_rpudec`, and mpv on `vo=gpu-next` —
+which is why `MpvVideoOutput`'s GPU path now opens `gpu-next` instead of `gpu`.
+`vo=gpu`'s libplacebo path does not perform the DV reshaping, so on this library
+it would silently be the base-layer-only playback the swap exists to remove.
 
-Which library an APK carries is still named in the log: the engine writes
-`MPV engine up · library=…` when it comes up. The GPU path's outstanding work is
-the surface lifecycle, not the library (see `MpvSurfaceCycleContractTest`), and
-`MpvAbiConstantsTest` pins the seam from the JVM side: the engine names no
-library, `MpvBackend` is the one file that wraps it, and the mpv ABI constants
-match the linked library.
+The swap is not source-compatible, and that is the thing to know before editing
+`MpvBackend`: the new AAR reuses the `io.github.abdallahmehiz:mpv-android-lib`
+shell (`classes.jar`, `libplayer.so`, `libc++_shared.so`, `libxml2.so`) and only
+swaps the `libmpv.so`/FFmpeg natives, so it exposes `is.xyz.mpv.MPV` — a class —
+where the old one exposed the `MPVLib` singleton. `MpvBackend` holds an instance
+for that reason. (That shell was itself trialled against the `vo=gpu`
+black-screen failure and removed as a *Maven* dependency, because it produced the
+same black screen — `updateAcquireFence: Did not find frame` repeating, which is
+the platform's libgui frame-timestamp bookkeeping, absent from every native
+library in the AAR, and it reports frames being queued rather than lost. The
+library was not that variable; the GPU surface lifecycle was. This AAR reuses
+that shell's Java/native glue, not its libmpv.)
+
+Which library an APK carries is named in the log: the engine writes
+`MPV engine up · library=… vo=…` when it comes up, and an attach logs mpv's own
+`wid` (`MPV wid after attach: …`), which splits "the attach did not stick"
+(`wid=0`) from "mpv has the window and the video output renders nothing"
+(`wid!=0`). `MpvAbiConstantsTest` pins the seam from the JVM side: the engine
+names no library, `MpvBackend` is the one file that wraps it, and the mpv ABI
+constants match the linked library.
 
 ## Running tests
 
@@ -416,11 +431,14 @@ docs/              # Supabase RLS + Realtime SQL reference
 - `scripts/build_ffmpeg_video.sh` builds the optional video-enabled FFmpeg
   decoder extension (see Building → Optional: software video decoding). It
   needs an NDK, which the normal Gradle build does not.
-- `scripts/build_libass.sh` and `scripts/build_dovi.sh` build the native
-  libraries the APK is expected to carry (ASS typesetting and Dolby Vision RPU
-  conversion). Both need an NDK; the libdovi one also needs Rust and
-  `cargo-ndk`. They are built by CI and published as artifacts, which is the
-  supported way to get them without a toolchain — see Building above.
+-`scripts/build_libass.sh` and `scripts/build_dovi.sh` build the native
+libraries the APK is expected to carry (ASS typesetting and Dolby Vision RPU
+conversion). Both need an NDK; the libdovi one also needs Rust and
+`cargo-ndk`. They are built by CI and published as artifacts, which is the
+supported way to get them without a toolchain — see Building above. The MPV
+engine's own libdovi comes from the `mpv-android-libdovi` AAR instead
+(statically linked into its libmpv); `scripts/fetch_mpv_aar.sh` is what brings
+that in.
 
 ## License
 

@@ -22,6 +22,13 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  * the three `Build` fields it is made from, so it can be pinned by a unit test
  * rather than by two TVs.
  *
+ * The GPU output is `gpu-next` (see [OPENGL]): the AAR this build links is
+ * built for it, and it is the output whose libplacebo performs the Dolby Vision
+ * reshape. The stored mode that reaches it is still the one on disk —
+ * [AppPreferences.MPV_VO_GPU] is the user-facing name of this output and is
+ * deliberately not renamed, because it is a value written to disk (a rename
+ * would reset every install's setting and orphan what was stored).
+ *
  * A resolved [Settings] is applied as mpv OPTIONS before `init()` (see
  * [MpvPlayerView.applyOptions]) and is never re-applied afterwards. It used to
  * be read back as a PROPERTY on every surface re-attach, to restore a `vo` that
@@ -46,21 +53,30 @@ internal object MpvVideoOutput {
     )
 
     /**
-     * The GPU path with the pin dropped: `vo=gpu` on the Android context, with
-     * `gpu-api` left on mpv's default `auto` (instead of the `opengl` pin that
-     * had been set for the old library). Unsetting it here is done by the
-     * caller ([MpvPlayerView.applyOptions]) doing nothing when [gpuApi] is null
-     * — mpv resolves `auto` itself, the same resolved path NuvioTV takes on the
-     * same library and the path the spec wants tested on the field boxes first.
+     * The GPU path: `vo=gpu-next` on the Android context, with `gpu-api` left on
+     * mpv's default `auto` (instead of the `opengl` pin that had been set for
+     * the old library). Unsetting it is done by the caller
+     * ([MpvPlayerView.applyOptions]) doing nothing when [gpuApi] is null — mpv
+     * resolves `auto` itself and picks Vulkan or OpenGL from the context.
      *
-     * The device table ([resolve]) keeps sending Fire TV Stick 4K Plus and Onn
-     * 4K Plus to `mediacodec_embed` for now, so an install that is not using the
-     * manual `gpu` override behaves exactly as it did before — the pin removal
-     * is gated behind that override, and the table is re-pointed to `OPENGL`
-     * without the pin only after `gpu` is confirmed working on the field boxes.
+     * `gpu-next` and not `gpu`, since the 2026-10-15 library swap: the AAR this
+     * build links is BUILT for it — its libplacebo carries `-Ddovi=enabled` and
+     * its libdovi is statically linked, which is the whole point of the swap —
+     * and `gpu-next` is libplacebo's own renderer, the one that performs the
+     * Dolby Vision reshape and reads the HDR metadata off the RPU. `vo=gpu`'s
+     * libplacebo path does not do the DV reshaping, so on the new library it
+     * would decode DV titles as their HDR10 base layer only — the exact
+     * limitation the swap was made to remove. `gpu-context=android` and
+     * `android-surface-size` are the same for both outputs.
+     *
+     * The device table ([resolve]) still sends Fire TV Stick 4K Plus and Onn
+     * 4K Plus to `mediacodec_embed`, so an install that is not using the manual
+     * `gpu` override behaves exactly as it did before — this output is reached
+     * through that override, and the table is re-pointed to it only after the
+     * GPU path is confirmed working on the field boxes.
      */
     private val OPENGL = Settings(
-        vo = AppPreferences.MPV_VO_GPU,
+        vo = AppPreferences.MPV_VO_GPU_NEXT,
         gpuContext = "android",
         gpuApi = null, // was "opengl" — unset: the mpv default (`auto`) applies
         openglEs = true
@@ -96,9 +112,9 @@ internal object MpvVideoOutput {
         openglEs = false
     )
 
-    /** The same `vo=gpu` output, on the Vulkan API instead of OpenGL ES. */
+    /** The same `gpu-next` output, on the Vulkan API instead of OpenGL ES. */
     private val VULKAN = Settings(
-        vo = AppPreferences.MPV_VO_GPU,
+        vo = AppPreferences.MPV_VO_GPU_NEXT,
         gpuContext = "android",
         gpuApi = "vulkan",
         // Not `opengl-es=yes`: asking for the GL context on the Vulkan API is

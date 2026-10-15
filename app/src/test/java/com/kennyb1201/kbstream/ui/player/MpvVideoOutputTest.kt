@@ -86,7 +86,7 @@ class MpvVideoOutputTest {
         val settings = MpvVideoOutput.resolve(
             AppPreferences.MPV_VO_AUTO, "Amazon", "AFTKA", "sabrina"
         )
-        assertEquals("gpu", settings.vo)
+        assertEquals("gpu-next", settings.vo)
         assertEquals("android", settings.gpuContext)
         assertEquals(null, settings.gpuApi)
         assertTrue(settings.openglEs)
@@ -119,13 +119,13 @@ class MpvVideoOutputTest {
         val forced = MpvVideoOutput.resolve(
             AppPreferences.MPV_VO_GPU, "onn", "onn. 4K Plus", "onn"
         )
-        assertEquals("gpu", forced.vo)
+        assertEquals("gpu-next", forced.vo)
         assertEquals("android", forced.gpuContext)
         assertEquals(null, forced.gpuApi)
         assertTrue(forced.openglEs)
 
         assertTrue(
-            "and the Auto default it overrides is the workaround, not OpenGL",
+            "and the Auto default it overrides is the workaround, not the GPU path",
             MpvVideoOutput.resolve(
                 AppPreferences.MPV_VO_AUTO, "onn", "onn. 4K Plus", "onn"
             ).vo == "mediacodec_embed"
@@ -141,10 +141,53 @@ class MpvVideoOutputTest {
         val settings = MpvVideoOutput.resolve(
             AppPreferences.MPV_VO_AUTO, "NVIDIA", "SHIELD Android TV", "mdarcy"
         )
-        assertEquals("gpu", settings.vo)
+        assertEquals("gpu-next", settings.vo)
         assertEquals("android", settings.gpuContext)
         assertEquals(null, settings.gpuApi)
         assertTrue(settings.openglEs)
+    }
+
+    @Test
+    fun `the GPU path opens gpu-next, the output the new library is built for`() {
+        // The 2026-10-15 library swap made this load-bearing rather than
+        // cosmetic: the linked AAR carries libplacebo with `-Ddovi=enabled` and
+        // libdovi statically linked, and it is `gpu-next` - libplacebo's own
+        // renderer - that performs the Dolby Vision reshape. `vo=gpu`'s
+        // libplacebo path does not, so shipping `gpu` here would silently give
+        // back the HDR10-base-layer-only playback the swap was made to remove.
+        val gpu = MpvVideoOutput.resolve(
+            AppPreferences.MPV_VO_GPU, "NVIDIA", "SHIELD Android TV", "mdarcy"
+        )
+        assertEquals("gpu-next", gpu.vo)
+        assertEquals(
+            "the Android context is the same for gpu-next as it was for gpu",
+            "android",
+            gpu.gpuContext
+        )
+        assertEquals(
+            "gpu-api stays unset (mpv's `auto`), so gpu-next picks Vulkan or GL from the " +
+                "context - and the explicit fallback modes remain the way to pin one",
+            null,
+            gpu.gpuApi
+        )
+        assertTrue(
+            "opengl-es=yes is still what asks the Android context for a GL context",
+            gpu.openglEs
+        )
+        assertEquals(
+            "the Vulkan mode opens the same gpu-next output",
+            "gpu-next",
+            MpvVideoOutput.resolve(
+                AppPreferences.MPV_VO_GPU_VULKAN, "NVIDIA", "SHIELD Android TV", "mdarcy"
+            ).vo
+        )
+        assertEquals(
+            "and the MediaCodec path is still the one output that names no gpu-* option",
+            "mediacodec_embed",
+            MpvVideoOutput.resolve(
+                AppPreferences.MPV_VO_MEDIACODEC_EMBED, "NVIDIA", "SHIELD Android TV", "mdarcy"
+            ).vo
+        )
     }
 
     // ── the explicit modes ────────────────────────────────────────────────
@@ -157,7 +200,7 @@ class MpvVideoOutputTest {
         val forcedGpu = MpvVideoOutput.resolve(
             AppPreferences.MPV_VO_GPU, "Amazon", "AFTKRT", "karat"
         )
-        assertEquals("gpu", forcedGpu.vo)
+        assertEquals("gpu-next", forcedGpu.vo)
         assertEquals(null, forcedGpu.gpuApi)
     }
 
@@ -166,7 +209,7 @@ class MpvVideoOutputTest {
         val settings = MpvVideoOutput.resolve(
             AppPreferences.MPV_VO_GPU_VULKAN, "Amazon", "AFTKRT", "karat"
         )
-        assertEquals("gpu", settings.vo)
+        assertEquals("gpu-next", settings.vo)
         assertEquals("android", settings.gpuContext)
         assertEquals("vulkan", settings.gpuApi)
         assertFalse(
@@ -178,11 +221,23 @@ class MpvVideoOutputTest {
 
     @Test
     fun `an unknown mode resolves as auto rather than a vo mpv does not have`() {
+        // The stored vocabulary is unchanged by the swap (`gpu` is still the
+        // stored name of the GPU path - see MPV_VO_GPU), so a value that is not
+        // in it is still a corrupt or older stored string. `gpu-next` is the
+        // right thing to probe with: it is a real mpv output now, which is
+        // exactly why it must NOT be accepted as a stored MODE. The stored
+        // strings are a contract with what is on disk; the `vo` they resolve to
+        // is not.
         val unknown = MpvVideoOutput.resolve("gpu-next", "Amazon", "AFTKRT", "karat")
         val auto = MpvVideoOutput.resolve(
             AppPreferences.MPV_VO_AUTO, "Amazon", "AFTKRT", "karat"
         )
         assertEquals(auto, unknown)
+        assertTrue(
+            "and gpu-next is not one of the stored modes: adding it would be a second " +
+                "name for the same output",
+            "gpu-next" !in AppPreferences.MPV_VO_MODES
+        )
     }
 
     @Test

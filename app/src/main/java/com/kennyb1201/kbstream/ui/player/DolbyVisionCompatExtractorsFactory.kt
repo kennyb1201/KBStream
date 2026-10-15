@@ -714,13 +714,16 @@ private class VideoCompatTrackOutput(
                 // codec config — renders. The Kotlin fallback keeps the
                 // rewrite, because the rewrite is what closes its stall.
                 val skipVpsRewrite = DoviBridge.available
-                // The 2026-10-14 trial: leave the track declared, so the
-                // declared codec string stays on the format while the samples
-                // are stripped. Re-read against NuvioTV `dev`, that is its MKV
-                // strip-only path alone — its MP4/fMP4/TS wrapper re-advertises
-                // as video/hevc + hvc1.2.4.L153.B0 (see [relabelTargetFor]).
-                // Same gate as the VPS skip above.
-                val skipRelabel = DoviBridge.available
+                // The 2026-10-14 no-relabel test is REMOVED: it field-failed
+                // that same night. Leaving the track declared as
+                // video/dolby-vision while the RPU NALs are stripped leaves a
+                // MediaTek DV decoder in DV mode, waiting for RPUs that never
+                // arrive, and it outputs no frame at all (configure OK, zero
+                // output, watchdog, then the identical stall through the
+                // surface reset + TextureView retry). Strip-RPU + keep-DV-label
+                // is the poisoned combination; the relabel is what takes the
+                // decoder out of DV mode, so it runs unconditionally here.
+                val skipRelabel = false
                 val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite, skipRelabel = skipRelabel)
                 val relabeled =
                     if (relabel.relabelSkipped) null else relabelDvFormat(relabel.format, relabelCodec)
@@ -757,13 +760,11 @@ private class VideoCompatTrackOutput(
                     // and happens on the first sample instead, with the RPU's
                     // Level 6 values already in it (see [deferHdr10StaticFormat]).
                     lastFormat = presented
-                    // The relabel is bit-exact and the removal is in-place:
-                    // the only parameter set touched is the codec config's VPS,
-                    // rewritten by relabelTargetFor above (see
-                    // Mode.STRIP_NALS_ONLY for the sample side) — or, while the
-                    // 2026-10-14 no-relabel test is on, none at all: the track
-                    // and its codec config reach the decoder exactly as the
-                    // container declared them and only the samples changed.
+                    // The relabel is bit-exact and the removal is in-place: the
+                    // only parameter set touched is the codec config's VPS,
+                    // rewritten by relabelTargetFor above — or left byte-exact
+                    // while the libdovi gate skips that rewrite — and the only
+                    // sample-side change is the strip (see Mode.STRIP_NALS_ONLY).
                     // The mode goes first: [deferHdr10StaticFormat] reads it to
                     // decide whether this format may be withheld for the first
                     // sample's metadata.
@@ -796,11 +797,12 @@ private class VideoCompatTrackOutput(
                 // that path's samples are stripped by the Kotlin parser, which
                 // is the stall the rewrite closes.
                 val skipVpsRewrite = DoviBridge.available
-                // The same trial as the Auto branch above, on this box: the
-                // declared codec string stays here too while the samples are
-                // stripped — Nuvio's MKV strip-only path, not its MP4 wrapper,
-                // which re-advertises (see [relabelTargetFor]).
-                val skipRelabel = DoviBridge.available
+                // The same removed no-relabel test and the same 2026-10-14
+                // field failure as the Auto branch above (see
+                // [relabelTargetFor]): a stripped track left declared as
+                // video/dolby-vision stalls this box's DV decoder with zero
+                // output too, so the relabel runs unconditionally.
+                val skipRelabel = false
                 val relabel = relabelTargetFor(format, skipVpsRewrite = skipVpsRewrite, skipRelabel = skipRelabel)
                 val relabeled =
                     if (relabel.relabelSkipped) null else relabelDvFormat(relabel.format, relabelCodec)
@@ -1002,7 +1004,19 @@ private class VideoCompatTrackOutput(
         sampleDataPart: Int
     ): Int {
         if (mode == Mode.NORMAL || sampleDataPart != TrackOutput.SAMPLE_DATA_PART_MAIN) {
-            flushDeferredFormatUnmodified()
+            // Do NOT flush a deferred format here. A non-MAIN part arriving
+            // before the first MAIN sample would emit the format without its
+            // HDR10 static metadata, defeating the deferral (field 2026-10-14:
+            // flushed at 29.901, RPU read at 29.907 -> mid-stream change instead
+            // of first-format). The format is emitted with metadata in
+            // sampleMetadata before the sample is finalized, which preserves
+            // ordering: SampleQueue associates the format at sampleMetadata
+            // time, not sampleData time. [flushDeferredFormatUnmodified] is
+            // already a no-op when deferredFormat is null; the gate makes the
+            // intent explicit and prevents the deferral defeat.
+            if (deferredFormat == null) {
+                flushDeferredFormatUnmodified()
+            }
             return delegate.sampleData(input, length, allowEndOfInput, sampleDataPart)
         }
         ensurePendingCapacity(pendingLen + length)
@@ -1020,7 +1034,12 @@ private class VideoCompatTrackOutput(
 
     override fun sampleData(data: ParsableByteArray, length: Int, sampleDataPart: Int) {
         if (mode == Mode.NORMAL || sampleDataPart != TrackOutput.SAMPLE_DATA_PART_MAIN) {
-            flushDeferredFormatUnmodified()
+            // Same gate as the DataReader overload above, and for the same
+            // reason: a non-MAIN part must not flush a format that is being
+            // withheld for the first MAIN sample's HDR10 static metadata.
+            if (deferredFormat == null) {
+                flushDeferredFormatUnmodified()
+            }
             delegate.sampleData(data, length, sampleDataPart)
             return
         }
@@ -1491,13 +1510,14 @@ internal fun vpsRewriteOutcome(skippedForLibdovi: Boolean, rewritten: Boolean): 
 /**
  * The relabel log's verdict on the codec-string relabel, for the field log.
  *
- * The 2026-10-14 field run reads this field to tell which path ran: the
- * declared `dvhe.08.06` left on the format because libdovi did the strip and
- * nothing re-advertised the track, or the `hvc1` relabel this app has always
- * shipped. It is a separate field from `vpsRewrite` because the two are
- * independent decisions — the VPS skip already ran on its own (0.6.71) and the
- * picture was still solid green, which is what leaves the relabel itself as
- * the candidate this test is bisecting.
+ * The 2026-10-14 field run read this field to tell which path ran: the declared
+ * `dvhe.08.06` left on the format because libdovi did the strip and nothing
+ * re-advertised the track, or the `hvc1` relabel this app has always shipped.
+ * That bisect is over: the no-relabel arm field-failed (zero output on a
+ * MediaTek DV decoder), no call site asks for the skip any more, and this
+ * therefore reports "applied" on every stripping track. It stays a separate
+ * field from `vpsRewrite` because the VPS skip is an independent decision that
+ * already ran on its own (0.6.71).
  */
 internal fun relabelOutcome(skippedForLibdovi: Boolean): String =
     if (skippedForLibdovi) "skipped(libdovi-test)" else "applied"
@@ -1531,21 +1551,25 @@ internal fun relabelOutcome(skippedForLibdovi: Boolean): String =
  * caller the source format itself, which is what makes the config
  * byte-identical rather than "rebuilt with the same bytes".
  *
- * [skipRelabel] is the 2026-10-14 test: it leaves the track declared, so the
- * declared `dvhe.08.06` stays on the format while the samples are stripped. The
- * VPS skip landed first (0.6.71, `vpsRewrite=skipped(libdovi)` in the field
- * log) and the picture still came up solid green, which made the `hvc1`
- * re-advertisement itself the remaining candidate — the decoder is told clean
- * HEVC while the stripped stream still carries DV-shaped structure the relabel
- * claims is not there. It subsumes [skipVpsRewrite] rather than stacking with
- * it, because a track the app leaves declared is a track whose codec config it
- * has to leave alone too: this returns the source format itself and reports
- * [RelabelTarget.relabelSkipped], and the caller keeps the strip. The call
- * sites gate it on [DoviBridge.available] exactly as they gate the VPS skip,
- * and the relabel log's `relabel=` field says which of the two ran.
+ * [skipRelabel] is the 2026-10-14 no-relabel test, and it is REMOVED: no call
+ * site passes it any more (both pass `false`). It leaves the track declared, so
+ * the declared `dvhe.08.06` stays on the format while the samples are stripped,
+ * and that is the poisoned combination. It field-failed on the night of
+ * 2026-10-14 (Fire TV Stick 4K Plus, P8 MKV, mode=3 Strip All): with the RPU
+ * NALs stripped but the label kept, the MediaTek HEVC decoder stayed in Dolby
+ * Vision mode waiting for RPUs that never arrive and produced no output frame
+ * at all (`bitrateInKbps = 0`, watchdog, then the identical stall through the
+ * surface reset + TextureView retry) — the "configure OK, zero output" failure
+ * DolbyVisionCapability.kt documents. A strip-RPU stream MUST be relabeled to
+ * `video/hevc` + hvc1 so the decoder leaves DV mode. The parameter and its
+ * [RelabelTarget.relabelSkipped] verdict are retained — it still subsumes
+ * [skipVpsRewrite] and hands the source format back untouched — but no caller
+ * takes it, so the relabel log's `relabel=` field now always reports the
+ * relabel as applied, never `skipped(libdovi-test)`.
  *
- * The trial was introduced as Nuvio parity, on the reading that the reference
- * never re-advertises a stripped track. Re-read against NuvioTV `dev` on
+ * For the record, the retired trial was introduced as Nuvio parity, on the
+ * reading that the reference never re-advertises a stripped track. Re-read
+ * against NuvioTV `dev` on
  * 2026-10-14, that holds for one of its two paths, and the container picks
  * which:
  *

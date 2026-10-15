@@ -60,10 +60,11 @@ object Diagnostics {
 
         report.appendLine("KBStream diagnostics")
         report.appendLine("generated: ${DateFormats.now(DateFormats.DATE_TIME_SECONDS)}")
-        // The build's own facts. There is exactly one MPV library now (the
-        // Riteshp2001/mpvlibAndroid AAR fetched into app/libs/ - see
-        // app/build.gradle.kts), so the build line carries the version, the code
-        // and the sha and nothing else.
+        // The build's own facts. There is exactly one MPV library (the
+        // fortunasxp/mpv-android-libdovi AAR fetched into app/libs/ - see
+        // app/build.gradle.kts), and the player names it on its own log line
+        // when the engine comes up, so the build line carries the version, the
+        // code and the sha and nothing else.
         report.appendLine("build: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) " +
             "sha ${BuildConfig.GIT_SHA.take(7)}")
 

@@ -9,13 +9,15 @@ import org.junit.Test
 /**
  * The MPV library seam and the ABI values that cross the JNI boundary.
  *
- * The engine links exactly one MPV library: the Riteshp2001/mpvlibAndroid
- * (Mpv∞) `mpvlib-1.1.2.aar` fetched into app/libs/ (see the MPV library note in
- * app/build.gradle.kts). An alternative library
- * (`io.github.abdallahmehiz:mpv-android-lib`) was trialled for the `vo=gpu`
- * black-screen failure and removed - it produced the SAME black screen, so the
- * library was not the variable. This file used to pin the swap between the two;
- * what remains is the part that outlives the swap:
+ * The engine links exactly one MPV library: the fortunasxp/mpv-android-libdovi
+ * `mpv-android-lib-libdovi.aar` fetched into app/libs/ (see the MPV library note
+ * in app/build.gradle.kts). It replaced Riteshp2001/mpvlibAndroid for one
+ * reason - the old build's libplacebo had no `-Ddovi`, so DV could only ever
+ * play as its HDR10 base layer. It reuses the
+ * `io.github.abdallahmehiz:mpv-android-lib` shell and therefore exposes
+ * `is.xyz.mpv.MPV` (a class) where the old one exposed `MPVLib` (an object).
+ * This file used to pin the swap between two libraries; what remains is the part
+ * that outlives every swap:
  *
  *  - the engine names no library, so `MpvPlayerView` compiles against the facade
  *    in `MpvEngineApi.kt` + `MpvBackend` alone;
@@ -62,6 +64,8 @@ class MpvAbiConstantsTest {
     private val backend: String
         get() = source("app/src/mpvrites/java/com/kennyb1201/kbstream/ui/player/MpvBackend.kt")
 
+    private val fetchScript: String get() = source("scripts/fetch_mpv_aar.sh")
+
     private val buildScript: String get() = source("app/build.gradle.kts")
 
     // ── the engine is library-agnostic ───────────────────────────────────────
@@ -101,20 +105,110 @@ class MpvAbiConstantsTest {
             "app/src/main/java/com/kennyb1201/kbstream/ui/player/MpvBackend.kt"
         )
         assertFalse("MpvBackend must not live in src/main: $onMainPath", onMainPath.isFile)
-        assertTrue(backend.contains("import `is`.xyz.mpv.MPVLib"))
+        // The new library reuses the mpv-android-lib shell, so the class is
+        // `MPV` (a class, one instance held) and not the old `MPVLib` object.
+        // A pin on the wrong one is a build that does not compile, which is the
+        // cheapest possible way to notice a half-finished swap.
+        assertTrue(backend.contains("import `is`.xyz.mpv.MPV"))
+        // Bound to, not merely mentioned: this file's own docs name `MPVLib` to
+        // explain what the swap changed, and that is the record a reader needs.
+        // What must not survive is a reference the compiler resolves - the
+        // import, or a call through the old singleton - because those are what
+        // would fail to compile against the AAR this build now links.
+        assertFalse(
+            "the superseded library's singleton may not be imported",
+            backend.contains("import `is`.xyz.mpv.MPVLib")
+        )
+        assertFalse(
+            "nor called: the new AAR exposes no such object",
+            backend.contains("MPVLib.") || backend.contains("MPVLib()")
+        )
         assertTrue(backend.contains("internal object MpvBackend {"))
         // The build adds that directory, and only that one.
         assertTrue(buildScript.contains("val mpvEngineSourceDir = \"src/mpvrites\""))
         assertTrue(
             buildScript.contains("kotlin { srcDir(\"\$projectDir/\$mpvEngineSourceDir\") }")
         )
-        assertTrue(buildScript.contains("val mpvAar = file(\"libs/mpvlib-1.1.2.aar\")"))
+        assertTrue(
+            "the build must name the AAR the fetch script actually downloads",
+            buildScript.contains("val mpvAar = file(\"libs/mpv-android-lib-libdovi.aar\")")
+        )
         assertTrue(buildScript.contains("implementation(files(mpvAar))"))
+        // Referenced, not mentioned: the build script's own note names the AAR
+        // this replaced, and that is the record a reader needs. What must not
+        // survive is a `file(...)` pointing at it - that is a dependency, and it
+        // would either fail the guard or silently link the wrong binary.
+        assertFalse(
+            "the superseded AAR may not be referenced as a file dependency",
+            buildScript.contains("file(\"libs/mpvlib-1.1.2.aar\")")
+        )
         assertTrue("a missing AAR is an error, not a silent fallback", buildScript.contains("throw GradleException("))
         // ...and no build flag selects a second engine library any more.
         assertFalse(
             "the removed library swap must not survive in the build script",
             buildScript.contains("mpv.lib") || buildScript.contains("MPV_LIB")
+        )
+    }
+
+    // ── the fetch script is the only way in, and it pins what it fetches ────
+
+    @Test
+    fun `the fetch script downloads the pinned libdovi AAR from its own release`() {
+        assertTrue(
+            "the asset the script fetches is the one the build and the log name",
+            fetchScript.contains("ASSET=\"mpv-android-lib-libdovi.aar\"")
+        )
+        assertTrue(
+            "from the fortunasxp/mpv-android-libdovi release, not the superseded one",
+            fetchScript.contains("FortunasXP/mpv-android-libdovi") &&
+                !fetchScript.contains("Riteshp2001/mpvlibAndroid/releases")
+        )
+        // A 64-hex pin: the digest IS the verification here, because this
+        // release publishes no .sha256 beside the asset. Without it the script
+        // would take whatever the release currently serves.
+        val pin = Regex("PINNED_SHA256=\"([0-9a-f]{64})\"")
+            .find(fetchScript)?.groupValues?.get(1)
+        assertTrue(
+            "the AAR must be pinned by a full sha256 - a re-uploaded asset may not " +
+                "silently change the binary this build ships",
+            pin != null
+        )
+        assertTrue(
+            "and the pin must not still be the superseded library's digest",
+            pin != "2bee300d6ab79a0b7317049bc62d3271b3c9e1b5d065f54907726f0da7b976da"
+        )
+        assertTrue(
+            "a mismatch is a hard failure, not a warning",
+            fetchScript.contains("differs from the one this build pins") &&
+                fetchScript.contains("exit 1")
+        )
+    }
+
+    @Test
+    fun `the fetch script fails the run on a library that is not 16 KB aligned`() {
+        // The 16 KB gate (Play requirement, Feb 1 2027) has to be on the
+        // ARTIFACT as well as on the packaged APK: a swapped or re-uploaded AAR
+        // is exactly the case the APK-level release check would catch, and only
+        // on a release run. The script therefore checks every 64-bit .so it
+        // carries and exits non-zero on one that is not aligned - and it fails
+        // CLOSED on a vacuous pass, because an AAR whose layout moved would
+        // otherwise silently stop being gated at all.
+        assertTrue(
+            "the alignment gate must look at the AAR's own 64-bit libraries",
+            fetchScript.contains("for abi in arm64-v8a x86_64") &&
+                fetchScript.contains("readelf -lW")
+        )
+        assertTrue(
+            "positively-detected small alignment is the failure - 0x4000 (or larger) is 16 KB",
+            fetchScript.contains("0x1000|0x800|0x400|0x200")
+        )
+        assertTrue(
+            "and an unaligned library must stop the run before the file is placed",
+            fetchScript.contains("Do not ship this AAR")
+        )
+        assertTrue(
+            "a vacuous pass (no 64-bit libraries found) is itself a failure",
+            fetchScript.contains("would be vacuous")
         )
     }
 

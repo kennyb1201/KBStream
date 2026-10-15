@@ -888,9 +888,26 @@ object AppPreferences {
      * configuration on a box that black-screens.
      */
     const val MPV_VO_AUTO = "auto"
+
+    /**
+     * The GPU output's stored name. It is `gpu` and NOT `gpu-next`, even though
+     * the `vo` this resolves to is `gpu-next` (see [MpvVideoOutput]): these
+     * strings are written to disk, so renaming one resets the setting on every
+     * install and orphans whatever was stored. The stored name is the user's
+     * name for "the GPU output"; which mpv output that is, is
+     * [MpvVideoOutput]'s to decide.
+     */
     const val MPV_VO_GPU = "gpu"
     const val MPV_VO_MEDIACODEC_EMBED = "mediacodec_embed"
     const val MPV_VO_GPU_VULKAN = "gpu-vulkan"
+
+    /**
+     * The `vo` the GPU path actually opens: `gpu-next`, mpv's libplacebo
+     * renderer and the one the linked AAR is built for (`-Ddovi=enabled`). Kept
+     * beside [MPV_VO_GPU] so the stored name and the mpv output it resolves to
+     * are visible in one place.
+     */
+    const val MPV_VO_GPU_NEXT = "gpu-next"
 
     /**
      * Every value [getMpvVoMode] will store or read back. A stored value outside

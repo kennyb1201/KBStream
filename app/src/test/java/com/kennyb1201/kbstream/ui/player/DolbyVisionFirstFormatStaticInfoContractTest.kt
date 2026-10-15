@@ -26,8 +26,9 @@ import org.junit.Test
  *  - the withholding must be limited to formats that can actually gain
  *    metadata, or a passthrough track's format would be withheld and never
  *    emitted at all (its samples never reach the code that emits it);
- *  - the withheld format must still be emitted on every path that can precede a
- *    MAIN sample part, or a track could strand its format mid-stream;
+ *  - the withheld format must NOT be emitted by a non-MAIN sample part (that
+ *    was the 2026-10-14 defeat), only by the metadata-only zero-length guard,
+ *    so a track cannot strand its format mid-stream;
  *  - `format()` must supersede anything it withheld, or a seek/re-init would
  *    emit a stale format later.
  *
@@ -149,15 +150,33 @@ class DolbyVisionFirstFormatStaticInfoContractTest {
 
     @Test
     fun `a withheld format can never be stranded`() {
-        // Both sampleData overrides (non-MAIN parts) and the metadata-only
-        // (zero-length) sample guard emit it, and the definition is the fourth
-        // mention of the name.
+        // The 2026-10-14 flush fix: a non-MAIN sample part must NOT flush a
+        // withheld format. Doing so emitted the format as `hdrStaticInfo=absent`
+        // (field: flushed at 29.901, the first MAIN sample's RPU read at 29.907),
+        // so the metadata landed as a mid-stream format change instead of in the
+        // first format. SampleQueue associates the format at sampleMetadata
+        // time, not sampleData time, so holding it is safe — and the
+        // metadata-only (zero-length) sample guard is the one path that still
+        // emits it, because then no MAIN data arrived to read an RPU from. The
+        // definition is the remaining mention of the name.
         assertEquals(
-            "the paths that can reach the delegate's sample methods before a MAIN sample " +
-                "part does must emit a withheld format first, or the delegate sees sample " +
-                "bytes before its format",
+            "both non-MAIN sampleData branches must gate the flush on an empty deferral, so " +
+                "a non-MAIN part cannot defeat it",
+            2,
+            count(source, "if (deferredFormat == null) {")
+        )
+        assertEquals(
+            "and the flush's three call sites are the two gated ones plus the zero-length " +
+                "guard; the definition makes the fourth mention",
             3,
             count(source, "flushDeferredFormatUnmodified()") - 1
+        )
+        assertTrue(
+            "the zero-length sample guard still emits a withheld format, which is the one " +
+                "path that must (no MAIN data arrived, so no RPU to read)",
+            source.contains(
+                "flushDeferredFormatUnmodified()\n            delegate.sampleMetadata"
+            )
         )
         assertTrue(
             "and the flush emits (format then sample bytes), so the delegate's order holds",

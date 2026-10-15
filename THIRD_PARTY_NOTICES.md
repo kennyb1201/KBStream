@@ -9,7 +9,8 @@ code shipped in the APK and the licenses its authors publish it under.
 | Component | Where it comes from | License |
 | --- | --- | --- |
 | NewPipeExtractor | `com.github.TeamNewPipe:NewPipeExtractor`, pinned to commit `43f8e6eb` (tag `v0.26.4`) | GPL-3.0-or-later |
-| mpv (libmpv) | the `mpvlib-1.1.2.aar` release AAR from [`Riteshp2001/mpvlibAndroid`](https://github.com/Riteshp2001/mpvlibAndroid) (release `v1.1.2`, sha256 `2bee300d…`), fetched into `app/libs/` by `scripts/fetch_mpv_aar.sh` — this replaced the old `dev.jdtech.mpv:libmpv` Maven artifact, which is no longer a dependency of anything | The AAR's own Android wrapper is MIT (the mpv-android project, © 2016 Ilya Zhuravlev and sfan5). The `libmpv.so` and FFmpeg native libraries bundled inside it are **GPL-3.0-or-later**: the release builds its FFmpeg with `--enable-gpl` and `--enable-version3` (`buildscripts/scripts/ffmpeg.sh` at tag `v1.1.2`), which selects FFmpeg's GPLv3 terms rather than its default LGPL. mpv's own `-Dgpl` is left at its default, so libmpv links a GPLv3 FFmpeg. This is why the AAR's shipped native code is described here as GPLv3, not LGPL. |
+| mpv (libmpv) | the `mpv-android-lib-libdovi.aar` release AAR from [`fortunasxp/mpv-android-libdovi`](https://github.com/fortunasxp/mpv-android-libdovi) (release `mpv-libdovi-v1`, sha256 `b19d39a7…`), fetched into `app/libs/` by `scripts/fetch_mpv_aar.sh` — this replaced the `Riteshp2001/mpvlibAndroid` `mpvlib-1.1.2.aar`, which in turn replaced the old `dev.jdtech.mpv:libmpv` Maven artifact; neither is a dependency of anything now | The AAR's own Android wrapper is MIT (the mpv-android project, © 2016 Ilya Zhuravlev and sfan5); its `classes.jar`, `libplayer.so`, `libc++_shared.so` and `libxml2.so` are reused from the `io.github.abdallahmehiz:mpv-android-lib` shell (Apache-2.0). The `libmpv.so` and FFmpeg native libraries bundled inside it are **GPL-3.0-or-later**: the release builds its FFmpeg with GPL terms enabled rather than its default LGPL, as the build it replaced did. mpv's own `-Dgpl` is left at its default, so libmpv links a GPLv3 FFmpeg. This is why the AAR's shipped native code is described here as GPLv3, not LGPL. |
+| libdovi | statically linked into the `libmpv.so` of the `fortunasxp/mpv-android-libdovi` AAR above (version 3.3.2) | MIT — the same license as the `libdovi.so` this repo builds itself for the ExoPlayer engine's RPU conversion; a statically linked copy inside a GPLv3 library adds no obligation beyond attribution |
 | FFmpeg | the video-enabled `media3-ffmpeg-decoder.aar` built by `scripts/build_ffmpeg_video.sh` (this repo's own FFmpeg), and the FFmpeg linked into libmpv | LGPL-2.1-or-later for the media3 extension built here (that build script enables only LGPL-compatible components). The FFmpeg inside libmpv is a different, separately built FFmpeg and is GPL-3.0-or-later — see the mpv row above. |
 | libass | linked into libmpv (subtitle typesetting) | ISC |
 | libass | also linked into `libassjni.so`, built by `scripts/build_libass.sh`, which is what typesets an `.ass` SIDECAR on the ExoPlayer engine | ISC |
@@ -30,8 +31,8 @@ GPL-3.0-or-later for exactly that reason. The same goes the other way for the
 copyleft libraries linked into `libassjni.so` and into libmpv: the LGPL-2.1-or-later
 of FriBidi and of the FFmpeg this repo builds itself is compatible with a
 GPL-3.0-or-later application, the GPLv3 of the libmpv/FFmpeg pair bundled in the
-mpvlibAndroid AAR is the same license as the app's own, and FreeType is used
-under its permissive FTL option rather than its GPL-2.0-only alternative.
+mpv-android-libdovi AAR is the same license as the app's own, and FreeType is
+used under its permissive FTL option rather than its GPL-2.0-only alternative.
 
 ## Permissive components
 

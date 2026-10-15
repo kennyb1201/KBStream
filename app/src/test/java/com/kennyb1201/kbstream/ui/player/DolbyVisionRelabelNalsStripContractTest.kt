@@ -25,19 +25,19 @@ import org.junit.Test
  * are stripped by the Kotlin parser the rewrite was written for. The gate and
  * the log field are pinned here.
  *
- * The 2026-10-14 run is the step after that one. The VPS skip was in and the
- * picture was still solid green, so the `hvc1` re-advertisement itself is what
- * is left — and the reference only leaves a stripped track declared on its
- * Matroska strip-only path, never on the MP4 / fMP4 / TS wrapper that
- * re-advertises as `video/hevc` + `hvc1.2.4.L153.B0`: both sites now ALSO skip
- * the relabel while libdovi is present
- * (`skipRelabel = DoviBridge.available`), keep the declared `dvhe.08.06` on the
- * format, and still run Mode.STRIP_NALS_ONLY — the sample strip stays, now the
- * Kotlin surgery (`kotlinOnly = true`) rather than the library's coarse one,
- * since the 2026-10-14 no-relabel run pinned libdovi's whole-SEI drop as the
- * green-screen cause. Both gates, both log fields and the "strip anyway" half
- * are pinned here, because a pin on the log alone would not notice the strip
- * being dropped along with the relabel.
+ * The 2026-10-14 no-relabel run is where that stopped. It left the track
+ * declared as `video/dolby-vision` while the RPU NALs were stripped, and it
+ * field-failed the same night (Fire TV Stick 4K Plus, P8 MKV, mode=3 Strip
+ * All): the MediaTek DV decoder stayed in DV mode waiting for RPUs that never
+ * arrive and produced no frame at all (`bitrateInKbps = 0`), with the surface
+ * reset + TextureView retry stalling identically. Strip-RPU + keep-DV-label is
+ * the poisoned combination the relabel exists to leave, so both sites now force
+ * the relabel (`skipRelabel = false`) and still run Mode.STRIP_NALS_ONLY — the
+ * sample strip stays, now the Kotlin surgery (`kotlinOnly = true`) rather than
+ * the library's coarse one, since the 2026-10-14 run also pinned libdovi's
+ * whole-SEI drop as the green-screen cause. The VPS skip, both log fields and
+ * the "strip anyway" half are pinned here, because a pin on the log alone would
+ * not notice the strip being dropped along with the relabel.
  * Dropping the RPU as well as the SEI is
  * what the reference player's "Always Strip DV" plays this chipset with, and the earlier arm
  * that kept the RPU only ever ran with the wrong codec string — see the source
@@ -115,8 +115,9 @@ class DolbyVisionRelabelNalsStripContractTest {
             branch.contains(RELABEL_CALL)
         )
         assertTrue(
-            "and the no-relabel trial travels the same call, not a second path of its own",
-            branch.contains("val skipRelabel = DoviBridge.available")
+            "and the 2026-10-14 no-relabel test is off: the relabel runs unconditionally, " +
+                "because strip-RPU + keep-DV-label is the zero-output stall",
+            branch.contains("val skipRelabel = false")
         )
         assertTrue(
             "and that gate is the bridge's own availability, not a copy of its state — a " +
@@ -241,8 +242,9 @@ class DolbyVisionRelabelNalsStripContractTest {
             reroute.contains(RELABEL_CALL)
         )
         assertTrue(
-            "with the same no-relabel trial as the Auto branch",
-            reroute.contains("val skipRelabel = DoviBridge.available")
+            "with the same removed no-relabel test as the Auto branch — the relabel runs " +
+                "unconditionally",
+            reroute.contains("val skipRelabel = false")
         )
         assertTrue(
             "with this branch reading the same libdovi gate off the bridge",
@@ -394,26 +396,32 @@ class DolbyVisionRelabelNalsStripContractTest {
         )
     }
 
-    // ── the 2026-10-14 no-relabel trial ───────────────────────────────
+    // ── the 2026-10-14 no-relabel test, removed ─────────────────────────
     //
-    // Nuvio's strip-only Matroska path never re-advertises the track; its MP4 /
-    // fMP4 / TS wrapper does (see relabelTargetFor), so this trial is the
-    // parity arm for MKV alone. Both sites now skip the relabel while libdovi
-    // is present,
-    // which is a separate decision from the VPS skip and gets its own log field,
-    // and the library's strip has to survive it — the strip is the half that
-    // works, and a `skipRelabel` that also skipped Mode.STRIP_NALS_ONLY would
-    // undo the 2026-10-13 fix instead of testing one variable at a time.
+    // The test ran once, on the night of 2026-10-14 (Fire TV Stick 4K Plus, P8
+    // MKV, mode=3 Strip All), and field-failed: with the RPU NALs stripped but
+    // the track still declared as video/dolby-vision, the MediaTek DV decoder
+    // stayed in DV mode waiting for RPUs that never arrive and produced no
+    // frame at all, and the surface reset + TextureView retry stalled the same
+    // way. Strip-RPU + keep-DV-label is the poisoned combination, so both sites
+    // now force the relabel (`skipRelabel = false`) and the log can no longer
+    // report the skip; the library strip has to survive it, because the strip
+    // is the half that works.
 
     @Test
-    fun `every relabel site skips the relabel itself while libdovi is present`() {
+    fun `every relabel site forces the relabel instead of reading a gate off the bridge`() {
         assertEquals(
-            "both sites must read the no-relabel gate off the bridge, not off a copy of its state",
+            "both sites must force the relabel — the 2026-10-14 no-relabel arm is removed",
             2,
+            count(source, "val skipRelabel = false")
+        )
+        assertEquals(
+            "and neither may read it off the bridge, which is the gate that field-failed",
+            0,
             count(source, "val skipRelabel = DoviBridge.available")
         )
         assertEquals(
-            "and neither may build a relabel on that path: the skip is decided before the attempt",
+            "the skipped arm may not build a relabel: the skip is decided before the attempt",
             2,
             count(
                 source,
@@ -426,8 +434,8 @@ class DolbyVisionRelabelNalsStripContractTest {
             count(source, "relabel=\${relabelOutcome(relabel.relabelSkipped)}")
         )
         assertTrue(
-            "and the two verdicts the field run greps for are the ones it prints",
-            source.contains("\"skipped(libdovi-test)\"")
+            "and the relabel this build ships is the one the field log names applied",
+            source.contains("\"applied\"")
         )
     }
 

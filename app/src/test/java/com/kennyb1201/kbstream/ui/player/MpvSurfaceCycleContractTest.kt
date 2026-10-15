@@ -23,7 +23,7 @@ import org.junit.Test
  *    callback's plus that one case, and a load now waits for it
  *    (`surfaceAttached`). The line that removal rested on — "Could not find
  *    corresponding native window for surface" — turned out not to be mpv's at
- *    all: it is absent from `mpvlib-1.1.2.aar`'s libmpv and its FFmpeg, and it
+ *    all: it is absent from the linked AAR's libmpv and its FFmpeg, and it
  *    shows up in the logcat of Fire OS apps that use neither, so it is the
  *    platform's and says nothing about this attach. When mpv itself cannot
  *    resolve a window it says "Failed to create ANativeWindow";
@@ -70,7 +70,7 @@ import org.junit.Test
  * the pending load: this view's SurfaceView is in the layout, so its surface is
  * created during activity startup and `load()` runs after it, leaving
  * `pendingLoad` null on a first creation — a pending-load test took the
- * recreation branch there and re-set the output, the `vo="gpu"` before
+ * recreation branch there and re-set the output, the output re-set before
  * `start-file` the 0.6.71 field log shows.
  *
  * `profile=fast` is pinned here too: it was added for the same boxes (a 4K
@@ -80,7 +80,7 @@ import org.junit.Test
  * verified by reading it out of the AAR, because a profile that mpv does not
  * define would be an option-set error and a silent no-op, not a fix:
  *
- *     unzip -p app/libs/mpvlib-1.1.2.aar jni/arm64-v8a/libmpv.so > libmpv.so
+ *     unzip -p app/libs/mpv-android-lib-libdovi.aar jni/arm64-v8a/libmpv.so > libmpv.so
  *     strings -a libmpv.so | grep -A8 '^\[fast\]$'
  *     -> scale=bilinear, dscale=bilinear, dither=no, correct-downscaling=no,
  *        linear-downscaling=no, sigmoid-upscaling=no, hdr-compute-peak=no,
@@ -519,8 +519,8 @@ class MpvSurfaceCycleContractTest {
         // frameworks/native/libs/gui/FrameTimestamps.cpp), which runs in this
         // process because the app is the producer of this view's buffer queue.
         // It fires when the producer queues a frame its own frame-time history
-        // has no record for, it is absent from every native library in
-        // `mpvlib-1.1.2.aar` (exactly as "Could not find corresponding native
+        // has no record for, it is absent from every native library in the
+        // linked MPV AAR (exactly as "Could not find corresponding native
         // window for surface" is), and it reports frames being QUEUED — not
         // lost, and not SurfaceFlinger refusing to acquire one. The window size,
         // not that line, is what the GPU path needs and the attach now

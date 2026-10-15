@@ -366,10 +366,18 @@ class MpvPlayerView @JvmOverloads constructor(
         // place.
         ensureSurfaceAttachedIfAlreadyAvailable()
 
-        // Which MPV library this build linked, once per session. There is one
-        // library now (see the MPV library note in app/build.gradle.kts), named
-        // here so a field log still says which binary produced it.
-        Log.i(TAG, "MPV engine up · library=$MPV_LIBRARY")
+        // Which MPV library this build linked, once per session (see the MPV
+        // library note in app/build.gradle.kts), named here so a field log says
+        // which binary produced it. The `vo` is on the line beside it because
+        // the two go together: this library's whole point is `gpu-next` +
+        // libplacebo with `-Ddovi`, so a capture has to show that the resolved
+        // output is the one it was built for.
+        val startupVo = videoOutput()
+        Log.i(
+            TAG,
+            "MPV engine up · library=$MPV_LIBRARY vo=${startupVo.vo} " +
+                "gpuContext=${startupVo.gpuContext ?: "none"} gpuApi=${startupVo.gpuApi ?: "none"}"
+        )
         return true
     }
 
@@ -1083,14 +1091,14 @@ class MpvPlayerView @JvmOverloads constructor(
 
         // Android video output, resolved for THIS device and the stored
         // override rather than pinned (see [MpvVideoOutput]): the 6.51
-        // mpvlibAndroid swap fixed black screen on one box and introduced it on
+        // library swap fixed black screen on one box and introduced it on
         // another, so which `vo` and which GPU settings work is a property of
-        // the box. gpu (not gpu-next) is the output the reference Android
-        // player ships as default and the one this native build is packaged
-        // for. The MediaCodec path deliberately sets no `gpu-*` option at all -
-        // there is no GPU context to name when the decoder writes to the
-        // Surface directly, and naming one is the mismatch the stalled boxes
-        // choke on.
+        // the box. The GPU path is `gpu-next` - the output the AAR this build
+        // links is built for, whose libplacebo carries `-Ddovi=enabled` and
+        // therefore performs the Dolby Vision reshape `vo=gpu` does not. The
+        // MediaCodec path deliberately sets no `gpu-*` option at all - there is
+        // no GPU context to name when the decoder writes to the Surface
+        // directly, and naming one is the mismatch the stalled boxes choke on.
         val vo = videoOutput()
         MpvBackend.setOptionString("vo", vo.vo)
         vo.gpuContext?.let { MpvBackend.setOptionString("gpu-context", it) }
@@ -1636,7 +1644,56 @@ class MpvPlayerView @JvmOverloads constructor(
             // Forces mpv to render video/subtitles into our surface even when
             // it would otherwise decide it has no window to draw into.
             MpvBackend.setOptionString("force-window", "yes")
+            // The diagnostic that splits the remaining failure in two, read
+            // back from mpv itself rather than assumed from the call above:
+            //
+            //  - `wid=0`: the attach did not stick. mpv holds no native
+            //    window, so nothing can render and the fault is in the
+            //    library's attach, not in any option this app sets.
+            //  - `wid!=0`: mpv has the window, so the window is there and the
+            //    video output is what is failing to put frames into it - which
+            //    is a `vo`/`gpu-*` question, not an attach one.
+            //
+            // Those two readings need opposite next steps, and before this line
+            // the field log could not tell them apart: an attach that silently
+            // did nothing and an attach that worked into a video output that
+            // renders nothing look identical from the app side (decoder
+            // running, audio playing, no picture). Diagnostic only - nothing
+            // here changes what the attach does.
+            logWidAfterAttach()
         }.onFailure { Log.e(TAG, "could not attach the MPV surface", it) }
+    }
+
+    /**
+     * Logs mpv's own `wid` - the native window handle it holds - after an
+     * attach.
+     *
+     * Read as a STRING (see [MpvBackend.getWid]): `wid` is a pointer, and the
+     * library's int getter returns a Java `Integer`, so a handle that truncated
+     * to 0 would report a broken attach about a working one. `null` is a third
+     * answer, distinct from 0 - it means mpv would not answer for the property
+     * at all - so the line says which of the three it is instead of collapsing
+     * them into a falsy value.
+     */
+    private fun logWidAfterAttach() {
+        val wid = runCatching { MpvBackend.getWid() }
+            .onFailure { Log.w(TAG, "could not read mpv wid after attach", it) }
+            .getOrNull()
+        when {
+            wid == null -> Log.i(TAG, "MPV wid after attach: unavailable (mpv did not answer)")
+            wid == "0" || wid.isBlank() ->
+                Log.w(
+                    TAG,
+                    "MPV wid after attach: $wid (0 = the attach did not stick; mpv holds no " +
+                        "window, so this is the library's attach, not the video output)"
+                )
+            else ->
+                Log.i(
+                    TAG,
+                    "MPV wid after attach: $wid (mpv holds the window; the video output is " +
+                        "what renders into it)"
+                )
+        }
     }
 
     private fun startPendingLoad() {
@@ -1989,7 +2046,7 @@ class MpvPlayerView @JvmOverloads constructor(
          * app/build.gradle.kts); it is named so a field log still says which
          * binary produced it.
          */
-        const val MPV_LIBRARY = "Riteshp2001/mpvlibAndroid mpvlib-1.1.2.aar"
+        const val MPV_LIBRARY = "fortunasxp/mpv-android-libdovi mpv-android-lib-libdovi.aar"
 
         /** How close to the resume point counts as "already there". */
         const val RESUME_TOLERANCE_MS = 5_000L

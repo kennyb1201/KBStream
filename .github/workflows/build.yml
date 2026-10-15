@@ -167,19 +167,23 @@ jobs:
 
       # --- MPV engine native library ----------------------------------------
       # The backup engine's AAR is not on Maven Central: it is the
-      # Riteshp2001/mpvlibAndroid v1.1.2 release asset, which
-      # scripts/fetch_mpv_aar.sh downloads into app/libs/ and verifies against
-      # both the published .sha256 and a digest pinned in the script. The app
-      # cannot compile without it (MpvPlayerView imports is.xyz.mpv.MPVLib), so
-      # this must run before any Gradle task configures the app.
+      # fortunasxp/mpv-android-libdovi `mpv-libdovi-v1` release asset, which
+      # scripts/fetch_mpv_aar.sh downloads into app/libs/ and verifies against a
+      # digest pinned in the script (that release publishes no .sha256 beside
+      # the asset, so the pin is the whole verification) plus a 16 KB alignment
+      # check on every 64-bit .so it carries. The app cannot compile without it
+      # (MpvBackend imports is.xyz.mpv.MPV), so this must run before any Gradle
+      # task configures the app.
       #
-      # Cached on the digest, not the branch: the 76 MB download happens once
+      # Cached on the digest, not the branch: the ~155 MB download happens once
       # per pinned AAR, and the script re-verifies whatever the cache restores.
+      # The key prefix carries the first 16 hex of the pinned digest, so a new
+      # AAR is a new cache entry rather than a stale restore.
       - name: Cache MPV engine AAR
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
-          path: app/libs/mpvlib-1.1.2.aar
-          key: mpv-aar-${{ runner.os }}-2bee300d6ab79a0b
+          path: app/libs/mpv-android-lib-libdovi.aar
+          key: mpv-aar-${{ runner.os }}-b19d39a7b4d1c65b
 
       - name: Fetch MPV engine AAR
         run: bash scripts/fetch_mpv_aar.sh
@@ -675,11 +679,12 @@ jobs:
 
       # Google Play requires every native library in a release to be 16 KB page
       # aligned (deadline Feb 1 2027), and nothing upstream guarantees it for a
-      # THIRD-PARTY prebuilt .so. libmpv is pinned to a build verified 16 KB
-      # aligned and the FFmpeg extension is linked with NDK r28c, but
-      # sentry-native ships its own .so with no such pin - so every packaged
-      # library is checked here and the run fails on any that is not, before a
-      # release can be published. A 16 KB-aligned object reports 0x4000 (or
+      # THIRD-PARTY prebuilt .so. The MPV AAR's 64-bit libraries are pinned to a
+      # build verified 16 KB aligned - re-checked on the artifact itself by
+      # scripts/fetch_mpv_aar.sh, which fails the run on an unaligned one - and
+      # the FFmpeg extension is linked with NDK r28c, but sentry-native ships
+      # its own .so with no such pin - so every packaged library is checked here
+      # and the run fails on any that is not, before a release can be published. A 16 KB-aligned object reports 0x4000 (or
       # larger) on its LOAD segments; a 4 KB one reports 0x1000.
       #
       # Only the 64-BIT ABIs are checked, because only they are required to be

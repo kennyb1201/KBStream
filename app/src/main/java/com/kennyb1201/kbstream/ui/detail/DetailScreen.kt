@@ -567,6 +567,13 @@ fun DetailScreen(
     // Detail has its artwork, and without this it fell back to the plain name
     // while the NEXT splash showed the pulsing clearlogo.
     onClearLogoResolved: (String) -> Unit = {},
+    // The same hand-off for the title's WIDESCREEN art, and for the same reason:
+    // the Continue Watching / Up Next deep link that opens this screen carries
+    // only the history row's meta, whose backdrop is usually absent, so the
+    // cover splash ran artless while the player's own showed a still. Only a
+    // real backdrop is reported - never [backdropUrl]'s poster fallback, which
+    // is a portrait and would read as a zoomed, wrong still across the splash.
+    onBackdropResolved: (String) -> Unit = {},
     // Keyed per (type, id): DetailScreen is the only consumer of a shared
     // DetailViewModel, and an unscoped (Activity-wide) instance carries the
     // previous title's meta/episodes/resume state into the next one — the
@@ -2417,21 +2424,44 @@ fun DetailScreen(
                 hasMediaRow = hasMediaRow
             )
 
-            // Add-on art first (fanart etc. from the meta provider), TMDB
-            // backdrop as fallback. When no meta add-on answered, the fallback
-            // meta was built from TMDB itself, so this still lands on TMDB art.
-            // The hero is the whole screen, so its TMDB still is pulled at
-            // full resolution - and so is the copy handed on to the player's
-            // loading splash (below). The add-on rungs under it are left as
-            // they are: their art is not TMDB's, and the poster rungs are not
-            // backdrops at all.
-            val backdropUrl = remember(tmdbDetail, m) {
+            // The title's art, in two shapes, because two consumers want
+            // different things from it.
+            //
+            // [backdropArtUrl] is WIDESCREEN art only: TMDB's still at full
+            // resolution (the hero is the whole screen, so its still is pulled
+            // at full size), else the add-on's own backdrop - fanart etc. from
+            // the meta provider, and when no add-on answered, the fallback meta
+            // was built from TMDB itself, so this still lands on TMDB art. This
+            // is the copy handed on to the player's loading splash, and the
+            // only value the COVER splash may draw: the poster rungs below are
+            // a PORTRAIT, and the splash fills the whole frame, so a poster
+            // there is the zoomed, wrong still this screen's own loading splash
+            // already refuses to show.
+            //
+            // [backdropUrl] is that plus the poster rungs, for the two surfaces
+            // that only need SOMETHING behind the title and have no widescreen
+            // art to fall back on: this screen's hero, and the hand-off to the
+            // player.
+            val backdropArtUrl = remember(tmdbDetail, m) {
                 tmdbDetail?.backdropPath?.let {
                     TmdbRepository.fullResBackdropUrl(TmdbRepository.BACKDROP_BASE + it)
                 }
                     ?: m.background
+            }
+
+            val backdropUrl = remember(backdropArtUrl, m, initialPoster) {
+                backdropArtUrl
                     ?: m.poster
                     ?: initialPoster
+            }
+
+            // Hand the resolved still up as soon as it exists, exactly as the
+            // clearlogo above is handed up. Without it the cover splash has no
+            // way to learn this value: MainActivity paints it from the deep
+            // link's own art, which for a Continue Watching / Up Next card is
+            // the history row's - usually empty - backdrop.
+            LaunchedEffect(backdropArtUrl) {
+                backdropArtUrl?.takeIf { it.isNotBlank() }?.let(onBackdropResolved)
             }
 
             // What the HERO draws: the still the viewer chose for this page when

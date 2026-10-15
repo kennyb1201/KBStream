@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.ui.components
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -17,6 +18,14 @@ import org.junit.Test
  * art. The fix hands Detail's resolved logo back up to the cover splash; drop
  * either half and the logoless first splash returns silently, which is why this
  * reads the sources the way BrowseCatalogPublishContractTest does.
+ *
+ * The same bug was reported again for the splash's BACKDROP, one layer down: a
+ * Continue Watching resume painted the cover with no picture while the player's
+ * own splash had one. The cover's backdrop came from the deep link's meta - a
+ * history row carries a poster, not a backdrop - and the still Detail resolved
+ * on the way past had nowhere to go, exactly as the logo once did. So the art
+ * hand-off is pinned in both halves here, logo and backdrop, with the same three
+ * surfaces each: the cover, the cover's pending branch, and the picker header.
  */
 class SplashClearLogoContractTest {
 
@@ -101,6 +110,7 @@ class SplashClearLogoContractTest {
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
 
         const val CALLBACK = "onClearLogoResolved"
+        const val BACKDROP_CALLBACK = "onBackdropResolved"
 
         /** The exact launch literal; only the two guide launches carry it. */
         const val CHANNEL_LAUNCH = "parentType = \"channel\""
@@ -179,6 +189,77 @@ class SplashClearLogoContractTest {
                 "logo itself from the title's parent id",
             activity.contains("fetchEnrichedMetaCached(") &&
                 activity.contains("bestLogoPath()")
+        )
+    }
+
+    @Test
+    fun `Detail reports the backdrop it resolves, and only a real one`() {
+        val detail = source(DETAIL_SCREEN)
+        assertTrue(
+            "DetailScreen must accept the backdrop callback",
+            detail.contains("$BACKDROP_CALLBACK: (String) -> Unit")
+        )
+        assertTrue(
+            "and invoke it with the WIDESCREEN value, or the cover splash never " +
+                "learns the still",
+            detail.contains("let($BACKDROP_CALLBACK)")
+        )
+        // The reported value has to be the widescreen-only one, never the poster
+        // fallback: a history row's poster is a portrait, and the splash fills
+        // the whole frame with whatever it is handed.
+        val reported = detail.substringAfter("val backdropArtUrl = remember")
+            .substringBefore("val backdropUrl = remember")
+        assertTrue(
+            "the reported art must be TMDB's still / the add-on's backdrop: $reported",
+            reported.contains("tmdbDetail?.backdropPath") && reported.contains("?: m.background")
+        )
+        assertFalse(
+            "and must NOT carry the poster rungs, which are a portrait: $reported",
+            reported.contains("m.poster") || reported.contains("initialPoster")
+        )
+        assertTrue(
+            "while the hero and the player hand-off keep them, so a title with no " +
+                "widescreen art still has something behind it",
+            detail.substringAfter("val backdropUrl = remember")
+                .substringBefore("LaunchedEffect(backdropArtUrl)")
+                .contains("?: m.poster")
+        )
+    }
+
+    @Test
+    fun `the cover splash reads the resolved backdrop before the raw one`() {
+        val activity = source(MAIN_ACTIVITY)
+        assertTrue(
+            "MainActivity must keep the resolved stills it is handed",
+            activity.contains("resolvedDetailBackdrops")
+        )
+        assertTrue(
+            "the cover splash a Continue Watching resume paints must consult the " +
+                "resolved still, falling back to the deep link's own (usually " +
+                "absent) backdrop",
+            activity.contains("?: detailAutoPlay.itemBackdrop")
+        )
+        assertTrue(
+            "and the pending branch must read it too, so a launch that reached the " +
+                "player without Detail's art still shows it",
+            activity.contains("?: resolvedDetailBackdrops[\"\${pending.parentType}:\${pending.parentId}\"]")
+        )
+    }
+
+    @Test
+    fun `the picker header gets the resolved backdrop too`() {
+        val activity = source(MAIN_ACTIVITY)
+        assertTrue(
+            "the Streams picker must consult the resolved still before the " +
+                "navigation one - its header draws it, and so does the player " +
+                "splash it launches",
+            activity.contains("?: current.backdropUrl")
+        )
+        assertTrue(
+            "and the route that never opens Detail has to resolve the still from " +
+                "the same fetch that already resolves its logo",
+            activity.contains("detail.backdropPath") &&
+                activity.contains("TmdbRepository.fullResBackdropUrl(TmdbRepository.BACKDROP_BASE + it)")
         )
     }
 }

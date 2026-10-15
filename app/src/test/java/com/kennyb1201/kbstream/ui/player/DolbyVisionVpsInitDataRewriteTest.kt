@@ -359,14 +359,16 @@ class DolbyVisionVpsInitDataRewriteTest {
         )
     }
 
-    // ── behavioral: the 2026-10-14 no-relabel trial ──────────────────────
+    // ── behavioral: the retired 2026-10-14 no-relabel arm ────────────────
     //
     // The VPS skip landed first (0.6.71) and the field picture was still solid
-    // green, which leaves the `hvc1` re-advertisement itself as the last
-    // difference from Nuvio's stripRpuOnly: it never re-advertises the track.
-    // [relabelTargetFor] is where that decision lives, so it is pinned here;
-    // the two call sites — and the DoviBridge gate they read it through — are
-    // pinned by DolbyVisionRelabelNalsStripContractTest.
+    // green, which left the `hvc1` re-advertisement itself as the candidate.
+    // The no-relabel arm tested that, and field-failed the same night (zero
+    // output on a MediaTek DV decoder), so no call site takes it — but the
+    // parameter is retained and its behaviour is still pinned here, because
+    // [relabelTargetFor] is where that decision lives. The two call sites and
+    // the gate they no longer read are pinned by
+    // DolbyVisionRelabelNalsStripContractTest.
 
     @Test
     fun `skipRelabel hands the declared track over untouched and reports the skip`() {
@@ -412,9 +414,10 @@ class DolbyVisionVpsInitDataRewriteTest {
 
     @Test
     fun `skipRelabel outranks skipVpsRewrite so the two gates can never disagree`() {
-        // Both flags are the same DoviBridge.available at the call sites, and the
-        // no-relabel arm is the stronger decision of the pair: leaving the track
-        // declared and rewriting its config would be neither arm.
+        // The no-relabel arm is the stronger decision of the pair: leaving the
+        // track declared and rewriting its config would be neither arm. No call
+        // site passes it any more (the 2026-10-14 test was removed), but the
+        // parameter is retained and still outranks skipVpsRewrite.
         val format = dvFormat(listOf(lengthDelimited(dvVps, sps, pps)))
 
         val target = relabelTargetFor(

@@ -995,6 +995,19 @@ fun AppRoot(
     // clearlogo. This lets the cover splash show the same art the moment it
     // lands, so the first splash is never the logoless one.
     val resolvedDetailClearLogos = remember { mutableStateMapOf<String, String>() }
+    // The backdrop half of the same hand-off: DetailScreen reports the still it
+    // resolved (onBackdropResolved), and every surface that covers or replaces
+    // the screen reads it before the navigation meta's own.
+    //
+    // Reported: a Continue Watching resume showed the "Finding sources" splash
+    // with no picture while the player's own splash - fed the backdrop by the
+    // time Screen.Player existed - had one. The cover is painted from the deep
+    // link's meta the moment the screen appears, and a CW / Up Next history row
+    // carries a poster, not a backdrop, so that value was empty and stayed
+    // empty: the resolved still had nowhere to go. Same map shape as the logos
+    // above, and read by the same three surfaces (cover splash, cover splash's
+    // pending branch, picker header).
+    val resolvedDetailBackdrops = remember { mutableStateMapOf<String, String>() }
 
     LaunchedEffect(pendingAutoPlay) {
         val pending = pendingAutoPlay ?: return@LaunchedEffect
@@ -1995,6 +2008,10 @@ fun AppRoot(
                     resolvedDetailClearLogos["${current.type}:${current.id}"] = logo
                 },
 
+                onBackdropResolved = { backdrop ->
+                    resolvedDetailBackdrops["${current.type}:${current.id}"] = backdrop
+                },
+
                 onNavigateDetail = {
                         type,
                         id ->                        screen = Screen.Detail(
@@ -2241,7 +2258,8 @@ fun AppRoot(
                 season = current.target.season,
                 episode = current.target.episode,
                 runtimeMinutes = current.target.runtimeMinutes,
-                backdropUrl = current.backdropUrl,
+                backdropUrl = resolvedDetailBackdrops["${current.parentType}:${current.parentId}"]
+                    ?: current.backdropUrl,
                 // The title's TMDB id, so the picker can draw the still the
                 // viewer chose for it on the Media row (see ImageOverrides).
                 // The route's parent id is one of the app's own spellings
@@ -2801,30 +2819,42 @@ fun AppRoot(
     }
     } // closes CompositionLocalProvider( LocalKBHeroTransition provides … )
 
-    // Resolve a clearlogo for the title on screen when the navigation meta
-    // carried none. DetailScreen reports its own resolved art (onClearLogoResolved
-    // above); this covers the route that never opens Detail - the Continue
-    // Watching picker (autoplay OFF / "Play Manually") - whose history row
-    // usually has no logo, so its header showed the plain name while every other
-    // surface had the art. Stored in the same map the cover splash reads.
+    // Resolve a clearlogo AND the still for the title on screen when the
+    // navigation meta carried neither. DetailScreen reports its own resolved art
+    // (onClearLogoResolved / onBackdropResolved above); this covers the route
+    // that never opens Detail - the Continue Watching picker (autoplay OFF /
+    // "Play Manually") - whose history row usually has no logo and no backdrop,
+    // so its header showed the plain name and the player it launched showed a
+    // bare splash while every other surface had the art. One fetch answers
+    // both: the same TMDB record carries the wordmark and the still. Stored in
+    // the same maps the cover splash reads.
     LaunchedEffect(current) {
         val streamsScreen = current as? Screen.Streams ?: return@LaunchedEffect
         val key = "${streamsScreen.parentType}:${streamsScreen.parentId}"
-        if (streamsScreen.parentId.isBlank() || resolvedDetailClearLogos.containsKey(key)) {
-            return@LaunchedEffect
-        }
-        val logo =
+        if (streamsScreen.parentId.isBlank()) return@LaunchedEffect
+        // Each half is asked for separately, so a route that has one already
+        // still gets the other - and so this never re-fetches a title that has
+        // both.
+        val needsLogo = !resolvedDetailClearLogos.containsKey(key)
+        val needsBackdrop = !resolvedDetailBackdrops.containsKey(key)
+        if (!needsLogo && !needsBackdrop) return@LaunchedEffect
+        val detail =
             runCatchingCancellable {
                 TmdbRepository.getInstance(context)
                     .fetchEnrichedMetaCached(
                         imdbId = streamsScreen.parentId,
                         type = streamsScreen.parentType.ifBlank { "movie" }
                     )
-                    ?.bestLogoPath()
-                    ?.let(::tmdbImageOriginal)
-            }.getOrNull()
-        if (logo != null) {
-            resolvedDetailClearLogos[key] = logo
+            }.getOrNull() ?: return@LaunchedEffect
+        if (needsLogo) {
+            detail.bestLogoPath()?.let(::tmdbImageOriginal)?.let {
+                resolvedDetailClearLogos[key] = it
+            }
+        }
+        if (needsBackdrop) {
+            detail.backdropPath
+                ?.let { TmdbRepository.fullResBackdropUrl(TmdbRepository.BACKDROP_BASE + it) }
+                ?.let { resolvedDetailBackdrops[key] = it }
         }
     }
 
@@ -2855,7 +2885,12 @@ fun AppRoot(
     val playerSplash = current as? Screen.Player
     when {
         detailAutoPlay != null -> AutoPlayLoadSplash(
-            backdropUrl = detailAutoPlay.itemBackdrop,
+            // Detail's own resolved still first, the deep link's own (usually
+            // absent) one second. This is the branch a Continue Watching resume
+            // paints, and the one that used to come up empty: its backdrop came
+            // only from the history row's meta, which carries a poster.
+            backdropUrl = resolvedDetailBackdrops["${detailAutoPlay.type}:${detailAutoPlay.id}"]
+                ?: detailAutoPlay.itemBackdrop,
             // The logo Detail has resolved for this title, so the cover splash
             // shows the pulsing clearlogo too - not just the plain name it had
             // when the deep link carried no logo of its own.
@@ -2868,7 +2903,11 @@ fun AppRoot(
         )
 
         pending != null -> AutoPlayLoadSplash(
-            backdropUrl = pending.backdropUrl,
+            // The hand-off's own still, else the one Detail resolved for this
+            // title - the same map the cover above reads, so a launch that
+            // reached here without Detail's art still shows it.
+            backdropUrl = pending.backdropUrl
+                ?: resolvedDetailBackdrops["${pending.parentType}:${pending.parentId}"],
             clearLogoUrl = pending.clearLogoUrl,
             title = pending.target.displayName,
             subtitle = "Finding sources…",

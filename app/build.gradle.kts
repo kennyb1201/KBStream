@@ -126,13 +126,24 @@ val ciGitSha = System.getenv("GIT_SHA")?.takeIf { it.isNotBlank() } ?: "local"
 
 // ── The MPV engine's library ───────────────────────────────────────────────
 //
-// The engine has exactly ONE backend: the Riteshp2001/mpvlibAndroid (Mpv∞)
-// build, the `mpvlib-1.1.2.aar` release AAR fetched into app/libs/ by
-// scripts/fetch_mpv_aar.sh. An alternative library (Nuvio's
-// io.github.abdallahmehiz:mpv-android-lib) was trialled for the `vo=gpu`
-// black-screen failure and removed: it produced the SAME black screen, so the
-// library was not the variable. Nothing links it now, and no build flag selects
-// an engine library.
+// The engine has exactly ONE backend: fortunasxp/mpv-android-libdovi, the
+// `mpv-android-lib-libdovi.aar` release AAR fetched into app/libs/ by
+// scripts/fetch_mpv_aar.sh. It replaced the Riteshp2001/mpvlibAndroid (Mpv∞)
+// `mpvlib-1.1.2.aar` build, which had no Dolby Vision decode at all: its
+// libplacebo was built without `-Ddovi`, so a DV title could only ever be
+// played as its HDR10 base layer. This one carries libplacebo with
+// `-Ddovi=enabled` (DV reshape + HDR metadata read from the RPU), libdovi 3.3.2
+// statically linked, FFmpeg n8.1.1 with `dovi_rpudec`, and mpv on `vo=gpu-next`
+// - so P5, P7, 8.1 and 8.4 are decoded as Dolby Vision rather than flattened.
+//
+// The two libraries are NOT drop-in compatible at the source level, and that is
+// the part worth knowing before touching this: the new AAR reuses the
+// `io.github.abdallahmehiz:mpv-android-lib` shell (its `classes.jar`,
+// `libplayer.so`, `libc++_shared.so` and `libxml2.so`) and only swaps the
+// `libmpv.so`/FFmpeg natives, so the Java class it exposes is `is.xyz.mpv.MPV`
+// (a class) rather than the old `is.xyz.mpv.MPVLib` (a Kotlin object). That is
+// the same API the removed `src/mpvnuvio` arm wrapped, and it is why
+// `MpvBackend` holds an instance now instead of delegating to a singleton.
 //
 // `MpvPlayerView` drives `ui/player/MpvEngineApi.kt` + `MpvBackend`, whose one
 // implementation lives in a source directory of its own (src/mpvrites),
@@ -151,9 +162,9 @@ android {
         // 26, not 24: this is the app's OWN floor now. PlayerEngine refuses the
         // MPV engine below 26, and without the FFmpeg extension ExoPlayer has
         // no software video, so an API 24-25 box was already
-        // ExoPlayer-on-MediaCodec only. (The MPV AAR moved to the mpvlibAndroid
-        // build, which declares minSdk 24 - below this - so no
-        // tools:overrideLibrary is needed either way.) work-runtime 2.12
+        // ExoPlayer-on-MediaCodec only. (The MPV AAR declares minSdk 21 - below
+        // this - so no tools:overrideLibrary is needed either way; the previous
+        // mpvlibAndroid AAR declared 24, also below.) work-runtime 2.12
         // (minSdk 24) is satisfied by 26 as well.
         minSdk = 26
         // 36, not 35: Play rejects updates from phone/tablet/foldable apps that
@@ -567,35 +578,36 @@ dependencies {
     // libplayer as native libraries for all four ABIs, so it needs no other
     // dependency and no app-side extraction.
     //
-    // The backend is the Riteshp2001/mpvlibAndroid (Mpv∞) build: the
-    // same mpv core, but an actively maintained, Vulkan-capable Android build.
-    // The previous `dev.jdtech.mpv:libmpv` 1.0.0 pinned here showed black video
-    // over playing audio on the Onn 4K Plus, where Mpv∞ plays the same files -
-    // so the library is the variable, and every mpv option and player behaviour
-    // above it is deliberately unchanged. It exposes a singleton (`MPVLib`), and
-    // `src/mpvrites/.../MpvBackend.kt` is the only file that names it.
+    // The backend is the fortunasxp/mpv-android-libdovi build: the mpv-android
+    // library with a Dolby Vision-capable libplacebo and libdovi statically
+    // linked, on `vo=gpu-next`. The library it replaced
+    // (Riteshp2001/mpvlibAndroid) could not decode DV at all - no `-Ddovi` in
+    // its libplacebo - so this is a capability change, not just a rebuild. It
+    // reuses the `io.github.abdallahmehiz:mpv-android-lib` shell and therefore
+    // exposes `is.xyz.mpv.MPV` as a class; `src/mpvrites/.../MpvBackend.kt` is
+    // the only file that names it.
     //
-    // It is not on Maven Central: it is the release AAR the library's README
-    // documents as a file dependency. A ~76 MB binary is deliberately not
-    // vendored in git (app/libs/ is gitignored, like libs/); instead
-    // scripts/fetch_mpv_aar.sh downloads mpvlib-1.1.2.aar from the v1.1.2
-    // GitHub release and verifies it against the published .sha256, and both CI
-    // workflows run that script before building. Its 64-bit .so files were
-    // checked 16 KB page aligned (readelf, 2026-10-11) and the release
-    // workflow's APK-level check re-verifies them on every release.
+    // It is not on Maven Central: it is a release AAR, consumed as a file
+    // dependency. A ~155 MB binary is deliberately not vendored in git
+    // (app/libs/ is gitignored, like libs/); instead scripts/fetch_mpv_aar.sh
+    // downloads mpv-android-lib-libdovi.aar from the `mpv-libdovi-v1` GitHub
+    // release, verifies it against a digest pinned in the script, and checks
+    // every 64-bit .so it carries for 16 KB page alignment - and both CI
+    // workflows run that script before building. The release workflow's
+    // APK-level check re-verifies the packaged libraries on every release.
     //
-    // Note ALSO that the AAR declares minSdk 24, below the app's floor of 26, so
+    // Note ALSO that the AAR declares minSdk 21, below the app's floor of 26, so
     // the manifest needs no tools:overrideLibrary.
     //
-    val mpvAar = file("libs/mpvlib-1.1.2.aar")
+    val mpvAar = file("libs/mpv-android-lib-libdovi.aar")
     if (!mpvAar.isFile) {
         throw GradleException(
             "The MPV engine AAR is missing at ${mpvAar.path}. Run " +
-                "scripts/fetch_mpv_aar.sh (it downloads mpvlib-1.1.2.aar and " +
-                "verifies its sha256), or drop the file there from a previous " +
-                "build. The app cannot compile without an MPV library: " +
-                "src/mpvrites/.../MpvBackend.kt imports is.xyz.mpv.MPVLib from " +
-                "this AAR."
+                "scripts/fetch_mpv_aar.sh (it downloads " +
+                "mpv-android-lib-libdovi.aar and verifies its sha256), or drop " +
+                "the file there from a previous build. The app cannot compile " +
+                "without an MPV library: src/mpvrites/.../MpvBackend.kt imports " +
+                "is.xyz.mpv.MPV from this AAR."
         )
     }
     implementation(files(mpvAar))
