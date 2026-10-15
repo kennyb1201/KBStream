@@ -159,25 +159,33 @@ internal object SubtitleTrackRules {
      * should override an explicit OFF is a product decision; silently overriding
      * one is the behavior viewers complain about most.)
      *
-     * Within a language the tracks are ranked by HOW COMPLETE they are, not by
-     * the forced flag:
+     * Language beats kind for the two honest kinds — SDH and regular — but NOT
+     * for the forced flag, which is demoted below an untagged SDH or regular
+     * track:
      *
      *  1. SDH — the dialogue plus the sound description, which reads as the
      *     whole track and is why it wins. Detected from the track's own name
      *     (see [SubtitleKindRules]); a `forced` flag on an SDH-named track is
      *     ignored, because not trusting that flag is what this ordering is for.
      *  2. A regular track — the full translation, not forced and not SDH.
-     *  3. The forced track — the signs / foreign-dialogue track. It is the
-     *     *least* of the three as a default, and the previous rules picked it
-     *     first on the theory that a disc shipping both puts the signs track in
-     *     the forced one. That holds on authored discs and not on the rips and
-     *     add-on tracks this app actually plays, where the flag is set on the
-     *     one track a viewer asks for subtitles to get past.
+     *  3. The forced track — the signs / foreign-dialogue track, demoted as a
+     *     block below the untagged bucket. The container puts the flag on the
+     *     signs track on an authored disc, but on the rips and add-on tracks
+     *     this app actually plays it is set on the one track a viewer asks for
+     *     subtitles to get past — so a preferred-tagged forced flag no longer
+     *     beats an untagged SDH/regular track, which is the viewer's own
+     *     language far more often than a forced flag is honest. Language order
+     *     among the forced tracks is preserved: a forced track in the preferred
+     *     language still beats an untagged one.
      *
-     * The same three-way order applies to the untagged bucket and to the
-     * fallback onto another language, so a forced track is a last resort there
-     * too rather than the first pick. A language match still beats a better
-     * KIND: the kind only breaks ties within one language bucket.
+     * The whole order, most complete first, is:
+     *
+     *  1. the preferred language: SDH, then regular;
+     *  2. a bitmap track in the preferred language — this engine cannot draw
+     *     it, so the next engine is asked (see [Choice.NeedsMpv]);
+     *  3. an untagged track: SDH, then regular;
+     *  4. a forced track: preferred-tagged, then untagged;
+     *  5. another language: SDH, then regular, then forced.
      */
     fun choose(candidates: List<Candidate>, preferredLanguage: String): Choice {
         val preferred = normalize(preferredLanguage) ?: return Choice.Off
@@ -198,12 +206,11 @@ internal object SubtitleTrackRules {
         val isRegular: (Candidate) -> Boolean = { !it.forced && !isSdh(it) }
 
         // 1. The preferred language, most complete kind first: SDH, then a
-        //    regular full translation, then its forced track as a last resort.
+        //    regular full translation. The forced flag is deliberately NOT
+        //    here: it is demoted below the untagged tracks (step 4).
         renderable.firstOrNull { isPreferred(it.value) && isSdh(it.value) }
             ?.let { return Choice.Show(it.index) }
         renderable.firstOrNull { isPreferred(it.value) && isRegular(it.value) }
-            ?.let { return Choice.Show(it.index) }
-        renderable.firstOrNull { isPreferred(it.value) && it.value.forced }
             ?.let { return Choice.Show(it.index) }
 
         // 2. The preferred language IS present, but only as a bitmap track. This
@@ -222,10 +229,18 @@ internal object SubtitleTrackRules {
             ?.let { return Choice.Show(it.index) }
         renderable.firstOrNull { isUntagged(it.value) && isRegular(it.value) }
             ?.let { return Choice.Show(it.index) }
+
+        // 4. Forced, demoted: a preferred-tagged forced track no longer beats an
+        //    untagged SDH/regular track. The container forced flag is unreliable
+        //    on rips (see KDoc); the untagged track is the viewer's language far
+        //    more often than a forced flag is honest. Language order among forced
+        //    tracks is preserved: preferred-tagged before untagged.
+        renderable.firstOrNull { isPreferred(it.value) && it.value.forced }
+            ?.let { return Choice.Show(it.index) }
         renderable.firstOrNull { isUntagged(it.value) && it.value.forced }
             ?.let { return Choice.Show(it.index) }
 
-        // 4. Only tagged tracks, none of them the preferred language. The
+        // 5. Only tagged tracks, none of them the preferred language. The
         //    fallback is still taken - "some subtitles" beats none for a viewer
         //    who asked for subtitles - but the preferred language won above, so
         //    this never overrides a real match, and a forced track in another
@@ -235,7 +250,7 @@ internal object SubtitleTrackRules {
         renderable.firstOrNull { it.value.forced }?.let { return Choice.Show(it.index) }
         renderable.firstOrNull()?.let { return Choice.Show(it.index) }
 
-        // 5. Nothing drawable at all, but the file does carry subtitle tracks:
+        // 6. Nothing drawable at all, but the file does carry subtitle tracks:
         //    they are bitmaps, which only the MPV engine can render.
         bitmap.firstOrNull()?.let { return Choice.NeedsMpv(it.index) }
 
