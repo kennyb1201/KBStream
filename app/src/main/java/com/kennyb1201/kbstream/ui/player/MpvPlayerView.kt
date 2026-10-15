@@ -799,10 +799,20 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     /**
-     * Selects the first subtitle track in [language], or turns subtitles OFF
-     * when the file carries none: a language preference must never silently
-     * show the wrong track, which is what the main player does as well. Blank
-     * hands the choice back to mpv's `slang`.
+     * Selects the subtitle track in [language], or turns subtitles OFF when
+     * the file carries none: a language preference must never silently show
+     * the wrong track, which is what the main player does as well. Blank hands
+     * the choice back to mpv's `slang`.
+     *
+     * Among the language matches the kind is ranked before first-wins - SDH,
+     * then a regular translation, then a forced / signs track - so a file
+     * whose first English track is forced no longer gets forced subtitles when
+     * an SDH or regular track sits later in the list. It is the same order
+     * [SubtitleTrackRules.choose] applies on the ExoPlayer engine, read here
+     * from the title because MPV's [Track] has no forced flag; the last
+     * `firstOrNull()` preserves the old first-match behavior when no title
+     * names a kind. Explicit picks ([selectSubtitleTrack]) and the blank-
+     * language `auto` path are untouched.
      */
     fun selectSubtitleLanguage(language: String): Boolean {
         if (!initialized) return false
@@ -810,7 +820,8 @@ class MpvPlayerView @JvmOverloads constructor(
             runCatching { MpvBackend.setPropertyString("sid", "auto") }
             return true
         }
-        val match = subtitleTracks().firstOrNull { LanguageMatch.matches(language, it.language) }
+        val matches = subtitleTracks().filter { LanguageMatch.matches(language, it.language) }
+        val match = rankedSubtitleMatch(matches)
         if (match == null) {
             clearSubtitles()
             return false
@@ -2209,8 +2220,46 @@ class MpvPlayerView @JvmOverloads constructor(
     private fun preferredLanguage(tag: String?): String? =
         tag?.substringBefore('-')?.substringBefore('_')?.trim()?.takeIf { it.isNotBlank() }
 
-    private companion object {
+    /**
+     * The kind ranking the automatic subtitle pick applies, as pure functions
+     * so [MpvSubtitleKindRankingTest] can pin it without a player (this engine
+     * has no unit harness - see the repo's other MPV contracts).
+     */
+    internal companion object {
         const val TAG = "PLAYER_MPV"
+
+        /**
+         * Whether this subtitle track's own TITLE names it SDH - the same
+         * detection the ExoPlayer path uses for its SDH bucket
+         * ([SubtitleKindRules], whose SDH tags are the literal "SDH" plus
+         * "hi", "cc", "deaf", "captions" and "hearing impaired"). MPV's
+         * `Track` carries no forced flag, so the title is the only kind
+         * evidence there is.
+         */
+        fun isSdhTitle(track: Track): Boolean =
+            SubtitleKindRules.of(track.title).contains(SubtitleKindRules.SDH)
+
+        /**
+         * A full, non-forced translation: its title names neither SDH nor the
+         * forced / signs kind. An untitled track counts as regular, exactly as
+         * the ExoPlayer untagged bucket ranks an unnamed track.
+         */
+        fun isRegularTitle(track: Track): Boolean {
+            val kinds = SubtitleKindRules.of(track.title)
+            return !kinds.contains(SubtitleKindRules.SDH) &&
+                !kinds.contains(SubtitleKindRules.FORCED)
+        }
+
+        /**
+         * The most complete of [matches] (the tracks already known to match
+         * the language): SDH first, then a regular translation, then whatever
+         * came first - the same order ExoPlayer picks with, so the two engines
+         * agree on a file that carries several tracks in one language.
+         */
+        fun rankedSubtitleMatch(matches: List<Track>): Track? =
+            matches.firstOrNull { isSdhTitle(it) }
+                ?: matches.firstOrNull { isRegularTitle(it) }
+                ?: matches.firstOrNull()
 
         /**
          * The MPV library this build links, for the once-per-session start
