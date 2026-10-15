@@ -287,8 +287,24 @@ private class VideoCompatTrackOutput(
     private var stripReported = false
 
     /**
+     * The format [deferHdr10StaticFormat] withheld from the decoder so the first
+     * sample could supply its HDR10 static metadata first, or null when nothing
+     * is withheld.
+     *
+     * Non-null only between the extractor's `format()` call for a stripping
+     * track whose container declared no static metadata and the first sample of
+     * that track, at which point [provideHdr10StaticMetadata] emits it — once,
+     * with the metadata the sample's RPU carried. That keeps the decoder's
+     * configuration a single event: the 2026-10-15 field report had the metadata
+     * attached by a re-emit AFTER the decoder was already configured from the
+     * metadata-less format, and the picture stalled at bitrate 0 with
+     * `hdrStaticInfo=present` appearing in the log afterwards.
+     */
+    private var deferredFormat: Format? = null
+    /**
      * True once the first sample of this track has been offered the RPU's own
-     * HDR10 static metadata (see [provideHdr10StaticMetadata]).
+     * HDR10 static metadata (see [provideHdr10StaticMetadata]) on the path whose
+     * format already reached the decoder — the in-band case, which cannot defer.
      *
      * One attempt per track, not per sample: the Level 6 block is identical in
      * every RPU of a stream, so a second read would be a second JNI parse for a
@@ -316,9 +332,12 @@ private class VideoCompatTrackOutput(
      * capture also shows when the intended path did NOT engage (a passthrough
      * line where a stripped one was expected is itself the finding).
      *
-     * Emitted from `format()`, which the extractor calls before any sample is
-     * handed over, so it always precedes the decoder's own first-input-frame
-     * line in the capture.
+     * Emitted from `format()` and, when a stripping track's format is withheld
+     * for the first sample's HDR10 static metadata (see
+     * [deferHdr10StaticFormat]), from the emit that happens on that sample
+     * instead. Either way it is logged immediately before the format is handed
+     * to the decoder, which is before any sample is, so it always precedes the
+     * decoder's own first-input-frame line in the capture.
      *
      * [Format] carries no `hdrStaticInfo` field of its own — Media3 puts it on
      * [ColorInfo] — so the presence flag reads through `colorInfo`, and
@@ -337,14 +356,30 @@ private class VideoCompatTrackOutput(
     }
 
     /**
-     * Attaches the RPU's own HDR10 static metadata to this track's format, when
-     * nothing else supplied any.
+     * Gives the decoder this track's HDR10 static metadata, read from the RPU's
+     * own Level 6 block, before the first sample reaches it.
      *
-     * Call sites: the two in-place sample transforms below, each of which calls
-     * this immediately BEFORE it rewrites the sample — the RPU is removed from
-     * `pendingBuf` in place, so a read after the strip can only ever answer
-     * "no RPU". Attaching here still precedes the sample reaching the decoder,
-     * which is what makes a format change mid-track safe.
+     * Two shapes, and which one runs is what this method has to get right:
+     *
+     *  - the format was WITHHELD by [deferHdr10StaticFormat] (a stripping track
+     *    whose container declared no static metadata). It is emitted here, once,
+     *    with the metadata already on it — the decoder is configured from a
+     *    format that has it, instead of from one without it and then reconfigured
+     *    mid-stream. The 2026-10-15 field report is why: the re-emit left the
+     *    decoder on the first, metadata-less configuration and the picture
+     *    stalled at bitrate 0 while the log said `hdrStaticInfo=present`
+     *    afterwards.
+     *  - the format already reached the decoder (an in-band DV track the sniff
+     *    discovered, whose format had to be emitted before its samples could be
+     *    read). The metadata can then only be attached as a format change, as
+     *    before, and only when this build can actually read a Level 6 block, the
+     *    format carries none already, and its mime is one of the two the DV
+     *    rewrite paths configure the decoder with.
+     *
+     * Either way the read happens on the first sample, immediately BEFORE the
+     * in-place transforms below rewrite or remove the RPU — the RPU is stripped
+     * from `pendingBuf` in place, so a read after the transform can only ever
+     * answer "no RPU".
      *
      * The gap this closes: a Dolby Vision Profile 8 base layer very often has no
      * mastering-display / content-light SEI of its own, and no container
@@ -354,21 +389,40 @@ private class VideoCompatTrackOutput(
      * `hdrStaticInfo=absent` next to a decoder that produces no frames.
      *
      * The RPU is the last place the values exist, so they are read from it here
-     * — on the way past, on the first sample, before it is stripped — and
-     * attached as the format's own color info, which is where the reference
-     * implementation keeps them and where `MediaFormatUtil` turns them into
+     * — on the way past, on the first sample — and attached as the format's own
+     * color info, which is where the reference implementation keeps them and
+     * where `MediaFormatUtil` turns them into
      * `MediaFormat.KEY_HDR_STATIC_INFO` for the decoder.
      *
-     * Called immediately before each of the two in-place sample transforms —
-     * never after one, because by then the RPU it has to read is gone from
-     * `pendingBuf` — and a no-op after the first call per track, for any track
-     * whose format already carries static metadata, and for anything that is
-     * not one of the two mimes the DV rewrite paths configure the decoder with.
-     * It never throws and never blocks: without libdovi, without an RPU, or
-     * without a Level 6 block in that RPU the format is simply left as it was —
-     * the strip is not allowed to depend on this.
+     * Never throws and never blocks: without libdovi, without an RPU, or without
+     * a Level 6 block in that RPU the format is emitted exactly as it was — the
+     * strip is not allowed to depend on this.
      */
     private fun provideHdr10StaticMetadata(sampleLen: Int) {
+        val deferred = deferredFormat
+        if (deferred != null) {
+            deferredFormat = null
+            val static = staticInfoFromPending(sampleLen)
+            val out = if (static != null) {
+                deferred.buildUpon().setColorInfo(dvHdr10ColorInfoWith(static)).build()
+            } else {
+                deferred
+            }
+            lastFormat = out
+            Log.i(
+                "PLAYER_DV",
+                if (static != null) {
+                    "HDR10 static metadata provided from the RPU's Level 6 block " +
+                        "(first format, hdrStaticInfo=present, codecs=${out.codecs ?: "?"})"
+                } else {
+                    "First format emitted with hdrStaticInfo=absent: this RPU carries no " +
+                        "Level 6 block (codecs=${out.codecs ?: "?"})"
+                }
+            )
+            logDecoderFormat(out)
+            delegate.format(out)
+            return
+        }
         if (hdr10StaticProvideChecked) return
         hdr10StaticProvideChecked = true
         val current = lastFormat ?: return
@@ -384,14 +438,7 @@ private class VideoCompatTrackOutput(
         }
         // The container, or an earlier copy of this step, already said it.
         if (current.colorInfo?.hdrStaticInfo != null) return
-        val nalFormat =
-            if (framing == NalFraming.LENGTH_DELIMITED) {
-                DoviBridge.NAL_FORMAT_LENGTH_DELIMITED
-            } else {
-                DoviBridge.NAL_FORMAT_ANNEX_B
-            }
-        val static = staticInfoFromRpU(pendingBuf, sampleLen, nalFormat, nalLengthFieldLength)
-            ?: return
+        val static = staticInfoFromPending(sampleLen) ?: return
         val withStatic = current.buildUpon()
             .setColorInfo(dvHdr10ColorInfoWith(static))
             .build()
@@ -399,10 +446,78 @@ private class VideoCompatTrackOutput(
         Log.i(
             "PLAYER_DV",
             "HDR10 static metadata provided from the RPU's Level 6 block " +
-                "(hdrStaticInfo=present, codecs=${current.codecs ?: "?"})"
+                "(mid-stream format change, hdrStaticInfo=present, codecs=${current.codecs ?: "?"})"
         )
         logDecoderFormat(withStatic)
         delegate.format(withStatic)
+    }
+
+    /**
+     * Reads the RPU's Level 6 block out of the first [sampleLen] bytes of
+     * `pendingBuf`, or null when there is nothing to read — see
+     * [staticInfoFromRpU]. The framing / `nalLengthFieldLength` pair is the same
+     * one the strip itself is handed.
+     */
+    private fun staticInfoFromPending(sampleLen: Int): ByteArray? {
+        val nalFormat =
+            if (framing == NalFraming.LENGTH_DELIMITED) {
+                DoviBridge.NAL_FORMAT_LENGTH_DELIMITED
+            } else {
+                DoviBridge.NAL_FORMAT_ANNEX_B
+            }
+        return staticInfoFromRpU(pendingBuf, sampleLen, nalFormat, nalLengthFieldLength)
+    }
+
+    /**
+     * Withholds a stripping track's format from the decoder until its first
+     * sample has been read, so the RPU's HDR10 static metadata can be in the
+     * format the decoder is configured with — the only format it needs, instead
+     * of a metadata-less one it is reconfigured out of mid-stream.
+     *
+     * Only a format that can actually gain metadata is withheld: this build must
+     * have libdovi (the only reader of a Level 6 block), the track's samples must
+     * actually be stripped (either stripping mode), its color info must carry no
+     * static metadata already, and its mime must be one of the two the DV
+     * rewrite paths configure the decoder with.
+     *
+     * @return true when the format was withheld, in which case the caller must
+     *     not hand it to the decoder: [provideHdr10StaticMetadata] emits it on
+     *     the first sample instead.
+     */
+    private fun deferHdr10StaticFormat(format: Format): Boolean {
+        if (!DoviBridge.available) return false
+        if (mode != Mode.STRIPPING && mode != Mode.STRIP_NALS_ONLY) return false
+        if (format.colorInfo?.hdrStaticInfo != null) return false
+        if (format.sampleMimeType != MimeTypes.VIDEO_H265 &&
+            format.sampleMimeType != MimeTypes.VIDEO_DOLBY_VISION
+        ) {
+            return false
+        }
+        deferredFormat = format
+        Log.i(
+            "PLAYER_DV",
+            "Decoder format withheld until the first sample so its HDR10 static metadata " +
+                "can be in it (hdrStaticInfo=absent in the container, codecs=${format.codecs ?: "?"})"
+        )
+        return true
+    }
+
+    /**
+     * Emits a format [deferHdr10StaticFormat] withheld, with no sample to read an
+     * RPU out of.
+     *
+     * It exists for the paths that can reach the delegate's sample methods before
+     * any MAIN sample part does — a non-MAIN sample-data part, or a metadata-only
+     * (zero-length) sample. Handing the delegate sample bytes before its format
+     * would be out of order, and emitting here is only ever a deferral of a call
+     * that would otherwise have happened in `format()`.
+     */
+    private fun flushDeferredFormatUnmodified() {
+        val deferred = deferredFormat ?: return
+        deferredFormat = null
+        lastFormat = deferred
+        logDecoderFormat(deferred)
+        delegate.format(deferred)
     }
 
     override fun durationUs(durationUs: Long) = delegate.durationUs(durationUs)
@@ -415,8 +530,11 @@ private class VideoCompatTrackOutput(
             "PLAYER_DV",
             "Compat video format mime=${format.sampleMimeType} codecs=${format.codecs ?: "?"} P5=${isP5Content}"
         )
-        // A (re)emitted format starts a fresh sample window (seek / re-init).
+        // A (re)emitted format starts a fresh sample window (seek / re-init), and
+        // supersedes anything this track withheld from the decoder before this
+        // one arrived.
         pendingLen = 0
+        deferredFormat = null
         hdr10StaticProvideChecked = false
         // 8.1 conversion is per-profile: only declared P5/P7 streams whose
         // toggle is on are rewritten — the codec stays in the dvhe/dvh1 family
@@ -455,9 +573,9 @@ private class VideoCompatTrackOutput(
                 rewriteInitData(format.initializationData)
             )
             val converted = builder.build()
-            logDecoderFormat(converted)
-            delegate.format(converted)
             mode = Mode.STRIPPING
+            logDecoderFormat(converted)
+            if (!deferHdr10StaticFormat(converted)) delegate.format(converted)
             return
         }
         // When DV conversion is disabled (the DV setting is Off and only the
@@ -633,11 +751,11 @@ private class VideoCompatTrackOutput(
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
-                    logDecoderFormat(presented)
-                    delegate.format(presented)
-                    // The decoder now has `presented`, so that — not the
-                    // container's format — is what the sample-side step that
-                    // adds the RPU's HDR10 static metadata must build on.
+                    // The decoder is configured from `presented` alone — the
+                    // relabel's format, not the container's. When it declared no
+                    // HDR10 static metadata, that configuration is withheld here
+                    // and happens on the first sample instead, with the RPU's
+                    // Level 6 values already in it (see [deferHdr10StaticFormat]).
                     lastFormat = presented
                     // The relabel is bit-exact and the removal is in-place:
                     // the only parameter set touched is the codec config's VPS,
@@ -646,7 +764,12 @@ private class VideoCompatTrackOutput(
                     // 2026-10-14 no-relabel test is on, none at all: the track
                     // and its codec config reach the decoder exactly as the
                     // container declared them and only the samples changed.
+                    // The mode goes first: [deferHdr10StaticFormat] reads it to
+                    // decide whether this format may be withheld for the first
+                    // sample's metadata.
                     mode = Mode.STRIP_NALS_ONLY
+                    logDecoderFormat(presented)
+                    if (!deferHdr10StaticFormat(presented)) delegate.format(presented)
                 } else {
                     mode = Mode.NORMAL
                     logDecoderFormat(format)
@@ -704,12 +827,14 @@ private class VideoCompatTrackOutput(
                             "(the mutating strip is field-dead here)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
-                    logDecoderFormat(presented)
-                    delegate.format(presented)
-                    // As in the branch above: the decoder's format is now
-                    // `presented`, which a relabel may have re-advertised.
+                    // As in the branch above: the decoder is configured from
+                    // `presented`, which a relabel may have re-advertised — and
+                    // withheld until the first sample when it carries no static
+                    // metadata of its own.
                     lastFormat = presented
                     mode = Mode.STRIP_NALS_ONLY
+                    logDecoderFormat(presented)
+                    if (!deferHdr10StaticFormat(presented)) delegate.format(presented)
                 } else {
                     mode = Mode.NORMAL
                     logDecoderFormat(format)
@@ -765,13 +890,13 @@ private class VideoCompatTrackOutput(
             }
             val strippedFormat = stripped.getOrNull()
             if (strippedFormat != null) {
+                mode = Mode.STRIPPING
                 logDecoderFormat(strippedFormat)
-                delegate.format(strippedFormat)
+                if (!deferHdr10StaticFormat(strippedFormat)) delegate.format(strippedFormat)
                 // This branch re-advertises the track too (mime + codec +
                 // rewritten codec config), so it is the stripped format the
                 // RPU's static metadata has to be attached to.
                 lastFormat = strippedFormat
-                mode = Mode.STRIPPING
             } else {
                 // Logged loudly and with the cause: the next capture has to show
                 // that the rewrite was abandoned rather than a load failure.
@@ -857,7 +982,7 @@ private class VideoCompatTrackOutput(
             // fully washed-out colors.
             val withColor = rewritten.buildUpon().setColorInfo(dvHdr10ColorInfoFor(format)).build()
             logDecoderFormat(withColor)
-            delegate.format(withColor)
+            if (!deferHdr10StaticFormat(withColor)) delegate.format(withColor)
         } else {
             logDecoderFormat(format)
             delegate.format(format)
@@ -877,6 +1002,7 @@ private class VideoCompatTrackOutput(
         sampleDataPart: Int
     ): Int {
         if (mode == Mode.NORMAL || sampleDataPart != TrackOutput.SAMPLE_DATA_PART_MAIN) {
+            flushDeferredFormatUnmodified()
             return delegate.sampleData(input, length, allowEndOfInput, sampleDataPart)
         }
         ensurePendingCapacity(pendingLen + length)
@@ -894,6 +1020,7 @@ private class VideoCompatTrackOutput(
 
     override fun sampleData(data: ParsableByteArray, length: Int, sampleDataPart: Int) {
         if (mode == Mode.NORMAL || sampleDataPart != TrackOutput.SAMPLE_DATA_PART_MAIN) {
+            flushDeferredFormatUnmodified()
             delegate.sampleData(data, length, sampleDataPart)
             return
         }
@@ -910,6 +1037,9 @@ private class VideoCompatTrackOutput(
         cryptoData: TrackOutput.CryptoData?
     ) {
         if (mode == Mode.NORMAL || pendingLen == 0) {
+            // No sample bytes to read an RPU out of, so a format withheld for its
+            // metadata is emitted as it stands rather than never at all.
+            flushDeferredFormatUnmodified()
             delegate.sampleMetadata(timeUs, flags, size, offset, cryptoData)
             return
         }
