@@ -256,9 +256,6 @@ fun SearchScreen(
     // Counted from the RAW lists, before the hidden filter drops rows: a viewer
     // who has hidden every hit still MATCHED something, so the "No matches
     // found" card must not stand in for results they chose to hide (LS-P2-6).
-    // Counted from the RAW lists, before the hidden filter drops rows: a viewer
-    // who has hidden every hit still MATCHED something, so the "No matches
-    // found" card must not stand in for results they chose to hide (LS-P2-6).
     val totalCount = resultsRaw.size + actorResults.size + studioResults.size +
         collectionResults.size + addonResultGroupsRaw.sumOf { it.results.size }
 
