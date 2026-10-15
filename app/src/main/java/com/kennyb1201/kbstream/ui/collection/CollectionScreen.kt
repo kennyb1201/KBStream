@@ -321,6 +321,11 @@ fun CollectionScreen(
                             // the one the focus is handed back to.
                             val isReturnItem = index == returnIndex
 
+                            // The OTHER id flavor a part can be keyed under,
+                            // and the one that needs no resolution: its own
+                            // TMDB id. Only consulted when the IMDB key misses,
+                            // so a part that resolved badges exactly as it did.
+                            val tmdbKeyId = "tmdb:${part.id}"
                             val watched =
                                 resolvedIds[
                                     viewModel.lookupKey(part.id, "movie")
@@ -329,20 +334,28 @@ fun CollectionScreen(
                                         imdbId,
                                         "movie"
                                     ) in watchedKeys
-                                } == true
+                                } == true ||
+                                    viewModel.watchedKey(tmdbKeyId, "movie") in watchedKeys
 
                             CollectionPosterTile(
                                 part = part,
                                 isWatched = watched,
+                                // The checkmark wins over the eye - tested
+                                // here rather than trusted from the view
+                                // model's own subtraction, which reads the
+                                // PREVIOUS watchedKeys emission.
                                 isPartiallyWatched =
-                                    resolvedIds[
-                                        viewModel.lookupKey(part.id, "movie")
-                                    ]?.let { imdbId ->
-                                        viewModel.watchedKey(
-                                            imdbId,
-                                            "movie"
-                                        ) in partialWatchedKeys
-                                    } == true,
+                                    !watched && (
+                                        resolvedIds[
+                                            viewModel.lookupKey(part.id, "movie")
+                                        ]?.let { imdbId ->
+                                            viewModel.watchedKey(
+                                                imdbId,
+                                                "movie"
+                                            ) in partialWatchedKeys
+                                        } == true ||
+                                            viewModel.watchedKey(tmdbKeyId, "movie") in partialWatchedKeys
+                                        ),
                                 onClick = {
                                     // Remember this film, so backing out of its
                                     // Detail page reopens the rail ON it.

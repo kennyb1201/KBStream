@@ -247,15 +247,28 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     var onOpenDecadeScreen:
         ((decadeStart: Int, name: String) -> Unit)? = null
 
+    /**
+     * The tile key for one id, in the shape every other screen's watch
+     * pipeline uses - `"series::tmdb:123"`. The type is LOWERCASED, which is
+     * not cosmetic: the keys the repository hands back are built from a
+     * normalized type, so a raw `"TV"` here produced `"TV::tt123"` and matched
+     * nothing. Every other view model's `watchedKey` lowercases for exactly
+     * this reason; this one did not.
+     */
     fun watchedKey(
         id: String,
         type: String
-    ): String = "$type::$id"
+    ): String = "${type.lowercase()}::$id"
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
 
-    private fun normalizedType(mediaType: String?): String? =
+    /**
+     * `movie` / `series`, or null for anything else. Shared with the tile
+     * badge helpers (see SearchScreenPart2), which have to normalize a
+     * result's type the same way this screen's own lookups do.
+     */
+    internal fun normalizedType(mediaType: String?): String? =
         when (mediaType?.lowercase()) {
             "movie" -> "movie"
             "tv", "series" -> "series"

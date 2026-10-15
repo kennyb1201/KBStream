@@ -796,15 +796,27 @@ private fun StudioRailRow(
                     viewModel.lookupKey(tmdbId, normalizedType)
                 ]
 
+                // The OTHER id flavor this title can be keyed under, and the
+                // one that needs no resolution: the rail's own TMDB id. Only
+                // consulted when the IMDB key misses, so a title that resolved
+                // badges exactly as it did.
+                val tmdbKeyId = "tmdb:$tmdbId"
+
                 val watched = imdbId?.let {
                     viewModel.watchedKey(it, normalizedType) in watchedKeys
-                } == true
+                } == true ||
+                    viewModel.watchedKey(tmdbKeyId, normalizedType) in watchedKeys
 
                 // Eye badge: started but not finished. The completed
-                // checkmark wins when the title is fully watched.
-                val watchedPartially = !watched && imdbId?.let {
-                    viewModel.watchedKey(it, normalizedType) in partialWatchedKeys
-                } == true
+                // checkmark wins when the title is fully watched - re-tested
+                // here rather than trusted from the view model's own
+                // subtraction, which reads the PREVIOUS watchedKeys emission.
+                val watchedPartially = !watched && (
+                    imdbId?.let {
+                        viewModel.watchedKey(it, normalizedType) in partialWatchedKeys
+                    } == true ||
+                        viewModel.watchedKey(tmdbKeyId, normalizedType) in partialWatchedKeys
+                    )
 
                 val isFirstItem =
                     isFirstSection && studioItem == section.items.firstOrNull()

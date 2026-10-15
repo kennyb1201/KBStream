@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.tmdb.StudioSection
 import com.kennyb1201.kbstream.data.tmdb.TagRailPage
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -54,19 +55,27 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
         _resolvedIds,
         watchedStatusRepository.observeWatchUpdates()
     ) { sections: List<StudioSection>, resolvedMap: Map<String, String>, _ ->
-        if (sections.isEmpty() || resolvedMap.isEmpty()) {
+        // No `resolvedMap.isEmpty()` guard: the badges no longer depend on the
+        // resolution pass at all (see the tmdb-flavored candidate below), so a
+        // load whose every resolution came back null still badges its rails.
+        if (sections.isEmpty()) {
             emptySet()
         } else {
             sections.flatMap { it.items }
-                .mapNotNull { studioItem ->
+                .flatMap { studioItem ->
                     val tmdbId = studioItem.item.id
-                    val mediaType = normalizeMediaType(studioItem.mediaType) ?: return@mapNotNull null
-                    val imdbId = resolvedMap[lookupKey(tmdbId, mediaType)] ?: return@mapNotNull null
-                    if (watchedStatusRepository.isWatchedCached(imdbId, mediaType)) {
-                        watchedKey(imdbId, mediaType)
-                    } else {
-                        null
-                    }
+                    val mediaType = normalizeMediaType(studioItem.mediaType) ?: return@flatMap emptyList()
+                    // The keys this title has: the resolved IMDB flavor first,
+                    // the raw `tmdb:<n>` one second (see [WatchedStatusKeys],
+                    // which owns the rule and is where the past-the-cap and
+                    // no-resolution cases are tested). Both are emitted when both
+                    // match, so the tile's own IMDB check still hits first.
+                    WatchedStatusKeys.watchedKeysOf(
+                        tmdbId = tmdbId,
+                        mediaType = mediaType,
+                        resolvedImdbId = resolvedMap[lookupKey(tmdbId, mediaType)],
+                        matches = watchedStatusRepository::isWatchedCached
+                    )
                 }
                 .toSet()
         }
@@ -84,19 +93,21 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
         _resolvedIds,
         watchedStatusRepository.observeWatchUpdates()
     ) { sections: List<StudioSection>, resolvedMap: Map<String, String>, _ ->
-        if (sections.isEmpty() || resolvedMap.isEmpty()) {
+        // Same two candidates as watchedKeys, against the partially-watched
+        // state, and the same dropped `resolvedMap.isEmpty()` guard.
+        if (sections.isEmpty()) {
             emptySet()
         } else {
             sections.flatMap { it.items }
-                .mapNotNull { studioItem ->
+                .flatMap { studioItem ->
                     val tmdbId = studioItem.item.id
-                    val mediaType = normalizeMediaType(studioItem.mediaType) ?: return@mapNotNull null
-                    val imdbId = resolvedMap[lookupKey(tmdbId, mediaType)] ?: return@mapNotNull null
-                    if (watchedStatusRepository.isPartiallyWatchedCached(imdbId, mediaType)) {
-                        watchedKey(imdbId, mediaType)
-                    } else {
-                        null
-                    }
+                    val mediaType = normalizeMediaType(studioItem.mediaType) ?: return@flatMap emptyList()
+                    WatchedStatusKeys.watchedKeysOf(
+                        tmdbId = tmdbId,
+                        mediaType = mediaType,
+                        resolvedImdbId = resolvedMap[lookupKey(tmdbId, mediaType)],
+                        matches = watchedStatusRepository::isPartiallyWatchedCached
+                    )
                 }
                 .toSet() - watchedKeys.value
         }
@@ -129,7 +140,12 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
      */
     private var loadGeneration = 0
 
-    fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
+    /**
+     * The key a tile is compared under. Delegates to [WatchedStatusKeys.key],
+     * so the keys the screen tests and the keys the sets above are built from
+     * cannot describe the same title differently.
+     */
+    fun watchedKey(id: String, type: String): String = WatchedStatusKeys.key(id, type)
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
@@ -266,6 +282,22 @@ class TagViewModel(application: Application) : AndroidViewModel(application) {
                 _resolvedIds.value = emptyMap()
                 return
             }
+
+            // The badge preload, UNCAPPED and ahead of the resolution below:
+            // this is the raw `tmdb:<n>` flavor the watched pipeline already
+            // answers under, and it costs local DB plus the already-cached Simkl
+            // snapshot - no network. It has to run even when every resolution
+            // comes back null, which is exactly the case the `resolved.isEmpty()`
+            // return below used to leave bare. (HomeViewModel's
+            // refreshWatchedStatus preloads its whole rail list the same way.)
+            val tmdbPairs = sections.flatMap { it.items }
+                .mapNotNull { studioItem ->
+                    val tmdbId = studioItem.item.id
+                    val mediaType = normalizeMediaType(studioItem.mediaType) ?: return@mapNotNull null
+                    if (tmdbId <= 0) null else "tmdb:$tmdbId" to mediaType
+                }
+                .distinct()
+            watchedStatusRepository.preload(tmdbPairs)
 
             val uniqueItems = sections
                 .flatMap { it.items }

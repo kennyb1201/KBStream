@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kennyb1201.kbstream.data.tmdb.TmdbCollectionDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,17 +48,23 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         _resolvedIds,
         watchedStatusRepository.observeWatchUpdates()
     ) { detail: TmdbCollectionDetail?, resolved: Map<String, String>, _: Long ->
-        if (detail == null || resolved.isEmpty()) {
+        // No `resolved.isEmpty()` guard: the badges no longer depend on the
+        // resolution pass at all (see the tmdb-flavored candidate below).
+        if (detail == null) {
             emptySet()
         } else {
             detail.parts
-                .mapNotNull { part ->
-                    val imdbId = resolved[lookupKey(part.id, "movie")] ?: return@mapNotNull null
-                    if (watchedStatusRepository.isWatchedCached(imdbId, "movie")) {
-                        watchedKey(imdbId, "movie")
-                    } else {
-                        null
-                    }
+                .flatMap { part ->
+                    // The keys a part has: the resolved IMDB flavor first,
+                    // the raw `tmdb:<n>` one second (see [WatchedStatusKeys],
+                    // which owns the rule and is where the past-the-cap and
+                    // no-resolution cases are tested). Parts are movies.
+                    WatchedStatusKeys.watchedKeysOf(
+                        tmdbId = part.id,
+                        mediaType = "movie",
+                        resolvedImdbId = resolved[lookupKey(part.id, "movie")],
+                        matches = watchedStatusRepository::isWatchedCached
+                    )
                 }
                 .toSet()
         }
@@ -75,17 +82,19 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
         _resolvedIds,
         watchedStatusRepository.observeWatchUpdates()
     ) { detail: TmdbCollectionDetail?, resolved: Map<String, String>, _: Long ->
-        if (detail == null || resolved.isEmpty()) {
+        // Same two candidates as watchedKeys, against the partially-watched
+        // state, and the same dropped `resolved.isEmpty()` guard.
+        if (detail == null) {
             emptySet()
         } else {
             detail.parts
-                .mapNotNull { part ->
-                    val imdbId = resolved[lookupKey(part.id, "movie")] ?: return@mapNotNull null
-                    if (watchedStatusRepository.isPartiallyWatchedCached(imdbId, "movie")) {
-                        watchedKey(imdbId, "movie")
-                    } else {
-                        null
-                    }
+                .flatMap { part ->
+                    WatchedStatusKeys.watchedKeysOf(
+                        tmdbId = part.id,
+                        mediaType = "movie",
+                        resolvedImdbId = resolved[lookupKey(part.id, "movie")],
+                        matches = watchedStatusRepository::isPartiallyWatchedCached
+                    )
                 }
                 .toSet() - watchedKeys.value
         }
@@ -100,7 +109,12 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private var currentId: Int? = null
 
-    fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
+    /**
+     * The key a tile is compared under. Delegates to [WatchedStatusKeys.key],
+     * so the keys the screen tests and the keys the sets above are built from
+     * cannot describe the same title differently.
+     */
+    fun watchedKey(id: String, type: String): String = WatchedStatusKeys.key(id, type)
 
     fun lookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
@@ -137,6 +151,20 @@ class CollectionViewModel(application: Application) : AndroidViewModel(applicati
 
     private suspend fun resolveAndPreload(tmdbIds: List<Int>) {
         if (tmdbIds.isEmpty()) return
+
+        // The badge preload, UNCAPPED and ahead of the resolution below: parts
+        // are movies, and the raw `tmdb:<n>` flavor is the one the watched
+        // pipeline answers under for them - local DB plus the already-cached
+        // Simkl snapshot, no network. It runs even when every resolution below
+        // comes back null, which is the case the `resolved.isEmpty()` return
+        // used to leave bare. HomeViewModel's watched refresh preloads its whole
+        // rail list the same way, and for the same reason: the old tt-only view
+        // of the pipeline silently dropped every tmdb-keyed item.
+        val tmdbPairs = tmdbIds
+            .filter { it > 0 }
+            .distinct()
+            .map { "tmdb:$it" to "movie" }
+        watchedStatusRepository.preload(tmdbPairs)
 
         val unique = tmdbIds
             .filter { it > 0 }

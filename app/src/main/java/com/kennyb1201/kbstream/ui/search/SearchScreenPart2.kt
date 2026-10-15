@@ -120,6 +120,13 @@ internal fun searchRailTitle(
  * Watched badge for a search tile: TMDB-keyed results compare against the
  * resolved IMDB id (populated asynchronously into [SearchViewModel.resolvedIds]);
  * add-on results are already keyed by their IMDB id and compare directly.
+ *
+ * The result's type is NORMALIZED before either use. Both the id lookup and
+ * the key carried the raw string, while the keys this compares against are
+ * built from a normalized type (see [SearchViewModel.watchedKey]) - so a
+ * result typed `"TV"` looked up `"tv::123"` against a map keyed `"series::123"`
+ * and then built `"TV::tt123"` against a set holding `"series::tt123"`. It
+ * missed on both, which is a badge that simply never appears.
  */
 internal fun watchedTile(
     result: SearchTitleResult,
@@ -127,20 +134,21 @@ internal fun watchedTile(
     watchedKeys: Set<String>,
     viewModel: SearchViewModel
 ): Boolean {
+    val normalizedType = viewModel.normalizedType(result.type) ?: return false
     val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
     val keyId = if (tmdbId != null) {
-        resolvedIds[viewModel.lookupKey(tmdbId, result.type)]
+        resolvedIds[viewModel.lookupKey(tmdbId, normalizedType)]
     } else {
         result.id
     } ?: return false
 
-    return viewModel.watchedKey(keyId, result.type) in watchedKeys
+    return viewModel.watchedKey(keyId, normalizedType) in watchedKeys
 }
 
 /**
- * Eye-badge twin of [watchedTile]: same id resolution, compared against the
- * partially-watched key set. The tile only shows the eye when the completed
- * checkmark is absent.
+ * Eye-badge twin of [watchedTile]: same id resolution and the same type
+ * normalization, compared against the partially-watched key set. The tile only
+ * shows the eye when the completed checkmark is absent.
  */
 internal fun partialWatchedTile(
     result: SearchTitleResult,
@@ -148,14 +156,15 @@ internal fun partialWatchedTile(
     partialWatchedKeys: Set<String>,
     viewModel: SearchViewModel
 ): Boolean {
+    val normalizedType = viewModel.normalizedType(result.type) ?: return false
     val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
     val keyId = if (tmdbId != null) {
-        resolvedIds[viewModel.lookupKey(tmdbId, result.type)]
+        resolvedIds[viewModel.lookupKey(tmdbId, normalizedType)]
     } else {
         result.id
     } ?: return false
 
-    return viewModel.watchedKey(keyId, result.type) in partialWatchedKeys
+    return viewModel.watchedKey(keyId, normalizedType) in partialWatchedKeys
 }
 
 @Composable
