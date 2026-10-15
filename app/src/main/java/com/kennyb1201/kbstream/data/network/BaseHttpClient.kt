@@ -27,6 +27,26 @@ import okhttp3.brotli.BrotliInterceptor
  *  - Nothing may shut down or evict this client: it is the base every one of
  *    those features derives from (nothing does, and nothing should).
  *
+ * It also carries the app's DEFAULT timeouts, which is why it exists as an
+ * object rather than a bare `OkHttpClient.Builder()` at each call site. A
+ * builder with none set means OkHttp's own defaults, and OkHttp's defaults are
+ * ZERO — no timeout at all. A feature client that derives from this base and
+ * sets none of its own therefore inherited "wait forever": one stalled TLS
+ * handshake (a captive portal, a dying DNS server, a router that accepts the
+ * SYN and then says nothing) left that coroutine suspended for the life of the
+ * process, holding one of the twelve per-host dispatcher slots the home rails,
+ * Detail and the Continue Watching scan all share — so a few of them wedged
+ * the whole host, and the screens that read it simply never loaded again.
+ *
+ * The three below are per-CONNECTION-and-per-READ gaps, not a budget for a
+ * whole call, which is deliberate: the features that derive from here fetch
+ * JSON documents and the ones that stream something long (the IPTV/EPG stack,
+ * addon subtitle downloads, the updater) set their own larger read windows on
+ * their derived builders, exactly as they did before this changed. A
+ * `callTimeout` is deliberately NOT set here for the same reason: it caps the
+ * TOTAL call, so it would have to be generous enough for the largest download
+ * the app makes, which is the same as having no timeout for the small ones.
+ *
  * NOT for playback: the player keeps its own dedicated clients (its stack,
  * UA handling and watchdog behavior are deliberately self-contained).
  */
@@ -56,6 +76,15 @@ object BaseHttpClient {
                 // working set; the five-minute keep-alive is OkHttp's default
                 // and is right for a box that idles minutes between syncs.
                 .connectionPool(ConnectionPool(12, 5, TimeUnit.MINUTES))
+                // See the class docs: a derived client that sets no timeouts of
+                // its own would otherwise wait forever. Ten seconds is several
+                // times a normal handshake to any of these APIs (and the ones
+                // that talk over slow links set their own, see IptvHttpClient);
+                // thirty seconds of read silence is past any of their slowest
+                // responses.
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(30, TimeUnit.SECONDS)
+                .writeTimeout(30, TimeUnit.SECONDS)
                 .build()
                 .also { base = it }
         }

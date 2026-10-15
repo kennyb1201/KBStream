@@ -85,12 +85,23 @@ class HomeFocusedCardContractTest {
 
     @Test
     fun `every rail kind keeps the focused-card target current`() {
+        // The card's own focus block, sliced out of the chain: it reports the
+        // key it was focused under, hands its requester to the focused-card
+        // target AND to the return-from-Detail restore, and swaps the hero.
+        val catalogFocusBlock = home.substringAfter(".onFocusChanged { focusState ->")
+            .substringBefore(".then(")
         assertTrue(
             "a catalog card reports itself on focus, not only on long press",
-            home.contains(
-                "if (focusState.isFocused) { lastFocusedItemKey = \"${'$'}{meta.type}:${'$'}{meta.id}\" " +
-                    "focusedCardRequester = requester selectHero(meta) }"
-            )
+            home.contains("if (focusState.isFocused) {") &&
+                catalogFocusBlock.contains("lastFocusedItemKey = cardKey") &&
+                catalogFocusBlock.contains("focusedCardRequester = requester") &&
+                catalogFocusBlock.contains("selectHero(meta)")
+        )
+        assertTrue(
+            "and the card's key reaches the return-from-Detail restore, so the " +
+                "focus the viewer left Home with is one it can land on again",
+            catalogFocusBlock.contains("viewModel.lastFocusedRailItemKey") &&
+                catalogFocusBlock.contains("railFocusRequesters[cardKey] = requester")
         )
         assertTrue(
             "the Continue Watching rail reports the card its focus lands on",

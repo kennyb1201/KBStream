@@ -24,10 +24,18 @@ data class MetaPreview(
     val releaseInfo: String? = null,
 
     // Some catalogs (AIOMetadata) ship a numeric `year` instead of a string
-    // `releaseInfo` on their search previews. Parsed as Any because it can be
-    // an int, a string, or absent; normalized into [yearOrNull] so callers
-    // never see the raw variant.
-    val year: Any? = null,
+    // `releaseInfo` on their search previews, so the wire type can be an int, a
+    // float, a string, or absent. [ScalarString] absorbs all three into the
+    // String this field is declared as, and [yearOrNull] does the arithmetic.
+    //
+    // The field is String? rather than Any? on purpose, and it is not a style
+    // preference: Compose cannot prove a model with an `Any` property stable,
+    // so MetaPreview was inferred unstable, which made every composable that
+    // takes one (the rail tile, and the whole rail above it) unstable with it —
+    // skippable nowhere, recomposed on every unrelated emission. See
+    // [ScalarStringAdapterFactory] for the parse side.
+    @ScalarString
+    val year: String? = null,
     // IMDb rating when the addon includes it in catalog/search previews
     // (Cinemeta does); powers the search-tile star-rating caption.
     @Json(name = "imdbRating") val imdbRating: String? = null,
@@ -53,8 +61,7 @@ data class MetaPreview(
      */
     val yearOrNull: Int?
         get() = releaseInfo?.take(4)?.toIntOrNull()
-            ?: (year as? Number)?.toInt()
-            ?: (year as? String)?.trim()?.take(4)?.toIntOrNull()
+            ?: year?.trim()?.take(4)?.toIntOrNull()
 }
 
 @JsonClass(generateAdapter = true)
@@ -395,6 +402,65 @@ object ManifestResourcesAdapterFactory : JsonAdapter.Factory {
     ): JsonAdapter<*>? {
         return if (annotations.any { it is ManifestResources }) {
             ManifestResourcesAdapter()
+        } else {
+            null
+        }
+    }
+}
+
+/**
+ * A JSON value that may be written as a number, a float or a string, declared
+ * as the [String] the model wants.
+ *
+ * Used by [MetaPreview.year], which some catalogs (AIOMetadata) send as `2026`
+ * and others as `"2026"` — and which the standard String adapter rejects
+ * outright when it sees a number ("Expected a string but was NUMBER"). The
+ * alternative, declaring the field `Any?`, parses but makes the whole model
+ * unstable to Compose: an `Any` property is unprovable, so MetaPreview is
+ * inferred unstable, and every composable taking one (the poster tile, the rail
+ * above it) is unstable with it and therefore never skippable.
+ *
+ * Deliberately no `@Retention` here, for the same KSP2 reason recorded above
+ * [ManifestResources]: [ScalarStringAdapterFactory] matches on `is ScalarString`
+ * rather than reading `Retention.value`, and Kotlin's default retention is
+ * already RUNTIME.
+ */
+@JsonQualifier
+annotation class ScalarString
+
+/** Any scalar (string, int, float) read as its wire text; null stays null. */
+class ScalarStringAdapter : JsonAdapter<String>() {
+
+    override fun fromJson(reader: JsonReader): String? =
+        if (reader.peek() == JsonReader.Token.NULL) {
+            reader.nextNull()
+        } else {
+            reader.nextString()
+        }
+
+    override fun toJson(writer: JsonWriter, value: String?) {
+        writer.value(value)
+    }
+}
+
+/**
+ * Moshi factory that only intercepts fields annotated [ScalarString], exactly
+ * like [ManifestResourcesAdapterFactory] below.
+ *
+ * Has to be registered on every Moshi instance that builds [MetaPreview]'s
+ * adapter — the addon repository's, and the catalog snapshot store's — because
+ * a qualifier no factory answers is a hard failure at adapter-construction
+ * time, not a silent fallback to the plain String adapter.
+ */
+object ScalarStringAdapterFactory : JsonAdapter.Factory {
+
+    override fun create(
+        type: Type,
+        annotations: Set<Annotation>,
+        moshi: Moshi
+    ): JsonAdapter<*>? {
+        return if (annotations.any { it is ScalarString }) {
+            ScalarStringAdapter()
         } else {
             null
         }

@@ -29,7 +29,10 @@ import java.nio.ByteBuffer
  *
  * Everything else is delegated straight through (`AudioSink by inner`), so offload
  * mode, tunneling, the audio session and the buffer-size accounting keep
- * behaving exactly as they did.
+ * behaving exactly as they did — with one more exception, the capability
+ * question at [supportsFormat], which is answered here so the bundled software
+ * audio decoder is never handed a track wider than its conversion can address
+ * (see [SoftwareAudioRules]).
  */
 internal class LiveDownmixAudioSink(
     private val inner: AudioSink
@@ -55,6 +58,60 @@ internal class LiveDownmixAudioSink(
      * other setting, so moving the pill back and forth re-tries it.
      */
     private var rejectedTarget = Int.MIN_VALUE
+
+    /**
+     * The width this sink last answered "unsupported" to for the software
+     * decoder (see [supportsFormat]), so one file cannot log it per query.
+     */
+    private var refusedWidth = Int.MIN_VALUE
+
+    /**
+     * The software decoder's questions, answered here because this is the only
+     * object media3 asks them of.
+     *
+     * `FfmpegAudioRenderer.supportsFormatInternal` decides whether the bundled
+     * FFmpeg decoder may take a track from `sinkSupportsFormat(format, 16-bit)`
+     * and `sinkSupportsFormat(format, float)` — both of which reach this sink as
+     * a PCM format built at the input track's channel count — and
+     * `shouldOutputFloat` asks through `getFormatSupport` too. So these two
+     * answers ARE the decoder's routing decision, and they are where the one
+     * width its libswresample conversion is provably wrong for is turned away
+     * before any decode (see [SoftwareAudioRules] for the crash and the source
+     * behind it).
+     *
+     * Both are overridden because `DecoderAudioRenderer` has a method for each
+     * (`sinkSupportsFormat` → `supportsFormat`, `getSinkFormatSupport` →
+     * `getFormatSupport`) and answers "does the software decoder fit this
+     * track" from either.
+     *
+     * Everything else is the inner sink's answer, unchanged: a compressed
+     * format here is the passthrough question, and passthrough never reaches
+     * libswresample.
+     */
+    override fun supportsFormat(format: Format): Boolean {
+        val refusal = refuseWidth(format)
+        return refusal == null && inner.supportsFormat(format)
+    }
+
+    override fun getFormatSupport(format: Format): Int {
+        val refusal = refuseWidth(format)
+        if (refusal != null) return AudioSink.SINK_FORMAT_UNSUPPORTED
+        return inner.getFormatSupport(format)
+    }
+
+    /**
+     * The shared answer behind the two overrides above: non-null and logged
+     * once per width when this track is past what the software decoder's
+     * conversion can address, null when it is not this question's business.
+     */
+    private fun refuseWidth(format: Format): String? {
+        val refusal = SoftwareAudioRules.refusesSoftwareDecode(format) ?: return null
+        if (refusedWidth != format.channelCount) {
+            refusedWidth = format.channelCount
+            Log.w(TAG, "software decoder refused this track: $refusal")
+        }
+        return refusal
+    }
 
     override fun configure(
         inputFormat: Format,
@@ -84,6 +141,7 @@ internal class LiveDownmixAudioSink(
         pcmInput = false
         channelMap = null
         rejectedTarget = Int.MIN_VALUE
+        refusedWidth = Int.MIN_VALUE
         inner.reset()
     }
 
@@ -91,6 +149,7 @@ internal class LiveDownmixAudioSink(
         inputFormat = null
         pcmInput = false
         channelMap = null
+        refusedWidth = Int.MIN_VALUE
         inner.release()
     }
 

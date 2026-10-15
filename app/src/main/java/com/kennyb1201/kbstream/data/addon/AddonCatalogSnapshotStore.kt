@@ -40,6 +40,11 @@ internal object AddonCatalogSnapshotStore {
 
     private val adapter =
         Moshi.Builder()
+            // CatalogSnapshot holds MetaPreview, whose `year` field carries a
+            // qualifier (see [ScalarStringAdapterFactory]): a Moshi that builds
+            // that adapter without the factory fails at construction, so this
+            // one is built the same way the addon repository's is.
+            .add(ScalarStringAdapterFactory)
             .addLast(KotlinJsonAdapterFactory())
             .build()
             .adapter(CatalogSnapshot::class.java)

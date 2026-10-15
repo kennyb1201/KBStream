@@ -156,6 +156,19 @@ class MpvPlayerView @JvmOverloads constructor(
     var onPlaybackError: ((String) -> Unit)? = null
 
     /**
+     * A stream that HAD loaded ended well short of its end (see
+     * [StreamEndRules.Verdict.DIED_MID_STREAM]).
+     *
+     * Deliberately separate from [onPlaybackError], which is the OPEN-failure
+     * path: that one means this source's link is what failed, so the Activity
+     * demotes the add-on and walks to the next source. A stream that played and
+     * then died says nothing about the link - it is a dropped segment or an
+     * exhausted reconnect - and must not cost a working add-on its place in the
+     * ranked list.
+     */
+    var onStreamDied: ((String) -> Unit)? = null
+
+    /**
      * The video track's frame rate, once mpv knows one.
      *
      * Offered to whatever matches the panel to the content (see
@@ -216,6 +229,25 @@ class MpvPlayerView @JvmOverloads constructor(
 
     private var fileLoaded = false
     private var endNotified = false
+
+    /**
+     * True when the load now in flight is REPLACING a file that had loaded.
+     *
+     * Set by [startPendingLoad] from [fileLoaded] before it clears it, and
+     * cleared when the replacement loads. It is what separates "the file we
+     * asked to unload ended" (our own `loadfile replace`, no failure) from "the
+     * file we asked for never opened" (a real open failure) - both arrive as
+     * END_FILE with `fileLoaded` false, which is why the old handler read a
+     * source switch as an unplayable source.
+     */
+    private var replacingPreviousFile = false
+
+    /**
+     * True once [stopPlayback] has issued mpv's own `stop`, for an engine
+     * handoff. Ends a LOADED file, so it is the second thing that has to read as
+     * "we asked for this" rather than "the stream died".
+     */
+    private var stoppingDeliberately = false
 
     /**
      * mpv's own last error-level line, if it has said anything.
@@ -424,6 +456,38 @@ class MpvPlayerView @JvmOverloads constructor(
         // that makes "mpv has the surface whenever a file opens" hold on every
         // path.
         if (surfaceAttached) startPendingLoad()
+    }
+
+    /**
+     * Ends the current file and gives its decoder back, WITHOUT tearing this
+     * view down: the engine handoff's half of the switch (see
+     * `MpvPlayerActivity.switchToExoPlayer`).
+     *
+     * Why it exists: mpv holds a real MediaCodec on the field boxes (the GPU
+     * path is `vo=mediacodec_embed` with `--hwdec=mediacodec`, see
+     * [MpvVideoOutput]), the decoder pool is one deep there, and this activity is
+     * not stopped until the successor is fully up — so mpv kept decoding over
+     * the successor's startup, playing two streams at once for a moment and, the
+     * part that actually breaks playback, still holding the one decoder the
+     * successor had to allocate. The opposite direction already releases its
+     * engine first (see `NativePlayerActivity.handOffToMpv`).
+     *
+     * Deliberately not [release]: the Activity finishes the handoff whatever the
+     * successor returns, but a released view cannot be re-initialized, and this
+     * one may still be handed another file (a picker choice, a source retry) if
+     * it does not.
+     */
+    fun stopPlayback() {
+        if (!initialized) return
+        stoppingDeliberately = true
+        runCatching { MpvBackend.command("stop") }
+            .onFailure { Log.w(TAG, "stop for the engine handoff failed", it) }
+        fileLoaded = false
+        endNotified = false
+        cacheStall = false
+        pauseState = false
+        lastPositionMs = 0L
+        lastDurationMs = 0L
     }
 
     fun release() {
@@ -1726,6 +1790,9 @@ class MpvPlayerView @JvmOverloads constructor(
     private fun startPendingLoad() {
         val request = pendingLoad ?: return
         pendingLoad = null
+        // Read BEFORE the flag is cleared: the outgoing file's END_FILE is
+        // classified from this (see [replacingPreviousFile]).
+        replacingPreviousFile = fileLoaded
         fileLoaded = false
         endNotified = false
         durationSec = null
@@ -1784,6 +1851,9 @@ class MpvPlayerView @JvmOverloads constructor(
         when (eventId) {
             MpvEvent.MPV_EVENT_FILE_LOADED -> {
                 fileLoaded = true
+                // The replacement is the file now: the previous one's END_FILE
+                // has already arrived (mpv unloads before it opens the next).
+                replacingPreviousFile = false
                 applyPendingSeek()
                 // The container's rate is known from here, so a panel switch
                 // happens before the first frame rather than over it.
@@ -1797,33 +1867,98 @@ class MpvPlayerView @JvmOverloads constructor(
             }
 
             MpvEvent.MPV_EVENT_END_FILE -> {
-                // A file that never opened is a failure; one that reached its
-                // end is handled by eof-reached (keep-open pauses there).
-                if (!fileLoaded) {
-                    // mpv's own words, when it had any: "HTTP error 403",
-                    // "Protocol not found" and a refused connection are the
-                    // same sentence on screen and want different fixes.
-                    val reason = lastErrorLine?.takeIf { it.isNotBlank() }
-                    val failureDetail = MpvErrorReason.failureDetail(reason, lastLoadHost)
-                    Log.w(TAG, "MPV could not open the stream: $failureDetail")
-                    // Same report line the ExoPlayer ladder writes to: an MPV
-                    // open that fails on a 403 or a refused connection is a
-                    // playback failure the diagnostics dump has to carry, and
-                    // this is the one place that knows mpv's own reason (see
-                    // PlaybackEngineTrace).
-                    com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
-                        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
-                            cause = "MPV could not open the stream",
-                            detail = failureDetail
-                        )
+                // Four different facts arrive as this one event (see
+                // [StreamEndRules] for why mpv's own end-file reason cannot be
+                // read here, and what each verdict means). Before this, only
+                // the "never opened" case was handled: a stream that loaded and
+                // then died mid-playback fell out of the bottom of the branch,
+                // leaving the last frame frozen on screen with keep-open and no
+                // callback, no log line and no card.
+                val verdict = StreamEndRules.verdict(
+                    fileLoaded = fileLoaded,
+                    ourOwnStop = replacingPreviousFile || stoppingDeliberately,
+                    released = released,
+                    eofReached = endNotified,
+                    positionMs = lastPositionMs,
+                    durationMs = lastDurationMs
+                )
+                // Whatever the verdict, the replacement/stop decision is spent
+                // by now: the outgoing file has ended.
+                replacingPreviousFile = false
+                stoppingDeliberately = false
+                when (verdict) {
+                    StreamEndRules.Verdict.IGNORE -> Unit
+
+                    StreamEndRules.Verdict.ENDED_NORMALLY -> Log.i(
+                        TAG,
+                        "MPV file ended at ${lastPositionMs}ms of ${lastDurationMs}ms: " +
+                            loadedFileDiagnostics()
                     )
-                    post {
-                        onPlaybackError?.invoke(
-                            when (reason) {
-                                null -> "This stream could not be played."
-                                else -> "This stream could not be played. $reason"
-                            }
+
+                    StreamEndRules.Verdict.DIED_MID_STREAM -> {
+                        // mpv's own words when it has any - a segment that
+                        // started answering 403 and a reconnect that ran out of
+                        // attempts are the same event on screen and want
+                        // different fixes. Same reader the open-failure path
+                        // uses.
+                        val reason = lastErrorLine?.takeIf { it.isNotBlank() }
+                        val where = "${lastPositionMs / 1000}s of ${lastDurationMs / 1000}s"
+                        Log.w(
+                            TAG,
+                            "MPV stream ended mid-playback at $where: " +
+                                MpvErrorReason.failureDetail(reason, lastLoadHost)
                         )
+                        // The report ring the ExoPlayer ladder and the open
+                        // failure both write to: a session that froze with no
+                        // card leaves nothing else behind (see
+                        // PlaybackEngineTrace).
+                        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+                            com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                                cause = "MPV stream ended mid-playback",
+                                detail = "at $where: " +
+                                    MpvErrorReason.failureDetail(reason, lastLoadHost)
+                            )
+                        )
+                        // The viewer gets the same treatment the open failure
+                        // does - a card, not a frozen frame - but through
+                        // [onStreamDied], which does NOT demote this add-on or
+                        // walk to the next source: the link was fine.
+                        post {
+                            onStreamDied?.invoke(
+                                when (reason) {
+                                    null -> "Playback stopped unexpectedly."
+                                    else -> "Playback stopped unexpectedly. $reason"
+                                }
+                            )
+                        }
+                    }
+
+                    StreamEndRules.Verdict.OPEN_FAILED -> {
+                        // mpv's own words, when it had any: "HTTP error 403",
+                        // "Protocol not found" and a refused connection are the
+                        // same sentence on screen and want different fixes.
+                        val reason = lastErrorLine?.takeIf { it.isNotBlank() }
+                        val failureDetail = MpvErrorReason.failureDetail(reason, lastLoadHost)
+                        Log.w(TAG, "MPV could not open the stream: $failureDetail")
+                        // Same report line the ExoPlayer ladder writes to: an MPV
+                        // open that fails on a 403 or a refused connection is a
+                        // playback failure the diagnostics dump has to carry, and
+                        // this is the one place that knows mpv's own reason (see
+                        // PlaybackEngineTrace).
+                        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+                            com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                                cause = "MPV could not open the stream",
+                                detail = failureDetail
+                            )
+                        )
+                        post {
+                            onPlaybackError?.invoke(
+                                when (reason) {
+                                    null -> "This stream could not be played."
+                                    else -> "This stream could not be played. $reason"
+                                }
+                            )
+                        }
                     }
                 }
             }

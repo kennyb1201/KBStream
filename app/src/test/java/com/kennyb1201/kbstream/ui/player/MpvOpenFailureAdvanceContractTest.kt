@@ -80,11 +80,25 @@ class MpvOpenFailureAdvanceContractTest {
             1,
             view.split("onPlaybackError?.invoke(").size - 1
         )
+        // The END_FILE handler classifies its one event into four outcomes (see
+        // StreamEndRules); the open-failure path is the OPEN_FAILED arm, and
+        // that is where the callback may be raised from. A stream that PLAYED
+        // and then died mid-file is DIED_MID_STREAM, which must NOT come through
+        // here - it would demote a working add-on and walk to another source.
         val endFile = view.substringAfter("MpvEvent.MPV_EVENT_END_FILE ->")
+        val slice = endFile.substring(0, endFile.indexOf("MPV_EVENT_VIDEO_RECONFIG"))
         assertTrue(
-            "and only from the branch that saw END_FILE without a file to end",
-            endFile.substring(0, endFile.indexOf("MPV_EVENT_VIDEO_RECONFIG"))
-                .contains("if (!fileLoaded) {")
+            "and only from the arm that saw END_FILE without a file to end",
+            slice.contains("StreamEndRules.Verdict.OPEN_FAILED ->") &&
+                slice.substringAfter("StreamEndRules.Verdict.OPEN_FAILED ->")
+                    .contains("onPlaybackError?.invoke(")
+        )
+        assertTrue(
+            "while a stream that died mid-playback goes to its own callback",
+            slice.contains("StreamEndRules.Verdict.DIED_MID_STREAM ->") &&
+                slice.substringAfter("StreamEndRules.Verdict.DIED_MID_STREAM ->")
+                    .substringBefore("StreamEndRules.Verdict.OPEN_FAILED ->")
+                    .contains("onStreamDied?.invoke(")
         )
     }
 

@@ -1394,3 +1394,61 @@ internal object ApiKeySyncRules {
     fun remoteKeyWins(remoteEditedAt: Long, localEditedAt: Long): Boolean =
         remoteEditedAt >= localEditedAt
 }
+
+/**
+ * Publish/apply rules for the manual "Mark as Watched" override set
+ * (`watched_overrides` prefs file, key "watched_overrides").
+ *
+ * The failure this closes: a device that has never hand-marked a title — or
+ * whose overrides a repair cleared — published its EMPTY override set from the
+ * bulk push on every sign-in / Sync now, stamped with its own push time. The
+ * pull/realtime apply on every sibling then replaced their hand-marked set
+ * with that blank, about a second later, and with no cloud row of its own to
+ * disagree with (the cloud's watched rows are per title) there was nothing
+ * left to correct it: server-derived state stayed right while every MANUAL
+ * mark vanished, on every device.
+ *
+ * So the blob gets the two rules the other full-replace blobs already have,
+ * plus the one only this blob needs because its emptiness is legal:
+ *
+ *  - the bulk push never publishes an empty set. An unmark is an edit, and
+ *    edits publish through the store's own save path
+ *    ([com.kennyb1201.kbstream.data.watched.WatchedStatusRepository]);
+ *  - an apply has to be at least as new as this device's own last override
+ *    edit or adoption, so an older copy cannot revert a newer local mark;
+ *  - an EMPTY payload is adopted only when it says it means it
+ *    ([CLEARED_FIELD], which [PrefsPayloadBuilder.buildWatchedOverrides] sets
+ *    on every payload). A blank blob published by a build that predates the
+ *    publish gate carries no such field and is ignored — otherwise the poison
+ *    would still have to be applied once to be repaired.
+ */
+internal object WatchedOverridesRules {
+
+    /** The prefs file (before profile scoping) and the set inside it. */
+    const val STORE = "kbstream_watched_overrides"
+    const val SET_KEY = "watched_overrides"
+
+    /** This device's own last override edit, and the last blob it adopted. */
+    const val EDITED_AT_KEY = "watched_overrides_edited_at"
+    const val SYNCED_AT_KEY = "watched_overrides_synced_at"
+
+    /** True in a payload that MEANS to carry an empty set. */
+    const val CLEARED_FIELD = "cleared"
+
+    /** The bulk push never publishes an empty override set (see pushPrefsBlobs). */
+    fun shouldPublish(overrides: Set<String>): Boolean = overrides.isNotEmpty()
+
+    /**
+     * Whether a pulled blob may replace the local set. [localSyncedAt] is the
+     * newer of this device's last override edit and the last blob it adopted.
+     */
+    fun shouldApply(
+        remoteUpdated: Long?,
+        localSyncedAt: Long,
+        incoming: Set<String>,
+        deliberateClear: Boolean
+    ): Boolean {
+        if (incoming.isEmpty() && !deliberateClear) return false
+        return remoteUpdated == null || remoteUpdated >= localSyncedAt
+    }
+}

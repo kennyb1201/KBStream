@@ -211,6 +211,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private var errorHint: TextView? = null
     private var errorSwitchButton: TextView? = null
     private var errorNextSourceButton: TextView? = null
+
+    /**
+     * The failure card's retry on THIS source (see [retryCurrentSource]). The
+     * one action that fits a stream that played and then died mid-playback:
+     * the link is fine, a segment or a reconnect was not.
+     */
+    private var errorRetryButton: TextView? = null
     private var bufferingView: View? = null
     private var loadingBackdropView: ImageView? = null
     private var loadingLogoView: ImageView? = null
@@ -994,6 +1001,24 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             onMpvBufferingChanged(buffering)
         }
         view.onEnded = { onPlaybackEnded() }
+        view.onStreamDied = { message ->
+            // A stream that PLAYED and then died mid-file (see
+            // StreamEndRules.Verdict.DIED_MID_STREAM): a segment that started
+            // answering 403, a reconnect that ran out of attempts. This used to
+            // be nothing at all - keep-open held the last frame and the viewer
+            // was left looking at it - so the card and the report line are the
+            // whole point.
+            //
+            // Deliberately NOT the ladder below: nothing here says the source's
+            // link is bad, so no add-on is demoted and no source is skipped.
+            // The card offers RETRY (this source, from where it stopped) and
+            // the same TRY NEXT SOURCE / SWITCH PLAYER the open failure does.
+            showError(
+                message,
+                "The stream stopped responding. Retry this source, or try the " +
+                    "next one - a dropped segment is usually over by now."
+            )
+        }
         view.onPlaybackError = { message ->
             // A cached link that never opened is dead: forget it now, so the
             // next replay resolves fresh instead of looping back into this card.
@@ -1425,6 +1450,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // the same switch the SOURCES picker makes, without the dig.
         errorNextSourceButton = findViewById(R.id.mpv_error_next)
         errorNextSourceButton?.setOnClickListener { tryNextSource() }
+        // ...and its retry on the SAME source, which needs no ranked-list
+        // check to be offered (see retryCurrentSource).
+        errorRetryButton = findViewById(R.id.mpv_error_retry)
+        errorRetryButton?.setOnClickListener { retryCurrentSource() }
         bufferingView = findViewById(R.id.mpv_buffering)
         loadingBackdropView = findViewById(R.id.mpv_loading_backdrop)
         loadingLogoView = findViewById(R.id.mpv_loading_logo)
@@ -4494,6 +4523,13 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
 
         Log.i(TAG, "switching playback to the ExoPlayer engine from ${position}ms")
+        // Hand the decoder back BEFORE the successor starts: on the field boxes
+        // mpv decodes through a real MediaCodec from a one-deep pool, and this
+        // activity is not stopped until the new one is up - so mpv used to keep
+        // decoding over the successor's startup, holding the very decoder it
+        // needed to allocate (and briefly playing over it). See
+        // [MpvPlayerView.stopPlayback].
+        surface?.stopPlayback()
         showToast("Switching to the ExoPlayer engine\u2026")
         exoSwitchLauncher.launch(exoSwitchIntent(launch))
     }
@@ -4557,6 +4593,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         }
 
         Log.i(TAG, "handing playback to the external player from ${position}ms")
+        // Same decoder hand-back as the engine switch above, and for the same
+        // reason: the external player is another app asking this device's
+        // MediaCodec for a decoder while mpv still holds one (see
+        // [MpvPlayerView.stopPlayback]).
+        surface?.stopPlayback()
         val label = ExternalPlayer.target(this)?.label ?: "the external player"
         showToast("Opening in $label\u2026")
         exoSwitchLauncher.launch(launch)
@@ -4809,6 +4850,48 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // state (see showError).
         errorContainer?.visibility = View.GONE
         switchToSource(next)
+    }
+
+    /**
+     * Re-opens the source that is ALREADY selected, from where it stopped.
+     *
+     * The card's RETRY, and the action that fits the failure it was raised for:
+     * a stream that played for minutes and then ended (see
+     * [MpvPlayerView.onStreamDied]) is a dropped segment or an exhausted
+     * reconnect, and re-opening the same link is the cheap first answer — where
+     * TRY NEXT SOURCE abandons a source that is probably fine.
+     *
+     * Not a call to [switchToSource]: that refuses a URL that is already
+     * current, which is exactly this case. It restates the same reset instead,
+     * because a retry IS a fresh read of the file — the stall window that
+     * condemned it, the seek clock and the end-of-file bookkeeping all belong
+     * to the file being replaced. `completionFiled` deliberately survives, for
+     * the same reason it survives a source switch: the episode's own verdict is
+     * not something a reload can unsay. The position is carried over, so the
+     * viewer resumes where the picture froze rather than at the opening frames.
+     */
+    private fun retryCurrentSource() {
+        val url = currentUrl
+        if (url.isBlank()) return
+        errorContainer?.visibility = View.GONE
+        rebufferDownshift.reset()
+        rebufferDownshiftGivenUp = false
+        bufferingStartedAtMs = 0L
+        lastSeekAtMs = 0L
+        hideEndPanels()
+        val resumeAt = positionMs.coerceAtLeast(0L)
+        positionMs = 0L
+        startPositionMs = resumeAt
+        endedHandled = false
+        showLoading("Reconnecting to this source")
+        surface?.load(
+            MpvPlayerView.LoadRequest(
+                url = url,
+                headers = streamHeaders,
+                audioUrl = currentAudioUrl,
+                startPositionMs = resumeAt
+            )
+        )
     }
 
     /**

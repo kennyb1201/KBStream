@@ -328,6 +328,26 @@ class HomeViewModel(
     private val dismissedContinueWatching: MutableMap<String, Long> =
         loadDismissedContinueWatching()
 
+    /**
+     * Where the viewer left Home: the rails list's first visible row, and the
+     * card the D-pad was on.
+     *
+     * Held here rather than in the screen for the reason the Sports hub
+     * records its own scroll (see SportsHubViewModel.hubScrollIndex): `Screen`
+     * is a route in the same activity, so opening a Detail disposes the Home
+     * composable and everything remembered inside it. The ViewModel outlives
+     * that - it is scoped to the activity, so the same instance is handed back
+     * to Home - and without this the most common navigation loop in the app
+     * (open a title, press Back) rebuilt Home at the top with no focus at all.
+     *
+     * Plain vars, not StateFlows: they are read once while the screen is being
+     * built and written from the scroll/focus callbacks, and neither direction
+     * should recompose anything.
+     */
+    var railScrollIndex: Int = 0
+    var railScrollOffset: Int = 0
+    var lastFocusedRailItemKey: String? = null
+
     private val _rails =
         MutableStateFlow<List<Rail>>(
             emptyList()

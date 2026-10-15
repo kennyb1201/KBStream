@@ -568,21 +568,31 @@ class WatchedStatusRepository(
                 }
             }
 
-        val currentRemoteState =
+        // The sets this device HOLDS right now travel with the staleness stamp,
+        // because a refresh that fails has to leave them exactly as they are
+        // and the fallback needs the values it falls back to (see
+        // [SimklMarkerRefreshRules]).
+        var previousCompletedMovieKeys: Set<String> = emptySet()
+        var previousCompletedShowImdbIds: Set<String> = emptySet()
+        var previousPartialShowImdbIds: Set<String> = emptySet()
+        var previousCompletedShowTmdbKeys: Set<String> = emptySet()
+        var previousPartialShowTmdbKeys: Set<String> = emptySet()
+        val simklSetsFetchedAtBefore =
             cacheMutex.withLock {
-                Triple(
-                    completedMovieKeys,
-                    completedShowImdbIds,
-                    simklSetsFetchedAt
-                )
+                previousCompletedMovieKeys = completedMovieKeys
+                previousCompletedShowImdbIds = completedShowImdbIds
+                previousPartialShowImdbIds = partialShowImdbIds
+                previousCompletedShowTmdbKeys = completedShowTmdbKeys
+                previousPartialShowTmdbKeys = partialShowTmdbKeys
+                simklSetsFetchedAt
             }
 
         val remoteSetsCold =
-            currentRemoteState.first.isEmpty() ||
-                currentRemoteState.second.isEmpty()
+            previousCompletedMovieKeys.isEmpty() ||
+                previousCompletedShowImdbIds.isEmpty()
 
         val remoteSetsStale =
-            now - currentRemoteState.third >=
+            now - simklSetsFetchedAtBefore >=
                 REMOTE_SET_TTL_MS
 
         val shouldRefreshRemoteSets =
@@ -594,90 +604,78 @@ class WatchedStatusRepository(
         if (
             shouldRefreshRemoteSets
         ) {
-            val refreshedMovieKeys =
-                try {
+            // A fetch that fails keeps the set this device already had, and the
+            // stamp below is left alone so the next preload tries again — see
+            // [SimklMarkerRefreshRules] for the wipe and the refetch storm the
+            // old `catch { emptySet() }` pairs caused.
+            var refreshFailed = false
+            fun noteFailure(what: String, attempt: SimklMarkerRefreshRules.Attempt) {
+                val failure = attempt.failure ?: return
+                refreshFailed = true
+                Log.e(
+                    "WATCHED_REPO",
+                    "$what failed: " +
+                        failure.message,
+                    failure
+                )
+            }
+
+            val movieAttempt =
+                SimklMarkerRefreshRules.keepPreviousOnFailure(
+                    previousCompletedMovieKeys
+                ) {
                     simklRepository
                         .getCompletedMovieKeys()
-                } catch (e: Exception) {
-                    Log.e(
-                        "WATCHED_REPO",
-                        "getCompletedMovieKeys failed: " +
-                            e.message,
-                        e
-                    )
-
-                    emptySet()
                 }
+            noteFailure("getCompletedMovieKeys", movieAttempt)
+            val refreshedMovieKeys = movieAttempt.keys
 
-            val refreshedShowImdbIds =
-                try {
-                    /*
-                     * This reads one cached/all-show
-                     * SIMKL response, not one request
-                     * for each poster.
-                     */
+            // This reads one cached/all-show SIMKL response, not one request
+            // for each poster.
+            val showAttempt =
+                SimklMarkerRefreshRules.keepPreviousOnFailure(
+                    previousCompletedShowImdbIds
+                ) {
                     simklRepository
                         .getCompletedShowImdbIds()
-                } catch (e: Exception) {
-                    Log.e(
-                        "WATCHED_REPO",
-                        "getCompletedShowImdbIds failed: " +
-                            e.message,
-                        e
-                    )
-
-                    emptySet()
                 }
+            noteFailure("getCompletedShowImdbIds", showAttempt)
+            val refreshedShowImdbIds = showAttempt.keys
 
             // Same cached all-shows response as the completed set, so this
             // resolves the eye-badge set for free alongside the checkmarks.
-            val refreshedPartialShowImdbIds =
-                try {
+            val partialAttempt =
+                SimklMarkerRefreshRules.keepPreviousOnFailure(
+                    previousPartialShowImdbIds
+                ) {
                     simklRepository
                         .getPartiallyWatchedShowImdbIds()
-                } catch (e: Exception) {
-                    Log.e(
-                        "WATCHED_REPO",
-                        "getPartiallyWatchedShowImdbIds failed: " +
-                            e.message,
-                        e
-                    )
-
-                    emptySet()
                 }
+            noteFailure("getPartiallyWatchedShowImdbIds", partialAttempt)
+            val refreshedPartialShowImdbIds = partialAttempt.keys
 
             // TMDB-id twins of the two show sets. Same cached response, so
             // these add no network round-trip — they only close the gap for
             // rails whose items carry "tmdb:<n>" ids instead of "tt…".
-            val refreshedShowTmdbKeys =
-                try {
+            val showTmdbAttempt =
+                SimklMarkerRefreshRules.keepPreviousOnFailure(
+                    previousCompletedShowTmdbKeys
+                ) {
                     simklRepository
                         .getCompletedShowTmdbKeys()
-                } catch (e: Exception) {
-                    Log.e(
-                        "WATCHED_REPO",
-                        "getCompletedShowTmdbKeys failed: " +
-                            e.message,
-                        e
-                    )
-
-                    emptySet()
                 }
+            noteFailure("getCompletedShowTmdbKeys", showTmdbAttempt)
+            val refreshedShowTmdbKeys = showTmdbAttempt.keys
 
-            val refreshedPartialShowTmdbKeys =
-                try {
+            val partialTmdbAttempt =
+                SimklMarkerRefreshRules.keepPreviousOnFailure(
+                    previousPartialShowTmdbKeys
+                ) {
                     simklRepository
                         .getPartiallyWatchedShowTmdbKeys()
-                } catch (e: Exception) {
-                    Log.e(
-                        "WATCHED_REPO",
-                        "getPartiallyWatchedShowTmdbKeys failed: " +
-                            e.message,
-                        e
-                    )
-
-                    emptySet()
                 }
+            noteFailure("getPartiallyWatchedShowTmdbKeys", partialTmdbAttempt)
+            val refreshedPartialShowTmdbKeys = partialTmdbAttempt.keys
 
             cacheMutex.withLock {
                 completedMovieKeys =
@@ -695,15 +693,23 @@ class WatchedStatusRepository(
                 partialShowTmdbKeys =
                     refreshedPartialShowTmdbKeys
 
-                simklSetsFetchedAt =
-                    now
+                // Only a refresh that actually ANSWERED may claim the TTL. A
+                // failed one left the sets it could not replace in place, and
+                // stamping them as fresh is what turned one timeout into 15
+                // minutes of missing Simkl checkmarks with a retry storm on
+                // top — see [SimklMarkerRefreshRules].
+                if (!refreshFailed) {
+                    simklSetsFetchedAt =
+                        now
+                }
             }
 
             Log.i(
                 "WATCHED_REPO",
                 "SIMKL marker sets refreshed: " +
                     "movies=${refreshedMovieKeys.size}, " +
-                    "series=${refreshedShowImdbIds.size}"
+                    "series=${refreshedShowImdbIds.size}" +
+                    (if (refreshFailed) ", FAILED (kept previous)" else "")
             )
         }
 
@@ -1407,6 +1413,14 @@ class WatchedStatusRepository(
                 .putStringSet(
                     KEY_WATCHED_OVERRIDES,
                     updatedKeys
+                )
+                // A hand-mark claims its own time as well: the pull guard
+                // refuses a blob older than this device's last override edit,
+                // so a stale sibling copy cannot re-add the title the viewer
+                // has just unmarked (see [WatchedOverridesRules]).
+                .putLong(
+                    com.kennyb1201.kbstream.data.sync.WatchedOverridesRules.EDITED_AT_KEY,
+                    now
                 )
                 .apply()
         }

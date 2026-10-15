@@ -6192,6 +6192,29 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 }
             }
             handleAssTrackSelection(tracks)
+            // A track no renderer claims is the one failure media3 does not
+            // report: the audio renderer is left disabled and the file plays on
+            // in silence, with no PlaybackException for the ladder below to
+            // route. The picture is supported in the shape this fires for, so
+            // the session is watchable and mute rather than broken - and the
+            // engine that can decode the track is the only lever left. Guarded
+            // by the same "may the engine change without being asked?" setting
+            // the decoder fallbacks use, and one-shot through [handOffToMpv]'s
+            // own latch.
+            SoftwareAudioRules.usesBackupEngine(tracks)?.let { reason ->
+                Log.w(
+                    "PLAYER_RETRY",
+                    "no audio renderer supports this file ($reason) - " +
+                        "continuing in the MPV backup engine"
+                )
+                PlaybackEngineTrace.note(
+                    PlaybackEngineTrace.describe(
+                        cause = "no audio renderer for this file",
+                        detail = reason
+                    )
+                )
+                handOffToMpv(MpvPlayerActivity.FALLBACK_REASON_DECODER)
+            }
         }
 
         override fun onPlayerError(error: PlaybackException) {

@@ -59,6 +59,9 @@
 # rather than the r26b the extension's README was written against.
 #   FFMPEG_TAG=release/6.0  FFmpeg branch media3's build_ffmpeg.sh expects
 #   ANDROID_NDK=/path       NDK root (default: $ANDROID_HOME/ndk/28.2.13676358)
+#   python3                 applies the one patch this script makes to
+#                           media3's own source (see "Patch media3's resampler
+#                           hand-off" below); the libdovi script needs it too
 #   ANDROID_API=23          native API level (must be <= the app's minSdk).
 #                           Held at 23 on purpose while the app sits at 26:
 #                           a LOWER floor is the permissive direction (the .so
@@ -222,6 +225,84 @@ if [[ -x "$NM" && -f "$FFMPEG_LIBS_ARM64" ]]; then
 else
   log "llvm-nm not found at ${NM}, or ${FFMPEG_LIBS_ARM64} is missing; skipping the decoder symbol check"
 fi
+
+# --- Patch media3's resampler hand-off ------------------------------------
+#
+# ONE edit to media3's own source, applied here because this repo owns the
+# libffmpegJNI.so it ships and the defect below is a field crash on it
+# (Sentry ANDROID-Z, kbstream@0.6.89: SIGSEGV in
+# swri_oldapi_conv_fltp_to_s16_nch_neon, inside this AAR's libffmpegJNI.so).
+#
+# What media3 1.11.1 does (libraries/decoder_ffmpeg/src/main/jni/ffmpeg_jni.cc,
+# decodePacket):
+#
+#   swr_convert(resampleContext, &outputBuffer, bufferOutSize,
+#               (const uint8_t**)frame->data, frame->nb_samples);
+#
+# `frame->data` is an array of AV_NUM_DATA_POINTERS (8) pointers. For planar
+# audio with MORE than eight channels FFmpeg puts the per-channel planes in
+# `frame->extended_data` instead (av_frame_get_buffer() only aliases the two
+# when the channel count fits), so this call hands libswresample an array whose
+# entries past the eighth are the frame's own `linesize[]` values read as
+# pointers. libswresample's planar converters walk one pointer per input
+# channel, so on a 9+ channel frame the ARM NEON FLTP->S16 converter
+# (swri_oldapi_conv_fltp_to_s16_nch_neon, selected for FLTP->S16 above two
+# channels) dereferences a garbage pointer on the frame's first block: exactly
+# the crash above, from the wide TrueHD/Atmos tracks this decoder exists for.
+#
+# `frame->extended_data` is the array with one valid pointer per channel always
+# (FFmpeg keeps it pointing at `data` for the 8-or-fewer case, where the two
+# are the same array), so the swap is a no-op for every track that works today
+# and the fix for the ones that crash. It is also what the FFmpeg API documents
+# planar audio access to go through.
+#
+# Deliberately NOT patched here, in the same call: `bufferOutSize` is a BYTE
+# count being passed as swr_convert's `out_count`, which is documented in
+# samples per channel. With output layout, format and rate pinned to the input
+# (see swr_alloc_set_opts2 above) the two agree for the ordinary case, so this
+# is latent rather than live, and it is entangled with the caller's own
+# `outputBuffer += bufferOutSize` block accounting and the Java side's buffer
+# growth: changing it is a separate, device-tested change, not something to
+# fold into a crash fix. The same applies to the resampler context being built
+# once from the codec context and never rebuilt if a frame's layout changes.
+# Neither is what crashed.
+#
+# The patch is anchored on the exact upstream call text, hard-fails if that
+# anchor is missing (a media3 bump that rewrites the call must be looked at,
+# not silently skipped) and is idempotent, because the media3 checkout is
+# cached between runs.
+FFMPEG_JNI="${FFMPEG_MODULE_PATH}/jni/ffmpeg_jni.cc"
+[[ -f "$FFMPEG_JNI" ]] || die "no ${FFMPEG_JNI} in the media3 ${MEDIA3_TAG} checkout"
+command -v python3 >/dev/null || die "python3 is required to patch media3's ffmpeg_jni.cc"
+log "patching media3's resampler hand-off (frame->data -> frame->extended_data)"
+python3 - "$FFMPEG_JNI" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path) as handle:
+    text = handle.read()
+
+UNPATCHED = "(const uint8_t**)frame->data, frame->nb_samples);"
+PATCHED = "(const uint8_t**)frame->extended_data, frame->nb_samples);"
+
+if text.count(UNPATCHED) == 0 and text.count(PATCHED) == 1:
+    print("  already patched; nothing to do")
+    sys.exit(0)
+if text.count(UNPATCHED) != 1 or text.count(PATCHED) != 0:
+    sys.exit(
+        "error: expected exactly one %r in %s (found %d unpatched, %d patched); "
+        "a media3 rewrite of this call must be reviewed by hand, not skipped"
+        % (UNPATCHED, path, text.count(UNPATCHED), text.count(PATCHED))
+    )
+
+with open(path, "w") as handle:
+    handle.write(text.replace(UNPATCHED, PATCHED))
+print("  patched %s" % path)
+PY
+# Independent read-back: the build must not proceed on a patch that did not
+# land, because the AAR it produces would be the one that segfaults.
+grep -q 'frame->extended_data' "$FFMPEG_JNI" ||
+  die "${FFMPEG_JNI} still hands swr_convert frame->data"
 
 # --- Build the extension AAR ----------------------------------------------
 

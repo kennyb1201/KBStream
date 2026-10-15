@@ -793,12 +793,25 @@ object PrefsPayloadBuilder {
     fun iptvCloudAt(context: Context): Long =
         scopedPrefs(context, "iptv_prefs").getLong(IPTV_SYNCED_AT_KEY, 0L)
 
+    /**
+     * The manual override set, and whether an empty one is MEANT.
+     *
+     * Every caller of this builder is a deliberate edit (a mark, an unmark, or
+     * an unmark of the last marked title) — the bulk push skips the empty case
+     * entirely (see [WatchedOverridesRules.shouldPublish] and
+     * [SupabaseSync.pushPrefsBlobs]) — so `cleared` is exactly "this device
+     * means to have no overrides", which is what the applier requires before it
+     * will erase a sibling's set.
+     */
     fun buildWatchedOverrides(context: Context): JsonObject =
         buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
+            val overrides =
+                scopedPrefs(context, WatchedOverridesRules.STORE)
+                    .getStringSet(WatchedOverridesRules.SET_KEY, emptySet()).orEmpty()
+            put(WatchedOverridesRules.CLEARED_FIELD, overrides.isEmpty())
             putJsonArray("overrides") {
-                scopedPrefs(context, "kbstream_watched_overrides")
-                    .getStringSet("watched_overrides", emptySet()).orEmpty().forEach { add(it) }
+                overrides.forEach { add(it) }
             }
         }
 
@@ -1429,8 +1442,35 @@ object PrefsPayloadApplier {
         val arr = payload["overrides"] as? kotlinx.serialization.json.JsonArray ?: return
         val set = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()
 
-        val prefs = scopedPrefs(context, "kbstream_watched_overrides")
-        prefs.edit().putStringSet("watched_overrides", set).apply()
+        val prefs = scopedPrefs(context, WatchedOverridesRules.STORE)
+        val deliberateClear =
+            (payload[WatchedOverridesRules.CLEARED_FIELD]
+                as? kotlinx.serialization.json.JsonPrimitive)
+                ?.content == "true"
+        // Never a bare putStringSet: an empty blob from a device that never
+        // hand-marked anything (or an older blob than this device's own last
+        // mark) used to erase the local set, which is the wipe this guard
+        // closes — see [WatchedOverridesRules].
+        val localSyncedAt =
+            maxOf(
+                prefs.getLong(WatchedOverridesRules.EDITED_AT_KEY, 0L),
+                prefs.getLong(WatchedOverridesRules.SYNCED_AT_KEY, 0L)
+            )
+        if (!WatchedOverridesRules.shouldApply(
+                payloadUpdatedAt(payload),
+                localSyncedAt,
+                set,
+                deliberateClear
+            )
+        ) {
+            return
+        }
+
+        val appliedAt = payloadUpdatedAt(payload) ?: System.currentTimeMillis()
+        prefs.edit()
+            .putStringSet(WatchedOverridesRules.SET_KEY, set)
+            .putLong(WatchedOverridesRules.SYNCED_AT_KEY, appliedAt)
+            .apply()
     }
 
     private fun payloadUpdatedAt(payload: JsonObject): Long? =

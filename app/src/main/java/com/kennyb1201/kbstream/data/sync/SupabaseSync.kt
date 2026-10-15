@@ -39,6 +39,7 @@ import kotlinx.serialization.json.put
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.cache.SyncOutboxDao
 import com.kennyb1201.kbstream.data.cache.SyncOutboxEntity
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
@@ -142,7 +143,10 @@ object SupabaseSync {
         // dump on a TV is useless and leaks the token onto the screen. The
         // first line carries the useful part ("new row violates row-level
         // security policy for table …").
-        val firstLine = (e.message ?: e.javaClass.simpleName)
+        // Redacted as well: the first line is what reaches the TV screen and
+        // the retained-error list, and supabase-kt's messages can carry the
+        // request URL and the bearer header on it (see [Redaction]).
+        val firstLine = Redaction.text(e.message ?: e.javaClass.simpleName)
             .lineSequence().firstOrNull()?.trim().orEmpty()
             .ifBlank { e.javaClass.simpleName }
         _syncError.value = "$where failed: $firstLine"
@@ -264,7 +268,7 @@ object SupabaseSync {
         // a realtime failure stays a log line instead of taking sync down.
         scope.launch {
             runCatching { client?.realtime?.connect() }
-                .onFailure { Log.w(TAG, "realtime connect failed: ${it.message}") }
+                .onFailure { Log.w(TAG, "realtime connect failed: ${Redaction.text(it.message)}") }
         }
 
         restoreSession(context)
@@ -371,7 +375,7 @@ object SupabaseSync {
                                     TAG,
                                     "session restore transient failure " +
                                         "(attempt $restoreAttempts/$MAX_RESTORE_ATTEMPTS, " +
-                                        "retrying in ${backoffMs / 1000}s): ${e.message}"
+                                        "retrying in ${backoffMs / 1000}s): ${Redaction.text(e.message)}"
                                 )
                                 _authState.value = AuthState.SignedOut
                                 scope.launch {
@@ -388,7 +392,7 @@ object SupabaseSync {
                                 _authState.value = AuthState.SignedOut
                             }
                         } else {
-                            Log.w(TAG, "session restore failed: ${e.message}")
+                            Log.w(TAG, "session restore failed: ${Redaction.text(e.message)}")
                             syncPrefs(context)
                                 .edit().remove(KEY_REFRESH_TOKEN).apply()
                             _authState.value = AuthState.SignedOut
@@ -470,7 +474,8 @@ object SupabaseSync {
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.e(TAG, "signIn failed", e)
-                _authState.value = AuthState.Error(e.message ?: "Sign-in failed")
+                _authState.value =
+                    AuthState.Error(Redaction.text(e.message).ifBlank { "Sign-in failed" })
             }
         }
     }
@@ -510,7 +515,8 @@ object SupabaseSync {
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.e(TAG, "signUp failed", e)
-                _authState.value = AuthState.Error(e.message ?: "Sign-up failed")
+                _authState.value =
+                    AuthState.Error(Redaction.text(e.message).ifBlank { "Sign-up failed" })
             }
         }
     }
@@ -625,7 +631,7 @@ object SupabaseSync {
         override fun save(item: OutboxItem) {
             scope.launch {
                 runCatchingCancellable { outboxDao()?.upsert(item.toEntity()) }
-                    .onFailure { Log.w(TAG, "outbox persist failed: ${it.message}") }
+                    .onFailure { Log.w(TAG, "outbox persist failed: ${Redaction.text(it.message)}") }
             }
         }
 
@@ -634,14 +640,14 @@ object SupabaseSync {
             val list = ids.toList()
             scope.launch {
                 runCatchingCancellable { outboxDao()?.deleteByIds(list) }
-                    .onFailure { Log.w(TAG, "outbox delete failed: ${it.message}") }
+                    .onFailure { Log.w(TAG, "outbox delete failed: ${Redaction.text(it.message)}") }
             }
         }
 
         override fun clear() {
             scope.launch {
                 runCatchingCancellable { outboxDao()?.deleteAll() }
-                    .onFailure { Log.w(TAG, "outbox clear failed: ${it.message}") }
+                    .onFailure { Log.w(TAG, "outbox clear failed: ${Redaction.text(it.message)}") }
             }
         }
     }
@@ -977,7 +983,7 @@ object SupabaseSync {
                         )
                     }
             }.onFailure { e ->
-                Log.w(TAG, "clearWatchState history failed: ${e.message}")
+                Log.w(TAG, "clearWatchState history failed: ${Redaction.text(e.message)}")
                 (e as? Exception)?.let { recordSyncError("Clear", it) }
             }
 
@@ -1006,7 +1012,7 @@ object SupabaseSync {
                         )
                     }
             }.onFailure { e ->
-                Log.w(TAG, "clearWatchState watched failed: ${e.message}")
+                Log.w(TAG, "clearWatchState watched failed: ${Redaction.text(e.message)}")
                 (e as? Exception)?.let { recordSyncError("Clear", it) }
             }
             Log.i(TAG, "clearWatchState: queued tombstones for profile=$pid")
@@ -1247,7 +1253,7 @@ object SupabaseSync {
                     clearSyncError()
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.w(TAG, "flush $table chunk of ${chunk.size} failed: ${e.message}")
+                    Log.w(TAG, "flush $table chunk of ${chunk.size} failed: ${Redaction.text(e.message)}")
                     recordSyncError("Upload", e)
                     // Keep in outbox; retried by the periodic sync loop.
                     //
@@ -1267,7 +1273,7 @@ object SupabaseSync {
                         t,
                         mapOf("source" to "flush_outbox", "table" to table)
                     )
-                    Log.e(TAG, "flush $table crashed: ${t.message}")
+                    Log.e(TAG, "flush $table crashed: ${Redaction.text(t.message)}")
                 }
             }
         }
@@ -1346,7 +1352,7 @@ object SupabaseSync {
         // if it started before hydration finished (putIfAbsent makes it safe).
         runCatchingCancellable { hydrateOutbox() }
         runCatchingCancellable { flushOutbox() }
-            .onFailure { Log.w(TAG, "outbox flush from worker failed: ${it.message}") }
+            .onFailure { Log.w(TAG, "outbox flush from worker failed: ${Redaction.text(it.message)}") }
         return outbox.isEmpty
     }
 
@@ -1419,7 +1425,7 @@ object SupabaseSync {
                     .getAll()
                 com.kennyb1201.kbstream.data.tv.TvLauncherPublisher.sync(context, entries)
             }.onFailure { e ->
-                Log.w(TAG, "launcher republish failed: ${e.message}")
+                Log.w(TAG, "launcher republish failed: ${Redaction.text(e.message)}")
             }
         }
     }
@@ -1571,12 +1577,12 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.w(TAG, "pullHistory failed: ${e.message}")
+            Log.w(TAG, "pullHistory failed: ${Redaction.text(e.message)}")
             recordSyncError("History sync", e)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_history"))
-            Log.e(TAG, "pullHistory crashed: ${t.message}")
+            Log.e(TAG, "pullHistory crashed: ${Redaction.text(t.message)}")
         }
     }
 
@@ -1632,12 +1638,12 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.w(TAG, "pullWatched failed: ${e.message}")
+            Log.w(TAG, "pullWatched failed: ${Redaction.text(e.message)}")
             recordSyncError("Watched sync", e)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_watched"))
-            Log.e(TAG, "pullWatched crashed: ${t.message}")
+            Log.e(TAG, "pullWatched crashed: ${Redaction.text(t.message)}")
         }
     }
 
@@ -1676,12 +1682,12 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.w(TAG, "pullOverrides failed: ${e.message}")
+            Log.w(TAG, "pullOverrides failed: ${Redaction.text(e.message)}")
             recordSyncError("Artwork sync", e)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_overrides"))
-            Log.e(TAG, "pullOverrides crashed: ${t.message}")
+            Log.e(TAG, "pullOverrides crashed: ${Redaction.text(t.message)}")
         }
     }
 
@@ -1714,7 +1720,7 @@ object SupabaseSync {
                 .map { storedKey -> unscopedKey(storedKey) }
                 .toSet()
         }.getOrElse { e ->
-            Log.w(TAG, "pushOverrides could not read the cloud rows: ${e.message}")
+            Log.w(TAG, "pushOverrides could not read the cloud rows: ${Redaction.text(e.message)}")
             return
         }
         if (!PushScopeRules.scopeStillActive(pid, currentProfileId())) return
@@ -1755,12 +1761,12 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            Log.w(TAG, "pullPrefs failed: ${e.message}")
+            Log.w(TAG, "pullPrefs failed: ${Redaction.text(e.message)}")
             recordSyncError("Settings sync", e)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_prefs"))
-            Log.e(TAG, "pullPrefs crashed: ${t.message}")
+            Log.e(TAG, "pullPrefs crashed: ${Redaction.text(t.message)}")
         }
     }
 
@@ -1819,7 +1825,7 @@ object SupabaseSync {
                 }
                 .toMap()
         }.onFailure {
-            Log.w(TAG, "pushHistory: cloud tombstone read failed (${it.message})")
+            Log.w(TAG, "pushHistory: cloud tombstone read failed (${Redaction.text(it.message)})")
         }.getOrDefault(emptyMap())
     }
 
@@ -1872,7 +1878,7 @@ object SupabaseSync {
                 }
                 .toMap()
         }.onFailure {
-            Log.w(TAG, "pushWatched: cloud timestamp read failed (${it.message})")
+            Log.w(TAG, "pushWatched: cloud timestamp read failed (${Redaction.text(it.message)})")
         }.getOrDefault(emptyMap())
     }
 
@@ -1985,6 +1991,29 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // Manual watched overrides are a full-replace blob too, and the one
+            // whose emptiness is legal in the store: a device that never
+            // hand-marked a title — or whose overrides a repair cleared — used
+            // to publish its empty set here on every sign-in / Sync now,
+            // stamped with the push time, and the apply on every sibling
+            // replaced their hand-marked set with it about a second later,
+            // silently (the delete paths publish through the store too, so it
+            // is really the next pull that removes the rows). Only a device
+            // with marks of its own publishes; unmarking the last one is an
+            // edit and publishes through
+            // [WatchedStatusRepository.applyOverrideKeys] instead (see
+            // [WatchedOverridesRules]).
+            if (key == PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES) {
+                val overrides =
+                    (payload["overrides"] as? kotlinx.serialization.json.JsonArray)
+                        ?.mapNotNull {
+                            (it as? kotlinx.serialization.json.JsonPrimitive)?.content
+                        }
+                        .orEmpty()
+                if (!WatchedOverridesRules.shouldPublish(overrides.toSet())) {
+                    return@forEach
+                }
+            }
             // Same rule for the service credentials (TorBox / OpenSubtitles /
             // MDBList), which travel per key with their own edit times: publish
             // when this device has an edit newer than the account copy it
@@ -2062,7 +2091,7 @@ object SupabaseSync {
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
             CrashReporter.recordNonFatal(t, mapOf("source" to "force_full_resync"))
-            Log.w(TAG, "force full resync failed: ${t.message}")
+            Log.w(TAG, "force full resync failed: ${Redaction.text(t.message)}")
         } finally {
             _isSyncing.value = false
         }
@@ -2084,7 +2113,7 @@ object SupabaseSync {
             delay(8_000L)
             if (isSignedIn()) {
                 runCatchingCancellable { pullAllNow(context) }
-                    .onFailure { Log.w(TAG, "catch-up pull failed: ${it.message}") }
+                    .onFailure { Log.w(TAG, "catch-up pull failed: ${Redaction.text(it.message)}") }
             }
         }
     }
@@ -2148,11 +2177,11 @@ object SupabaseSync {
                     watchRealtimeHealth()
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.w(TAG, "realtime setup failed: ${e.message}")
+                    Log.w(TAG, "realtime setup failed: ${Redaction.text(e.message)}")
                 } catch (t: Throwable) {
                     if (t is CancellationException) throw t
                     CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_setup"))
-                    Log.e(TAG, "realtime setup crashed: ${t.message}")
+                    Log.e(TAG, "realtime setup crashed: ${Redaction.text(t.message)}")
                 }
             }
         }
@@ -2264,7 +2293,7 @@ object SupabaseSync {
                             repaired = true
                         } catch (e: Exception) {
                             if (e is CancellationException) throw e
-                            Log.w(TAG, "rebuild ${sub.table} failed: ${e.message}")
+                            Log.w(TAG, "rebuild ${sub.table} failed: ${Redaction.text(e.message)}")
                         } catch (t: Throwable) {
                             if (t is CancellationException) throw t
                             CrashReporter.recordNonFatal(t, mapOf("source" to "realtime_resubscribe"))
@@ -2277,7 +2306,7 @@ object SupabaseSync {
                 if (repaired) {
                     appContextRef?.get()?.let { ctx ->
                         runCatching { pullAll(ctx) }
-                            .onFailure { Log.w(TAG, "post-rebuild pull failed: ${it.message}") }
+                            .onFailure { Log.w(TAG, "post-rebuild pull failed: ${Redaction.text(it.message)}") }
                     }
                 }
             }
@@ -2320,11 +2349,11 @@ object SupabaseSync {
                 _lastSyncAtMs.value = System.currentTimeMillis()
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.w(TAG, "onRemoteChange failed: ${e.message}")
+                Log.w(TAG, "onRemoteChange failed: ${Redaction.text(e.message)}")
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
                 CrashReporter.recordNonFatal(t, mapOf("source" to "remote_change"))
-                Log.e(TAG, "onRemoteChange crashed: ${t.message}")
+                Log.e(TAG, "onRemoteChange crashed: ${Redaction.text(t.message)}")
             }
         }
     }

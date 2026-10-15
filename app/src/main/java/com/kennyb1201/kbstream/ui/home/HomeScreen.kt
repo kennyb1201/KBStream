@@ -42,6 +42,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -3334,7 +3335,56 @@ fun HomeScreen(
     // Scroll position of the rails LazyColumn; read/written by selectHero so
     // the Continue Watching row can be cleared out of the viewport on rail
     // focus (see below).
-    val railListState = rememberLazyListState()
+    //
+    // Seeded from where the viewer left Home (see [HomeViewModel.railScrollIndex]):
+    // this composable is disposed when Detail opens - it is a route in the same
+    // activity - so a plain rememberLazyListState came back at the top of the
+    // rails on every return, on the most common loop in the app.
+    val railListState = rememberLazyListState(
+        initialFirstVisibleItemIndex = viewModel.railScrollIndex,
+        initialFirstVisibleItemScrollOffset = viewModel.railScrollOffset
+    )
+
+    // ...and the position is put back into the ViewModel as the viewer scrolls,
+    // so the seed above is current. A snapshot flow rather than a state read in
+    // the body: reading `firstVisibleItemIndex` during composition would charge
+    // every scroll tick to this whole function's scope.
+    LaunchedEffect(railListState) {
+        snapshotFlow {
+            railListState.firstVisibleItemIndex to railListState.firstVisibleItemScrollOffset
+        }.collect { (index, offset) ->
+            viewModel.railScrollIndex = index
+            viewModel.railScrollOffset = offset
+        }
+    }
+
+    // Every rail card's requester, keyed the way [lastFocusedItemKey] is, so the
+    // card the viewer left Home on can be asked for focus when they come back.
+    // Registered by the cards themselves (they own their requesters).
+    val railFocusRequesters = remember {
+        mutableMapOf<String, FocusRequester>()
+    }
+
+    // The other half of the restore: the scroll seed above puts the remembered
+    // rail back in the viewport, and this asks that card for focus. The rails
+    // compose lazily, so the target may not exist for a frame or two after the
+    // restored scroll lands - hence the bounded retry. Giving up quietly is
+    // correct: the rails are back where they were, which is already the
+    // difference the viewer notices, and a longer wait would fight whatever
+    // they do next.
+    LaunchedEffect(Unit) {
+        val wanted = viewModel.lastFocusedRailItemKey ?: return@LaunchedEffect
+        repeat(20) {
+            val requester = railFocusRequesters[wanted]
+            if (requester != null) {
+                // Not attached yet (or already gone): a request against a
+                // disposed node throws, and the retry below is the answer.
+                runCatching { requester.requestFocus() }
+                return@LaunchedEffect
+            }
+            delay(50L)
+        }
+    }
 
     // Height of a section title, in pixels, reported by the rails themselves.
     // The band left below a focused rail is built from this rather than from a
@@ -4290,7 +4340,16 @@ fun HomeScreen(
                                                     .height(cardHeight)
                                                     .onFocusChanged { focusState ->
                                                         if (focusState.isFocused) {
-                                                            lastFocusedItemKey = "${meta.type}:${meta.id}"
+                                                            val cardKey = "${meta.type}:${meta.id}"
+                                                            lastFocusedItemKey = cardKey
+                                                            // Remembered past this composable's
+                                                            // life too: the card the viewer left
+                                                            // Home on is what focus has to land on
+                                                            // when they come back from Detail (see
+                                                            // HomeViewModel.lastFocusedRailItemKey).
+                                                            viewModel.lastFocusedRailItemKey =
+                                                                cardKey
+                                                            railFocusRequesters[cardKey] = requester
                                                             // The card focus is
                                                             // on (see
                                                             // focusedCardRequester).

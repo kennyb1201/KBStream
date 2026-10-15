@@ -5,6 +5,47 @@ import androidx.room.Query
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * When a save may erase a completion that is already stored.
+ *
+ * The failure this closes: a save's verdict is decided on the main thread and
+ * the write is dispatched to IO, so two saves of the same row are not ordered
+ * by the order they were decided in. A pause-save decided an instant before the
+ * episode's end (its `isCompleted` false, its position a few seconds from the
+ * end) could therefore land AFTER the completion write and overwrite the
+ * completed row with a resume row: the episode lost its watched marker and
+ * went straight back onto Continue Watching with a progress bar at 99%. The
+ * same thing is reachable through the shutdown save when the activity is torn
+ * down mid-completion.
+ *
+ * The rule is about ORDER, not permission: a row that was completed and then
+ * re-watched legitimately comes back as a resume row (the viewer chose to play
+ * it again, in a later session), so a completion may not simply be permanent.
+ * What it may not be overwritten by is a save that was DECIDED BEFORE the
+ * completion was filed - and a save's own `updatedAt` is that decision time.
+ * So: a resume row whose stamp is at or before the stored completion's stamp is
+ * a stale save, and the completed row stands. Anything later than the
+ * completion is a new session and writes over it exactly as it always did.
+ *
+ * A row completed before `completedAt` was tracked (null) has nothing to
+ * compare and takes the write, as does one whose stored completion is newer
+ * than every save that could race it.
+ *
+ * Pure, so it is pinned by [HistoryCompletionRulesTest] rather than through a
+ * player.
+ */
+internal object HistoryCompletionRules {
+
+    /**
+     * True when [incomingUpdatedAt] belongs to a save that was decided before
+     * the stored completion, i.e. when the stored completion must win.
+     */
+    fun staleResumeOverCompletion(
+        storedCompletedAt: Long?,
+        incomingUpdatedAt: Long
+    ): Boolean = storedCompletedAt != null && incomingUpdatedAt <= storedCompletedAt
+}
+
 @Dao
 interface WatchHistoryDao {
     @Upsert
@@ -17,6 +58,18 @@ interface WatchHistoryDao {
     @androidx.room.Transaction
     suspend fun upsert(entry: WatchHistoryEntity) {
         val existing = getById(entry.id)
+        // A save decided before the completion was filed must not overwrite it
+        // (see [HistoryCompletionRules]): the write table is the last one to
+        // land, not the last one to be decided.
+        if (existing != null &&
+            !entry.isCompleted &&
+            HistoryCompletionRules.staleResumeOverCompletion(
+                storedCompletedAt = existing.completedAt,
+                incomingUpdatedAt = entry.updatedAt
+            )
+        ) {
+            return
+        }
         upsertRaw(
             entry.copy(
                 name = entry.name.ifBlank { existing?.name.orEmpty() },

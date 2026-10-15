@@ -143,6 +143,10 @@ class AddonRepository private constructor() {
     private val moshi =
         Moshi.Builder()
             .add(ManifestResourcesAdapterFactory)
+            // MetaPreview.year can be a number or a string on the wire (see
+            // [ScalarString]); without this the catalog and search adapters
+            // fail to construct at all.
+            .add(ScalarStringAdapterFactory)
             .addLast(KotlinJsonAdapterFactory())
             .build()
 
