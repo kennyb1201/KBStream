@@ -703,17 +703,36 @@ private class VideoCompatTrackOutput(
                 // identifies which step threw. The success log is emitted only
                 // AFTER the build, so it can never announce a relabel that did
                 // not happen.
-                // The config's VPS is rewritten only while the app's own
-                // stripper is the one removing the samples. libdovi is the
-                // stripper whenever it is in the build (see
-                // Mode.STRIP_NALS_ONLY), and the 2026-10-13 field run on a
-                // Fire TV Stick 4K Max + non-DV TV is what this arm exists for:
-                // on Auto the relabel plus libdovi's strip but with the
-                // rewritten VPS in the codec config came up as a solid green
-                // picture at 62 kbps, where Nuvio — which never touches the
-                // codec config — renders. The Kotlin fallback keeps the
-                // rewrite, because the rewrite is what closes its stall.
-                val skipVpsRewrite = DoviBridge.available
+                // Both relabel arms force this rewrite now. It is the same
+                // decision the DV-hardware reroute below takes, for the same
+                // reason: this arm's samples are the Kotlin stripper's too
+                // (`kotlinOnly` in Mode.STRIP_NALS_ONLY is the stripper both
+                // arms use), and a DV-flagged VPS left on a track whose RPU
+                // NALs were removed is the zero-output stall the rewrite closes
+                // - the decoder configures from it and then waits for metadata
+                // that never arrives (2026-10-15, a declared dvhe.08.06 track,
+                // no picture, then the fallback).
+                //
+                // The libdovi gate that used to stand here is gone. It was the
+                // Nuvio-parity arm: Nuvio's `stripRpuOnly` strips the samples
+                // and never touches the codec config, and the 2026-10-13 field
+                // run on a Fire TV Stick 4K Max + non-DV TV is where it came
+                // from - libdovi's strip plus this rewritten VPS came up as a
+                // solid green picture at 62 kbps, where Nuvio renders. That
+                // combination cannot occur on either arm any more, because
+                // neither relabel site hands its samples to libdovi: the
+                // Kotlin surgery is what runs, and this rewrite is exactly what
+                // closes ITS stall (the mutating strip and the in-band sniff
+                // path both keep it for that reason). So the rule this file
+                // follows is unconditional here: once the RPU is gone the track
+                // has to be HEVC/HDR10 in the label AND in the parameter set,
+                // whichever mode got us here.
+                //
+                // [relabelTargetFor]'s skipVpsRewrite parameter is retained - it
+                // is the same shape as skipRelabel below and a future caller may
+                // want the Nuvio arm - but no call site takes it, exactly as
+                // with skipRelabel.
+                val skipVpsRewrite = false
                 // The 2026-10-14 no-relabel test is REMOVED: it field-failed
                 // that same night. Leaving the track declared as
                 // video/dolby-vision while the RPU NALs are stripped leaves a
@@ -789,14 +808,25 @@ private class VideoCompatTrackOutput(
                 // which forces Strip All for the session — lands on such a box.
                 // Boxes WITHOUT a DV decoder keep the mutating strip below: it
                 // is the tested working path there, so it is left alone.
-                // Same libdovi gate as the Auto branch above: this is where
-                // "Strip All" (and the 0x80001000 rescue that forces it) lands
-                // on a DV-capable box, the strip itself is libdovi's, and the
-                // rewritten config VPS is what green-screened that same field
-                // run at 62 kbps. The mutating strip below keeps its rewrite —
-                // that path's samples are stripped by the Kotlin parser, which
-                // is the stall the rewrite closes.
-                val skipVpsRewrite = DoviBridge.available
+                // Rewriting the config VPS here is where the declared-DV stall
+                // was fixed first (2026-10-15): codecs=dvhe.08.06, mode=Strip
+                // All, vpsRewrite=skipped(libdovi), RPU NALs removed while the
+                // VPS still described Dolby Vision - the decoder configured
+                // from it, waited for metadata that never arrives, produced zero
+                // output frames, and the session fell back. Same poison the
+                // mutating strip below and the in-band sniff path both close
+                // with this rewrite. This is where "Strip All" (and the
+                // 0x80001000 rescue that forces it) lands on a DV-capable box.
+                // Neither relabel arm takes the libdovi gate any more (see the
+                // Auto branch above for why it went), so the two sites now make
+                // the same decision.
+                //
+                // Same single-layer VPS the in-band path re-emits: the VPS is
+                // rewritten, the SPS/PPS stay byte-identical, so the
+                // SPS-derived codec string advertised above is still what the
+                // decoder is configured with ([rewriteVpsInInitData] covers the
+                // length-delimited, hvcC and Annex-B codec configs).
+                val skipVpsRewrite = false
                 // The same removed no-relabel test and the same 2026-10-14
                 // field failure as the Auto branch above (see
                 // [relabelTargetFor]): a stripped track left declared as
@@ -1538,18 +1568,21 @@ internal fun relabelOutcome(skippedForLibdovi: Boolean): String =
  * relabel unchanged with `vpsRewritten=false`, exactly as before this existed,
  * rather than failing a load that must never fail.
  *
- * [skipVpsRewrite] is the Nuvio-parity arm: it is what every caller whose
- * samples are stripped by libdovi passes (see the two relabel call sites and
- * [Mode.STRIP_NALS_ONLY]). Nuvio's `stripRpuOnly` strips the samples and leaves
- * the codec config alone, and the reference transformer it is modelled on does
- * the same. The 2026-10-13 field run is why that matters — libdovi stripped the
- * RPU/EL/HDR10+ and the decoder rendered its first frame, but the config's
- * rewritten VPS on top of that strip produced a solid green picture at 62 kbps.
- * The rewrite is not wrong for every case: it is what closes the zero-output
- * stall of the app's OWN sample stripper, so it is the default behaviour here
- * and every caller on the Kotlin fallback keeps it. Skipping it hands the
- * caller the source format itself, which is what makes the config
- * byte-identical rather than "rebuilt with the same bytes".
+ * [skipVpsRewrite] is the Nuvio-parity arm: Nuvio's `stripRpuOnly` strips the
+ * samples and leaves the codec config alone, and the reference transformer it is
+ * modelled on does the same. The 2026-10-13 field run is why that matters —
+ * libdovi stripped the RPU/EL/HDR10+ and the decoder rendered its first frame,
+ * but the config's rewritten VPS on top of that strip produced a solid green
+ * picture at 62 kbps. No call site takes it any more, because no relabel site
+ * hands its samples to libdovi: both strip with the app's OWN parser
+ * (`kotlinOnly` in [Mode.STRIP_NALS_ONLY]), and this rewrite is what closes that
+ * parser's zero-output stall. Skipping it on either arm leaves a DV VPS on a
+ * track whose RPUs are gone, which is the 2026-10-15 stall, so the rewrite is
+ * unconditional at both relabel sites (the mutating strip and the in-band sniff
+ * path keep it too). The parameter is retained - the same shape as [skipRelabel]
+ * below, and a future caller may want the Nuvio arm - but nothing passes it.
+ * Skipping it hands the caller the source format itself, which is what makes the
+ * config byte-identical rather than "rebuilt with the same bytes".
  *
  * [skipRelabel] is the 2026-10-14 no-relabel test, and it is REMOVED: no call
  * site passes it any more (both pass `false`). It leaves the track declared, so

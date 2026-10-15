@@ -18,12 +18,19 @@ import org.junit.Test
  *
  * As of the 2026-10-13 field run (Fire TV Stick 4K Max, non-DV TV, Auto AND
  * Strip All: first frame rendered, then a solid green picture at 62 kbps) the
- * config rewrite is conditional instead of unconditional — it is exactly the
- * difference from Nuvio's stripRpuOnly, which never touches the codec config.
- * The two relabel sites therefore pass `skipVpsRewrite = DoviBridge.available`
- * and the mutating strip below keeps its rewrite, because that path's samples
- * are stripped by the Kotlin parser the rewrite was written for. The gate and
- * the log field are pinned here.
+ * config rewrite became conditional instead of unconditional — it is exactly
+ * the difference from Nuvio's stripRpuOnly, which never touches the codec
+ * config. That gate is gone now: both relabel sites force the rewrite
+ * (`skipVpsRewrite = false`), which is the same decision the mutating strip
+ * below has always made. The 2026-10-15 field report is why — a declared
+ * `dvhe.08.06` track came back with `vpsRewrite=skipped(libdovi)` and no
+ * picture, the RPUs removed while the VPS still described Dolby Vision, which is
+ * the zero-output stall the rewrite exists to close — and the green-screen run
+ * the skip was measured against stripped with libdovi, which neither relabel
+ * site does any more (both run the Kotlin surgery, `kotlinOnly`). So the rule is
+ * unconditional on both arms: once the RPU is gone the track is HEVC/HDR10 in
+ * the label and in the parameter set, whichever mode got us there. Both sites'
+ * decision and both relabel log fields are pinned here.
  *
  * The 2026-10-14 no-relabel run is where that stopped. It left the track
  * declared as `video/dolby-vision` while the RPU NALs were stripped, and it
@@ -107,11 +114,11 @@ class DolbyVisionRelabelNalsStripContractTest {
     }
 
     @Test
-    fun `the relabel branch gates the codec config VPS rewrite on libdovi`() {
+    fun `the relabel branch forces the codec config VPS rewrite`() {
         val branch = relabelBranch()
         assertTrue(
-            "the relabel must be built through relabelTargetFor — the libdovi verdict has " +
-                "to reach the relabel from somewhere, and this is where",
+            "the relabel must be built through relabelTargetFor — that is where the config " +
+                "VPS rewrite happens, and it has to reach the relabel from somewhere",
             branch.contains(RELABEL_CALL)
         )
         assertTrue(
@@ -120,9 +127,10 @@ class DolbyVisionRelabelNalsStripContractTest {
             branch.contains("val skipRelabel = false")
         )
         assertTrue(
-            "and that gate is the bridge's own availability, not a copy of its state — a " +
-                "build with libdovi must not rewrite the config, and one without it must",
-            branch.contains("val skipVpsRewrite = DoviBridge.available")
+            "and the skip must be off: this arm's samples are the Kotlin stripper's, and a " +
+                "DV VPS left on a track whose RPUs were removed is the decoder stall the " +
+                "rewrite closes (2026-10-15)",
+            branch.contains("val skipVpsRewrite = false")
         )
         assertTrue(
             "and the relabel itself must be built from that format",
@@ -247,8 +255,11 @@ class DolbyVisionRelabelNalsStripContractTest {
             reroute.contains("val skipRelabel = false")
         )
         assertTrue(
-            "with this branch reading the same libdovi gate off the bridge",
-            reroute.contains("val skipVpsRewrite = DoviBridge.available")
+            "and, unlike the Auto branch, forcing the config VPS rewrite instead of " +
+                "skipping it: this is where Strip All lands, its samples are the Kotlin " +
+                "surgery's, and a skipped rewrite leaves the DV VPS on a track whose RPUs " +
+                "are gone (the 2026-10-15 declared-DV stall)",
+            reroute.contains("val skipVpsRewrite = false")
         )
         assertTrue(
             "and report the VPS rewrite, so both relabel logs can be compared",
@@ -368,26 +379,35 @@ class DolbyVisionRelabelNalsStripContractTest {
         )
     }
 
-    // ── the 2026-10-13 green-screen arm (Nuvio parity) ────────────────
+    // ── the 2026-10-13 green-screen arm (Nuvio parity), retired ───────
     //
     // Both field-green paths — Auto (the RELABEL_ONLY branch) and Strip All
     // (the DV-hardware reroute) — stripped with libdovi and then rewrote the
-    // codec config's VPS, which is where they differed from Nuvio. Every
-    // relabel site is now gated on the library, and the field log names which
-    // of the two ran.
+    // codec config's VPS, which is where they differed from Nuvio. Neither
+    // takes that skip now: the samples on both arms are the Kotlin surgery's,
+    // where a skipped rewrite is a stall rather than a green screen (the
+    // 2026-10-15 report on a declared dvhe.08.06 track). The parameter stays —
+    // the same shape as skipRelabel — and both sites still report the same log
+    // field, so a capture can still say which of the two paths the VPS took.
 
     @Test
-    fun `every relabel site skips the config VPS rewrite while libdovi is present`() {
+    fun `both relabel sites force the config VPS rewrite`() {
         assertEquals(
             "both relabel sites — Auto's RELABEL_ONLY branch and the DV-hardware reroute — " +
-                "must pass the gate",
+                "must still build through the shared call",
             2,
             count(source, RELABEL_CALL)
         )
         assertEquals(
-            "and each must read it off the bridge itself",
-            2,
+            "no site may read the VPS skip off the bridge any more: the strip on both arms " +
+                "is the Kotlin surgery's, where a DV VPS on stripped samples is the stall",
+            0,
             count(source, "val skipVpsRewrite = DoviBridge.available")
+        )
+        assertEquals(
+            "both must force the rewrite, like the mutating strip below always has",
+            2,
+            count(source, "val skipVpsRewrite = false")
         )
         assertEquals(
             "so a field log says which of the two paths the VPS took",
