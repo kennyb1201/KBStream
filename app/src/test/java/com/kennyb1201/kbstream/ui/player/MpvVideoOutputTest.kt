@@ -13,9 +13,12 @@ import org.junit.Test
  *
  * Field problem the resolver exists for: the 6.51 mpvlibAndroid swap
  * black-screened the Fire TV Stick 4K Plus (`karat`, MediaTek) — audio plays,
- * frames decode, and nothing reaches the Surface (`updateAcquireFence: Did not
- * find frame`) — and the Onn 4K Plus, which the swap appeared to fix, was
- * black-screening again on the same OpenGL path by the 11 October field test.
+ * frames decode, and nothing reaches the Surface — and the Onn 4K Plus, which
+ * the swap appeared to fix, was black-screening again on the same OpenGL path
+ * by the 11 October field test. (The `updateAcquireFence: Did not find frame`
+ * those reports quote is the platform's libgui frame-timestamp bookkeeping —
+ * absent from every native library in the AAR — not mpv's and not
+ * SurfaceFlinger's: it reports frames being queued, not lost.)
  * Swapping the video output is what fixes either box, so the choice is a
  * function of the device and the stored mode, and the table has to follow the
  * field tests rather than the history: an entry that says "known good" about a

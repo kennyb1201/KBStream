@@ -215,9 +215,11 @@ native library is linked, not selected.
 
 A second library, `io.github.abdallahmehiz:mpv-android-lib` (the build Nuvio's
 GPU video output uses), was trialled for the `vo=gpu` black-screen failure and
-removed: it produced the **same** black screen (`updateAcquireFence: Did not
-find frame` repeated, the decoder rendering, no picture) on the same boxes, so
-the library was not the variable. Nothing links it now — the `-Pmpv.lib` flag,
+removed: it produced the **same** black screen (the decoder rendering, no
+picture, `updateAcquireFence: Did not find frame` repeating — that line is the
+platform's libgui frame-timestamp bookkeeping, absent from every native library
+in the AAR, and it reports frames being queued rather than lost) on the same
+boxes, so the library was not the variable. Nothing links it now — the `-Pmpv.lib` flag,
 the `src/mpvnuvio/` arm and the `MPV_LIB` workflow input are gone with it.
 
 Which library an APK carries is still named in the log: the engine writes

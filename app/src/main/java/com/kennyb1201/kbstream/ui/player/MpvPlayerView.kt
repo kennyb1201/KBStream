@@ -32,10 +32,16 @@ import kotlin.math.pow
  *    the holder already has a live surface by the time [initialize] registers
  *    it, from [ensureSurfaceAttachedIfAlreadyAvailable], because a holder does
  *    not replay a create that already happened (NuvioTV's engine covers the
- *    same case the same way) — and the video output is cycled with it in the
- *    reference player's order (`BaseMPVView` in mpv-android, the view Nuvio's
- *    working engine is built on): attach the surface and `force-window=yes`,
- *    then either load the pending file (a FIRST creation, which is what
+ *    same case the same way) — and every attach publishes the window's size as
+ *    mpv's `android-surface-size` before `force-window=yes` can create the
+ *    output, because the size update the holder would otherwise send never
+ *    arrives on that path either (see [publishAttachedSurfaceSize]) — and the
+ *    view's own layout publishes the same property for the one attach that can
+ *    reach the output with no size at all ([onSizeChanged]) — and the
+ *    video output is cycled with it in the reference player's order
+ *    (`BaseMPVView` in mpv-android, the view Nuvio's working engine is built
+ *    on): attach the surface, publish the size and `force-window=yes`, then
+ *    either load the pending file (a FIRST creation, which is what
  *    [surfaceCreatedOnce] says — not whether a load is waiting, because the
  *    surface arrives before [load] does here — and the output is already
  *    configured as the option, so it is left alone) or `vo=<resolved output>`
@@ -1412,9 +1418,14 @@ class MpvPlayerView @JvmOverloads constructor(
      * window is "Failed to create ANativeWindow", from `vo_android_init`.
      *
      * Re-uses the callback's own attach path rather than attaching here, so
-     * there is exactly one sequence: attach, `force-window=yes`, then the
-     * first-creation branch. This IS the first creation, so that branch is the
-     * right one — and any file already waiting goes out with it.
+     * there is exactly one sequence: attach, publish `android-surface-size`,
+     * `force-window=yes`, then the first-creation branch. This IS the first
+     * creation, so that branch is the right one — and any file already waiting
+     * goes out with it. The size in that sequence is the one thing this helper
+     * adds beyond the callback's own case: the holder will not send the
+     * `surfaceChanged` the reference player publishes it from either, and a GPU
+     * output with no size queues frames that never reach the display (see
+     * [publishAttachedSurfaceSize]).
      */
     private fun ensureSurfaceAttachedIfAlreadyAvailable() {
         if (!initialized || released || surfaceAttached) return
@@ -1422,6 +1433,85 @@ class MpvPlayerView @JvmOverloads constructor(
         if (liveHolder.surface?.isValid != true) return
         runCatching { surfaceCreated(liveHolder) }
             .onFailure { Log.w(TAG, "could not attach the surface the holder already had", it) }
+    }
+
+    /**
+     * Publishes the size of the surface mpv was just handed, as
+     * `android-surface-size`.
+     *
+     * mpv's Android GPU contexts (`gpu-context=android`, in both the OpenGL
+     * and the Vulkan implementation the bundled libmpv carries) size their
+     * EGL / Vulkan window surface from this property. They cannot read it off
+     * the window: `ANativeWindow_getWidth/Height` is not answered for a
+     * `SurfaceView`'s window until a buffer has been queued, so the embedding
+     * app is the only thing that knows the size. The reference player
+     * publishes it from `surfaceChanged` alone (`BaseMPVView.surfaceChanged`),
+     * which is enough there because `surfaceChanged` follows every
+     * `surfaceCreated` — but NOT for a surface the holder already had:
+     * [ensureSurfaceAttachedIfAlreadyAvailable] attaches one whose
+     * `surfaceChanged` will never arrive, because a `SurfaceHolder` replays no
+     * callback at all for a surface that came up before the callback was
+     * registered. That path hands the GPU output a window with no size, and the
+     * picture never reaches the display while `hwdec` keeps decoding — a
+     * `vo=gpu` failure on a box whose MediaCodec-direct output
+     * (`mediacodec_embed`) works, because that one renders no window of its own
+     * and so never asks for a size. That asymmetry is this fix's whole shape.
+     *
+     * Called from [attachSurface], so every attach path publishes it — and
+     * BEFORE the `force-window=yes` that can create the video output, so the
+     * output reads the size at its own init instead of after a first frame.
+     * [surfaceChanged] keeps updating it for sizes that change later.
+     *
+     * The surface's own frame is preferred to the view's measured size (they
+     * agree for this full-bleed SurfaceView, and the frame is the one actually
+     * attached). When neither is known yet — a frame that is not laid out and a
+     * view that has not been measured — nothing is published here, because a
+     * wrong size would be worse than none: the layout that follows publishes it
+     * instead, through [onSizeChanged]. That second publisher is what makes the
+     * already-attached case whole, because `surfaceChanged` is not one this
+     * surface can ever produce (see [publishAndroidSurfaceSize]).
+     *
+     * A note on the log line this file's field reports keep quoting:
+     * `updateAcquireFence: Did not find frame` is the platform's — not mpv's,
+     * and not SurfaceFlinger's. It is `libgui`'s
+     * `ProducerFrameEventHistory::updateAcquireFence`
+     * (`frameworks/native/libs/gui/FrameTimestamps.cpp`), which runs in this
+     * process because the app is the producer of this view's buffer queue, and
+     * it fires when the producer queues a frame its own frame-time history has
+     * no record for. It is absent from every native library in
+     * `mpvlib-1.1.2.aar` (libmpv, libplayer, libavcodec), exactly as "Could not
+     * find corresponding native window for surface" is — and it says frames
+     * ARE being queued, not that the window was lost, which is why no fix can
+     * be read off it.
+     */
+    private fun publishAttachedSurfaceSize() {
+        val frame = holder.surfaceFrame
+        val fromFrame = frame.width() > 0 && frame.height() > 0
+        val w = if (fromFrame) frame.width() else width
+        val h = if (fromFrame) frame.height() else height
+        if (w <= 0 || h <= 0) {
+            Log.i(
+                TAG,
+                "android-surface-size unknown at attach " +
+                    "(frame=${frame.width()}x${frame.height()} view=${width}x$height) — leaving it " +
+                    "to the view's own size change"
+            )
+            return
+        }
+        publishAndroidSurfaceSize(w, h, if (fromFrame) "attach/frame" else "attach/view")
+    }
+
+    /**
+     * [publishAttachedSurfaceSize] with the size already known — one writer for
+     * the property, so the attach, the holder's own size change and the view's
+     * layout cannot drift, and neither callback has anything of its own to
+     * spell.
+     */
+    private fun publishAndroidSurfaceSize(w: Int, h: Int, source: String) {
+        if (!initialized || released) return
+        runCatching { MpvBackend.setPropertyString("android-surface-size", "${w}x$h") }
+            .onSuccess { Log.i(TAG, "android-surface-size=${w}x$h ($source)") }
+            .onFailure { Log.w(TAG, "android-surface-size=${w}x$h rejected", it) }
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
@@ -1465,8 +1555,40 @@ class MpvPlayerView @JvmOverloads constructor(
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
         if (!initialized || released) return
-        // mpv sizes its output from this, not from the Surface itself.
-        runCatching { MpvBackend.setPropertyString("android-surface-size", "${width}x$height") }
+        // mpv sizes its output from this, not from the Surface itself — and the
+        // attach publishes the same property for the surface the holder already
+        // had, for which this callback never arrives (see
+        // [publishAttachedSurfaceSize]).
+        publishAndroidSurfaceSize(width, height, "surfaceChanged")
+    }
+
+    /**
+     * The size update that a surface the holder ALREADY had can still get.
+     *
+     * [publishAttachedSurfaceSize] can only publish a size it knows, and the one
+     * case it cannot is the attach [ensureSurfaceAttachedIfAlreadyAvailable]
+     * makes during [initialize]: the view is registered with the holder before
+     * the Activity has laid it out, so its frame is empty and its measured size
+     * is zero, and there is nothing to publish. The `surfaceChanged` the
+     * reference player relies on will not rescue that either — a SurfaceHolder
+     * replays no callback at all for a surface that came up before the callback
+     * was registered, so no `surfaceChanged` is ever delivered for this surface
+     * and the GPU context would keep a window it was never told the size of.
+     * That is the same `vo=gpu` black screen (decoder rendering, every frame
+     * going nowhere) on the one path that reaches it without a size.
+     *
+     * The layout that follows is the one event left, and this is where it
+     * arrives: the view's own size change. It is published through the same
+     * single writer as the attach and the holder callback, so the three cannot
+     * describe different sizes, and it is skipped while mpv holds no surface —
+     * before the attach there is no window for the size to describe, and the
+     * attach publishes it from the frame once there is one.
+     */
+    override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        super.onSizeChanged(w, h, oldw, oldh)
+        if (!initialized || released || !surfaceAttached) return
+        if (w <= 0 || h <= 0) return
+        publishAndroidSurfaceSize(w, h, "onSizeChanged")
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -1505,6 +1627,12 @@ class MpvPlayerView @JvmOverloads constructor(
             // re-opening it are the two halves of the same cycle and are pinned
             // together in MpvSurfaceCycleContractTest.
             //
+            // The window's size, BEFORE force-window can create the video
+            // output: the GPU contexts size their EGL / Vulkan surface from
+            // this property and have no other way to learn it, and on the path
+            // where the holder already had the surface no `surfaceChanged`
+            // will ever deliver it (see [publishAttachedSurfaceSize]).
+            publishAttachedSurfaceSize()
             // Forces mpv to render video/subtitles into our surface even when
             // it would otherwise decide it has no window to draw into.
             MpvBackend.setOptionString("force-window", "yes")

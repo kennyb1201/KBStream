@@ -7,9 +7,16 @@ import com.kennyb1201.kbstream.data.settings.AppPreferences
  *
  * The 6.51 mpvlibAndroid swap moved the black screen rather than removing it:
  * the Fire TV Stick 4K Plus (MediaTek, `karat`) lost its picture — audio plays,
- * frames decode, and no frame ever reaches the Surface (`updateAcquireFence:
- * Did not find frame`) — and the Onn 4K Plus, which the swap appeared to fix,
- * was black-screening again by the 11 October field test. That is a property of
+ * frames decode, and no frame ever reaches the Surface — and the Onn 4K Plus,
+ * which the swap appeared to fix, was black-screening again by the 11 October
+ * field test. The line those reports used to quote for it,
+ * `updateAcquireFence: Did not find frame`, is the platform's own `libgui`
+ * frame-timestamp bookkeeping (it is absent from every native library in
+ * `mpvlib-1.1.2.aar`, exactly as "Could not find corresponding native window
+ * for surface" is), and it reports frames being QUEUED, not lost — so no fix
+ * was ever going to be read off it. See
+ * [MpvPlayerView.publishAttachedSurfaceSize], which is where the window size
+ * the GPU output was never told is now published, at the attach itself. That is a property of
  * the video output, not of the file, so the settings around `vo` have to be
  * chosen per device. This is that choice, as one pure function of the mode and
  * the three `Build` fields it is made from, so it can be pinned by a unit test

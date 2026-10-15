@@ -587,8 +587,11 @@ object AppPreferences {
      * That library swap fixed black screen on one box and introduced it on
      * another: with `vo=gpu` + `gpu-context=android` the Fire TV Stick 4K Plus
      * (MediaTek) decodes and plays audio but never gets a frame onto the
-     * Surface (`updateAcquireFence: Did not find frame`), so the video output
-     * has to be chosen per device. [com.kennyb1201.kbstream.ui.player.MpvVideoOutput]
+     * Surface, so the video output has to be chosen per device. (The
+     * `updateAcquireFence: Did not find frame` line those reports quote is the
+     * platform's, not mpv's and not SurfaceFlinger's, and it reports frames
+     * being queued rather than lost — see
+     * [com.kennyb1201.kbstream.ui.player.MpvPlayerView.publishAttachedSurfaceSize].) [com.kennyb1201.kbstream.ui.player.MpvVideoOutput]
      * owns that choice; this is only where the override is stored. [MPV_VO_AUTO]
      * leaves it to that device table, and the three explicit modes are what lets
      * a viewer cycle the options on the box itself to find one that works —
