@@ -52,7 +52,7 @@ class CredentialSyncWiringContractTest {
 
     @Test
     fun `the IPTV applier asks the rules, not the synced-at stamp`() {
-        val apply = functionBody(payload, "private fun applyIptv(context: Context, payload: JsonObject)")
+        val apply = functionBody(payload, "private fun applyIptv(")
 
         assertTrue(
             "an applied-nothing blob used to stamp iptv_synced_at and block the " +
@@ -68,8 +68,9 @@ class CredentialSyncWiringContractTest {
         )
         assertTrue(
             "an adopted config is not a local edit: the change tracker has to be " +
-                "refreshed to what this device now holds",
-            apply.contains("IPTV_SNAPSHOT_KEY, iptvSignature(context)")
+                "refreshed to what this device now holds - and for the profile the " +
+                "row names, not for whichever one is on screen",
+            apply.contains("IPTV_SNAPSHOT_KEY, iptvSignature(context, profileId)")
         )
     }
 
@@ -97,7 +98,8 @@ class CredentialSyncWiringContractTest {
         )
         assertTrue(
             "and the applier has to handle it on the way back",
-            payload.contains("PrefsPayloadBuilder.KEY_API_KEYS -> applyApiKeys(context, payload)")
+            payload.contains("PrefsPayloadBuilder.KEY_API_KEYS ->") &&
+                payload.contains("applyApiKeys(context, payload, profileId)")
         )
     }
 
@@ -126,7 +128,7 @@ class CredentialSyncWiringContractTest {
 
     @Test
     fun `the applier adopts key by key, from the known set only`() {
-        val apply = functionBody(payload, "private fun applyApiKeys(context: Context, payload: JsonObject)")
+        val apply = functionBody(payload, "private fun applyApiKeys(")
 
         assertTrue(
             "a blob from a build that knows a key this one does not must not have " +
@@ -159,14 +161,17 @@ class CredentialSyncWiringContractTest {
             prefs.contains("private fun pushApiKeysBlob()") &&
                 prefs.contains("PrefsPayloadBuilder.KEY_API_KEYS,")
         )
-        val adopt = functionBody(
-            prefs,
-            "fun adoptApiKeyFromSync(context: Context, keyName: String, value: String, editedAt: Long)"
-        )
+        val adopt = functionBody(prefs, "fun adoptApiKeyFromSync(")
         assertTrue(
             "an adopted key carries the REMOTE edit time, so the pull is never " +
                 "mistaken for a local edit: $adopt",
             adopt.contains("putLong(apiKeySyncStampKey(keyName), editedAt)")
+        )
+        assertTrue(
+            "and it names the profile the row belongs to, so a sibling " +
+                "profile's key is adopted into ITS store: $adopt",
+            prefs.contains("profileId: String? = null\n    ) {\n        apiKeyPrefs(context, profileId)") &&
+                adopt.contains("prefs(context, profileId)")
         )
     }
 
@@ -211,10 +216,7 @@ class CredentialSyncWiringContractTest {
 
     @Test
     fun `the OMDB path never clears MDBList's legacy plaintext slot`() {
-        val adopt = functionBody(
-            prefs,
-            "fun adoptApiKeyFromSync(context: Context, keyName: String, value: String, editedAt: Long)"
-        )
+        val adopt = functionBody(prefs, "fun adoptApiKeyFromSync(")
         assertTrue(
             "the plaintext remove must be skipped for OMDB on the pull side: the " +
                 "`omdb_api_key` plaintext slot is the pre-MDBLIST ratings slot, not OMDB's " +

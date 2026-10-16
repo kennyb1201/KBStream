@@ -3,11 +3,14 @@ package com.kennyb1201.kbstream.ui.components
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 
 /**
  * One poster surface's tile, in whichever shape the viewer chose.
@@ -70,7 +73,15 @@ fun GlobalPosterCard(
     landscape: Boolean? = null
 ) {
     val context = LocalContext.current
-    val useLandscape = landscape ?: AppPreferences.landscapePostersActive(context)
+    // The global switch is a SYNCED pref, so a change that arrives from the
+    // account (the other TV's guest profile flips it) has to repaint this card.
+    // A bare read cannot: the pref file changed, nothing in the composition
+    // knows. The revision is bumped on every applied blob, and keying on it
+    // re-reads exactly once per real change (see PrefsPayloadApplier.revision).
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val useLandscape = landscape ?: remember(syncedRevision) {
+        AppPreferences.landscapePostersActive(context)
+    }
     // Landscape mode resolves the item's own backdrop + clearlogo when the
     // caller's data carries none; portrait never looks anything up.
     val art = rememberGlobalLandscapeArt(
@@ -136,6 +147,12 @@ fun GlobalPosterCard(
 @Composable
 fun rememberGlobalLandscape(): Boolean {
     val context = LocalContext.current
-    return remember { AppPreferences.landscapePostersActive(context) }
+    // Reactive like the card itself: this reads the same synced pref, and a
+    // wrapper that sized itself from a stale answer would clip the landscape
+    // tile the card is drawing. The rule for every Compose read of a
+    // SYNCED_PREF_KEYS-backed pref: collect PrefsPayloadApplier.revision, never
+    // a bare remember.
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    return remember(syncedRevision) { AppPreferences.landscapePostersActive(context) }
 }
 

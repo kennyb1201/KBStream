@@ -1,11 +1,14 @@
 package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 
 /**
  * App-wide poster tile sizing, chosen in Settings → Display ("Poster Size").
@@ -28,11 +31,21 @@ enum class PosterSize(val width: Dp, val height: Dp) {
     }
 }
 
-/** Current poster size from prefs, remembered for the composition. */
+/**
+ * Current poster size from prefs, remembered for the composition.
+ *
+ * Keyed on the sync revision: "Poster Size" is a SYNCED pref, so the size the
+ * viewer picked on the other TV has to reshape these tiles when the blob lands.
+ * A bare `remember` kept whatever was read at first composition (see
+ * [PrefsPayloadApplier.revision]).
+ */
 @Composable
 fun rememberPosterSize(): PosterSize {
     val context = LocalContext.current
-    return remember { PosterSize.fromPref(AppPreferences.getPosterSize(context)) }
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    return remember(syncedRevision) {
+        PosterSize.fromPref(AppPreferences.getPosterSize(context))
+    }
 }
 
 /**
@@ -89,6 +102,10 @@ fun rememberPosterTileWidth(posterWidth: Dp): Dp =
 @Composable
 fun rememberHomeLandscape(): Boolean {
     val context = LocalContext.current
-    return remember { AppPreferences.homeLandscapeActive(context) }
+    // Reactive for the same reason as [rememberGlobalLandscape]: the Home-rails
+    // switch is a synced pref, and a change of it from the account must reshape
+    // Home's rails live instead of after the next screen build.
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    return remember(syncedRevision) { AppPreferences.homeLandscapeActive(context) }
 }
 

@@ -493,7 +493,8 @@ class CatalogBuilderContractTest {
         assertTrue(payload.contains("fun buildCustomCatalogs(context: Context): JsonObject"))
         assertTrue(
             "an incoming blob has to be applied",
-            payload.contains("PrefsPayloadBuilder.KEY_CUSTOM_CATALOGS -> applyCustomCatalogs(context, payload)")
+            payload.contains("PrefsPayloadBuilder.KEY_CUSTOM_CATALOGS ->") &&
+                payload.contains("applyCustomCatalogs(context, payload, profileId)")
         )
         assertTrue(
             "and a blank blob must never erase the account's catalogs",

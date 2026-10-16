@@ -212,6 +212,11 @@ object SupabaseSync {
         }
         if (!initStarted.compareAndSet(false, true)) return
 
+        // Foreground liveness (see [onAppForeground]). Registered here, once,
+        // because every Activity — MainActivity and each player — is the app
+        // coming back, and only the Application sees all of them.
+        registerForegroundCallbacks(context)
+
         // createSupabaseClient builds a Ktor engine, an OkHttp stack and the
         // Auth/Postgrest/Realtime plugin chain — the single heaviest piece of
         // app startup, and it used to run inline here, on the main thread,
@@ -2155,15 +2160,53 @@ object SupabaseSync {
     // doubled every remote-change event and leaked a websocket.
     private val realtimeMutex = Mutex()
 
-    private fun startRealtime() {
+    /**
+     * The health watcher's job, so a re-join can replace it instead of leaving a
+     * second watcher looping over the same table list (see [onAppForeground]).
+     */
+    private var realtimeHealthJob: kotlinx.coroutines.Job? = null
+
+    /** True while at least one tracked channel is actually joined. */
+    private val realtimeLive: Boolean
+        get() = realtimeSubscriptions.any {
+            it.channel.status.value ==
+                io.github.jan.supabase.realtime.RealtimeChannel.Status.SUBSCRIBED
+        }
+
+    /**
+     * Subscribes the four tables (once per session). [force] is the foreground
+     * re-join (see [onAppForeground]): it first drops the tracked channels that
+     * are DEAD, because a list that is non-empty but holds nothing live is
+     * exactly the state the plain "already subscribed?" check would skip. A
+     * channel that is merely SUBSCRIBING is left alone — tearing that down
+     * mid-join would race the SDK — and a healthy join needs nothing.
+     */
+    private fun startRealtime(force: Boolean = false) {
         val c = client ?: return
 
         scope.launch {
             realtimeMutex.withLock {
-                if (realtimeSubscriptions.isNotEmpty()) return@withLock
+                if (realtimeSubscriptions.isNotEmpty()) {
+                    if (!force) return@withLock
+                    val dead = realtimeSubscriptions.filter {
+                        it.channel.status.value ==
+                            io.github.jan.supabase.realtime.RealtimeChannel.Status.UNSUBSCRIBED
+                    }
+                    if (dead.isEmpty()) return@withLock
+                    Log.w(TAG, "realtime: ${dead.size} dead channel(s); re-joining")
+                    dead.forEach { sub ->
+                        realtimeSubscriptions.remove(sub)
+                        sub.collectorJob.cancel()
+                        runCatching { sub.channel.unsubscribe() }
+                    }
+                }
                 // A fresh sign-in starts with a clean failure budget, so a
-                // deployment that has since enabled Realtime recovers.
-                realtimeRebuildAttempts.clear()
+                // deployment that has since enabled Realtime recovers. A
+                // foreground re-join deliberately KEEPS the budget: a table the
+                // server has rejected must not be retried forever (and logged
+                // about) just because the app came back, and the health
+                // watcher's backoff stays what it was.
+                if (!force) realtimeRebuildAttempts.clear()
                 try {
                     // One channel per table; the flow must be created BEFORE the
                     // channel subscribes (supabase-kt requirement).
@@ -2246,7 +2289,8 @@ object SupabaseSync {
      * dead are still ingested.
      */
     private fun watchRealtimeHealth() {
-        scope.launch {
+        realtimeHealthJob?.cancel()
+        realtimeHealthJob = scope.launch {
             while (isSignedIn()) {
                 delay(REALTIME_HEALTH_CHECK_MS)
                 val c = client ?: break
@@ -2341,8 +2385,26 @@ object SupabaseSync {
                     TABLE_PREFS -> {
                         val context = appContextRef?.get() ?: return@launch
                         val storedKey = row.prefKey ?: return@launch
-                        if (storedKeyApplies(storedKey)) {
-                            PrefsPayloadApplier.apply(context, unscopedKey(storedKey), row.payload)
+                        // The row names its profile in its own key, and that is
+                        // the ONLY thing that picks the store here (never the
+                        // active profile): a non-active profile's blob is
+                        // applied to ITS store — ready for the next switch,
+                        // exactly as the cold-start pull used to leave it — and
+                        // can never reach the profile on screen. Dropping it
+                        // (the old storedKeyApplies pin) is what made a guest
+                        // profile's change wait for a restart.
+                        val owner = SyncKeys.scopeOf(storedKey)
+                        if (owner != null) {
+                            PrefsPayloadApplier.applyForProfile(
+                                context, owner, unscopedKey(storedKey), row.payload
+                            )
+                        } else if (storedKeyApplies(storedKey)) {
+                            // Legacy unscoped row, or the account-wide profiles
+                            // blob: no profile key to resolve, so the old rule
+                            // stands.
+                            PrefsPayloadApplier.applyForProfile(
+                                context, null, unscopedKey(storedKey), row.payload
+                            )
                         }
                     }
                 }
@@ -2358,70 +2420,117 @@ object SupabaseSync {
         }
     }
 
+    /**
+     * Runs [block] against the history database of the profile [storedKey]
+     * NAMES: the ACTIVE profile's shared instance when that is the one, or a
+     * one-shot handle on the owning profile's own file otherwise (see
+     * [WatchHistoryDatabase.openForProfile] — the precedent
+     * PlaybackHistoryWriter's redirect branch and the poison sweep follow).
+     * [block]'s second argument says whether the profile is the active one,
+     * which is what gates the live side effects (cache invalidation, the
+     * override mirror).
+     *
+     * The target comes from the KEY, never from the active profile. That is what
+     * keeps a sibling profile's realtime row out of the profile on screen, and
+     * what lets it land in its own store instead of being dropped — the change
+     * that used to only show up after a restart (the cold-start pull activated
+     * that profile and applied it).
+     *
+     * A legacy unscoped row keeps the old rule: it applies only while the device
+     * has no profile at all, because there is no profile store it could belong to.
+     */
+    private suspend fun withOwningProfileDb(
+        context: Context,
+        storedKey: String,
+        block: suspend (WatchHistoryDatabase, Boolean) -> Unit
+    ) {
+        val owner = SyncKeys.scopeOf(storedKey)
+        if (owner == null) {
+            val active = currentProfileId()
+            if (!storedKeyMatchesProfile(storedKey, active)) return
+            block(WatchHistoryDatabase.getInstanceScoped(context), true)
+            return
+        }
+        val active = currentProfileId()
+        if (owner == active) {
+            // Pin the profile for the whole apply: filter the row against THIS
+            // profile, resolve the DB, then drop the row if a switch landed in
+            // between. Resolving the DB first and filtering after could file the
+            // departing profile's row under the new profile's database.
+            val db = WatchHistoryDatabase.getInstanceScoped(context)
+            if (currentProfileId() != active) return
+            block(db, true)
+            return
+        }
+        // Another profile's row: its own file, opened and closed by us, so the
+        // active instance's bookkeeping is left untouched (see
+        // [WatchHistoryDatabase.openForProfile]).
+        val oneShot = WatchHistoryDatabase.openForProfile(context, owner)
+        try {
+            block(oneShot, false)
+        } finally {
+            runCatching { oneShot.close() }
+        }
+    }
+
     private suspend fun applyHistoryRow(row: SyncRowDto) {
         val context = appContextRef?.get() ?: return
         val remote = row.payload
         val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
         val storedId = row.itemId ?: return
-        // Pin the profile for the whole apply: filter the row against THIS
-        // profile, resolve the DB, then drop the row if a switch landed in
-        // between. Resolving the DB first and filtering after could file the
-        // departing profile's row under the new profile's database.
-        val pid = currentProfileId()
-        if (!storedKeyMatchesProfile(storedId, pid)) return
-        val db = WatchHistoryDatabase.getInstanceScoped(context)
-        if (currentProfileId() != pid) return
-        val id = unscopedKey(storedId)
+        withOwningProfileDb(context, storedId) { db, live ->
+            val id = unscopedKey(storedId)
 
-        val local = db.watchHistoryDao().getById(id)
+            val local = db.watchHistoryDao().getById(id)
 
-        // A realtime tombstone deletes the local row, exactly like the pull
-        // path. It arrives as an INSERT/UPDATE (a delete is a payload now), so
-        // this is the same single-row apply a live row takes (see
-        // HistoryTombstoneRules).
-        val deletedAt = HistoryTombstoneRules.deletedAt(remote)
-        if (deletedAt != null) {
-            if (local != null &&
-                HistoryTombstoneRules.tombstoneWins(deletedAt, local.updatedAt)
-            ) {
-                db.watchHistoryDao().deleteById(id)
-                WatchedStatusRepository.invalidateAllCaches()
+            // A realtime tombstone deletes the local row, exactly like the pull
+            // path. It arrives as an INSERT/UPDATE (a delete is a payload now), so
+            // this is the same single-row apply a live row takes (see
+            // HistoryTombstoneRules).
+            val deletedAt = HistoryTombstoneRules.deletedAt(remote)
+            if (deletedAt != null) {
+                if (local != null &&
+                    HistoryTombstoneRules.tombstoneWins(deletedAt, local.updatedAt)
+                ) {
+                    db.watchHistoryDao().deleteById(id)
+                    if (live) WatchedStatusRepository.invalidateAllCaches()
+                }
+                return@withOwningProfileDb
             }
-            return
-        }
 
-        val localUpdated = local?.updatedAt ?: 0L
-        if (historyRemoteWins(
-                remoteUpdated = remoteUpdated,
-                remoteToken = HistoryTombstoneRules.mergeToken(remote),
-                localUpdated = localUpdated,
-                localToken = local?.let { HistoryTombstoneRules.mergeToken(HistoryRowRules.payload(it)) }
-            )
-        ) {
-            db.watchHistoryDao().upsert(
-                WatchHistoryEntity(
-                    id = id,
-                    parentId = remote.str("parentId") ?: "",
-                    type = remote.str("type") ?: "movie",
-                    name = remote.str("name") ?: "",
-                    episodeTitle = remote.str("episodeTitle"),
-                    overview = remote.str("overview"),
-                    clearLogo = remote.str("clearLogo"),
-                    backdropUrl = remote.str("backdropUrl"),
-                    totalEpisodesInSeason = remote.lng("totalEpisodesInSeason")?.toInt(),
-                    poster = remote.str("poster"),
-                    streamUrl = remote.str("streamUrl"),
-                    season = remote.lng("season")?.toInt(),
-                    episode = remote.lng("episode")?.toInt(),
-                    episodeStreamId = remote.str("episodeStreamId"),
-                    positionMs = remote.lng("positionMs") ?: 0L,
-                    durationMs = remote.lng("durationMs") ?: 0L,
-                    updatedAt = remoteUpdated,
-                    isCompleted = remote.bool("isCompleted"),
-                    completedAt = remote.lng("completedAt")
+            val localUpdated = local?.updatedAt ?: 0L
+            if (historyRemoteWins(
+                    remoteUpdated = remoteUpdated,
+                    remoteToken = HistoryTombstoneRules.mergeToken(remote),
+                    localUpdated = localUpdated,
+                    localToken = local?.let { HistoryTombstoneRules.mergeToken(HistoryRowRules.payload(it)) }
                 )
-            )
-            WatchedStatusRepository.invalidateAllCaches()
+            ) {
+                db.watchHistoryDao().upsert(
+                    WatchHistoryEntity(
+                        id = id,
+                        parentId = remote.str("parentId") ?: "",
+                        type = remote.str("type") ?: "movie",
+                        name = remote.str("name") ?: "",
+                        episodeTitle = remote.str("episodeTitle"),
+                        overview = remote.str("overview"),
+                        clearLogo = remote.str("clearLogo"),
+                        backdropUrl = remote.str("backdropUrl"),
+                        totalEpisodesInSeason = remote.lng("totalEpisodesInSeason")?.toInt(),
+                        poster = remote.str("poster"),
+                        streamUrl = remote.str("streamUrl"),
+                        season = remote.lng("season")?.toInt(),
+                        episode = remote.lng("episode")?.toInt(),
+                        episodeStreamId = remote.str("episodeStreamId"),
+                        positionMs = remote.lng("positionMs") ?: 0L,
+                        durationMs = remote.lng("durationMs") ?: 0L,
+                        updatedAt = remoteUpdated,
+                        isCompleted = remote.bool("isCompleted"),
+                        completedAt = remote.lng("completedAt")
+                    )
+                )
+                if (live) WatchedStatusRepository.invalidateAllCaches()
+            }
         }
     }
 
@@ -2441,42 +2550,40 @@ object SupabaseSync {
     private suspend fun applyImageOverrideRow(row: SyncRowDto) {
         val context = appContextRef?.get() ?: return
         val storedKey = row.overrideKey ?: return
-        // Same pin as applyHistoryRow: filter first, resolve the DB, then
-        // re-check the profile so a switch cannot file the row under it.
-        val pid = currentProfileId()
-        if (!storedKeyMatchesProfile(storedKey, pid)) return
-        val db = WatchHistoryDatabase.getInstanceScoped(context)
-        if (currentProfileId() != pid) return
         val key = unscopedKey(storedKey)
         val remote = row.payload
         val remoteUpdated = ImageOverrideRowRules.updatedAt(remote)
 
-        // A write this device has queued for the same key is the newer one when
-        // its stamp is not older - the same test pullHistory applies to a
-        // pending tombstone, so a slow flush cannot be walked back by a pull
-        // that raced it.
-        val queued = outbox.pending(TABLE_OVERRIDES, KEY_OVERRIDES, storedKey)
-        if (queued != null && ImageOverrideRowRules.updatedAt(queued.payload) >= remoteUpdated) {
-            return
-        }
+        withOwningProfileDb(context, storedKey) { db, live ->
+            // A write this device has queued for the same key is the newer one when
+            // its stamp is not older - the same test pullHistory applies to a
+            // pending tombstone, so a slow flush cannot be walked back by a pull
+            // that raced it.
+            val queued = outbox.pending(TABLE_OVERRIDES, KEY_OVERRIDES, storedKey)
+            if (queued != null && ImageOverrideRowRules.updatedAt(queued.payload) >= remoteUpdated) {
+                return@withOwningProfileDb
+            }
 
-        val dao = db.imageOverrideDao()
-        val local = dao.getAll().firstOrNull { it.key == key }
+            val dao = db.imageOverrideDao()
+            val local = dao.getAll().firstOrNull { it.key == key }
 
-        val deletedAt = ImageOverrideRowRules.deletedAt(remote)
-        if (deletedAt != null) {
-            // A reset is a tombstone, not a delete: a row deleted only on the
-            // device that asked for it is invisible to this one, which would
-            // keep drawing the still the viewer just rejected.
-            if (local != null) dao.clear(local.tmdbId, local.type, local.screen)
-        } else {
-            val entity = ImageOverrideRowRules.entity(key, remote) ?: return
-            if (local?.imagePath == entity.imagePath) return
-            dao.set(entity)
+            val deletedAt = ImageOverrideRowRules.deletedAt(remote)
+            if (deletedAt != null) {
+                // A reset is a tombstone, not a delete: a row deleted only on the
+                // device that asked for it is invisible to this one, which would
+                // keep drawing the still the viewer just rejected.
+                if (local != null) dao.clear(local.tmdbId, local.type, local.screen)
+            } else {
+                val entity = ImageOverrideRowRules.entity(key, remote) ?: return@withOwningProfileDb
+                if (local?.imagePath == entity.imagePath) return@withOwningProfileDb
+                dao.set(entity)
+            }
+            // Republish the in-memory mirror the surfaces read, so the choice
+            // appears live instead of after the screen is rebuilt. The mirror is
+            // the ON-SCREEN profile's; a sibling profile's row is picked up when
+            // that profile is next activated.
+            if (live) ImageOverrides.refresh(context)
         }
-        // Republish the in-memory mirror the surfaces read, so the choice
-        // appears live instead of after the screen is rebuilt.
-        ImageOverrides.refresh(context)
     }
 
     private suspend fun applyWatchedRow(row: SyncRowDto) {
@@ -2484,28 +2591,26 @@ object SupabaseSync {
         val remote = row.payload
         val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: return
         val storedKey = row.itemKey ?: return
-        // Same pin as applyHistoryRow: filter first, resolve the DB, then
-        // re-check the profile so a switch cannot file the row under it.
-        val pid = currentProfileId()
-        if (!storedKeyMatchesProfile(storedKey, pid)) return
-        val db = WatchHistoryDatabase.getInstanceScoped(context)
-        if (currentProfileId() != pid) return
         val key = unscopedKey(storedKey)
 
-        val local = db.watchedStatusDao().getByKeys(listOf(key)).firstOrNull()
-        val localUpdated = local?.updatedAt ?: 0L
-        // Same merge rule as the pull path — one place decides which badge
-        // flags a remote row carries, so the live channel can no longer land a
-        // row that erased the eye badge (see [watchedMarkerRow]).
-        watchedMarkerRow(key, remote, localUpdated)?.let { merged ->
-            db.watchedStatusDao().upsertAll(listOf(merged))
-            WatchedStatusRepository.invalidateAllCaches()
+        withOwningProfileDb(context, storedKey) { db, live ->
+            val local = db.watchedStatusDao().getByKeys(listOf(key)).firstOrNull()
+            val localUpdated = local?.updatedAt ?: 0L
+            // Same merge rule as the pull path — one place decides which badge
+            // flags a remote row carries, so the live channel can no longer land a
+            // row that erased the eye badge (see [watchedMarkerRow]).
+            watchedMarkerRow(key, remote, localUpdated)?.let { merged ->
+                db.watchedStatusDao().upsertAll(listOf(merged))
+                if (live) WatchedStatusRepository.invalidateAllCaches()
+            }
         }
     }
 
     private fun stopRealtime() {
         val subs = realtimeSubscriptions.toList()
         realtimeSubscriptions.clear()
+        realtimeHealthJob?.cancel()
+        realtimeHealthJob = null
         _realtimeStatus.value = "stopped"
         _realtimeChannelCount.value = 0
         scope.launch {
@@ -2515,6 +2620,87 @@ object SupabaseSync {
                     runCatching { sub.channel.unsubscribe() }
                 }
             }
+        }
+    }
+
+    /**
+     * Process-foreground hook for [onAppForeground], registered with the
+     * Application at [init].
+     *
+     * Process-scoped on purpose, and it reuses the kids guard's transition rule
+     * rather than counting started Activities again: the app has one Activity per
+     * player engine as well as MainActivity, so "the app came back" is the count
+     * rising off zero, not any single Activity's onStart.
+     */
+    private var foregroundCallbacksRegistered = false
+
+    private fun registerForegroundCallbacks(context: Context) {
+        if (foregroundCallbacksRegistered) return
+        val application =
+            (context.applicationContext as? android.app.Application) ?: return
+        foregroundCallbacksRegistered = true
+        var startedActivities = 0
+        application.registerActivityLifecycleCallbacks(
+            object : android.app.Application.ActivityLifecycleCallbacks {
+                override fun onActivityStarted(activity: android.app.Activity) {
+                    val previous = startedActivities
+                    startedActivities += 1
+                    if (
+                        KidsTimeGuard.foregroundTransition(previous, startedActivities) ==
+                        KidsTimeGuard.ForegroundTransition.FOREGROUNDED
+                    ) {
+                        onAppForeground(activity.applicationContext)
+                    }
+                }
+
+                override fun onActivityStopped(activity: android.app.Activity) {
+                    startedActivities = (startedActivities - 1).coerceAtLeast(0)
+                }
+
+                override fun onActivityCreated(
+                    activity: android.app.Activity,
+                    savedInstanceState: android.os.Bundle?
+                ) = Unit
+
+                override fun onActivityResumed(activity: android.app.Activity) = Unit
+
+                override fun onActivityPaused(activity: android.app.Activity) = Unit
+
+                override fun onActivitySaveInstanceState(
+                    activity: android.app.Activity,
+                    outState: android.os.Bundle
+                ) = Unit
+
+                override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+            }
+        )
+    }
+
+    /**
+     * Liveness hardening for the foreground: the app can come back from hours in
+     * the background with realtime quietly dead — supabase-kt never re-joins a
+     * dropped channel on its own (see [watchRealtimeHealth]) — which is what
+     * "it only syncs after a restart" looks like from the sofa.
+     *
+     * So on every foreground, while signed in:
+     *
+     *  1. the channels are re-joined when none of them is live ([startRealtime]
+     *     with `force`), and
+     *  2. the PREFS table is pulled once — the cheap table, and the one that
+     *     carries the display settings a viewer has just changed on the other TV
+     *     — as the safety net for whatever a dead channel missed.
+     *
+     * Foreground-gated only: deliberately no new periodic timer, and the health
+     * watcher's own backoff budget is untouched.
+     */
+    fun onAppForeground(context: Context) {
+        if (!isSignedIn()) return
+        if (!realtimeLive) startRealtime(force = true)
+        scope.launch {
+            runCatchingCancellable { pullPrefs(context) }
+                .onFailure {
+                    Log.w(TAG, "foreground prefs pull failed: ${Redaction.text(it.message)}")
+                }
         }
     }
 

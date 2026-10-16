@@ -3143,13 +3143,19 @@ fun HomeScreen(
     // settings for the whole session after a switch.
     val activeProfileId = com.kennyb1201.kbstream.data.sync.ProfileManager
         .activeProfile.collectAsStateWithLifecycle().value?.id
-    val showRailType by remember(activeProfileId) {
+    // ...and on the sync revision too, because every one of these is a SYNCED
+    // pref: a value that arrives from the account (a sibling TV changed the
+    // rail labels or the landscape switch) has to re-read here instead of
+    // waiting for the next entry into Home.
+    val syncRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+    val showRailType by remember(activeProfileId, syncRevision) {
         mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
     }
-    val showRailAddon by remember(activeProfileId) {
+    val showRailAddon by remember(activeProfileId, syncRevision) {
         mutableStateOf(AppPreferences.getHomeRailShowAddonName(context))
     }
-    val landscapeCards by remember(activeProfileId) {
+    val landscapeCards by remember(activeProfileId, syncRevision) {
         mutableStateOf(AppPreferences.homeLandscapeActive(context))
     }
     // Profile-gated: rows render only while they belong to the ACTIVE

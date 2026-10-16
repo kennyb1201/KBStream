@@ -86,9 +86,10 @@ class CatalogGridLandscapeContractTest {
         )
         assertTrue(
             "the helper must be the Home one, or the Home-rails switch would " +
-                "reshape nothing here",
+                "reshape nothing here - and it reads it reactively (keyed on the " +
+                "sync revision), because that switch is a synced pref",
             source(TILE_SIZE).contains(
-                "return remember { AppPreferences.homeLandscapeActive(context) }"
+                "return remember(syncedRevision) { AppPreferences.homeLandscapeActive(context) }"
             )
         )
         assertFalse(

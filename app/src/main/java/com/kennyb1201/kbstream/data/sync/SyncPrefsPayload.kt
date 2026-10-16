@@ -28,14 +28,14 @@ import kotlinx.serialization.json.putJsonObject
  * halves of the sync layer — the builder and the applier — need the SAME
  * normalisation, and two copies would drift. (See [IptvConfigRules].)
  */
-private fun iptvSignature(context: Context): String {
+private fun iptvSignature(context: Context, profileId: String? = null): String {
     fun normalised(raw: String?): String =
         raw.orEmpty().split('\n', ';')
             .mapNotNull { it.trim().takeIf(String::isNotBlank) }
             .joinToString(",")
 
-    val prefs = scopedPrefs(context, "iptv_prefs")
-    val guidePrefs = scopedPrefs(context, "iptv_guide_preferences")
+    val prefs = profilePrefs(context, "iptv_prefs", profileId)
+    val guidePrefs = profilePrefs(context, "iptv_guide_preferences", profileId)
     return listOf(
         normalised(prefs.getString("playlist_url", null)),
         prefs.getString("playlist_name", null).orEmpty().trim(),
@@ -58,18 +58,45 @@ private fun scopedPrefs(context: Context, baseName: String) =
     )
 
 /**
+ * [scopedPrefs] for ONE NAMED profile: the store a synced row's OWN key names,
+ * not the one the active profile happens to resolve to.
+ *
+ * This is what lets a realtime row for a profile that is not on screen be
+ * applied to THAT profile's file (see [PrefsPayloadApplier.applyForProfile]) —
+ * ready for the next switch, and never written into the active profile's store.
+ * A null [profileId] is the legacy "no profile system" store, exactly
+ * [scopedPrefs].
+ */
+private fun profilePrefs(context: Context, baseName: String, profileId: String?) =
+    if (profileId == null) {
+        scopedPrefs(context, baseName)
+    } else {
+        context.getSharedPreferences(
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(profileId, baseName),
+            Context.MODE_PRIVATE
+        )
+    }
+
+/**
  * The Simkl session store, which holds a live access token and so lives behind
  * [SecureTokenStore] rather than in plain XML. The name is resolved through
  * ProfileStorage exactly as [scopedPrefs] does, so per-profile scoping is
  * unchanged.
  */
-private fun simklAuthPrefs(context: Context) =
+private fun simklAuthPrefs(context: Context, profileId: String? = null) =
     com.kennyb1201.kbstream.data.security.SecureTokenStore.prefs(
         context,
-        com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-            context,
-            SIMKL_AUTH_STORE
-        ),
+        if (profileId == null) {
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                context,
+                SIMKL_AUTH_STORE
+            )
+        } else {
+            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                profileId,
+                SIMKL_AUTH_STORE
+            )
+        },
         legacyPlaintext = true
     )
 
@@ -887,13 +914,47 @@ object PrefsPayloadApplier {
     // Suspend: the addon applier serializes through AddonManager's apply
     // mutex (shared with auto-update), which can suspend. Every caller is
     // already inside SupabaseSync's coroutine scope.
-    suspend fun apply(context: Context, prefKey: String, payload: JsonObject) {
+    //
+    // The ACTIVE profile's stores. This is the pull path's entry point (a pulled
+    // row was already filtered against the active profile); the realtime path
+    // uses [applyForProfile], because a row that arrives live can belong to a
+    // profile that is not the one on screen.
+    suspend fun apply(context: Context, prefKey: String, payload: JsonObject) =
+        applyForProfile(context, ProfileStorage.activeProfileId(context), prefKey, payload)
+
+    /**
+     * The owning-profile apply: [profileId] is the profile the ROW names (its
+     * key's "p:<profileId>:" scope), and every store this touches is resolved
+     * from it rather than from the active profile.
+     *
+     * Why it exists: a sibling TV's change to a profile that is not active here
+     * used to be dropped outright (`storedKeyApplies`), so "the guest profile's
+     * landscape posters" only appeared on the other TV after a restart — the
+     * cold-start pull is what finally applied the row. Applying it to the
+     * OWNING profile's store instead leaves the change already in place when
+     * that profile is next switched to, and the store is still derived from the
+     * key alone, so the cross-profile leak the old pin guarded against stays
+     * impossible.
+     *
+     * Live side effects — the theme mirrors, the addon manager's in-memory list,
+     * the Simkl caches, an EPG re-schedule — belong to the profile on screen, so
+     * they run only when [profileId] IS the active one. The store writes run
+     * either way: they are what the next switch reads.
+     */
+    suspend fun applyForProfile(
+        context: Context,
+        profileId: String?,
+        prefKey: String,
+        payload: JsonObject
+    ) {
         // Fingerprint BEFORE the apply, but never to SKIP the apply: sync is
         // last-write-wins, so a local edit that diverged from an unchanged
         // server blob still has to be overwritten by the next pull. The apply
         // therefore runs exactly as it did; the fingerprint only answers "did
         // this pull change anything", which is what the revision above reports.
-        val scope = ProfileStorage.activeProfileId(context) ?: "global"
+        // Keyed per profile, because the same key carries a different blob for
+        // each one.
+        val scope = profileId ?: "global"
         val fingerprintKey = "$scope|$prefKey"
         val encoded = payload.toString()
         val changed = synchronized(appliedFingerprints) {
@@ -902,20 +963,29 @@ object PrefsPayloadApplier {
             previous != encoded
         }
 
+        val live = profileId == ProfileStorage.activeProfileId(context)
+
         when (prefKey) {
-            PrefsPayloadBuilder.KEY_DISPLAY_PREFS -> applyDisplayPrefs(context, payload)
-            PrefsPayloadBuilder.KEY_ADDONS -> applyAddons(context, payload)
-            PrefsPayloadBuilder.KEY_SIMKL_AUTH -> applySimklAuth(context, payload)
-            PrefsPayloadBuilder.KEY_API_KEYS -> applyApiKeys(context, payload)
-            PrefsPayloadBuilder.KEY_IPTV -> applyIptv(context, payload)
-            PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES -> applyWatchedOverrides(context, payload)
-            PrefsPayloadBuilder.KEY_HOME_ORDER -> applyHomeOrder(context, payload)
-            PrefsPayloadBuilder.KEY_BROWSE_SHORTCUTS -> applyBrowseShortcuts(context, payload)
-            PrefsPayloadBuilder.KEY_CUSTOM_CATALOGS -> applyCustomCatalogs(context, payload)
-            PrefsPayloadBuilder.KEY_COLLECTIONS -> applyCollections(context, payload)
-            PrefsPayloadBuilder.KEY_BADGE_PACK -> applyBadgePack(context, payload)
-            PrefsPayloadBuilder.KEY_LIBRARY -> applyLibrary(context, payload)
-            PrefsPayloadBuilder.KEY_DISMISSALS -> applyDismissals(context, payload)
+            PrefsPayloadBuilder.KEY_DISPLAY_PREFS ->
+                applyDisplayPrefs(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_ADDONS -> applyAddons(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_SIMKL_AUTH ->
+                applySimklAuth(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_API_KEYS ->
+                applyApiKeys(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_IPTV -> applyIptv(context, payload, profileId, live)
+            PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES ->
+                applyWatchedOverrides(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_HOME_ORDER -> applyHomeOrder(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_BROWSE_SHORTCUTS ->
+                applyBrowseShortcuts(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_CUSTOM_CATALOGS ->
+                applyCustomCatalogs(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_COLLECTIONS ->
+                applyCollections(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_BADGE_PACK -> applyBadgePack(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_LIBRARY -> applyLibrary(context, payload, profileId)
+            PrefsPayloadBuilder.KEY_DISMISSALS -> applyDismissals(context, payload, profileId)
             PrefsPayloadBuilder.KEY_PROFILES ->
                 com.kennyb1201.kbstream.data.sync.ProfileManager.applyProfilesPayload(
                     context, payload
@@ -923,11 +993,13 @@ object PrefsPayloadApplier {
         }
 
         // After the apply, so anything observing the revision reads the
-        // already-updated local stores.
-        if (changed) _revision.value += 1
+        // already-updated local stores. Only a change to the ACTIVE profile's
+        // stores can repaint a screen that is on it: a sibling profile's row is
+        // picked up by the next composition after that profile is switched to.
+        if (changed && live) _revision.value += 1
     }
 
-    private fun applyBadgePack(context: Context, payload: JsonObject) {
+    private fun applyBadgePack(context: Context, payload: JsonObject, profileId: String?) {
         fun str(key: String): String =
             (payload[key] as? kotlinx.serialization.json.JsonPrimitive)?.content.orEmpty()
 
@@ -935,7 +1007,7 @@ object PrefsPayloadApplier {
         val packJson = str("badge_pack_json")
         if (packJson.isBlank()) return
 
-        val prefs = scopedPrefs(context, "kbstream_stream_badges")
+        val prefs = profilePrefs(context, "kbstream_stream_badges", profileId)
         if (packJson == prefs.getString("badge_pack_json", null).orEmpty()) return
 
         prefs.edit()
@@ -950,9 +1022,9 @@ object PrefsPayloadApplier {
      * either device must survive, so the loser of a timestamp race keeps
      * its state and re-pushes on its next edit.
      */
-    private fun applyLibrary(context: Context, payload: JsonObject) {
+    private fun applyLibrary(context: Context, payload: JsonObject, profileId: String?) {
         val remoteUpdated = payloadUpdatedAt(payload)
-        val prefs = scopedPrefs(context, "kbstream_library")
+        val prefs = profilePrefs(context, "kbstream_library", profileId)
         if (remoteUpdated != null &&
             remoteUpdated < prefs.getLong("library_synced_at", 0L)
         ) return
@@ -974,9 +1046,9 @@ object PrefsPayloadApplier {
      * a remote blob older than the newest local dismissal write is
      * rejected so offline dismissals survive.
      */
-    private fun applyDismissals(context: Context, payload: JsonObject) {
+    private fun applyDismissals(context: Context, payload: JsonObject, profileId: String?) {
         val remoteUpdated = payloadUpdatedAt(payload)
-        val prefs = scopedPrefs(context, "continue_watching_dismissals")
+        val prefs = profilePrefs(context, "continue_watching_dismissals", profileId)
         if (remoteUpdated != null &&
             remoteUpdated < prefs.getLong("dismissals_synced_at", 0L)
         ) return
@@ -990,13 +1062,13 @@ object PrefsPayloadApplier {
             .apply()
     }
 
-    private fun applyHomeOrder(context: Context, payload: JsonObject) {
+    private fun applyHomeOrder(context: Context, payload: JsonObject, profileId: String?) {
         val blob = (payload["home_order_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
         // A blank blob is "this device has no arrangement", never "erase
         // yours": adopting it would wipe a real rail order for everyone and
         // read exactly like "it doesn't sync" from the receiving end.
         if (blob.isBlank()) return
-        val prefs = scopedPrefs(context, "kbstream_kb_home_order")
+        val prefs = profilePrefs(context, "kbstream_kb_home_order", profileId)
         val remoteUpdated = payloadUpdatedAt(payload)
         if (remoteUpdated != null && remoteUpdated < prefs.getLong("home_order_synced_at", 0L)) return
 
@@ -1014,7 +1086,7 @@ object PrefsPayloadApplier {
      * the local edit stamp so an older sibling-device copy cannot revert a
      * chip the user just added (the same rule the home order follows).
      */
-    private fun applyBrowseShortcuts(context: Context, payload: JsonObject) {
+    private fun applyBrowseShortcuts(context: Context, payload: JsonObject, profileId: String?) {
         val blob =
             (payload["shortcuts_json"] as? kotlinx.serialization.json.JsonPrimitive)
                 ?.content
@@ -1024,9 +1096,10 @@ object PrefsPayloadApplier {
         if (blob.isBlank()) return
 
         val prefs =
-            scopedPrefs(
+            profilePrefs(
                 context,
-                com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.SYNC_STORE
+                com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.SYNC_STORE,
+                profileId
             )
         val blobKey =
             com.kennyb1201.kbstream.data.kb.BrowseHomeShortcuts.SYNC_BLOB_KEY
@@ -1051,7 +1124,7 @@ object PrefsPayloadApplier {
      * the local edit stamp so an older sibling-device copy cannot revert a
      * catalog the user just built (the same rule the chips follow).
      */
-    private fun applyCustomCatalogs(context: Context, payload: JsonObject) {
+    private fun applyCustomCatalogs(context: Context, payload: JsonObject, profileId: String?) {
         val blob =
             (payload["catalogs_json"] as? kotlinx.serialization.json.JsonPrimitive)
                 ?.content
@@ -1061,9 +1134,10 @@ object PrefsPayloadApplier {
         if (blob.isBlank()) return
 
         val prefs =
-            scopedPrefs(
+            profilePrefs(
                 context,
-                com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.SYNC_STORE
+                com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.SYNC_STORE,
+                profileId
             )
         val blobKey =
             com.kennyb1201.kbstream.data.catalogs.CustomCatalogStore.SYNC_BLOB_KEY
@@ -1089,10 +1163,10 @@ object PrefsPayloadApplier {
      * (see [KBProfilePrefs]) — an imported collection must survive a sibling's
      * older blob, and the device re-pushes its own list on its next import.
      */
-    private fun applyCollections(context: Context, payload: JsonObject) {
+    private fun applyCollections(context: Context, payload: JsonObject, profileId: String?) {
         val arr = payload["profile_urls"] as? kotlinx.serialization.json.JsonArray ?: return
         val urls = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
-        val prefs = scopedPrefs(context, "kbstream_kb_collections")
+        val prefs = profilePrefs(context, "kbstream_kb_collections", profileId)
 
         val remoteUpdated = payloadUpdatedAt(payload)
         if (!HomeListBlobRules.shouldApply(remoteUpdated, prefs.getLong("collections_synced_at", 0L))) {
@@ -1108,8 +1182,13 @@ object PrefsPayloadApplier {
             .apply()
     }
 
-    private fun applyDisplayPrefs(context: Context, payload: JsonObject) {
-        val prefs = scopedPrefs(context, DISPLAY_PREFS_STORE)
+    private fun applyDisplayPrefs(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        val prefs = profilePrefs(context, DISPLAY_PREFS_STORE, profileId)
         val remoteUpdated = payloadUpdatedAt(payload)
         val remoteTimestamps =
             (payload[DisplayPrefsRules.TIMESTAMPS_FIELD] as? JsonObject)
@@ -1209,10 +1288,13 @@ object PrefsPayloadApplier {
         // launch). Re-reading through the theme's own mirror keeps the data
         // layer out of the UI state entirely: whichever values were actually
         // adopted above are now in prefs, and the rest read back unchanged.
-        com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors(context)
+        // Only for the profile on screen: the mirror is the LIVE theme of this
+        // device, and re-reading it for a sibling profile's file would just
+        // overwrite it with the active profile's own values.
+        if (live) com.kennyb1201.kbstream.ui.theme.refreshThemeMirrors(context)
     }
 
-    private suspend fun applyAddons(context: Context, payload: JsonObject) {
+    private suspend fun applyAddons(context: Context, payload: JsonObject, profileId: String?) {
         val addonsJson = (payload["installed_addons_json"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return
         if (addonsJson.isBlank()) return
 
@@ -1233,9 +1315,9 @@ object PrefsPayloadApplier {
         // adopt (identical content, or a local config that wins). This is what
         // lets the publish gate tell "already synced" from "never sent".
         com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context)
-            .observeAddonsCloudEditedAt(remoteEditedAt)
+            .observeAddonsCloudEditedAt(remoteEditedAt, profileId)
 
-        val prefs = scopedPrefs(context, "kbstream_addons")
+        val prefs = profilePrefs(context, "kbstream_addons", profileId)
         val localAddons = prefs.getString("installed_addons_json", null).orEmpty()
         if (addonsJson == localAddons) return
 
@@ -1244,7 +1326,7 @@ object PrefsPayloadApplier {
         // writers would clobber each other's updates.
         try {
             com.kennyb1201.kbstream.data.addon.AddonManager.getInstance(context)
-                .applySyncedAddons(addonsJson, remoteEditedAt)
+                .applySyncedAddons(addonsJson, remoteEditedAt, profileId)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1252,14 +1334,19 @@ object PrefsPayloadApplier {
         }
     }
 
-    private fun applySimklAuth(context: Context, payload: JsonObject) {
+    private fun applySimklAuth(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
         val token = (payload[SIMKL_ACCESS_TOKEN_KEY] as? kotlinx.serialization.json.JsonPrimitive)
             ?.content.orEmpty()
         val signedOut =
             (payload[SimklAuthRules.SIGNED_OUT_FIELD] as? kotlinx.serialization.json.JsonPrimitive)
                 ?.content == "true"
 
-        val prefs = simklAuthPrefs(context)
+        val prefs = simklAuthPrefs(context, profileId)
 
         // Blank token = the profile SIGNED OUT on some device. Honor it — but
         // only when the blob says so explicitly. Every device used to publish
@@ -1270,7 +1357,9 @@ object PrefsPayloadApplier {
             if (!SimklAuthRules.clearsSession(token, signedOut)) return
             if (!prefs.contains(SIMKL_ACCESS_TOKEN_KEY)) return
             prefs.edit().remove(SIMKL_ACCESS_TOKEN_KEY).apply()
-            resetSimklStateAfterTokenChange(context)
+            // The caches below are the ON-SCREEN profile's; a sibling
+            // profile's sign-out must not clear them.
+            if (live) resetSimklStateAfterTokenChange(context)
             return
         }
 
@@ -1287,7 +1376,7 @@ object PrefsPayloadApplier {
             .putString(SIMKL_ACCESS_TOKEN_KEY, token)
             .putBoolean(SimklAuthRules.SIGNED_OUT_FIELD, false)
             .apply()
-        resetSimklStateAfterTokenChange(context)
+        if (live) resetSimklStateAfterTokenChange(context)
     }
 
     /**
@@ -1325,7 +1414,7 @@ object PrefsPayloadApplier {
      * copy carries are touched: a device's own key is never blanked by a blob
      * that simply has no entry for it.
      */
-    private fun applyApiKeys(context: Context, payload: JsonObject) {
+    private fun applyApiKeys(context: Context, payload: JsonObject, profileId: String?) {
         val stamps = payload[ApiKeySyncRules.TIMESTAMPS_FIELD] as? JsonObject ?: return
         val keys = payload[ApiKeySyncRules.KEYS_FIELD] as? JsonObject
         var adopted = false
@@ -1339,24 +1428,30 @@ object PrefsPayloadApplier {
             val remoteEditedAt = (stampValue as? kotlinx.serialization.json.JsonPrimitive)
                 ?.content?.toLongOrNull() ?: return@forEach
             val localEditedAt = com.kennyb1201.kbstream.data.settings.AppPreferences
-                .apiKeyEditedAt(context, name)
+                .apiKeyEditedAt(context, name, profileId)
             if (!ApiKeySyncRules.remoteKeyWins(remoteEditedAt, localEditedAt)) return@forEach
             val value = (keys?.get(name) as? kotlinx.serialization.json.JsonPrimitive)
                 ?.content.orEmpty()
             com.kennyb1201.kbstream.data.settings.AppPreferences
-                .adoptApiKeyFromSync(context, name, value, remoteEditedAt)
+                .adoptApiKeyFromSync(context, name, value, remoteEditedAt, profileId)
             adopted = true
         }
         if (adopted) {
             com.kennyb1201.kbstream.data.settings.AppPreferences.markApiKeysAdopted(
                 context,
-                payloadUpdatedAt(payload) ?: System.currentTimeMillis()
+                payloadUpdatedAt(payload) ?: System.currentTimeMillis(),
+                profileId
             )
         }
     }
 
-    private fun applyIptv(context: Context, payload: JsonObject) {
-        val prefs = scopedPrefs(context, "iptv_prefs")
+    private fun applyIptv(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?,
+        live: Boolean
+    ) {
+        val prefs = profilePrefs(context, "iptv_prefs", profileId)
         val remoteUpdated = payloadUpdatedAt(payload)
         // A remote config wins only when its edit is strictly NEWER than this
         // profile's own last edit here — not, as it used to be, when it beat
@@ -1403,7 +1498,7 @@ object PrefsPayloadApplier {
         // Guide-level sets: full replace when present (a device that un-hid
         // a group should propagate the un-hide), guarded by the same
         // iptv_synced_at staleness check above.
-        val guidePrefs = scopedPrefs(context, "iptv_guide_preferences")
+        val guidePrefs = profilePrefs(context, "iptv_guide_preferences", profileId)
         val guideEditor = guidePrefs.edit()
         var guideChanged = false
         (payload["hidden_groups"] as? kotlinx.serialization.json.JsonArray)?.let { arr ->
@@ -1427,10 +1522,15 @@ object PrefsPayloadApplier {
         // holds, so the next build's change tracker does not read the adoption
         // as a change of ours and echo the same config back with a new stamp
         // (the same "adopt, do not echo" rule the addons blob follows).
-        prefs.edit().putString(IPTV_SNAPSHOT_KEY, iptvSignature(context)).apply()
+        prefs.edit().putString(IPTV_SNAPSHOT_KEY, iptvSignature(context, profileId)).apply()
 
-        // Trigger IPTV reload if the source actually changed.
-        if (playlistUrl.isNotBlank() && playlistUrl != prefs.getString("playlist_applied_url", null)) {
+        // Trigger IPTV reload if the source actually changed. The re-schedule is
+        // the on-screen profile's EPG: a sibling profile's config write waits
+        // for that profile's own activation to schedule its guide.
+        if (live &&
+            playlistUrl.isNotBlank() &&
+            playlistUrl != prefs.getString("playlist_applied_url", null)
+        ) {
             prefs.edit().putString("playlist_applied_url", playlistUrl).apply()
             runCatching {
                 com.kennyb1201.kbstream.data.iptv.EpgRefreshScheduler.schedule(context)
@@ -1438,11 +1538,15 @@ object PrefsPayloadApplier {
         }
     }
 
-    private fun applyWatchedOverrides(context: Context, payload: JsonObject) {
+    private fun applyWatchedOverrides(
+        context: Context,
+        payload: JsonObject,
+        profileId: String?
+    ) {
         val arr = payload["overrides"] as? kotlinx.serialization.json.JsonArray ?: return
         val set = arr.mapNotNull { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }.toSet()
 
-        val prefs = scopedPrefs(context, WatchedOverridesRules.STORE)
+        val prefs = profilePrefs(context, WatchedOverridesRules.STORE, profileId)
         val deliberateClear =
             (payload[WatchedOverridesRules.CLEARED_FIELD]
                 as? kotlinx.serialization.json.JsonPrimitive)

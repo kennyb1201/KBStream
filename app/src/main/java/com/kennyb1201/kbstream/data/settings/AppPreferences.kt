@@ -137,6 +137,26 @@ object AppPreferences {
             Context.MODE_PRIVATE
         )
 
+    /**
+     * [prefs] for ONE NAMED profile, for the sync layer's owning-profile apply
+     * ([com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier.applyForProfile]):
+     * a realtime row for a profile that is not the active one must be applied to
+     * THAT profile's store, never the one on screen. A null [profileId] is the
+     * active profile, exactly [prefs].
+     */
+    private fun prefs(context: Context, profileId: String?): SharedPreferences =
+        if (profileId == null) {
+            prefs(context)
+        } else {
+            context.getSharedPreferences(
+                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                    profileId,
+                    PREFS_NAME
+                ),
+                Context.MODE_PRIVATE
+            )
+        }
+
     // ── Buffer mode ──────────────────────────────────────────────────
     fun getDefaultBufferMode(context: Context): Int =
         prefs(context).getInt(KEY_DEFAULT_BUFFER_MODE, 0)
@@ -1391,12 +1411,23 @@ object AppPreferences {
      * profile keeps its own keys.
      */
     private fun apiKeyPrefs(context: Context): SharedPreferences =
+        apiKeyPrefs(context, null)
+
+    /** [apiKeyPrefs] for ONE NAMED profile (see [prefs]' own overload). */
+    private fun apiKeyPrefs(context: Context, profileId: String?): SharedPreferences =
         SecureTokenStore.prefs(
             context,
-            com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
-                context,
-                "kbstream_api_keys"
-            )
+            if (profileId == null) {
+                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                    context,
+                    "kbstream_api_keys"
+                )
+            } else {
+                com.kennyb1201.kbstream.data.sync.ProfileStorage.prefsName(
+                    profileId,
+                    "kbstream_api_keys"
+                )
+            }
         )
 
     /**
@@ -1446,8 +1477,8 @@ object AppPreferences {
      * never edited has no opinion about it, and must not overwrite the account's
      * copy with the blank it holds.
      */
-    fun apiKeyEditedAt(context: Context, keyName: String): Long =
-        apiKeyPrefs(context).getLong(apiKeySyncStampKey(keyName), 0L)
+    fun apiKeyEditedAt(context: Context, keyName: String, profileId: String? = null): Long =
+        apiKeyPrefs(context, profileId).getLong(apiKeySyncStampKey(keyName), 0L)
 
     /** Records a local edit of [keyName]. */
     fun stampApiKeyEdit(context: Context, keyName: String, at: Long) {
@@ -1485,8 +1516,14 @@ object AppPreferences {
      * as the remote sent them, so the pull is never mistaken for a local edit
      * (the same "adopt, do not echo" rule the other blobs follow).
      */
-    fun adoptApiKeyFromSync(context: Context, keyName: String, value: String, editedAt: Long) {
-        apiKeyPrefs(context).edit()
+    fun adoptApiKeyFromSync(
+        context: Context,
+        keyName: String,
+        value: String,
+        editedAt: Long,
+        profileId: String? = null
+    ) {
+        apiKeyPrefs(context, profileId).edit()
             .putString(keyName, value.trim())
             .putLong(apiKeySyncStampKey(keyName), editedAt)
             .apply()
@@ -1497,7 +1534,7 @@ object AppPreferences {
         // clear that slot out from under a migration the device has not run yet,
         // or the viewer's ratings key would be lost.
         if (keyName != KEY_OMDB_API_KEY) {
-            prefs(context).edit().remove(keyName).apply()
+            prefs(context, profileId).edit().remove(keyName).apply()
         }
     }
 
@@ -1508,8 +1545,8 @@ object AppPreferences {
     fun apiKeysCloudAt(context: Context): Long =
         apiKeyPrefs(context).getLong(KEY_API_KEYS_SYNCED_AT, 0L)
 
-    fun markApiKeysAdopted(context: Context, at: Long) {
-        apiKeyPrefs(context).edit().putLong(KEY_API_KEYS_SYNCED_AT, at).apply()
+    fun markApiKeysAdopted(context: Context, at: Long, profileId: String? = null) {
+        apiKeyPrefs(context, profileId).edit().putLong(KEY_API_KEYS_SYNCED_AT, at).apply()
     }
 
     // ── MDBList API key (critic ratings: IMDb / RT / Metacritic / more) ─

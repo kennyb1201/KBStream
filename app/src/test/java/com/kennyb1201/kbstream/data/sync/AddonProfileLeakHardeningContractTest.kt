@@ -172,12 +172,19 @@ class AddonProfileLeakHardeningContractTest {
 
         val apply = body(addon, "suspend fun applySyncedAddons(")
         assertTrue(
-            "a cloud apply resolves the profile ONCE at entry",
-            apply.contains("val profileId = activeStoreProfileId()")
+            "a cloud apply takes the profile it was given ONCE, defaulting to the " +
+                "active one for the pull path",
+            apply.contains("targetProfileId: String? = activeStoreProfileId()") &&
+                apply.contains("val profileId = targetProfileId")
         )
         assertTrue(
             "and writes that same profile's store, not the current one",
             apply.contains("addonPrefs(profileId)")
+        )
+        assertTrue(
+            "the in-memory list is only reloaded for the profile on screen: a " +
+                "sibling's blob lives in its own store until that profile is entered",
+            apply.contains("if (profileId == activeStoreProfileId())")
         )
     }
 

@@ -682,10 +682,15 @@ private fun FollowHomeLayout(
     onRetryFolder: () -> Unit
 ) {
     val context = LocalContext.current
-    val showLandscapeCards = remember {
+    // Both of these are SYNCED prefs, so the read is keyed on the sync revision:
+    // a change that arrives from the account reaches an open folder instead of
+    // waiting for it to be left and re-entered (see PrefsPayloadApplier.revision).
+    val syncRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+    val showLandscapeCards = remember(syncRevision) {
         AppPreferences.homeLandscapeActive(context)
     }
-    val showRailType = remember {
+    val showRailType = remember(syncRevision) {
         AppPreferences.getHomeRailShowCatalogType(context)
     }
 
@@ -861,10 +866,15 @@ private fun RowsLayout(
     onRetryFolder: () -> Unit
 ) {
     val context = LocalContext.current
-    val showLandscapeCards = remember {
+    // Both of these are SYNCED prefs, so the read is keyed on the sync revision:
+    // a change that arrives from the account reaches an open folder instead of
+    // waiting for it to be left and re-entered (see PrefsPayloadApplier.revision).
+    val syncRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+    val showLandscapeCards = remember(syncRevision) {
         AppPreferences.homeLandscapeActive(context)
     }
-    val showRailType = remember {
+    val showRailType = remember(syncRevision) {
         AppPreferences.getHomeRailShowCatalogType(context)
     }
 

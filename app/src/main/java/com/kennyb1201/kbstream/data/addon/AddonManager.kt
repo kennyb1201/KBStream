@@ -1178,13 +1178,23 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      * [applyMutex] as auto-update applies: both replace/merge the full addon
      * list, and unserialized writers would clobber each other's updates.
      */
-    suspend fun applySyncedAddons(addonsJson: String, remoteEditedAt: Long = 0L) {
+    suspend fun applySyncedAddons(
+        addonsJson: String,
+        remoteEditedAt: Long = 0L,
+        /**
+         * The profile the blob BELONGS to — the profile id its sync row's key is
+         * scoped to, resolved by the caller. Defaults to the active profile (the
+         * pull path, whose rows were already filtered against it); the realtime
+         * path passes the row's own owner, so a sibling profile's addon set is
+         * written into THAT profile's store (see
+         * com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier.applyForProfile).
+         * Named explicitly because the row was fetched earlier, and the ambient
+         * profile can have changed since.
+         */
+        targetProfileId: String? = activeStoreProfileId()
+    ) {
         applyMutex.withLock {
-            // The pull filters cloud rows by profile scope, so this blob
-            // belongs to whichever profile is active now. Resolve it here and
-            // name it explicitly instead of resolving the ambient profile at
-            // prefs-write time — the row was fetched earlier.
-            val profileId = activeStoreProfileId()
+            val profileId = targetProfileId
             val store = addonPrefs(profileId)
             val localEditedAt = store.getLong(KEY_CONFIG_EDITED_AT, 0L)
 
@@ -1220,8 +1230,13 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             }
             adoption.apply()
 
-            synchronized(stateLock) {
-                loadForLocked(profileId)
+            // Reloading the in-memory list is for the profile ON SCREEN: a
+            // sibling profile's blob lives in its own store, and that profile's
+            // activation loads it from there.
+            if (profileId == activeStoreProfileId()) {
+                synchronized(stateLock) {
+                    loadForLocked(profileId)
+                }
             }
         }
     }
@@ -1467,8 +1482,12 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
      * than advanced at push time: a push that never reached the cloud (an app
      * kill mid-flush) must not silence the next attempt.
      */
-    fun observeAddonsCloudEditedAt(remoteEditedAt: Long) {
-        val store = addonPrefs(activeStoreProfileId())
+    fun observeAddonsCloudEditedAt(
+        remoteEditedAt: Long,
+        /** The profile the cloud blob belongs to; null = the active profile. */
+        profileId: String? = activeStoreProfileId()
+    ) {
+        val store = addonPrefs(profileId)
         if (remoteEditedAt > store.getLong(KEY_CONFIG_CLOUD_AT, 0L)) {
             store.edit().putLong(KEY_CONFIG_CLOUD_AT, remoteEditedAt).apply()
         }

@@ -77,7 +77,7 @@ class ImageOverrideSyncWiringContractTest {
 
     @Test
     fun `realtime subscribes to four tables and says so`() {
-        val start = body(sync, "private fun startRealtime()", 2_000)
+        val start = body(sync, "private fun startRealtime(force: Boolean = false) {", 2_000)
         assertTrue(
             "the new table must be in the subscription list, or changes only " +
                 "arrive on the next full pull",
