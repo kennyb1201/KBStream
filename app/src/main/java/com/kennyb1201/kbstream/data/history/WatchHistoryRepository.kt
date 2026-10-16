@@ -39,11 +39,14 @@ class WatchHistoryRepository(private val appContext: Context) {
         WatchHistoryDatabase.observeScopedDao(appContext) { it.observeContinueWatchingParents() }
 
     suspend fun upsert(entry: WatchHistoryEntity) {
-        // Enqueued outside the retry: the outbox is keyed by row id, so a
-        // re-enqueue would be harmless, but the sync side is not what a swap
-        // interrupted.
-        SupabaseSync.enqueueHistory(entry)
+        // The LOCAL write runs first: this used to enqueue the outbox row before
+        // the DB write, so a write that then failed (a swap, an unavailable
+        // profile DB) left a queued cloud copy of a row that does not exist
+        // locally - a ghost resume card on the next pull. With the order
+        // reversed, a failed local write enqueues nothing. The outbox is keyed
+        // by row id, so a re-enqueue would still be harmless.
         WatchHistoryDatabase.withScopedDao(appContext) { it.upsert(entry) }
+        SupabaseSync.enqueueHistory(entry)
     }
 
     suspend fun getById(id: String): WatchHistoryEntity? =

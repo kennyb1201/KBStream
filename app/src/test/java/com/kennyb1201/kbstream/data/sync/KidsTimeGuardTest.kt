@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.data.sync
 
 import com.kennyb1201.kbstream.data.sync.KidsTimeGuard.ForegroundTransition
+import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -70,6 +72,43 @@ class KidsTimeGuardTest {
         assertEquals(
             ForegroundTransition.NONE,
             KidsTimeGuard.foregroundTransition(3, 3)
+        )
+    }
+
+    /**
+     * The persisted day counter is written by the ticker (Dispatchers.Default)
+     * and read on the MAIN thread by the lock snapshot and the overlay, so the
+     * fields need @Volatile: without it a main-thread read can see the previous
+     * day's key with this day's minutes, which shows yesterday's usage and a
+     * locked state that never lifts. Pinned at the source because JVM visibility
+     * has no observable outcome in a single-threaded unit test.
+     */
+    @Test
+    fun `the ticker's counters are visible across threads`() {
+        val file = File(findSourceRoot(),
+            "com/kennyb1201/kbstream/data/sync/KidsTimeGuard.kt")
+        assertTrue("source missing: $file", file.isFile)
+        val src = file.readText()
+        listOf("dayKey", "todayMinutes", "profileIdForCounter").forEach { field ->
+            assertTrue(
+                "$field is written by the ticker and read on the main thread",
+                Regex("@Volatile\\s+private var $field\\b").containsMatchIn(src)
+            )
+        }
+    }
+
+    private fun findSourceRoot(): File {
+        val prefixes = listOf("", "app/")
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (dir != null) {
+            prefixes.forEach { prefix ->
+                val candidate = File(dir, "${prefix}src/main/java")
+                if (candidate.isDirectory) return candidate
+            }
+            dir = dir.parentFile
+        }
+        throw AssertionError(
+            "main source root not found walking up from " + System.getProperty("user.dir")
         )
     }
 }

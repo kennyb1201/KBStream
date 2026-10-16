@@ -226,18 +226,49 @@ class DolbyVisionHevcCodecFromSpsTest {
     }
 
     @Test
-    fun `the codec string is not leaked into the mutating strip path`() {
+    fun `the mutating strip advertises the codec its rewritten config declares`() {
         val factory = source(FACTORY)
-        // The mutating strip (no DV decoder) keeps the shipping guess: only the
-        // relabel may advertise the SPS-derived string.
+        // This arm rewrites the codec config's VPS AND SPS (rewriteInitData ->
+        // rewriteInitDataVps -> rewriteCodecConfig), so the string it advertises
+        // has to come from that REWRITTEN config: the pre-rewrite csd SPS names
+        // the source's proprietary DV profile / tier, which nothing this path
+        // sends carries any more, and the bare `hvc1.2.4.L153.B0` guess names a
+        // level the rewritten SPS does not (5.1 beside an SPS saying 5.0 is the
+        // advertised-string-vs-SPS stall this file exists for).
         val start = factory.indexOf("val stripped = runCatching {")
         assertTrue("the mutating strip block not found", start >= 0)
         val end = factory.indexOf("val strippedFormat =", start)
         assertTrue("the mutating strip block end not found", end > start)
         val mutatingStrip = factory.substring(start, end)
+        val rewrite = mutatingStrip.indexOf("rewriteInitData(format.initializationData)")
+        val derive = mutatingStrip.indexOf("hevcCodecFromInitData(rewrittenInitData)")
+        val advertise = mutatingStrip.indexOf("setCodecs(")
+        assertTrue("the config must be rewritten in this block", rewrite >= 0)
+        assertTrue(
+            "the advertised string must be derived from the rewritten config",
+            derive > rewrite
+        )
+        assertTrue(
+            "and derived BEFORE it is advertised",
+            advertise > derive
+        )
+        assertTrue(
+            "the guess must survive only as the fallback for a config with no SPS",
+            mutatingStrip.contains("?: rewriteCodec")
+        )
+        // Both wrong shapes: the bare guess, and a string derived from the
+        // pre-rewrite source csd.
         assertFalse(
-            "the mutating strip must keep rewriteCodec/HDR10_CODEC",
-            mutatingStrip.contains("relabelCodec") || mutatingStrip.contains("spsCodec")
+            "the mutating strip must not advertise the bare L153 guess",
+            mutatingStrip.contains("setCodecs(rewriteCodec)")
+        )
+        assertFalse(
+            "and must not derive its string from the pre-rewrite csd",
+            mutatingStrip.contains("hevcCodecFromInitData(format.initializationData)")
+        )
+        assertFalse(
+            "nor from the source SPS the relabel arms advertise",
+            mutatingStrip.contains("setCodecs(relabelCodec)")
         )
     }
 

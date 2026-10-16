@@ -2291,14 +2291,24 @@ class MpvPlayerView @JvmOverloads constructor(
             SubtitleKindRules.of(track.title).contains(SubtitleKindRules.SDH)
 
         /**
-         * A full, non-forced translation: its title names neither SDH nor the
-         * forced / signs kind. An untitled track counts as regular, exactly as
-         * the ExoPlayer untagged bucket ranks an unnamed track.
+         * A full, non-forced translation: its title names neither SDH, the
+         * forced / signs kind, a commentary, nor a machine translation. An
+         * untitled track counts as regular, exactly as the ExoPlayer untagged
+         * bucket ranks an unnamed track.
+         *
+         * Commentary and MT are excluded because neither is the film's own
+         * dialogue as translated: a commentary track and a machine-translated
+         * one both read as "regular" and could out-rank a plain full track in
+         * the same language. When they are the only match they still win via
+         * the caller's final `?:` fallback, so nothing is dropped - only the
+         * ordering between an honest track and these changes.
          */
         fun isRegularTitle(track: Track): Boolean {
             val kinds = SubtitleKindRules.of(track.title)
             return !kinds.contains(SubtitleKindRules.SDH) &&
-                !kinds.contains(SubtitleKindRules.FORCED)
+                !kinds.contains(SubtitleKindRules.FORCED) &&
+                !kinds.contains(SubtitleKindRules.COMMENTARY) &&
+                !kinds.contains(SubtitleKindRules.MT)
         }
 
         /**

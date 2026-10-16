@@ -914,16 +914,29 @@ private class VideoCompatTrackOutput(
             // format through and let the ladder move on (another renderer,
             // the FFmpeg software path, the MPV engine).
             val stripped = runCatching {
-                // Deliberately the GUESSED string, not the SPS-derived relabel
-                // string: in THIS arm the mutating strip rewrites the codec
-                // config's own parameter sets too (see rewriteInitData below)
-                // and transformAnnexB rewrites the in-sample ones, so an
-                // SPS-derived string taken from the PRE-rewrite csd SPS would
-                // describe a parameter set this path no longer sends. Only the
-                // relabel arms, which keep the config SPS byte-identical, may
-                // advertise the SPS-derived string (see
-                // [DolbyVisionHevcCodecFromSpsTest]).
-                var builder = format.buildUpon().setCodecs(rewriteCodec)
+                // The advertised string has to describe the parameter sets this
+                // path actually SENDS. The mutating strip rewrites the codec
+                // config's VPS *and* SPS ([rewriteInitData] ->
+                // DolbyVisionCompat.rewriteInitDataVps -> rewriteCodecConfig,
+                // whose rewriteSpsToHdr10 patches the SPS
+                // general_profile_tier_level to clean Main10 / Main tier) and
+                // transformAnnexB rewrites the in-sample sets too, so the
+                // shipping `hvc1.2.4.L153.B0` guess has to agree with that
+                // rewritten SPS's level: advertising 5.1 beside an SPS saying
+                // 5.0 is the same advertised-string-vs-SPS disagreement the two
+                // relabel arms closed, and a decoder that verifies the two
+                // before emitting output takes the frame and produces nothing.
+                //
+                // Derived from the REWRITTEN config and not from the pre-rewrite
+                // csd SPS: the source PTL of a declared-DV track routinely names
+                // a proprietary profile / High tier that this path no longer
+                // sends, so a string taken from it would advertise a parameter
+                // set the decoder never sees. The guess stays the fallback for
+                // the containers whose rewritten config carries no parseable SPS.
+                val rewrittenInitData = rewriteInitData(format.initializationData)
+                val advertisedCodec =
+                    DolbyVisionCompat.hevcCodecFromInitData(rewrittenInitData) ?: rewriteCodec
+                var builder = format.buildUpon().setCodecs(advertisedCodec)
                 // Keep the original declared DV codec (e.g. "dvhe.08.06") on the
                 // label so the player UI can badge the profile playing as HDR10.
                 if (!format.codecs.isNullOrBlank()) {
@@ -932,9 +945,7 @@ private class VideoCompatTrackOutput(
                 if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
                     builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
                 }
-                builder = builder.setInitializationData(
-                    rewriteInitData(format.initializationData)
-                )
+                builder = builder.setInitializationData(rewrittenInitData)
                 // The rewritten format must carry explicit HDR10 color metadata,
                 // same as the general strip path below — declared DV tracks don't
                 // reliably have Format.colorInfo populated coming out of the

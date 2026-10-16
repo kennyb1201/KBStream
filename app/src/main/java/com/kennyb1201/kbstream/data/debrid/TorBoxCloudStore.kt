@@ -26,21 +26,39 @@ internal class TorBoxCloudStore(context: Context) {
     )
 
     /** Torrent ids already dealt with by a previous round. */
+    @Synchronized
     fun processed(): Set<Long> =
         prefs.getStringSet(KEY_PROCESSED, emptySet()).orEmpty()
             .mapNotNull { it.toLongOrNull() }
             .toSet()
 
+    /**
+     * Records [torrentId] as handled. Synchronized because the library sync can
+     * run from more than one place (launch, the schedule, a manual "sync now"),
+     * and the read-modify-write here would otherwise drop one round's ids when
+     * two overlap.
+     */
+    @Synchronized
     fun markProcessed(torrentId: Long) {
         val updated = processed().toMutableSet()
         if (!updated.add(torrentId)) return
+        // Cap the set so a very large library cannot grow the persisted set
+        // without bound. Ids are unordered in a StringSet, so the overflow is
+        // dropped arbitrarily: those torrents are simply re-checked once.
+        val capped =
+            if (updated.size > MAX_PROCESSED) {
+                updated.toList().takeLast(MAX_PROCESSED).toMutableSet()
+            } else {
+                updated
+            }
         prefs.edit()
-            .putStringSet(KEY_PROCESSED, updated.map { it.toString() }.toSet())
+            .putStringSet(KEY_PROCESSED, capped.map { it.toString() }.toSet())
             .apply()
     }
 
     companion object {
         private const val PREFS_NAME = "kbstream_debrid"
         private const val KEY_PROCESSED = "torbox_library_processed"
+        private const val MAX_PROCESSED = 5000
     }
 }

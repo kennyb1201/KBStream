@@ -32,6 +32,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.io.File
 import java.net.ConnectException
+import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -549,9 +550,11 @@ internal object AddonSubtitleSource {
                 Uri.fromFile(file)
             }
         } catch (e: Exception) {
-            // Only a failure to ESTABLISH the connection blackholes the host.
-            // An HTTP 500 or a corrupt body is that track's problem, not the
-            // host's, and must not hide its other subtitles.
+            // Only a HOST-level failure blackholes the host: one that refused,
+            // does not resolve, stalls without ever answering, or never
+            // finished its TLS handshake. An HTTP 500 or a corrupt body is
+            // that track's problem, not the host's, and must not hide its
+            // other subtitles.
             val failedHost = host
             if (failedHost != null && isConnectionFailure(e)) {
                 deadHosts[failedHost] = SystemClock.elapsedRealtime()
@@ -562,17 +565,29 @@ internal object AddonSubtitleSource {
     }
 
     /**
-     * True when [e] is a failure to establish the connection, as opposed to
-     * one that arrived after it: refused, unresolvable, or a TLS handshake
-     * that never completed. Precisely the failures that say something about
-     * the HOST rather than about the file being fetched.
+     * True when [e] says something about the HOST rather than about the file
+     * being fetched: it refused the connection, does not resolve, timed out
+     * (connect or read - the accept-then-stall shape, where the connection is
+     * up and nothing ever answers), or never finished its TLS handshake.
+     *
+     * [SocketTimeoutException] belongs here and used to be missing. It is the
+     * accept-then-stall host's own exception: one such host was re-attempted
+     * once per track of every picker open instead of being parked with the
+     * other dead hosts, which is the whole reason the memo exists. A per-read
+     * timeout cannot be told apart from a slow host at this level, and
+     * [DEAD_HOST_TTL_MS] bounds the cost of that: the host gets another chance
+     * ten minutes later. The download client's own call timeout - a server that
+     * IS answering, just not fast enough to finish a subtitle inside 30 s -
+     * throws its parent `InterruptedIOException` and is deliberately NOT in the
+     * set: that host is slow, not dead.
      *
      * `internal` rather than private so the classification itself is unit
      * tested: the rule that an HTTP 500 must NOT blackhole a host is the whole
      * reason this is a named predicate instead of an inline `is` chain.
      */
     internal fun isConnectionFailure(e: Exception): Boolean =
-        e is ConnectException || e is UnknownHostException || e is SSLException
+        e is ConnectException || e is UnknownHostException ||
+            e is SocketTimeoutException || e is SSLException
 }
 
 /**

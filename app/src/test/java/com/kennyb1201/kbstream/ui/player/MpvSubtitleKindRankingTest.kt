@@ -104,6 +104,42 @@ class MpvSubtitleKindRankingTest {
     }
 
     @Test
+    fun `a commentary or machine-translated track is not a regular pick`() {
+        // Neither is the film's own dialogue as translated, and both used to
+        // read as "regular" - so a commentary or MT track listed first beat the
+        // plain full translation beside it in the same language.
+        listOf(
+            "English Commentary",
+            "Commentary with the director",
+            "English (Machine Translated)",
+            "English MT"
+        ).forEach {
+            assertFalse(
+                "a track titled \"$it\" is not the film's own translation",
+                MpvPlayerView.isRegularTitle(track(title = it))
+            )
+        }
+        assertTrue(
+            "the plain translation beside them is still the regular pick",
+            MpvPlayerView.isRegularTitle(track(title = "English"))
+        )
+    }
+
+    @Test
+    fun `a commentary track loses to the plain translation beside it`() {
+        val matches = listOf(track(title = "English Commentary"), track(title = "English"))
+        assertEquals(matches[1], MpvPlayerView.rankedSubtitleMatch(matches))
+    }
+
+    @Test
+    fun `a commentary track alone still falls back to the first match`() {
+        // The ranking reorders, it never drops: a file whose only English track
+        // is a commentary still gets it.
+        val matches = listOf(track(title = "English Commentary"))
+        assertEquals(matches[0], MpvPlayerView.rankedSubtitleMatch(matches))
+    }
+
+    @Test
     fun `no matches means no pick`() {
         assertNull(MpvPlayerView.rankedSubtitleMatch(emptyList()))
     }

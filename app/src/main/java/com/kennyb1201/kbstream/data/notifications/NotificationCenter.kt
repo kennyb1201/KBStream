@@ -33,6 +33,13 @@ internal object NotificationCenter {
 
     private const val TAG = "NOTIFICATIONS"
 
+    /**
+     * Ceiling on a crest download. A crest is a few KB; anything past this is a
+     * misconfigured or hostile URL, and `response.body.bytes()` (the whole body
+     * into one array) would have read it into memory unbounded before decoding.
+     */
+    private const val MAX_CREST_BYTES = 512L * 1024L
+
     const val CHANNEL_NEW_EPISODES = "new_episodes"
     const val CHANNEL_LIVE_REMINDERS = "live_reminders"
     const val CHANNEL_GAME_REMINDERS = "game_reminders"
@@ -283,7 +290,11 @@ internal object NotificationCenter {
             val request = Request.Builder().url(href).get().build()
             logoClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@runCatching null
-                val bytes = response.body.bytes()
+                // Read at most [MAX_CREST_BYTES], whatever the Content-Length
+                // (which may be absent on a chunked response) says.
+                val source = response.body.source()
+                source.request(MAX_CREST_BYTES)
+                val bytes = source.readByteArray(minOf(source.buffer.size, MAX_CREST_BYTES))
                 BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             }
         }.getOrNull()

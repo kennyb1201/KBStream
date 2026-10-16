@@ -160,15 +160,19 @@ class AddonSubtitleBulkDownloadContractTest {
     }
 
     @Test
-    fun `the failure classification is exactly the connection-establishment set`() {
+    fun `the failure classification is the dead-host set`() {
         assertTrue(AddonSubtitleSource.isConnectionFailure(ConnectException("refused")))
         assertTrue(AddonSubtitleSource.isConnectionFailure(UnknownHostException("no dns")))
         assertTrue(AddonSubtitleSource.isConnectionFailure(SSLException("handshake")))
+        assertTrue(
+            "a host that takes the connection and then never answers is the shape the memo is " +
+                "for: without it that host is re-attempted once per track of every picker open",
+            AddonSubtitleSource.isConnectionFailure(SocketTimeoutException("read timed out"))
+        )
         assertFalse(
             "an IO failure after the connection is up is the track's problem, not the host's",
             AddonSubtitleSource.isConnectionFailure(IOException("http 500"))
         )
-        assertFalse(AddonSubtitleSource.isConnectionFailure(SocketTimeoutException("read timed out")))
         assertFalse(AddonSubtitleSource.isConnectionFailure(RuntimeException("corrupt body")))
     }
 

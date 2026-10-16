@@ -84,9 +84,21 @@ object KidsTimeGuard {
     )
     private var tickerJob: kotlinx.coroutines.Job? = null
 
-    // Per-profile persisted minute counters: { day: "yyyyMMdd", mins: Int }
+    // Per-profile persisted minute counters: { day: "yyyyMMdd", mins: Int }.
+    //
+    // @Volatile: the accumulation ticker runs on Dispatchers.Default and these
+    // are read on the main thread (the lock snapshot [state] and [enforceLock]).
+    // Without it a main-thread read can observe a stale day/counter while the
+    // ticker has already rolled over, so the overlay shows yesterday's minutes
+    // or a lock that never lifts. The ticker is one coroutine, so its own
+    // writes are ordered; only cross-thread visibility is what these need.
+    @Volatile
     private var dayKey: String? = null
+
+    @Volatile
     private var todayMinutes: Int = 0
+
+    @Volatile
     private var profileIdForCounter: String? = null
 
     /** Set by MainActivity so the guard can persist without a Context leak. */

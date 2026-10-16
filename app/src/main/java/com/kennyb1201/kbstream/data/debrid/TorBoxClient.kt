@@ -76,6 +76,23 @@ internal object TorBoxClient {
     private val cache = ConcurrentHashMap<String, Entry>()
 
     /**
+     * Ceiling on the memo, so browsing many titles cannot grow it without
+     * bound. Past this the expired entries go first; if that is not enough, the
+     * oldest go too, and those hashes are simply re-queried once.
+     */
+    private const val MAX_CACHE_ENTRIES = 2000
+
+    private fun pruneCache(nowMs: Long) {
+        if (cache.size <= MAX_CACHE_ENTRIES) return
+        cache.entries.removeIf { nowMs - it.value.atMs >= CACHE_TTL_MS }
+        if (cache.size <= MAX_CACHE_ENTRIES) return
+        cache.entries
+            .sortedBy { it.value.atMs }
+            .take(cache.size - MAX_CACHE_ENTRIES)
+            .forEach { cache.remove(it.key) }
+    }
+
+    /**
      * The subset of [hashes] TorBox reports as cached. Empty when no key is set,
      * the list carries no usable hashes, or every request failed — in which case
      * nothing is badged and the picker is exactly as it was before this existed.
@@ -102,6 +119,7 @@ internal object TorBoxClient {
                 val result = runCatching { query(apiKey, batch) }.getOrNull() ?: return@forEach
                 val stamp = System.currentTimeMillis()
                 batch.forEach { hash -> cache[hash] = Entry(cached = hash in result, atMs = stamp) }
+                pruneCache(stamp)
             }
 
             val at = System.currentTimeMillis()
