@@ -106,8 +106,83 @@ object BrowseReturnFocus {
  * [revealBrowseReturnRail]) - and a request against a card that is not composed
  * yet is a silent miss (`requestFocus()` returns false). The budget is the
  * detail page's own for the same race, long enough for two scrolls to settle.
+ *
+ * It counts LANDING TRIES - the recorded rail is on screen, a request was made,
+ * and it missed - and never the WAITING for that rail to arrive at all. That
+ * wait is bounded by [BROWSE_RETURN_WAIT_MS], and spending landing tries on it
+ * is how a genre page whose pressed rail built slower than its other rails ran
+ * the budget out on unrelated arrivals and fell through to its own first card
+ * (see [browseReturnDecision]).
  */
 internal const val BROWSE_RETURN_FOCUS_STEPS = 12
+
+/**
+ * How long a browse page holds its Detail-return record waiting for the rail
+ * that card sits in, before it gives up and takes its own first card.
+ *
+ * The rails stream in one at a time and the pressed rail is not always early,
+ * so the wait has to be long enough to cover a rail that builds behind several
+ * others - and it is bounded by TIME rather than by the landing budget, because
+ * no landing can be tried until the rail exists at all. Ten seconds is several
+ * orders of magnitude past the frame or two a rail really takes, and short
+ * enough that a rail whose load FAILED hands the D-pad to the first card
+ * instead of leaving it nowhere.
+ */
+internal const val BROWSE_RETURN_WAIT_MS = 10_000L
+
+internal enum class BrowseReturnDecision {
+    /** Recorded rail not on screen yet: hold the record, spend nothing. */
+    WAIT_FOR_RAIL,
+
+    /** Rail here (or no rail to wait for): spend one attempt on the landing. */
+    TRY_LANDING,
+
+    /** Ordinary open, exhausted budget, or rail never arrived: first card. */
+    FIRST_CARD
+}
+
+/**
+ * What a browse page should do about its held Detail-return record on this
+ * composition. Pure so the table below is pinnable without a composition.
+ *
+ * [arrivedRailKeys] is the key space the page's records use: `section.title`
+ * for Tag/Studio/Decade, `"rail:${sourceId}"` for KB folders (their records
+ * are keyed that way; see `KBFolderLayouts`). A null `railKey` (the folder
+ * grid, which has no rail) counts as arrived.
+ *
+ * The two budgets are separate on purpose, and that is the whole point of the
+ * rule. The landing budget ([BROWSE_RETURN_FOCUS_STEPS]) is spent by tries,
+ * because a try means a request was made against a card that has a focus node;
+ * the wait is spent by TIME, because the arrival of a rail is not the page's
+ * doing - charging a landing attempt for it abandoned the card the page had
+ * been handed as soon as the page's OTHER rails arrived first.
+ *
+ * The wait is bounded so a rail whose load failed falls back to the first card
+ * instead of stranding the D-pad; the 30-minute [BrowseReturnFocus] age-out
+ * still bounds cross-session staleness.
+ */
+internal fun browseReturnDecision(
+    recorded: BrowseReturnTarget?,
+    arrivedRailKeys: Set<String>,
+    attemptsSpent: Int,
+    waitStartMs: Long,
+    nowMs: Long
+): BrowseReturnDecision {
+    if (recorded == null) return BrowseReturnDecision.FIRST_CARD
+    val railKey = recorded.railKey
+    if (railKey != null && railKey !in arrivedRailKeys) {
+        return if (waitStartMs == 0L || nowMs - waitStartMs < BROWSE_RETURN_WAIT_MS) {
+            BrowseReturnDecision.WAIT_FOR_RAIL
+        } else {
+            BrowseReturnDecision.FIRST_CARD
+        }
+    }
+    return if (attemptsSpent < BROWSE_RETURN_FOCUS_STEPS) {
+        BrowseReturnDecision.TRY_LANDING
+    } else {
+        BrowseReturnDecision.FIRST_CARD
+    }
+}
 internal const val BROWSE_RETURN_FOCUS_DELAY_MS = 40L
 
 /**

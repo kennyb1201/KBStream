@@ -121,7 +121,7 @@ class BrowseReturnFocusWiringContractTest {
                 val read = effect.indexOf(
                     "val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)"
                 )
-                val restore = effect.indexOf("focusPlaced = restoreBrowseReturn(recorded)")
+                val restore = effect.indexOf("focusPlaced = restoreBrowseReturn(target)")
                 val first = effect.indexOf("focusFirstCard()")
                 assertTrue(
                     "$file reads the record first, then the page's own first card - " +
@@ -133,7 +133,16 @@ class BrowseReturnFocusWiringContractTest {
                         "that has not landed yet is retried when the next rail arrives",
                     effect.contains("returnTarget = recorded") &&
                         effect.contains("returnAttempts++") &&
-                        effect.contains("recorded != null && returnAttempts < BROWSE_RETURN_FOCUS_STEPS")
+                        effect.contains("focusPlaced = restoreBrowseReturn(target)")
+                )
+                assertTrue(
+                    "which rail may be waited for is the pure rule's call, so a rail " +
+                        "that has not arrived yet is waited for instead of spending a " +
+                        "landing try on its arrival",
+                    effect.contains("browseReturnDecision(") &&
+                        effect.contains("BrowseReturnDecision.WAIT_FOR_RAIL") &&
+                        effect.contains("attemptsSpent = returnAttempts") &&
+                        effect.contains("waitStartMs = returnWaitStartMs")
                 )
                 assertTrue(
                     "a new load drops a record left by the list before it - a " +

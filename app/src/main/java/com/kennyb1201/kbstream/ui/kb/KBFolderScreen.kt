@@ -18,9 +18,10 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.data.library.LibraryIds
-import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.browseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.kbFolderBrowseScreenKey
 import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
@@ -79,6 +80,10 @@ fun KBFolderScreen(
         mutableStateOf<BrowseReturnTarget?>(null)
     }
     var returnAttempts by remember(folderId) { mutableStateOf(0) }
+    // When the held record was first waited for, so a rail whose load failed
+    // hands the D-pad back to the first card instead of holding it for ever
+    // (see [BROWSE_RETURN_WAIT_MS]).
+    var returnWaitStartMs by remember(folderId) { mutableStateOf(0L) }
     // Whether the card this page came back for has been landed on. Set by the
     // landing itself, never before it: the rails stream in one at a time, and a
     // flag raised ahead of a request that never landed would leave the rest of
@@ -141,24 +146,53 @@ fun KBFolderScreen(
             returnHandled = false
             returnTarget = null
             returnAttempts = 0
+            returnWaitStartMs = 0L
             return@LaunchedEffect
         }
         if (returnHandled) return@LaunchedEffect
-        val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)
+        // The wait starts when the record is read, not when a rail arrives: it
+        // is what bounds holding the record at all.
+        val recorded = returnTarget
+            ?: BrowseReturnFocus.consume(browseReturnKey)
+                .also { if (it != null) returnWaitStartMs = System.currentTimeMillis() }
             ?: return@LaunchedEffect
-        if (returnAttempts >= BROWSE_RETURN_FOCUS_STEPS) return@LaunchedEffect
         returnTarget = recorded
-        returnAttempts++
-        // The rail has to be on screen before its own row can scroll onto the
-        // card, and a rail outside the viewport has composed nothing at all.
-        recorded.railKey?.let { railKey ->
-            browseListState.revealBrowseReturnRail(railKey, recorded.railIndex)
+        when (
+            browseReturnDecision(
+                recorded = recorded,
+                arrivedRailKeys = state.rails.map { "rail:${it.sourceId}" }.toSet(),
+                attemptsSpent = returnAttempts,
+                waitStartMs = returnWaitStartMs,
+                nowMs = System.currentTimeMillis()
+            )
+        ) {
+            // The rail holding the card has not landed yet. Hold the record and
+            // spend nothing: an arrival is not a landing try, and charging one
+            // for it is what ran this page's budget out on its other rails (see
+            // [browseReturnDecision]).
+            BrowseReturnDecision.WAIT_FOR_RAIL -> return@LaunchedEffect
+
+            BrowseReturnDecision.TRY_LANDING -> {
+                returnAttempts++
+                // The rail has to be on screen before its own row can scroll onto
+                // the card, and a rail outside the viewport has composed nothing
+                // at all.
+                recorded.railKey?.let { railKey ->
+                    browseListState.revealBrowseReturnRail(railKey, recorded.railIndex)
+                }
+                // A request against a card that is not composed yet is a silent
+                // miss (requestFocus() answers false rather than throwing), and
+                // the rails and the grid scroll themselves onto the card from
+                // the record they are handed above.
+                returnHandled = landFocusOn(returnFocusRequester)
+            }
+
+            // This effect never placed an initial focus of its own, so the
+            // give-up path moves nothing rather than repeating an ordinary
+            // open's focus: a record whose rail never arrived leaves the D-pad
+            // where the folder put it.
+            BrowseReturnDecision.FIRST_CARD -> return@LaunchedEffect
         }
-        // A request against a card that is not composed yet is a silent miss
-        // (requestFocus() answers false rather than throwing), and the rails
-        // and the grid scroll themselves onto the card from the record they
-        // are handed above.
-        returnHandled = landFocusOn(returnFocusRequester)
     }
 
     val folder = state.folder

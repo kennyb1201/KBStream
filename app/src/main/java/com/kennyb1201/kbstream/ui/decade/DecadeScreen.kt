@@ -72,8 +72,10 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.browseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.decadeBrowseScreenKey
 import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.tag.RailPagingState
@@ -154,8 +156,16 @@ fun DecadeScreen(
     var returnTarget by remember {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
-    // How many rails this page has waited for the return's rail to land behind.
+    // How many LANDING tries this page has spent on the return's card - the
+    // recorded rail on screen, a request made, and it missed. Waiting for that
+    // rail to arrive at all spends none of it, which is the difference between
+    // a rail that builds slowly and a return that never lands (see
+    // [browseReturnDecision]).
     var returnAttempts by remember { mutableStateOf(0) }
+    // When the held record was first waited for, so a rail whose load failed
+    // hands the D-pad back to the first card instead of holding it for ever
+    // (see [BROWSE_RETURN_WAIT_MS]).
+    var returnWaitStartMs by remember { mutableStateOf(0L) }
     val returnFocusRequester = remember { FocusRequester() }
 
     // Long-press context menu for rail posters.
@@ -264,24 +274,52 @@ fun DecadeScreen(
             // A new load is a new list: a position in the old one means nothing.
             returnTarget = null
             returnAttempts = 0
+            returnWaitStartMs = 0L
         } else if (!focusPlaced && sections.any { it.items.isNotEmpty() }) {
-            val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)
-            if (recorded != null && returnAttempts < BROWSE_RETURN_FOCUS_STEPS) {
-                returnTarget = recorded
-                returnAttempts++
-                // The landing is what marks the page focused; a false leaves the
-                // retry to the next rail that lands behind this one.
-                focusPlaced = restoreBrowseReturn(recorded)
-                return@LaunchedEffect
+            // The wait starts when the record is read, not when a rail arrives:
+            // it is what bounds holding the record at all.
+            val recorded = returnTarget
+                ?: BrowseReturnFocus.consume(browseReturnKey)
+                    .also { if (it != null) returnWaitStartMs = System.currentTimeMillis() }
+            if (recorded != null) returnTarget = recorded
+            when (
+                browseReturnDecision(
+                    recorded = recorded,
+                    arrivedRailKeys = sections.map { it.title }.toSet(),
+                    attemptsSpent = returnAttempts,
+                    waitStartMs = returnWaitStartMs,
+                    nowMs = System.currentTimeMillis()
+                )
+            ) {
+                // The rail holding the card has not landed yet. Hold the record
+                // and spend nothing: an arrival is not a landing try, and
+                // charging one for it is what ran this page's budget out on its
+                // OTHER rails (see [browseReturnDecision]).
+                BrowseReturnDecision.WAIT_FOR_RAIL -> return@LaunchedEffect
+
+                BrowseReturnDecision.TRY_LANDING -> {
+                    // Reachable only with a record in hand, by the rule's own
+                    // contract.
+                    val target = recorded ?: return@LaunchedEffect
+                    returnAttempts++
+                    // The landing is what marks the page focused; a false leaves
+                    // the retry to the next rail that lands behind this one.
+                    focusPlaced = restoreBrowseReturn(target)
+                    return@LaunchedEffect
+                }
+
+                BrowseReturnDecision.FIRST_CARD -> {
+                    // The landing is what marks the page focused, exactly as the
+                    // return path does. A flag set BEFORE the suspend request was
+                    // the trap: this effect restarts whenever another rail streams
+                    // in, so an attempt cancelled inside its delay left the flag
+                    // true and the restarted effect skipped the branch - an
+                    // ordinary first open with nothing focused and the D-pad dead.
+                    // A false landing now leaves the retry to the next rail that
+                    // arrives.
+                    focusPlaced = focusFirstCard()
+                }
             }
-            // The landing is what marks the page focused, exactly as the
-            // return path does. A flag set BEFORE the suspend request was the
-            // trap: this effect restarts whenever another rail streams in, so
-            // an attempt cancelled inside its delay left the flag true and the
-            // restarted effect skipped the branch - an ordinary first open with
-            // nothing focused and the D-pad dead. A false landing now leaves
-            // the retry to the next rail that arrives.
-            focusPlaced = focusFirstCard()
         }
     }
 

@@ -70,8 +70,16 @@ class KBFolderReturnFocusContractTest {
     @Test
     fun `the record is held until it is honoured`() {
         assertTrue(
-            "read once, by the page it was raised for",
-            screen.contains("val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)")
+            "read once, by the page it was raised for, and held from then on",
+            screen.contains("val recorded = returnTarget") &&
+                screen.contains("BrowseReturnFocus.consume(browseReturnKey)") &&
+                screen.contains("returnTarget = recorded")
+        )
+        assertTrue(
+            "and the wait it is given starts when the record is READ, not when a " +
+                "rail arrives: an arrival is not the page's doing and must not " +
+                "count against the wait",
+            screen.contains("returnWaitStartMs = System.currentTimeMillis()")
         )
         assertTrue(
             "and the page's own rail list is scrolled to the rail it names, " +
@@ -85,12 +93,23 @@ class KBFolderReturnFocusContractTest {
             screen.contains("returnHandled = landFocusOn(returnFocusRequester)")
         )
         assertTrue(
-            "bounded, so a card that never comes back cannot spin",
-            screen.contains("if (returnAttempts >= BROWSE_RETURN_FOCUS_STEPS) return@LaunchedEffect")
+            "bounded, so a card that never comes back cannot spin - and bounded by " +
+                "the shared rule, which spends a landing try only on a landing: a " +
+                "rail that has not arrived yet is waited for instead, so the budget " +
+                "cannot be exhausted by the folder's OTHER rails arriving first",
+            screen.contains("browseReturnDecision(") &&
+                screen.contains("BrowseReturnDecision.WAIT_FOR_RAIL -> return@LaunchedEffect")
+        )
+        assertTrue(
+            "and the wait it is given is the one the rule bounds by time",
+            screen.contains("waitStartMs = returnWaitStartMs") &&
+                screen.contains("arrivedRailKeys = state.rails.map { \"rail:\${it.sourceId}\" }.toSet()")
         )
         assertTrue(
             "a new load is a new list: a position in the old one means nothing",
-            screen.contains("returnHandled = false") && screen.contains("returnAttempts = 0")
+            screen.contains("returnHandled = false") &&
+                screen.contains("returnAttempts = 0") &&
+                screen.contains("returnWaitStartMs = 0L")
         )
     }
 
