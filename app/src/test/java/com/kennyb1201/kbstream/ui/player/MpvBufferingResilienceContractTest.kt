@@ -21,6 +21,16 @@ import org.junit.Test
  * forever, and a legitimate VOD EOF is untouched (this is reconnect-on-error,
  * not reconnect-at-eof).
  *
+ * The 2026-10-15 field follow-up is in here too: the engine resumed after only
+ * ~2s of cushion (`cache-pause-wait` was 2), which is why the Onn 4K Plus log
+ * shows seven buffering events whose every refill lasted ~2s before another
+ * stall. The threshold is now 8s, the cache is prefilled before the first frame
+ * and after a seek, FFmpeg's AVIO buffer on the demuxer path is enlarged, and
+ * the log's `Audio device underrun detected` gets its own audio buffer.
+ * `demuxer-hysteresis-secs` was the lowest-confidence knob of that spec and was
+ * deliberately NOT taken - the note at its call site says why, and there is no
+ * pin for it here so that taking it later is a deliberate act.
+ *
  * There is no device in CI and a libmpv Activity cannot be driven in a JVM
  * test, so the options that implement this are read out of the source the way
  * this tree's other player contracts are.
@@ -50,8 +60,40 @@ class MpvBufferingResilienceContractTest {
             view.contains("MpvBackend.setOptionString(\"cache-pause\", \"yes\")")
         )
         assertTrue(
-            "and the pause is bounded to a couple of seconds",
+            "the resume threshold is the field bug: 2s of cushion per resume IS the ~2s refill " +
+                "the log shows before buffering is re-entered, so the old value has to be 8",
+            view.contains("MpvBackend.setOptionString(\"cache-pause-wait\", \"8\")")
+        )
+        assertFalse(
+            "and the 2 that caused the loop must not come back",
             view.contains("MpvBackend.setOptionString(\"cache-pause-wait\", \"2\")")
+        )
+        assertTrue(
+            "the same cushion is prefilled before the first frame and after a seek, so startup " +
+                "and seek-restart do not begin on a thin cache either",
+            view.contains("MpvBackend.setOptionString(\"cache-pause-initial\", \"yes\")")
+        )
+    }
+
+    @Test
+    fun `the field log's audio underrun gets its own device buffer`() {
+        assertTrue(
+            "the same run recorded `Audio device underrun detected`; mpv #13189 is that exact " +
+                "underrun and --audio-buffer=1 is what it names",
+            view.contains("MpvBackend.setOptionString(\"audio-buffer\", \"1\")")
+        )
+    }
+
+    @Test
+    fun `the demuxer's AVIO read buffer is enlarged, not mpv's generic stream buffer`() {
+        assertTrue(
+            "2 MB of AVIO read buffer, so a bursty CDN refills the cache in fewer, larger reads",
+            view.contains("MpvBackend.setOptionString(\"demuxer-lavf-buffersize\", \"2097152\")")
+        )
+        assertFalse(
+            "and NOT stream-buffer-size: the primary open goes through lavf here, so the " +
+                "generic knob would not cover the path this is for",
+            view.contains("MpvBackend.setOptionString(\"stream-buffer-size\"")
         )
     }
 

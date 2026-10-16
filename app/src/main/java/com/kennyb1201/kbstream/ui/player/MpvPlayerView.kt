@@ -1279,8 +1279,38 @@ class MpvPlayerView @JvmOverloads constructor(
         // When the cache runs thin, pause briefly and refill instead of
         // stuttering through it. In low-latency mode above `cache=no`, so there
         // is nothing to pause on and live behavior is as it was.
+        //
+        // The wait is 8s - not mpv's 1s default, and not the 2s this used to
+        // be. That resume threshold WAS the field bug (Onn 4K Plus, 2026-10-15):
+        // the log showed 7 buffering events, every post-stall refill lasting
+        // ~2s before playback resumed and re-entered buffering, and 2 was
+        // exactly `cache-pause-wait`. Each resume now starts with 8s of
+        // cushion, so one real pause replaces several pause/stall cycles. The
+        // byte budget still binds first - 64 MB is ~40s at 1080p - so this
+        // changes how often a stall happens, not how much memory the engine
+        // may use.
         MpvBackend.setOptionString("cache-pause", "yes")
-        MpvBackend.setOptionString("cache-pause-wait", "2")
+        MpvBackend.setOptionString("cache-pause-wait", "8")
+        // Prefill those same 8s before the first frame and after every seek,
+        // instead of starting (or restarting) on a thin cache; mpv fires this
+        // on a seek-restart too, and the field run did two startup seeks
+        // (resume, then the subtitle refresh). The manual recommends
+        // `cache-secs` around `cache-pause-wait` when this is on; `cache-secs`
+        // is effectively unbounded by default here and the byte cap binds
+        // first, so it needs no value of its own.
+        MpvBackend.setOptionString("cache-pause-initial", "yes")
+        // One second of audio-device buffer. The same field log carried "Audio
+        // device underrun detected", which is exactly what mpv #13189 reports
+        // and what `--audio-buffer=1` resolves. Audio only: the video output
+        // and the cache are untouched by it.
+        MpvBackend.setOptionString("audio-buffer", "1")
+        // Deliberately NOT set here: `demuxer-hysteresis-secs`. It was the
+        // lowest-confidence knob of the 2026-10-15 spec and was dropped - it
+        // cannot turn a stall into a failure (`cache-pause` remains the underrun
+        // safety net), so it could only be neutral or helpful, and the field
+        // evidence does not establish that the readahead burst pattern - rather
+        // than the resume threshold above - is the limiter. Revisit it only
+        // with evidence, on its own change.
         // HLS: adapt the variant to the network instead of pinning the heaviest
         // and stalling when it cannot keep up.
         MpvBackend.setOptionString("hls-bitrate", "no")
@@ -1305,6 +1335,13 @@ class MpvPlayerView @JvmOverloads constructor(
                 "reconnect_streamed=1,reconnect_delay_max=5,reconnect_max_retries=5," +
                 "reconnect_delay_total_max=20"
         )
+        // FFmpeg's AVIO read buffer on the demuxer path: 2 MB instead of
+        // FFmpeg's small default, so a bursty CDN refills the cache in fewer,
+        // larger reads on a high-bitrate stream. Deliberately the lavf-scoped
+        // knob and not mpv's generic `stream-buffer-size`: the primary http(s)
+        // open goes through lavf (see the stream-lavf-o note above), so
+        // `stream-buffer-size` would not touch this path at all.
+        MpvBackend.setOptionString("demuxer-lavf-buffersize", "2097152")
         // When the renderer cannot keep up, drop the late frames instead of
         // building up long-term jitter. `vo` only drops frames the video output
         // was already going to miss - it is never pre-emptive.
