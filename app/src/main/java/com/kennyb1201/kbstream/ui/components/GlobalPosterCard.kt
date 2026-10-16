@@ -57,6 +57,11 @@ fun GlobalPosterCard(
      * `TmdbRepository.fetchEnrichedMetaCached` can resolve: "tt...",
      * "tmdb:...", or a bare numeric TMDB id). Null skips the lookup and keeps
      * [backdropUrl] and [posterUrl] as the whole story.
+     *
+     * [artType] may also be [ART_TYPE_COLLECTION], for a tile that draws a TMDB
+     * collection rather than a title: the resolver then reads the collection's
+     * own images, and the id is deliberately not looked up as a title id (see
+     * the image-override read below).
      */
     artId: String? = null,
     artType: String? = null,
@@ -102,7 +107,13 @@ fun GlobalPosterCard(
         LandscapeCard(
             backdropUrl = imageOverrideCardBackdropUrl(
                 paths = overridePaths,
-                rawId = artId,
+                // A collection's id is a different id space from a title's
+                // (collection 55 is not film 55), and every choice the viewer
+                // makes is filed under a TITLE id - so none of them may be read
+                // for one. Without this, a film's chosen still would land on
+                // the tile of an unrelated franchise that happens to share its
+                // number.
+                rawId = artId.takeUnless { isCollectionArtType(artType) },
                 fallbackUrl = art.first?.takeIf { it.isNotBlank() } ?: posterUrl
             ),
             logoUrl = art.second,

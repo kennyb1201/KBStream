@@ -88,6 +88,28 @@ interface TmdbApiService {
     ): TmdbCollectionDetail
 
     /**
+     * A COLLECTION's own images, for the collection tiles on the browse and
+     * search screens.
+     *
+     * A collection is not a title: `GET /collection/{id}` carries no `images`
+     * to append to, so a collection card cannot reach the card ranking through
+     * [getMovie]/[getTv] and has to be asked for separately. The response is
+     * language-restricted exactly the same way ([imageLanguage]) so the same
+     * rule ranks it (see [bestCardBackdropPath]).
+     *
+     * It holds `backdrops` and `posters` and nothing else - TMDB publishes no
+     * logo set for a collection - so a collection card can be given the
+     * textless-ranked backdrop but never a corner clearlogo, and keeps its plain
+     * title where every other card draws a wordmark.
+     */
+    @GET("collection/{id}/images")
+    suspend fun getCollectionImages(
+        @Path("id") id: Int,
+        @Query("api_key") apiKey: String,
+        @Query("include_image_language") imageLanguage: String = "en,null"
+    ): TmdbImagesResponse
+
+    /**
      * Shows airing in the next seven days - the real "airing now" feed, as
      * opposed to a discover window. Item shape matches a discover response.
      */

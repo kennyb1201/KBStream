@@ -450,6 +450,29 @@ class TmdbRepository private constructor(context: Context) :
     /** Bound so a long browse cannot grow the map without end. */
     private val collectionCacheMaxEntries = 64
 
+    /**
+     * Memory cache for a collection's RANKED card backdrop, keyed by collection
+     * id.
+     *
+     * A collection has no detail response to hang this on: its images come from
+     * their own endpoint (see [TmdbApiService.getCollectionImages]) and the
+     * search rail asks for one per tile. A title's detail art lives for
+     * [detailCacheTtlMs] (twelve hours), and this is artwork for the same
+     * reason - what is cached is which IMAGE stands in for the key art, which
+     * changes far more slowly than that.
+     *
+     * Only non-null answers are ever filed. A failed request and a collection
+     * TMDB holds no alternate backdrop for both come out as null, and filing
+     * that would park "keep drawing the key art" on the tile for half a day
+     * after one bad round-trip; a miss simply resolves again - and the
+     * app-wide memo in front of this (see GlobalLandscapeArtCache) already
+     * bounds how often that can happen.
+     */
+    private val collectionArtCache = ConcurrentHashMap<Int, Pair<Long, String>>()
+
+    /** Bound for the same reason as [collectionCacheMaxEntries]. */
+    private val collectionArtCacheMaxEntries = 64
+
     private val detailJsonAdapter: JsonAdapter<TmdbDetail> by lazy {
         moshi.adapter(TmdbDetail::class.java)
     }
@@ -1152,6 +1175,56 @@ class TmdbRepository private constructor(context: Context) :
             }
 
         return detail.copy(parts = filteredParts)
+    }
+
+    /**
+     * The backdrop a collection CARD should draw: TMDB's best text-free (or
+     * English) `/collection/{id}/images` entry that differs from
+     * [primaryBackdropPath], at card size - or null, which leaves the caller its
+     * own key art.
+     *
+     * The ranking is the one every title card's backdrop goes through
+     * ([bestCardBackdropPath]), because the question is the same: which image
+     * stands in for the key art without repeating it. [primaryBackdropPath] is
+     * TMDB's `file_path` for the key art the tile already holds, so the ranking
+     * keeps its "never the image already on screen" half; a null simply ranks
+     * the list on its own. A ranking that can only offer that same primary image
+     * back is reported as NO answer, not as the primary: the caller already has
+     * the primary, and at the size the caller holds it.
+     *
+     * No clearlogo comes with it - TMDB publishes no logos for a collection - so
+     * a collection card keeps its plain title in the corner where a title card
+     * draws its English wordmark.
+     */
+    suspend fun fetchCollectionBackdropCached(
+        collectionId: Int,
+        primaryBackdropPath: String? = null
+    ): String? {
+        if (apiKey.isBlank()) return null
+
+        val now = System.currentTimeMillis()
+        collectionArtCache[collectionId]
+            ?.takeIf { (storedAt, _) -> now - storedAt < detailCacheTtlMs }
+            ?.let { return it.second }
+
+        val images = runCatchingCancellable {
+            api.getCollectionImages(collectionId, apiKey)
+        }.getOrNull() ?: return null
+
+        val primary = primaryBackdropPath?.takeIf { it.isNotBlank() }
+        val ranked = bestCardBackdropPath(
+            backdrops = images.backdrops,
+            primaryPath = primary
+        )
+            ?.takeIf { it != primary }
+            ?: return null
+
+        if (collectionArtCache.size > collectionArtCacheMaxEntries) {
+            collectionArtCache.clear()
+        }
+        collectionArtCache[collectionId] = now to ranked
+
+        return BACKDROP_BASE + ranked
     }
 
     // ------------------------------------------------------------------
@@ -3356,6 +3429,32 @@ class TmdbRepository private constructor(context: Context) :
             // qualifies, not just w1280 - "original" on a URL that is already
             // original rewrites to itself.
             return TMDB_IMAGE_SIZE.replaceFirst(raw, "$BACKDROP_BASE_FULL/")
+        }
+
+        /**
+         * The TMDB `file_path` inside [url], when [url] is one of TMDB's own
+         * image URLs at some size: `"…/t/p/w780/abc.jpg"` -> `"/abc.jpg"`.
+         *
+         * The inverse of [fullResBackdropUrl]'s size rewrite, for a surface
+         * that holds a URL rather than the `file_path` it was built from - a
+         * search result's backdrop, an add-on's meta - and has to name that
+         * image in a comparison against TMDB's own image list. The ranking a
+         * card's backdrop is chosen by refuses to re-pick the image already on
+         * screen (see [bestCardBackdropPath]), and that is a comparison of
+         * paths: without this, a collection tile could be handed the very image
+         * it is already drawing and read as "nothing better exists".
+         *
+         * Anything that is not TMDB's image host is null, and so is a URL with
+         * nothing after its size segment. Both mean the caller has no path to
+         * compare and must fall back to its own art rather than let an
+         * unrelated image pass as "already on screen".
+         */
+        fun tmdbImagePath(url: String?): String? {
+            val raw = url?.trim()?.takeIf { it.isNotBlank() } ?: return null
+            val size = TMDB_IMAGE_SIZE.find(raw) ?: return null
+            val path = raw.substring(size.value.length)
+            return path.takeIf { it.isNotBlank() }
+                ?.let { if (it.startsWith("/")) it else "/$it" }
         }
 
         /** TMDB's image host plus its size segment - the part "original" replaces. */

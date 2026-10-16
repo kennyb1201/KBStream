@@ -49,6 +49,7 @@ import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.components.ART_TYPE_COLLECTION
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.components.VoiceSearchChip
@@ -648,6 +649,13 @@ internal fun StudioResultCard(
 /**
  * Poster-only tile for the Collections rail — no text label underneath,
  * the poster art carries the collection name.
+ *
+ * A collection is not a title, so its art is resolved as one: the id and type
+ * below route the card through the COLLECTION images endpoint, which is what
+ * gives this tile the same textless-ranked backdrop every other card gets
+ * instead of the key art the search result happens to carry. TMDB publishes no
+ * logos for a collection, so it still shows its plain title in the corner where
+ * a title card draws a clearlogo.
  */
 @Composable
 internal fun CollectionPosterTile(
@@ -662,6 +670,8 @@ internal fun CollectionPosterTile(
         isWatched = false,
         onClick = onClick,
         posterWidth = posterSize.width,
-        posterHeight = posterSize.height
+        posterHeight = posterSize.height,
+        artId = collection.id.toString(),
+        artType = ART_TYPE_COLLECTION
     )
 }

@@ -921,24 +921,50 @@ fun TmdbDetail.bestLogoPath(): String? =
  * visually distinct from the Home hero, which always shows the primary
  * backdrop, without pulling in the foreign-language art TMDB also lists.
  */
-fun TmdbDetail.cardBackdropPath(): String? {
+fun TmdbDetail.cardBackdropPath(): String? =
+    bestCardBackdropPath(
+        backdrops = images?.backdrops.orEmpty(),
+        primaryPath = backdropPath
+    )
 
-    val primary = backdropPath?.takeIf { it.isNotBlank() }
+/**
+ * The one rule a card's backdrop is chosen by, over whatever image list the
+ * caller holds: text-free (no language set) first, then English, then vote
+ * average - and never [primaryPath], so a card does not repeat the image the
+ * surface it was opened from is already showing.
+ *
+ * Shared, because a TMDB COLLECTION's images do not arrive on a detail
+ * response: `/collection/{id}/images` has to be asked for on its own (see
+ * [TmdbApiService.getCollectionImages]), and a second copy of this order is
+ * exactly how a collection tile would end up ranked differently from every
+ * other card in the app. [cardBackdropPath] is the title-shaped entry point to
+ * it; the collection-shaped one is
+ * [TmdbRepository.fetchCollectionBackdropCached].
+ *
+ * [primaryPath] is a TMDB `file_path` (`/abc.jpg`), never a URL: the image
+ * paths it is compared against are the API's own.
+ */
+internal fun bestCardBackdropPath(
+    backdrops: List<TmdbImageAsset>,
+    primaryPath: String?
+): String? {
 
-    return images?.backdrops
-        ?.asSequence()
-        ?.filter { !it.filePath.isNullOrBlank() }
+    val primary = primaryPath?.takeIf { it.isNotBlank() }
+
+    return backdrops
+        .asSequence()
+        .filter { !it.filePath.isNullOrBlank() }
         // Text-free backdrop first (no burned-in title, whatever its locale),
         // then English. The plain "first backdrop that is not the primary" pick
         // was what showed foreign-language art on the cards: TMDB lists several
         // locales per title and the first alternate is often not English.
-        ?.sortedWith(
+        .sortedWith(
             compareByDescending<TmdbImageAsset> { it.iso6391 == null }
                 .thenByDescending { it.iso6391 == "en" }
                 .thenByDescending { it.voteAverage ?: 0.0 }
         )
-        ?.mapNotNull { it.filePath?.takeIf(String::isNotBlank) }
-        ?.firstOrNull { it != primary }
+        .mapNotNull { it.filePath?.takeIf(String::isNotBlank) }
+        .firstOrNull { it != primary }
         ?: primary
 }
 

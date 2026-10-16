@@ -34,16 +34,36 @@ class TmdbLogoLanguageContractTest {
     private val becauseYouWatched by lazy { read(BECAUSE_YOU_WATCHED) }
 
     @Test
-    fun `the detail endpoints still ask TMDB for English plus untagged images`() {
+    fun `every artwork endpoint asks TMDB for English plus untagged images`() {
         // The request half is what narrows the response before any client-side
         // pick: without it TMDB answers with every locale it holds.
+        //
+        // Three endpoints serve card artwork, and the count is a pin rather
+        // than a census: the collection's own images endpoint joined the two
+        // detail ones when collection tiles stopped drawing the key art the
+        // search result happened to carry (see
+        // CollectionTileArtworkContractTest), and it has to ask for the same
+        // languages or the ranking it feeds is handed every locale TMDB holds.
         assertEquals(
-            "both detail endpoints must carry the image-language filter",
-            2,
+            "the two detail endpoints and the collection images endpoint must " +
+                "each carry the image-language filter",
+            3,
             Regex("include_image_language\"\\) imageLanguage: String = \"en,null\"")
                 .findAll(apiService)
                 .count()
         )
+        listOf("getMovie", "getTv", "getCollectionImages").forEach { endpoint ->
+            val signature = apiService
+                .substringAfter("suspend fun $endpoint(")
+                .substringBefore("): ")
+            assertTrue(
+                "$endpoint must carry the filter in its own signature, not " +
+                    "only somewhere in this file",
+                signature.contains(
+                    "include_image_language\") imageLanguage: String = \"en,null\""
+                )
+            )
+        }
     }
 
     @Test

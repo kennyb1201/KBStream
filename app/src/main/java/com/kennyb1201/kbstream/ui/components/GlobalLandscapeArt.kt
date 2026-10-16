@@ -69,16 +69,42 @@ internal object GlobalLandscapeArtCache {
         val art = semaphore.withPermit {
             memo[request.key]?.let { return@withPermit it }
 
-            val detail = runCatchingCancellable {
-                TmdbRepository.getInstance(context.applicationContext)
-                    .fetchEnrichedMetaCached(
-                        imdbId = request.id,
-                        type = request.type
-                    )
-            }.getOrNull()
+            val repository = TmdbRepository.getInstance(context.applicationContext)
+
+            val tmdbArt =
+                if (isCollectionArtType(request.type)) {
+                    // A collection's art comes from its own endpoint: there is no
+                    // detail response to append `images` to (see
+                    // TmdbApiService.getCollectionImages), so the title lookup
+                    // below could only answer for whatever TITLE happens to
+                    // share the collection's number. The ranked backdrop is the
+                    // whole answer - TMDB publishes no logos for a collection -
+                    // and the card keeps its plain title in the corner.
+                    val collectionId = request.id.trim().toIntOrNull()
+                    val backdrop = if (collectionId == null) {
+                        null
+                    } else {
+                        runCatchingCancellable {
+                            repository.fetchCollectionBackdropCached(
+                                collectionId = collectionId,
+                                primaryBackdropPath =
+                                    TmdbRepository.tmdbImagePath(request.addonBackdrop)
+                            )
+                        }.getOrNull()
+                    }
+                    backdrop to null
+                } else {
+                    val detail = runCatchingCancellable {
+                        repository.fetchEnrichedMetaCached(
+                            imdbId = request.id,
+                            type = request.type
+                        )
+                    }.getOrNull()
+                    detail.landscapeArtUrls()
+                }
 
             landscapeArtEntry(
-                tmdbArt = detail.landscapeArtUrls(),
+                tmdbArt = tmdbArt,
                 request = request
             )
         }

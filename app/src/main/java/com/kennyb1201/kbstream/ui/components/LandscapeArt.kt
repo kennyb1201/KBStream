@@ -65,6 +65,29 @@ internal fun landscapeArtKey(type: String, id: String): String =
 internal fun MetaPreview.landscapeArtKey(): String = landscapeArtKey(type, id)
 
 /**
+ * The `artType` a TMDB COLLECTION's card is resolved under.
+ *
+ * A collection is not a title, in two ways that both matter here: its id is a
+ * different TMDB id space (collection 55 is not film 55, so a card must never
+ * read a title's image choice for it - see the image-override lookup in
+ * `GlobalPosterCard`), and its art cannot come from a detail response, so the
+ * resolver has to be told which of the two it was handed. This spelling says so,
+ * and it is what keeps a collection's entry key (`collection:55`) apart from a
+ * film's.
+ */
+internal const val ART_TYPE_COLLECTION = "collection"
+
+/**
+ * Whether [type] names a TMDB collection rather than a title.
+ *
+ * Read through [TmdbRepository.normalizeMediaType] like every other type in this
+ * vocabulary, so a caller spelling it "Collection" or with stray whitespace is
+ * the same request rather than a silent second entry.
+ */
+internal fun isCollectionArtType(type: String?): Boolean =
+    type != null && TmdbRepository.normalizeMediaType(type) == ART_TYPE_COLLECTION
+
+/**
  * The number a landscape card shows at [index] of a rail, or null when the rail
  * is not a ranking and the card shows none.
  *
