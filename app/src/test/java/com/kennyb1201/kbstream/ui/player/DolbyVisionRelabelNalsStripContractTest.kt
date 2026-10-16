@@ -130,11 +130,23 @@ class DolbyVisionRelabelNalsStripContractTest {
             count(source, "logFirstSampleAudits(")
         )
         assertEquals(
-            "the mode that rewrites the in-sample parameter sets is labelled as such",
-            1,
+            "BOTH modes now rewrite the in-sample parameter sets: the mutating strip always " +
+                "did, and the relabel modes' NALS-strip does as of Fix 1 (2026-10-16) - the " +
+                "declared-DV P8 field file whose config VPS was rewritten while its first " +
+                "sample still carried the original DV-flagged set",
+            2,
             count(source, "rewritesInSampleParamSets = true")
         )
-        assertEquals(1, count(source, "rewritesInSampleParamSets = false"))
+        assertFalse(
+            "so no call site may report that it leaves the samples' parameter sets alone: " +
+                "that is what made PARAM-AUDIT print the set as a survivor on the failing file",
+            source.contains("rewritesInSampleParamSets = false")
+        )
+        assertEquals(
+            "and Fix 1's agreement itself is armed on both framings of that strip",
+            2,
+            count(source, "rewriteParamSets = true")
+        )
         assertEquals(
             "the relabel modes' strip call arms the suffix-SEI rule unconditionally: that " +
                 "container declared Dolby Vision by definition",

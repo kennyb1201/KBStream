@@ -14,10 +14,13 @@ import org.junit.Test
  * (62) is removed on both.
  *
  * So this file pins three things:
- *  - the SEI payload-type walk and the vendor-only rule it feeds (Fix A),
- *  - that the rule fires ONLY on a declared-DV stream and ONLY on a suffix SEI,
- *    which is what keeps NAL 40 handling on the in-band path byte-for-byte what
- *    it was,
+ *  - the SEI payload-type walk and the vendor-only rule it feeds (Fix A's
+ *    premise, still the mutating strip's rule),
+ *  - that the NALS-strip drops that NAL outright on a declared-DV stream -
+ *    2026-10-16 field evidence, after the 20:43 K83 run kept it as
+ *    `40:35->kept(seiWalkTrunc)[pt=5]` - and ONLY on a suffix SEI of a
+ *    declared-DV track, which is what keeps NAL 40 handling on the in-band path
+ *    byte-for-byte what it was,
  *  - that the first-sample audits (Fix B's payload types, Fix C's boundaries,
  *    Fix D's parameter-set bytes) report rather than rewrite,
  *  - that the same suffix-SEI rule is armed on the MUTATING strip (Fix F8, the
@@ -199,6 +202,8 @@ class DvDeclaredSeiAuditTest {
 
     @Test
     fun `a declared-DV suffix SEI with only vendor data is dropped`() {
+        // The rule does not read the messages any more, but the payload types it
+        // prints are still what the field side compares between files.
         val sample = concat(vps, sps, pps, prefSei, idr, vendorSuffix, rpu)
         val accounting = DolbyVisionCompat.SeiStripAccounting()
 
@@ -216,13 +221,17 @@ class DvDeclaredSeiAuditTest {
             "the log has to attribute this removal: ${accounting.summary()}",
             accounting.summary().contains(
                 "40:${payloadSize(vendorSuffix)}->dropped(" +
-                    "${DolbyVisionCompat.HevcSeiAudit.DROP_REASON_VENDOR_ONLY})[pt=5]"
+                    "${DolbyVisionCompat.HevcSeiAudit.DROP_REASON_DECLARED_DV_SUFFIX})[pt=5]"
             )
         )
     }
 
     @Test
-    fun `a declared-DV suffix SEI carrying the mastering display is kept`() {
+    fun `a declared-DV suffix SEI goes even when it carries the mastering display`() {
+        // The field fix, spelled out: the drop is the RPU's, not an audit's, so
+        // the message content cannot save the NAL. A decoder that needs static
+        // metadata gets it from the format (hdrStaticInfo), not from a NAL that
+        // sits after the slice data.
         val mastering = seiNal(40, seiMessage(137, vendorBody(20)))
         val sample = concat(vps, sps, pps, prefSei, idr, mastering, rpu)
         val accounting = DolbyVisionCompat.SeiStripAccounting()
@@ -232,14 +241,16 @@ class DvDeclaredSeiAuditTest {
             accounting = accounting, declaredDv = true
         )
 
-        // Only the RPU goes: the suffix SEI carries a decoder-relevant message.
-        val expected = concat(vps, sps, pps, prefSei, idr, mastering)
+        // Both the RPU and the suffix SEI go; the prefix SEI rides through.
+        val expected = concat(vps, sps, pps, prefSei, idr)
+        assertTrue("something must have been removed", newLen >= 0)
         assertEquals(expected.size, newLen)
         assertArrayEquals(expected, sample.copyOf(newLen))
         assertTrue(
-            "and the log says why it stayed: ${accounting.summary()}",
+            "and the log still names what it was carrying: ${accounting.summary()}",
             accounting.summary().contains(
-                "40:${payloadSize(mastering)}->kept(${DolbyVisionCompat.HevcSeiAudit.KEEP_REASON_DECODER_RELEVANT})[pt=137]"
+                "40:${payloadSize(mastering)}->dropped(" +
+                    "${DolbyVisionCompat.HevcSeiAudit.DROP_REASON_DECLARED_DV_SUFFIX})[pt=137]"
             )
         )
     }
@@ -260,9 +271,12 @@ class DvDeclaredSeiAuditTest {
     }
 
     @Test
-    fun `a truncated suffix SEI is never dropped`() {
-        // Type 5, size 32, one byte of body: the walk cannot finish, so the NAL
-        // stays even on a declared-DV stream.
+    fun `a truncated suffix SEI is dropped, which is the 20-43 K83 fix`() {
+        // Type 5, size 32, one byte of body: the walk cannot finish. Under the
+        // 2026-10-15 audit this NAL stayed (`40:35->kept(seiWalkTrunc)[pt=5]` in
+        // the field log) and the file kept buffering at 0-1 kbps; a truncated
+        // walk must no longer save the one NAL that distinguishes the stalled
+        // file from the playing one.
         val truncated = seiNal(40, byteArrayOf(0x05, 0x20, 0x5A))
         val sample = concat(vps, sps, pps, idr, truncated, rpu)
         val accounting = DolbyVisionCompat.SeiStripAccounting()
@@ -272,12 +286,16 @@ class DvDeclaredSeiAuditTest {
             accounting = accounting, declaredDv = true
         )
 
-        val expected = concat(vps, sps, pps, idr, truncated)
+        val expected = concat(vps, sps, pps, idr)
+        assertTrue("something must have been removed", newLen >= 0)
         assertEquals(expected.size, newLen)
         assertArrayEquals(expected, sample.copyOf(newLen))
         assertTrue(
-            "and the log names the truncated walk: ${accounting.summary()}",
-            accounting.summary().contains(DolbyVisionCompat.HevcSeiAudit.TRUNCATED_REASON)
+            "and the field line reads `dropped` with no walk qualifier: ${accounting.summary()}",
+            accounting.summary().contains(
+                "40:${payloadSize(truncated)}->dropped(" +
+                    "${DolbyVisionCompat.HevcSeiAudit.DROP_REASON_DECLARED_DV_SUFFIX})"
+            )
         )
     }
 
@@ -337,7 +355,7 @@ class DvDeclaredSeiAuditTest {
         assertTrue(
             accounting.summary().contains(
                 "40:${ldVendorSuffix.size}->dropped(" +
-                    "${DolbyVisionCompat.HevcSeiAudit.DROP_REASON_VENDOR_ONLY})[pt=5]"
+                    "${DolbyVisionCompat.HevcSeiAudit.DROP_REASON_DECLARED_DV_SUFFIX})[pt=5]"
             )
         )
     }

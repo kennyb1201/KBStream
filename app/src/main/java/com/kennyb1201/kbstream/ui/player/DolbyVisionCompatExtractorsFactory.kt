@@ -1260,12 +1260,21 @@ private class VideoCompatTrackOutput(
                     length = sampleEnd,
                     annexB = framing == NalFraming.ANNEX_B,
                     nalLengthFieldLength = nalLengthFieldLength,
-                    rewritesInSampleParamSets = false,
+                    // Fix 1: this mode DOES write the rewrite back into the
+                    // sample, so the audit stops reporting the original sets as
+                    // survivors.
+                    rewritesInSampleParamSets = true,
                     dvSuffixSeiRuleActive = true
                 )
             }
-            // Pure removal — stripAnnexB/stripLengthDelimited never rewrite
-            // parameter sets. The RPU/EL (stripDv) and the HDR10+ SEI
+            // Removal plus Fix 1's in-band parameter-set agreement: the sample's
+            // VPS/SPS are rewritten, not just the RPU/EL removed, because this
+            // mode's codec config already carries the rewritten sets and the two
+            // have to describe the same thing (the 2026-10-15 field file had
+            // `vpsRewrite=rewritten(22)` in the csd with
+            // `survivors=vps:rewriteLeftInSample` in the first sample - MTK
+            // configured, took the first input frame and emitted 0-1 kbps).
+            // The RPU/EL (stripDv) and the HDR10+ SEI
             // (stripHdr10Plus) are BOTH dropped, which is the combination the
             // field has: the old keep-the-RPU theory here — "a DV-flagged track
             // with no DV metadata stalls the decoder" — was only ever run
@@ -1300,7 +1309,10 @@ private class VideoCompatTrackOutput(
                         stripHdr10Plus = true,
                         kotlinOnly = true,
                         accounting = accounting,
-                        declaredDv = true
+                        declaredDv = true,
+                        // Fix 1: the csd this caller re-advertised carries the
+                        // rewritten VPS/SPS, so the in-band ones must too.
+                        rewriteParamSets = true
                     )
                 NalFraming.LENGTH_DELIMITED ->
                     DolbyVisionCompat.stripLengthDelimited(
@@ -1309,7 +1321,10 @@ private class VideoCompatTrackOutput(
                         stripHdr10Plus = true,
                         kotlinOnly = true,
                         accounting = accounting,
-                        declaredDv = true
+                        declaredDv = true,
+                        // Fix 1: the csd this caller re-advertised carries the
+                        // rewritten VPS/SPS, so the in-band ones must too.
+                        rewriteParamSets = true
                     )
             }
             if (firstSample) {
@@ -1332,10 +1347,12 @@ private class VideoCompatTrackOutput(
                         if (accounting?.viaLibdovi == true) " (via libdovi)" else " (via kotlin)"
                 )
             }
-            // No parameter set is rewritten here: this mode is the sample-side
-            // half of the relabel, whose codec config is what carries the
-            // rewritten VPS (see relabelTargetFor). The samples themselves get
-            // nothing but the removal above.
+            // The parameter sets in the sample are the rewritten ones (Fix 1,
+            // `rewriteParamSets` above): this mode is the sample-side half of
+            // the relabel, whose codec config carries the rewritten VPS (see
+            // relabelTargetFor), and a sample still carrying the original
+            // DV-flagged sets contradicts that config. Nothing else about the
+            // sample changes beyond the removal above.
             val outLen = if (stripped >= 0) stripped else sampleEnd
             emit(outLen)
             if (carrySize > 0) System.arraycopy(pendingBuf, sampleEnd, pendingBuf, 0, carrySize)

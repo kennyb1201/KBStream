@@ -551,8 +551,9 @@ internal object DolbyVisionCompat {
      * byte-for-byte unchanged.
      *
      * With [stripDv], the ONLY NALs this removes are the RPU (62), the EL (63)
-     * and any NAL with `layerId > 0` — matching Nuvio's `HevcDvRpuStripper`.
-     * A prefix/suffix SEI NAL (39/40) is never dropped whole: a NAL whose only
+     * and any NAL with `layerId > 0` — matching Nuvio's `HevcDvRpuStripper` —
+     * plus the declared-DV suffix SEI of [declaredDv] below.
+     * A prefix/suffix SEI NAL (39/40) is never dropped whole otherwise: a NAL whose only
      * message is HDR10+ is forwarded bit-exact, and one that shares the HDR10+
      * message with the HDR10 static metadata (mastering display / content
      * light) is surgically shrunk so the static metadata the decoder needs after
@@ -571,14 +572,33 @@ internal object DolbyVisionCompat {
      *
      * [declaredDv] is the container's own answer, and it gates the one rule that
      * reads it: a SUFFIX SEI (40) on a stream whose container declared Dolby
-     * Vision is audited message by message and dropped when every message in it
-     * is vendor data (see [HevcSeiAudit]). The 2026-10-15 stall's two field files
-     * differ in exactly that NAL, and nothing a decoder needs for the picture
-     * rides in a suffix SEI, so a vendor-only one is Dolby Vision signalling
-     * left behind once the RPU NAL is gone. A suffix SEI carrying any
-     * decoder-relevant message - film grain, mastering display, content light,
-     * timing - is forwarded bit-exact. Default false, and the in-band path never
-     * sets it: NAL 40 handling there is byte-for-byte what it was.
+     * Vision is dropped outright, the way the RPU (62) is. The 2026-10-15
+     * stall's two field files differ in exactly that NAL, and nothing a decoder
+     * needs for the picture rides in a suffix SEI - it sits after the slice data
+     * - so it is Dolby Vision signalling left behind once the RPU NAL is gone.
+     *
+     * The 2026-10-16 field evidence is what takes the message walk out of this
+     * decision. It had required a completed walk before dropping, and the stalled
+     * file's NAL came out `40:35->kept(seiWalkTrunc)[pt=5]` in the 20:43 K83 run:
+     * the walk could not finish, so the one NAL that distinguishes the stalled
+     * file from the playing in-band one survived a strip it exists to survive.
+     * The walk is still taken here, but only to name the payload types the
+     * first-sample log prints. (The mutating strip's separate vendor-only rule
+     * is not this one - see [transformAnnexB].) Default false, and the in-band
+     * path never sets it: NAL 40 handling there is byte-for-byte what it was.
+     *
+     * [rewriteParamSets] makes the in-band VPS/SPS describe single-layer HDR10,
+     * the way the caller's codec config already does — the csd and the sample
+     * must agree. It is the same rewrite [transformAnnexB] applies in-sample,
+     * and it exists because of the 2026-10-15 declared-DV P8 field file whose
+     * config VPS had been rewritten 24→22B while its first sample's in-band
+     * sets were still the original DV-flagged ones (`survivors=
+     * vps:rewriteLeftInSample,sps:rewriteLeftInSample`): the MTK decoder was
+     * handed a csd and in-band sets that disagree, configured, accepted the
+     * first input frame, and emitted nothing. This is a rebuild, not a splice:
+     * a shortened set is re-emitted at the compaction point, so every NAL after
+     * it lands at a corrected offset (never back at its original one). Default
+     * false = every other caller byte-for-byte unchanged.
      */
     fun stripAnnexB(
         buf: ByteArray,
@@ -588,7 +608,8 @@ internal object DolbyVisionCompat {
         dropRpuNal: Boolean = false,
         kotlinOnly: Boolean = false,
         accounting: SeiStripAccounting? = null,
-        declaredDv: Boolean = false
+        declaredDv: Boolean = false,
+        rewriteParamSets: Boolean = false
     ): Int {
         // Prefer libdovi's native strip; fall back to the Kotlin parser below.
         //
@@ -672,6 +693,47 @@ internal object DolbyVisionCompat {
                         nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
                     )
                 }
+                // Fix 1 (2026-10-16 field): the in-band parameter sets are made
+                // to agree with the codec config the caller re-advertised. This
+                // mode's csd already carries the rewritten VPS/SPS while the
+                // samples still carried the original DV-flagged ones - the
+                // field's `survivors=vps:rewriteLeftInSample,sps:...,
+                // applied=false` - and a decoder fed a csd and in-band sets that
+                // disagree (MTK/OMX above all) configures OK and then emits
+                // nothing at all. The rewritten NAL is re-emitted here, at the
+                // compaction point: the NALs after it are shifted by the new
+                // size, never spliced back into the original offsets.
+                if (keep && rewriteParamSets) {
+                    when (nalType) {
+                        NAL_VPS -> when (val res = rewriteVpsToHdr10(buf, header + 2, nalEnd)) {
+                            is VpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                // start code + 2-byte NAL header + rewritten RBSP
+                                System.arraycopy(buf, code, buf, write, codeLen)
+                                System.arraycopy(buf, header, buf, write + codeLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + codeLen + 2, res.rbsp.size)
+                                write += codeLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            // A failed rewrite keeps the original NAL: the
+                            // sample must never carry a half-rewritten set.
+                            is VpsRewriteOutcome.Failed -> Unit
+                            VpsRewriteOutcome.NoDvExtension -> Unit
+                        }
+                        NAL_SPS -> when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
+                            is SpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                System.arraycopy(buf, code, buf, write, codeLen)
+                                System.arraycopy(buf, header, buf, write + codeLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + codeLen + 2, res.rbsp.size)
+                                write += codeLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is SpsRewriteOutcome.Failed -> Unit
+                            SpsRewriteOutcome.NoDvExtension -> Unit
+                        }
+                    }
+                }
                 // Diagnostic arm, RPU (62) only: the EL (63) is untouched, so a
                 // P7 sample still behaves exactly as it does today.
                 if (keep && dropRpuNal && nalType == NAL_DV_RPU) {
@@ -680,32 +742,35 @@ internal object DolbyVisionCompat {
                         nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED
                     )
                 }
-                // Fix A: a suffix SEI on a declared-DV stream is audited message
-                // by message, and dropped when it carries nothing but vendor
-                // data - the one NAL the stalled field file has and the playing
-                // one does not. Kept (bit-exact) when a decoder-relevant message
-                // rides in it, or when the walk could not be completed: a parse
-                // failure never removes a NAL.
+                // Fix A: the suffix SEI (40) of a declared-DV stream goes the
+                // way of the RPU (62) - dropped unconditionally, because that
+                // NAL is what the stalled field file carries and the playing
+                // in-band one does not (H12 in the audit's register). Nothing
+                // here is decided from the message walk: the 2026-10-16 K83 run
+                // came out `40:35->kept(seiWalkTrunc)[pt=5]`, i.e. the walk did
+                // not finish, so the one NAL that distinguishes the stalled file
+                // survived the strip it exists to survive. The walk below is
+                // taken only to name the payload types the first-sample log
+                // prints (Fix B); a truncated one no longer keeps this NAL,
+                // though it still keeps every other NAL there is.
                 val declaredDvSuffixSei = stripDv && declaredDv && nalType == NAL_SUFFIX_SEI
                 var seiWalk: HevcSeiAudit.Walk? = null
                 if (keep && isHdr10PlusSeiNal(nalType) &&
                     (accounting != null || declaredDvSuffixSei)
                 ) {
-                    // One walk serves both the drop below and the payload types
-                    // the first-sample log prints (Fix B). Its cost is a header
-                    // walk of one small NAL, and only where a caller asked.
+                    // The payload types the first-sample log prints (Fix B). Its
+                    // cost is a header walk of one small NAL, and only where a
+                    // caller asked.
                     seiWalk = HevcSeiAudit.walk(buf, header + 2, nalEnd)
                 }
                 if (keep && declaredDvSuffixSei) {
                     val walk = seiWalk ?: HevcSeiAudit.walk(buf, header + 2, nalEnd)
-                    if (walk.complete && HevcSeiAudit.isVendorOnly(walk.types)) {
-                        keep = false
-                        accounting?.record(
-                            nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED,
-                            payloadTypes = walk.types,
-                            reason = HevcSeiAudit.DROP_REASON_VENDOR_ONLY
-                        )
-                    }
+                    keep = false
+                    accounting?.record(
+                        nalType, nalEnd - header, SeiStripAccounting.Action.DROPPED,
+                        payloadTypes = walk.types,
+                        reason = HevcSeiAudit.DROP_REASON_DECLARED_DV_SUFFIX
+                    )
                 }
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType)) {
                     // Diagnostic only, computed only when someone is listening:
@@ -713,14 +778,11 @@ internal object DolbyVisionCompat {
                     // dropped this NAL? (See [seiWouldLegacyDrop].)
                     val legacyDrop = accounting != null &&
                         seiWouldLegacyDrop(buf, header + 2, nalEnd)
-                    // The suffix-SEI audit's verdict, when this IS that NAL: kept
-                    // because a decoder-relevant message rides in it, or because
-                    // the walk was truncated.
+                    // The payload types the walk found, for the first-sample
+                    // log. A declared-DV suffix SEI never reaches this block any
+                    // more - it was dropped above - so no entry here carries a
+                    // reason.
                     val seiTypes = seiWalk?.types.orEmpty()
-                    val seiReason = if (declaredDvSuffixSei) {
-                        if (seiWalk?.complete == true) HevcSeiAudit.KEEP_REASON_DECODER_RELEVANT
-                        else HevcSeiAudit.TRUNCATED_REASON
-                    } else null
                     if (!seiCarriesHdr10Plus(buf, header + 2, nalEnd)) {
                         // The detector did not fire: this SEI NAL is forwarded
                         // bit-exact, which is a third thing the first-sample log
@@ -729,7 +791,7 @@ internal object DolbyVisionCompat {
                         // nothing".
                         accounting?.record(
                             nalType, nalEnd - header, SeiStripAccounting.Action.KEPT,
-                            legacyDrop = legacyDrop, payloadTypes = seiTypes, reason = seiReason
+                            legacyDrop = legacyDrop, payloadTypes = seiTypes
                         )
                     } else {
                         // Surgical removal: only the HDR10+ messages go, the SEI
@@ -747,7 +809,7 @@ internal object DolbyVisionCompat {
                         ) {
                             SEI_STRIP_UNTOUCHED -> accounting?.record(
                                 nalType, nalEnd - header, SeiStripAccounting.Action.KEPT,
-                                legacyDrop = legacyDrop, payloadTypes = seiTypes, reason = seiReason
+                                legacyDrop = legacyDrop, payloadTypes = seiTypes
                             )
                             SEI_STRIP_DROP -> {
                                 keep = false
@@ -762,7 +824,7 @@ internal object DolbyVisionCompat {
                                 accounting?.record(
                                     nalType, nalEnd - header, SeiStripAccounting.Action.SHRUNK,
                                     newSize = codeLen + 2 + res,
-                                    payloadTypes = seiTypes, reason = seiReason
+                                    payloadTypes = seiTypes
                                 )
                             }
                         }
@@ -795,9 +857,14 @@ internal object DolbyVisionCompat {
      * [kotlinOnly] is [stripAnnexB]'s skip-the-native-strip flag, for the same
      * 2026-10-14 coarse-SEI reason.
      *
-     * [declaredDv] is [stripAnnexB]'s declared-DV gate for the suffix-SEI (40)
-     * audit, in this framing: a NAL whose every message is vendor data is
-     * dropped, one carrying a decoder-relevant message is forwarded bit-exact.
+     * [declaredDv] is [stripAnnexB]'s declared-DV gate for the suffix SEI (40),
+     * in this framing: that NAL is dropped outright, the way the RPU (62) is, on
+     * a stream whose container declared Dolby Vision.
+     *
+     * [rewriteParamSets] is [stripAnnexB]'s in-band parameter-set agreement, in
+     * this framing: the sample's VPS/SPS are re-emitted as single-layer HDR10,
+     * each with its length prefix rewritten, so they equal the csd the caller
+     * already re-advertised.
      */
     fun stripLengthDelimited(
         buf: ByteArray,
@@ -808,7 +875,8 @@ internal object DolbyVisionCompat {
         dropRpuNal: Boolean = false,
         kotlinOnly: Boolean = false,
         accounting: SeiStripAccounting? = null,
-        declaredDv: Boolean = false
+        declaredDv: Boolean = false,
+        rewriteParamSets: Boolean = false
     ): Int {
         // Prefer libdovi's native strip; fall back to the Kotlin parser below.
         // Same contract and same trade as [stripAnnexB], in an MP4/fMP4 shape:
@@ -869,13 +937,45 @@ internal object DolbyVisionCompat {
                     keep = false
                     accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
                 }
+                // Fix 1's in-band parameter-set agreement, in this framing
+                // (see [stripAnnexB]): each rewritten set is re-emitted with its
+                // own length prefix, so the NALs after it shift by what it lost.
+                if (keep && rewriteParamSets) {
+                    when (nalType) {
+                        NAL_VPS -> when (val res = rewriteVpsToHdr10(buf, payload + 2, payload + nal)) {
+                            is VpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                writeLength(buf, write, res.rbsp.size + 2, fieldLen)
+                                System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + fieldLen + 2, res.rbsp.size)
+                                write += fieldLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is VpsRewriteOutcome.Failed -> Unit
+                            VpsRewriteOutcome.NoDvExtension -> Unit
+                        }
+                        NAL_SPS -> when (val res = rewriteSpsToHdr10(buf, payload + 2, payload + nal)) {
+                            is SpsRewriteOutcome.Rewritten -> {
+                                changed = true
+                                writeLength(buf, write, res.rbsp.size + 2, fieldLen)
+                                System.arraycopy(buf, payload, buf, write + fieldLen, 2)
+                                System.arraycopy(res.rbsp, 0, buf, write + fieldLen + 2, res.rbsp.size)
+                                write += fieldLen + 2 + res.rbsp.size
+                                keep = false
+                            }
+                            is SpsRewriteOutcome.Failed -> Unit
+                            SpsRewriteOutcome.NoDvExtension -> Unit
+                        }
+                    }
+                }
                 // Diagnostic arm, RPU (62) only (see [stripAnnexB]).
                 if (keep && dropRpuNal && nalType == NAL_DV_RPU) {
                     keep = false
                     accounting?.record(nalType, nal, SeiStripAccounting.Action.DROPPED)
                 }
-                // Same declared-DV suffix-SEI audit as [stripAnnexB], in this
-                // framing (Fix A).
+                // Same declared-DV suffix-SEI drop as [stripAnnexB], in this
+                // framing (Fix A): unconditional, and the walk only names the
+                // payload types for the log.
                 val declaredDvSuffixSei = stripDv && declaredDv && nalType == NAL_SUFFIX_SEI
                 var seiWalk: HevcSeiAudit.Walk? = null
                 if (keep && isHdr10PlusSeiNal(nalType) &&
@@ -885,14 +985,12 @@ internal object DolbyVisionCompat {
                 }
                 if (keep && declaredDvSuffixSei) {
                     val walk = seiWalk ?: HevcSeiAudit.walk(buf, payload + 2, payload + nal)
-                    if (walk.complete && HevcSeiAudit.isVendorOnly(walk.types)) {
-                        keep = false
-                        accounting?.record(
-                            nalType, nal, SeiStripAccounting.Action.DROPPED,
-                            payloadTypes = walk.types,
-                            reason = HevcSeiAudit.DROP_REASON_VENDOR_ONLY
-                        )
-                    }
+                    keep = false
+                    accounting?.record(
+                        nalType, nal, SeiStripAccounting.Action.DROPPED,
+                        payloadTypes = walk.types,
+                        reason = HevcSeiAudit.DROP_REASON_DECLARED_DV_SUFFIX
+                    )
                 }
                 if (keep && stripHdr10Plus && isHdr10PlusSeiNal(nalType) && nal >= 4) {
                     // Diagnostic only, computed only when someone is listening:
@@ -901,14 +999,10 @@ internal object DolbyVisionCompat {
                     val legacyDrop = accounting != null &&
                         seiWouldLegacyDrop(buf, payload + 2, payload + nal)
                     val seiTypes = seiWalk?.types.orEmpty()
-                    val seiReason = if (declaredDvSuffixSei) {
-                        if (seiWalk?.complete == true) HevcSeiAudit.KEEP_REASON_DECODER_RELEVANT
-                        else HevcSeiAudit.TRUNCATED_REASON
-                    } else null
                     if (!seiCarriesHdr10Plus(buf, payload + 2, payload + nal)) {
                         accounting?.record(
                             nalType, nal, SeiStripAccounting.Action.KEPT,
-                            legacyDrop = legacyDrop, payloadTypes = seiTypes, reason = seiReason
+                            legacyDrop = legacyDrop, payloadTypes = seiTypes
                         )
                     } else {
                         val dest = write + fieldLen + 2
@@ -922,7 +1016,7 @@ internal object DolbyVisionCompat {
                         ) {
                             SEI_STRIP_UNTOUCHED -> accounting?.record(
                                 nalType, nal, SeiStripAccounting.Action.KEPT,
-                                legacyDrop = legacyDrop, payloadTypes = seiTypes, reason = seiReason
+                                legacyDrop = legacyDrop, payloadTypes = seiTypes
                             )
                             SEI_STRIP_DROP -> {
                                 keep = false
@@ -938,7 +1032,7 @@ internal object DolbyVisionCompat {
                                 accounting?.record(
                                     nalType, nal, SeiStripAccounting.Action.SHRUNK,
                                     newSize = 2 + res,
-                                    payloadTypes = seiTypes, reason = seiReason
+                                    payloadTypes = seiTypes
                                 )
                             }
                         }
@@ -1053,10 +1147,10 @@ internal object DolbyVisionCompat {
             /**
              * Why an entry came out the way it did when the plain
              * RPU/EL/HDR10+ rule does not explain it - e.g.
-             * [HevcSeiAudit.DROP_REASON_VENDOR_ONLY] for a declared-DV suffix
-             * SEI. Printed as `(reason)`, so the removal is attributable from
-             * the first-sample line alone (the audit runs A-E are attributed
-             * per fix, never bundled).
+             * [HevcSeiAudit.DROP_REASON_DECLARED_DV_SUFFIX] for a declared-DV
+             * suffix SEI the NALS-strip removed. Printed as `(reason)`, so the
+             * removal is attributable from the first-sample line alone (the
+             * audit runs A-E are attributed per fix, never bundled).
              */
             val reason: String? = null
         )
@@ -1074,7 +1168,7 @@ internal object DolbyVisionCompat {
         }
         /**
          * Compact logcat rendering, e.g.
-         * "39:69->kept[pt=137,144],40:35->dropped(dvVendorSei)[pt=5]".
+         * "39:69->kept[pt=137,144],40:35->dropped(declaredDvSei)[pt=5]".
          * Entries recorded by libdovi ([viaLibdovi]) print with a size of 0,
          * which is "not measured", not "empty".
          */
@@ -3048,17 +3142,22 @@ internal object DolbyVisionCompat {
      *
      * [walk] parses the message headers exactly the way [seiCarriesHdr10Plus]
      * does (0xFF continuation on payload type and size), so the two agree about
-     * where a message ends. [isVendorOnly] is the rule the declared-DV NAL-40
-     * drop reads: a NAL whose every message falls outside
-     * [DECODER_RELEVANT_TYPES] carries nothing the decoder consumes and is
-     * dropped like the RPU; a NAL carrying even one decoder-relevant message is
-     * forwarded bit-exact - film grain, the mastering-display / content-light
-     * static metadata, and the timing messages all live in types that set.
+     * where a message ends. The payload types it finds are what the first-sample
+     * log prints, so the field run can say which types a file actually carries
+     * instead of trusting [DECODER_RELEVANT_TYPES] (H12 / H13).
      *
-     * The rule never decides a drop from a truncated walk ([Walk.complete]), and
-     * the payload types it found are what the first-sample log prints, so the
-     * field run can say which types a file actually carries instead of trusting
-     * this set (H12 / H13).
+     * [isVendorOnly] is the MUTATING strip's rule for that NAL
+     * ([dvSuffixSeiVendorOnly], Fix F8), not the NALS-strip's: there a NAL whose
+     * every message falls outside [DECODER_RELEVANT_TYPES] carries nothing the
+     * decoder consumes and is dropped like the RPU, while a NAL carrying even
+     * one decoder-relevant message is forwarded bit-exact - film grain, the
+     * mastering-display / content-light static metadata, and the timing messages
+     * all live in types that set. That rule never decides from a truncated walk
+     * ([Walk.complete]).
+     *
+     * The NALS-strip no longer consults any of that: since the 2026-10-16 field
+     * evidence ([stripAnnexB]) it drops the declared-DV suffix SEI outright, so a
+     * truncated walk cannot save the one NAL the stalled file is known to carry.
      */
     internal object HevcSeiAudit {
         /**
@@ -3076,19 +3175,15 @@ internal object DolbyVisionCompat {
          */
         val DECODER_RELEVANT_TYPES = setOf(0, 1, 2, 3, 6, 19, 137, 144, 145, 147)
 
-        /** Recorded on the declared-DV suffix SEI this rule drops. */
-        const val DROP_REASON_VENDOR_ONLY = "dvVendorSei"
-
-        /** Recorded on a declared-DV suffix SEI this rule keeps. */
-        const val KEEP_REASON_DECODER_RELEVANT = "decoderRelevantSei"
-
-        /** Recorded when the message walk could not be completed. */
-        const val TRUNCATED_REASON = "seiWalkTrunc"
+        /** Recorded on the declared-DV suffix SEI the NALS-strip drops. */
+        const val DROP_REASON_DECLARED_DV_SUFFIX = "declaredDvSei"
 
         /**
          * One SEI NAL's message walk: [types] in order, and whether the walk
-         * consumed the NAL exactly. An incomplete walk carries no opinion - a
-         * NAL is never dropped on a parse failure.
+         * consumed the NAL exactly. An incomplete walk carries no opinion of
+         * its own - the mutating strip's vendor-only rule refuses to decide on
+         * one, and the NALS-strip's suffix-SEI drop does not read the walk at
+         * all.
          */
         internal data class Walk(val types: List<Int>, val complete: Boolean)
 
