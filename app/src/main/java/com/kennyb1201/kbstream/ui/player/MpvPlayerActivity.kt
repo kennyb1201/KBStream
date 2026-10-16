@@ -4039,6 +4039,12 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             parentId,
             currentAddonName
         )
+        // ...and dead for the REST of this session too, exactly as the
+        // open-failure path marks it: a source that opened and stalled is no
+        // more usable than one that never opened, and without this the ladder
+        // walks the same addon's OTHER links, each burning a whole three-stall
+        // window before the next one is reached.
+        SourceAddonSession.markDead(sessionDeadAddons, currentAddonName)
         switchToSource(next, isAutoRecovery = true)
     }
 

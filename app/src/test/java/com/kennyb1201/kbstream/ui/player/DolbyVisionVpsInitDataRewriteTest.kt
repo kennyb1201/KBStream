@@ -153,6 +153,67 @@ class DolbyVisionVpsInitDataRewriteTest {
         )
     }
 
+    /**
+     * The mutating strip's config rewrite (the VPS-and-SPS variant, reached
+     * through `rewriteInitDataVps`) answers with the rewritten RBSP ALONE, so
+     * the NAL has to be re-emitted as its original 2-byte header plus that
+     * payload, with the length prefix counting both. Writing the bare RBSP with
+     * a fresh length and no header is what a decoder reads as a NAL header
+     * sitting on payload bytes: the record then carries a parameter set
+     * nothing can find, which is a corrupt codec config on every path that
+     * mutates a declared-DV MP4/fMP4.
+     */
+    @Test
+    fun `the VPS-and-SPS config path keeps the rewritten VPS's NAL header`() {
+        val record = hvcCRecord(dvVps, sps)
+        val out = DolbyVisionCompat.rewriteInitDataVps(listOf(record)).single()
+
+        assertEquals(
+            "this path patches the record's general profile to Main10 (profile_idc 2), " +
+                "which is the one byte of the header it owns",
+            0x02,
+            out[1].toInt() and 0xFF
+        )
+        assertEquals(
+            "and raises the Main10 compatibility flag (profile 2 is the top bit of the " +
+                "second flag byte) - the fixture's flags start at zero",
+            0x20,
+            out[2].toInt() and 0xFF
+        )
+        assertArrayEquals(
+            "while every header byte past the flags is copied verbatim",
+            record.copyOfRange(6, 23),
+            out.copyOfRange(6, 23)
+        )
+        assertEquals("the array header still says VPS", 32, out[23].toInt() and 0x3F)
+        assertEquals(
+            "and still holds one NAL",
+            1,
+            ((out[24].toInt() and 0xFF) shl 8) or (out[25].toInt() and 0xFF)
+        )
+        val vpsLen = ((out[26].toInt() and 0xFF) shl 8) or (out[27].toInt() and 0xFF)
+        assertEquals(
+            "the NAL header is carried through",
+            0x40,
+            out[28].toInt() and 0xFF
+        )
+        assertEquals(
+            "its second byte too - a payload byte in this position is the bug",
+            0x01,
+            out[29].toInt() and 0xFF
+        )
+        assertEquals(
+            "and the length counts that header with the rewritten RBSP",
+            out.size - 30 - (sps.size + 5),
+            vpsLen - 2
+        )
+        assertArrayEquals(
+            "the SPS array is still byte-identical behind it",
+            byteArrayOf(33, 0, 1, (sps.size shr 8).toByte(), sps.size.toByte()) + sps,
+            out.copyOfRange(out.size - (sps.size + 5), out.size)
+        )
+    }
+
     @Test
     fun `a config with no VPS comes back as the very same list`() {
         val init = listOf(lengthDelimited(sps, pps), ByteArray(0))

@@ -1031,7 +1031,16 @@ private class VideoCompatTrackOutput(
             // The pixel-level conversion is applied by the FFmpeg renderer when
             // P5 content is detected — see NativePlayerActivity for the decoder
             // selection logic that forces FFmpeg for P5 streams.
-            var builder = format.buildUpon().setCodecs(dvRewrite)
+            // The init data is rewritten just below, so the codec string this
+            // format advertises is DERIVED from it rather than left as the fixed
+            // guess: an "hvc1.2.4.L153.B0" that disagrees with the VPS/SPS the
+            // decoder is handed is the MTK stall class the rescue arm already
+            // fixed - the decoder configures from one and is fed the other - and
+            // this arm rewrites the config too.
+            val rewrittenInitData = rewriteInitData(format.initializationData)
+            var builder = format.buildUpon().setCodecs(
+                DolbyVisionCompat.hevcCodecFromInitData(rewrittenInitData) ?: dvRewrite
+            )
             // Keep the original declared DV codec (e.g. "dvhe.07.06") on the
             // rewritten format so the player UI can badge the exact profile
             // that was converted ("DV P7 → HDR10"). The decoder selection
@@ -1042,9 +1051,7 @@ private class VideoCompatTrackOutput(
             if (format.sampleMimeType == MimeTypes.VIDEO_DOLBY_VISION) {
                 builder = builder.setSampleMimeType(MimeTypes.VIDEO_H265)
             }
-            builder = builder.setInitializationData(
-                rewriteInitData(format.initializationData)
-            )
+            builder = builder.setInitializationData(rewrittenInitData)
             val rewritten = builder.build()
             // When DV is stripped, the resulting stream is plain HDR10 HEVC.
             // Inject correct HDR10 color metadata (ST.2084 PQ / BT.2020) so
@@ -1196,8 +1203,21 @@ private class VideoCompatTrackOutput(
                             "Re-emitting format with rewritten single-layer HDR10 codec config " +
                                 "(codecs=${fmt.codecs ?: "?"})"
                         )
-                        val reEmitted =
-                            fmt.buildUpon().setInitializationData(rewrittenInit).build()
+                        // The codec string has to agree with the config the
+                        // decoder is handed, exactly as on the declared-DV arm
+                        // above: this sample's VPS/SPS really did change (the
+                        // sniff only re-emits when they did), so leaving the old
+                        // string is the "configures from one, fed the other" MTK
+                        // stall - derived here, with the stream's own string as
+                        // the fallback when the sets do not parse.
+                        val reEmitted = fmt
+                            .buildUpon()
+                            .setInitializationData(rewrittenInit)
+                            .setCodecs(
+                                DolbyVisionCompat.hevcCodecFromInitData(rewrittenInit)
+                                    ?: fmt.codecs
+                            )
+                            .build()
                         logDecoderFormat(reEmitted)
                         delegate.format(reEmitted)
                         // The decoder's format is the rewrite, so the step below

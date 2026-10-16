@@ -770,7 +770,7 @@ internal object DolbyVisionCompat {
                 // removes just the HDR10+ message and keeps the NAL. Every
                 // other declared-DV suffix SEI still goes the way of the RPU.
                 if (keep && declaredDvSuffixSei &&
-                    !hdr10PlusSeiNal(buf, nalType, header + 2, nalEnd, stripHdr10Plus)
+                    !hdr10PlusSeiNal(buf, nalType, header + 2, nalEnd)
                 ) {
                     val walk = seiWalk ?: HevcSeiAudit.walk(buf, header + 2, nalEnd)
                     keep = false
@@ -995,7 +995,7 @@ internal object DolbyVisionCompat {
                 // only HDR10+ falls to the branch below instead of being dropped
                 // whole (ebd3ad1c's keep-whole rule).
                 if (keep && declaredDvSuffixSei &&
-                    !hdr10PlusSeiNal(buf, nalType, payload + 2, payload + nal, stripHdr10Plus)
+                    !hdr10PlusSeiNal(buf, nalType, payload + 2, payload + nal)
                 ) {
                     val walk = seiWalk ?: HevcSeiAudit.walk(buf, payload + 2, payload + nal)
                     keep = false
@@ -2170,10 +2170,23 @@ internal object DolbyVisionCompat {
                     }
                     else -> null
                 }
-                if (rewritten != null) nal = rewritten
-                out.write((nal.size ushr 8) and 0xFF)
-                out.write(nal.size and 0xFF)
-                out.write(nal, 0, nal.size)
+                // The rewrite answers with the RBSP ALONE (see [rewriteVpsNal]):
+                // the NAL goes back out as its original 2-byte header followed
+                // by the rewritten payload, and the length prefix counts both.
+                // Writing the bare RBSP as a complete NAL - a fresh length, no
+                // header - leaves the decoder reading payload bytes as the NAL
+                // header and finding no parameter sets in the record at all,
+                // which is exactly the corrupt codec config the sibling
+                // [rewriteVpsInHvcCRecord] already avoids by preserving it.
+                val outLen = if (rewritten != null) rewritten.size + 2 else nalLen
+                out.write((outLen ushr 8) and 0xFF)
+                out.write(outLen and 0xFF)
+                if (rewritten != null) {
+                    out.write(nal, 0, 2)
+                    out.write(rewritten, 0, rewritten.size)
+                } else {
+                    out.write(nal, 0, nal.size)
+                }
                 pos += nalLen
             }
             arrays++
@@ -2300,16 +2313,21 @@ internal object DolbyVisionCompat {
      * dropped whole - contradicting ebd3ad1c's keep-whole rule for exactly the
      * NAL whose HDR10+ has to be surgically removed rather than the NAL. Seeing
      * it here lets that rule defer to the HDR10+ branch for this NAL.
+     *
+     * Deliberately NOT gated on the strip flag: this answers only whether the
+     * NAL carries HDR10+, because the NAL's fate belongs to the HDR10+ branch
+     * behind it - that branch is the one that knows whether the viewer asked for
+     * the material to be removed. Charging the strip flag here made "don't strip
+     * HDR10+" mean "drop the whole NAL", so a declared-DV track's HDR10+ was
+     * destroyed by the very setting that asked to keep it.
      */
     private fun hdr10PlusSeiNal(
         buf: ByteArray,
         nalType: Int,
         payloadStart: Int,
-        nalEnd: Int,
-        stripHdr10Plus: Boolean
+        nalEnd: Int
     ): Boolean =
-        stripHdr10Plus && isHdr10PlusSeiNal(nalType) &&
-            seiCarriesHdr10Plus(buf, payloadStart, nalEnd)
+        isHdr10PlusSeiNal(nalType) && seiCarriesHdr10Plus(buf, payloadStart, nalEnd)
 
     /**
      * DV-strip transform for Annex-B samples: rewrites the VPS to plain
@@ -2416,7 +2434,7 @@ internal object DolbyVisionCompat {
                     dvSuffixSeiVendorOnly(
                         buf, nalType, header + 2, nalEnd,
                         longEnough = nalBytes >= 4, declaredDv = declaredDv
-                    ) && !hdr10PlusSeiNal(buf, nalType, header + 2, nalEnd, stripHdr10Plus) -> {
+                    ) && !hdr10PlusSeiNal(buf, nalType, header + 2, nalEnd) -> {
                         keep = false
                         changed = true
                         if (stats != null) {
@@ -2429,7 +2447,15 @@ internal object DolbyVisionCompat {
                         val dest = write + codeLen + 2
                         if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
                         when (val res = stripHdr10PlusMessagesInPlace(
-                            buf, header + 2, nalEnd, dest
+                            buf, header + 2, nalEnd, dest,
+                            // The DV strip's keep-whole rule (see
+                            // [stripHdr10PlusMessagesInPlace]): every caller of
+                            // this transform is converting Dolby Vision, so the
+                            // flag the strip paths thread through as `stripDv`
+                            // is constant here - without it a declared-DV file
+                            // on the mutating path lost every all-HDR10+ NAL
+                            // 39/40 it carried.
+                            keepNalWhenAllHdr10Plus = true
                         )) {
                             SEI_STRIP_UNTOUCHED -> Unit
                             SEI_STRIP_DROP -> {
@@ -2626,11 +2652,14 @@ internal object DolbyVisionCompat {
                         if (stats != null) stats.elBytes += nal
                     }
                     // Fix F8 in this framing: the same declared-DV NAL-40 rule
-                    // [transformAnnexB] applies (see [dvSuffixSeiVendorOnly]).
+                    // [transformAnnexB] applies (see [dvSuffixSeiVendorOnly]),
+                    // including its HDR10+ exception - a suffix SEI carrying
+                    // HDR10+ falls to the HDR10+ branch below, which keeps the
+                    // NAL (see [stripHdr10PlusMessagesInPlace]).
                     dvSuffixSeiVendorOnly(
                         buf, nalType, payload + 2, payload + nal,
                         longEnough = nal >= 4, declaredDv = declaredDv
-                    ) -> {
+                    ) && !hdr10PlusSeiNal(buf, nalType, payload + 2, payload + nal) -> {
                         keep = false
                         changed = true
                         if (stats != null) {
@@ -2643,7 +2672,9 @@ internal object DolbyVisionCompat {
                         val dest = write + fieldLen + 2
                         if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
                         when (val res = stripHdr10PlusMessagesInPlace(
-                            buf, payload + 2, payload + nal, dest
+                            buf, payload + 2, payload + nal, dest,
+                            // Same DV keep-whole rule as the Annex-B transform.
+                            keepNalWhenAllHdr10Plus = true
                         )) {
                             SEI_STRIP_UNTOUCHED -> Unit
                             SEI_STRIP_DROP -> {
@@ -3346,9 +3377,24 @@ internal object DolbyVisionCompat {
                 payloadSize += b
                 pos++
             } while (b == 0xFF)
-            if (pos + payloadSize > end) return false
-            if (payloadType == 4 && containsHdr10PlusMarker(buf, pos, pos + payloadSize)) return true
-            pos += payloadSize
+            val payloadStart = pos
+            // The payload region is EBSP, so [payloadSize] counts RBSP bytes and
+            // the message ends past any emulation-prevention 0x03 inside it:
+            // advancing by the raw count lands mid-message and reads the rest of
+            // the NAL as message headers, which is how a NAL that does carry
+            // HDR10+ gets reported as not carrying it (the same step
+            // [HevcSeiAudit.walk] makes).
+            var remaining = payloadSize
+            while (remaining > 0) {
+                if (pos >= end) return false
+                val v = buf[pos].toInt() and 0xFF
+                pos++
+                val epb = v == 0x03 && pos >= 3 &&
+                    (buf[pos - 2].toInt() and 0xFF) == 0x00 &&
+                    (buf[pos - 3].toInt() and 0xFF) == 0x00
+                if (!epb) remaining--
+            }
+            if (payloadType == 4 && containsHdr10PlusMarker(buf, payloadStart, pos)) return true
         }
         return false
     }
@@ -4135,7 +4181,15 @@ internal object DolbyVisionCompat {
                         val dest = write + codeLen + 2
                         if (write != read) System.arraycopy(buf, read, buf, write, codeLen + 2)
                         when (val res = stripHdr10PlusMessagesInPlace(
-                            buf, header + 2, nalEnd, dest
+                            buf, header + 2, nalEnd, dest,
+                            // The DV strip's keep-whole rule (see
+                            // [stripHdr10PlusMessagesInPlace]): every caller of
+                            // this transform is converting Dolby Vision, so the
+                            // flag the strip paths thread through as `stripDv`
+                            // is constant here - without it a declared-DV file
+                            // on the mutating path lost every all-HDR10+ NAL
+                            // 39/40 it carried.
+                            keepNalWhenAllHdr10Plus = true
                         )) {
                             SEI_STRIP_UNTOUCHED -> Unit
                             SEI_STRIP_DROP -> {
@@ -4250,7 +4304,9 @@ internal object DolbyVisionCompat {
                         val dest = write + fieldLen + 2
                         if (write != read) System.arraycopy(buf, payload, buf, write + fieldLen, 2)
                         when (val res = stripHdr10PlusMessagesInPlace(
-                            buf, payload + 2, payload + nal, dest
+                            buf, payload + 2, payload + nal, dest,
+                            // Same DV keep-whole rule as the Annex-B transform.
+                            keepNalWhenAllHdr10Plus = true
                         )) {
                             SEI_STRIP_UNTOUCHED -> Unit
                             SEI_STRIP_DROP -> {

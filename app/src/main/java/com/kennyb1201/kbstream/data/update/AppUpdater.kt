@@ -9,6 +9,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.content.FileProvider
 import androidx.core.content.IntentCompat
+import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -306,6 +307,7 @@ object AppUpdater {
 
     /** Silent launch-time check, throttled to once per 12h. Failures are quiet. */
     fun maybeAutoCheck(context: Context) {
+        if (BuildConfig.PLAY_BUILD) return
         val last = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getLong(KEY_LAST_CHECK_MS, 0L)
         if (System.currentTimeMillis() - last < AUTO_CHECK_INTERVAL_MS) return
@@ -329,6 +331,12 @@ object AppUpdater {
     }
 
     fun checkForUpdate(context: Context) {
+        // A Play build has no self-update: REQUEST_INSTALL_PACKAGES is stripped
+        // from its merged manifest, so the offer could only end in a failed
+        // install (and asking for it is a Play policy risk). The check is a
+        // no-op rather than an offer that cannot be accepted - the Settings row
+        // is hidden on the same flag.
+        if (BuildConfig.PLAY_BUILD) return
         when (state.value) {
             is UpdateState.Checking, is UpdateState.Downloading -> return
             is UpdateState.ReadyToInstall -> return // APK already staged

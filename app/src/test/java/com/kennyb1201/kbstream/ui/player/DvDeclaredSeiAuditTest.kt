@@ -639,6 +639,65 @@ class DvDeclaredSeiAuditTest {
         assertArrayEquals(expectedInBand, inBandBuf.copyOf(inBand))
     }
 
+    // ── the HDR10+ exception the repaired F8 walk has to keep ─────────────
+    //
+    // A suffix SEI carrying ONLY an HDR10+ message reads as "vendor only" to the
+    // NAL-40 rule (type 4 is outside the decoder-relevant set), so the rule would
+    // drop the whole NAL - taking HDR10+ the viewer asked to KEEP with it, and
+    // contradicting the keep-whole rule the strip paths already honour. The
+    // exception is what defers that NAL to the HDR10+ branch, which knows
+    // whether the material was asked for or not.
+
+    /** A T35 payload that opens with the ST 2094-40 marker (see the walker). */
+    private val hdr10PlusBody =
+        byteArrayOf(0xB5.toByte(), 0x00, 0x3C, 0x00, 0x01, 0x04) + ByteArray(24) { 0x5A }
+
+    @Test
+    fun `the mutating strip keeps an all-HDR10+ suffix SEI when HDR10+ is kept`() {
+        val hdr10Sei = seiNal(40, seiMessage(4, hdr10PlusBody))
+        val sample = concat(idr, hdr10Sei, rpu)
+
+        val newLen = DolbyVisionCompat.transformAnnexB(
+            sample, sample.size, stripHdr10Plus = false, stats = null, declaredDv = true
+        )
+
+        // This is a DV strip, so the RPU still goes; the SEI is forwarded
+        // bit-exact, which is what "don't strip HDR10+" has to mean.
+        val expected = concat(idr, hdr10Sei)
+        assertEquals(expected.size, newLen)
+        assertArrayEquals(expected, sample.copyOf(newLen))
+    }
+
+    @Test
+    fun `an all-HDR10+ SEI NAL is kept whole on the mutating transform`() {
+        val hdr10Sei = seiNal(40, seiMessage(4, hdr10PlusBody))
+        val sample = concat(idr, hdr10Sei, rpu)
+
+        val newLen = DolbyVisionCompat.transformAnnexB(
+            sample, sample.size, stripHdr10Plus = true, stats = null, declaredDv = true
+        )
+
+        // The Nuvio shape the strip paths pass `stripDv` for: the message list
+        // is emptied of HDR10+, so nothing is left to remove and the NAL stays.
+        val expected = concat(idr, hdr10Sei)
+        assertEquals(expected.size, newLen)
+        assertArrayEquals(expected, sample.copyOf(newLen))
+    }
+
+    @Test
+    fun `the length-delimited transform honours the same HDR10+ exception`() {
+        val ldHdr10Sei = ldNal(40, seiMessage(4, hdr10PlusBody))
+        val sample = lengthDelimited(ldIdr, ldHdr10Sei, ldRpu)
+
+        val newLen = DolbyVisionCompat.transformLengthDelimited(
+            sample, sample.size, 4, stripHdr10Plus = true, stats = null, declaredDv = true
+        )
+
+        val expected = lengthDelimited(ldIdr, ldHdr10Sei)
+        assertEquals(expected.size, newLen)
+        assertArrayEquals(expected, sample.copyOf(newLen))
+    }
+
     // ── Fix F2: does a DV-flagged set survive into the decoder's bytes? ────
 
     @Test

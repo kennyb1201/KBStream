@@ -107,9 +107,19 @@
         </intent>
     </queries>
 
+    <!--
+         required=false, deliberately: this manifest also carries a plain
+         LAUNCHER category and the app targets API 36 (the phone/tablet/foldable
+         requirement), so the AAB is meant for those form factors too. A
+         REQUIRED leanback feature is a Play device filter - it hid the app from
+         every non-TV device, which is the opposite of what the launcher entry
+         and the tablet work are for. The TV entry keeps its own
+         LEANBACK_LAUNCHER category below; a TV box that declares leanback still
+         gets the banner icon and D-pad home screen.
+    -->
     <uses-feature
         android:name="android.software.leanback"
-        android:required="true" />
+        android:required="false" />
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />

@@ -114,6 +114,61 @@ class PlayerTrackBridgeSubtitleFormatTest {
 
     // ── the paths that must not change ─────────────────────────────────────
 
+    // ── an untagged track is the second block, not a miss ────────────────
+
+    /**
+     * The field shape: a rip whose subtitle tracks state NO language, with a
+     * subtitle language set in Settings. The activity's own selection arms one
+     * of them ([SubtitleTrackRules.choose] step 3) and this pass - which runs
+     * on every READY and rebuffer, after it - used to answer "no track for
+     * 'en'" and DISABLE text, on the same READY. Subtitles appeared for a
+     * moment and were switched back off.
+     */
+    @Test
+    fun `an untagged track is armed when nothing is tagged for the language`() {
+        val group = group(Format.Builder().setSampleMimeType(MimeTypes.APPLICATION_SUBRIP).build())
+
+        assertEquals(
+            "the untagged track is the viewer's language far more often than not",
+            TrackSelectionOverride(group.mediaTrackGroup, 0),
+            PlayerTrackBridge.matchingOverride(tracks(group), C.TRACK_TYPE_TEXT, "en")
+        )
+    }
+
+    @Test
+    fun `a tagged match still outranks the untagged block`() {
+        val untagged = group(Format.Builder().setSampleMimeType(MimeTypes.APPLICATION_SUBRIP).build())
+        val english = group(format("eng", MimeTypes.APPLICATION_SUBRIP))
+
+        assertEquals(
+            "the language-tagged track is the first block, exactly as choose() ranks it",
+            TrackSelectionOverride(english.mediaTrackGroup, 0),
+            PlayerTrackBridge.matchingOverride(tracks(untagged, english), C.TRACK_TYPE_TEXT, "en")
+        )
+    }
+
+    @Test
+    fun `another language never wins over the untagged track`() {
+        val untagged = group(Format.Builder().setSampleMimeType(MimeTypes.APPLICATION_SUBRIP).build())
+        val russian = group(format("rus", MimeTypes.APPLICATION_SUBRIP))
+
+        assertEquals(
+            "a stated language that is not the one asked for never beats an untagged track",
+            TrackSelectionOverride(untagged.mediaTrackGroup, 0),
+            PlayerTrackBridge.matchingOverride(tracks(russian, untagged), C.TRACK_TYPE_TEXT, "en")
+        )
+    }
+
+    @Test
+    fun `no subtitle track at all is still the caller's null`() {
+        val russian = group(format("rus", MimeTypes.APPLICATION_SUBRIP))
+
+        assertNull(
+            "nothing drawable to arm, so the NeedsMpv handoff / fetch path stays in charge",
+            PlayerTrackBridge.matchingOverride(tracks(russian), C.TRACK_TYPE_TEXT, "en")
+        )
+    }
+
     @Test
     fun `an English SRT on its own is still armed`() {
         val group = group(format("eng", MimeTypes.APPLICATION_SUBRIP))

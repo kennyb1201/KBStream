@@ -99,6 +99,15 @@ internal class P5PlaneDecoder(
     private var outputStartTimeUs: Long = 0L
     private var endOfStreamQueued = false
     private var endOfStreamDequeued = false
+
+    /**
+     * The codec's end-of-stream was seen while every output buffer was still out
+     * with the renderer, so there was nothing to hang the marker on. Handed over
+     * by the next dequeue instead of dropped: media3 reads the marker as "this
+     * decoder is finished", and a stream that never reports it ends in a renderer
+     * that waits for a frame that is already over (see [dequeueOutputBuffer]).
+     */
+    private var endOfStreamPending = false
     private var colorRangeLimited = true
     private var released = false
     private var oversizedSamples = 0
@@ -176,6 +185,15 @@ internal class P5PlaneDecoder(
     @Suppress("DEPRECATION")
     override fun dequeueOutputBuffer(): P5OutputBuffer? {
         drainPendingInputs()
+        // The marker the pool could not carry last time, before anything else:
+        // the frames behind it are already drained, and the renderer is waiting
+        // for exactly this.
+        if (endOfStreamPending) {
+            val eos = obtainOutputBuffer() ?: return null
+            endOfStreamPending = false
+            eos.addFlag(C.BUFFER_FLAG_END_OF_STREAM)
+            return eos
+        }
         var drained = 0
         while (!released && drained < MAX_OUTPUT_DRAIN_PER_CALL) {
             val info = MediaCodec.BufferInfo()
@@ -201,7 +219,14 @@ internal class P5PlaneDecoder(
                     if (info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
                         endOfStreamDequeued = true
                         releaseCodecBuffer(index)
-                        val eos = obtainOutputBuffer() ?: return null
+                        val eos = obtainOutputBuffer()
+                        if (eos == null) {
+                            // Every output buffer is still out with the renderer,
+                            // so the marker has nowhere to go this call. Held, not
+                            // dropped (see [endOfStreamPending]).
+                            endOfStreamPending = true
+                            return null
+                        }
                         eos.addFlag(C.BUFFER_FLAG_END_OF_STREAM)
                         return eos
                     }
@@ -261,6 +286,11 @@ internal class P5PlaneDecoder(
         }
         endOfStreamQueued = false
         endOfStreamDequeued = false
+        // A flush starts a new stream: the oversize run that counts toward
+        // failing the decoder belongs to the one being left behind, so a seek or
+        // a source switch does not inherit its count (the frames around it are
+        // gone and the next samples are a different encode).
+        oversizedSamples = 0
         // Output buffers held by the renderer/GL view return through the
         // owner callback; freeOutputBuffers is concurrent so that is safe.
     }
@@ -350,6 +380,20 @@ internal class P5PlaneDecoder(
                     // a dropped frame is a glitch until the next keyframe, a
                     // thrown exception is a dead player.
                     oversize(input, data.remaining(), buffer.capacity())
+                    // Hand the codec input index BACK before dropping the sample.
+                    // Leaking it is worse than the drop: the codec owns a handful
+                    // of input slots, so a 4K P5 stream that keeps oversizing runs
+                    // them all out and starves for the rest of the session, with
+                    // pendingInputs growing behind it. A zero-length queue is the
+                    // codec's own "here is the buffer, no data".
+                    try {
+                        codec.queueInputBuffer(index, 0, 0, 0, 0)
+                    } catch (e: Exception) {
+                        throw DecoderException(
+                            "P5PlaneDecoder: queueInputBuffer (dropped oversize sample) failed",
+                            e
+                        )
+                    }
                     freeInputBuffers.addLast(input)
                     continue
                 }

@@ -35,7 +35,13 @@ import java.nio.ByteBuffer
  * (see [SoftwareAudioRules]).
  */
 internal class LiveDownmixAudioSink(
-    private val inner: AudioSink
+    private val inner: AudioSink,
+    /**
+     * The pair this sink wears, owned by the factory that built it. Read here
+     * rather than taken from a process-wide singleton: the processors' state
+     * belongs to this player's stream (see [PlayerAudioProcessors]).
+     */
+    private val processors: PlayerAudioProcessors
 ) : AudioSink by inner {
 
     private companion object {
@@ -170,7 +176,7 @@ internal class LiveDownmixAudioSink(
         if (!pcmInput) return
         val format = inputFormat ?: return
 
-        val processor = AudioDownmixProcessor.instance
+        val processor = processors.downmix
         // The processor stands aside for encodings and layouts it does not
         // model (passthrough/offload, or a channel count with no speaker map);
         // guessing at a fold for those would corrupt the stream.
@@ -186,7 +192,7 @@ internal class LiveDownmixAudioSink(
         // The reconfigure replays the sink's configure/flush hooks, and those are
         // where AudioDelayProcessor re-inserts the A/V offset — but the audio
         // already carries its shift, so that one re-insertion must be skipped.
-        AudioDelayProcessor.instance.beginInPlaceReconfigure()
+        processors.delay.beginInPlaceReconfigure()
 
         try {
             inner.configure(format, specifiedBufferSize, channelMap)
@@ -207,7 +213,7 @@ internal class LiveDownmixAudioSink(
                 "live downmix: sink refused the new layout, keeping $carrying channels",
                 rejected
             )
-            AudioDownmixProcessor.instance.rePinOutputChannels(carrying)
+            processors.downmix.rePinOutputChannels(carrying)
             rejectedTarget = target
         }
     }

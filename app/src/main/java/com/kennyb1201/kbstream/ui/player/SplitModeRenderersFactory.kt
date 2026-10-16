@@ -53,6 +53,16 @@ internal class SplitModeRenderersFactory(
     }
 
     /**
+     * This player's OWN audio processors (see [PlayerAudioProcessors]).
+     * Deliberately not a process-wide singleton: Home's hero trailer builds one
+     * of these factories too, and a hand-off leaves both players alive for a
+     * moment, so a shared pair would answer for the new stream's first buffers
+     * with the old stream's state - a stale offset still to shift, and the
+     * downmix's channel counts from the trailer's own configure.
+     */
+    internal val audioProcessors = PlayerAudioProcessors()
+
+    /**
      * Prepends the libass text renderer so an embedded ASS/SSA track is claimed
      * by it rather than by media3's default text renderer (which flattens the
      * script into plain cues). With no libass in this build the lambda is null
@@ -154,15 +164,37 @@ internal class SplitModeRenderersFactory(
             DefaultAudioSink.Builder(context)
                 .setAudioProcessors(
                     arrayOf(
-                        AudioDelayProcessor.instance,
-                        AudioDownmixProcessor.instance
+                        audioProcessors.delay,
+                        audioProcessors.downmix
                     )
                 )
                 .setEnableFloatOutput(enableFloatOutput)
                 .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
-                .build()
+                .build(),
+            // The sink drives the layout switch through the SAME pair it wears,
+            // which is this player's alone.
+            audioProcessors
         )
     }
+}
+
+/**
+ * The audio processors ONE player runs in its sink chain.
+ *
+ * Per factory, never shared. [AudioDelayProcessor] carries the bytes still to
+ * shift and whether it is inside a live in-place reconfigure; the downmix
+ * carries the channel counts its last configure committed to (and re-pins them
+ * when a layout change is refused). Two players - the full one and Home's hero
+ * trailer, which overlap for a moment during a hand-off - sharing one pair means
+ * one stream's state is applied to the other's buffers.
+ *
+ * The settings themselves stay process-wide where they always were
+ * ([PlayerAudioTuning], [AppPreferences]): only the state that APPLIES them is
+ * per-player.
+ */
+internal class PlayerAudioProcessors {
+    val delay = AudioDelayProcessor()
+    val downmix = AudioDownmixProcessor()
 }
 
 /**

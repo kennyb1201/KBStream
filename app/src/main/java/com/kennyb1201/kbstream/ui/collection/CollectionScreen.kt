@@ -164,6 +164,15 @@ fun CollectionScreen(
     }
     val returnFocusRequester = remember { FocusRequester() }
 
+    /**
+     * The rail's own first card. The landing a return falls THROUGH to when the
+     * recorded card is not on screen any more (the collection changed while its
+     * Detail page was up): without it the effect early-returned and left nothing
+     * focused, so Back out of Detail left the D-pad dead until the viewer
+     * pressed something that happened to grab focus.
+     */
+    val firstPartFocusRequester = remember { FocusRequester() }
+
     // The card is named by the key its own rail keys it with, so a collection
     // that has re-ordered under the viewer comes back on the film that is still
     // there rather than on whatever took its position; the recorded position is
@@ -197,6 +206,25 @@ fun CollectionScreen(
             landed = runCatching { returnFocusRequester.requestFocus() }
                 .getOrDefault(false)
             attempts++
+        }
+        // The record is SPENT, either way. Left in state it also keys this
+        // effect, so the next change to the rail re-ran the whole landing - and
+        // the second drill-down got the stale record instead of the fresh one
+        // the card just recorded.
+        returnTarget = null
+        if (!landed) {
+            // This page could never put the viewer back (the card it named is
+            // gone). The rail's first card is where an ordinary open lands, so
+            // that is the fallthrough - not an early return with nothing
+            // focused, which is a dead D-pad on the way back from Detail.
+            var firstLanded = false
+            var firstAttempts = 0
+            while (!firstLanded && firstAttempts < BROWSE_RETURN_FOCUS_STEPS) {
+                delay(BROWSE_RETURN_FOCUS_DELAY_MS)
+                firstLanded = runCatching { firstPartFocusRequester.requestFocus() }
+                    .getOrDefault(false)
+                firstAttempts++
+            }
         }
     }
 
@@ -379,12 +407,17 @@ fun CollectionScreen(
                                 modifier = Modifier
                                     .focusRequester(requester)
                                     .then(
-                                        if (isReturnItem) {
-                                            Modifier.focusRequester(
+                                        when {
+                                            isReturnItem -> Modifier.focusRequester(
                                                 returnFocusRequester
                                             )
-                                        } else {
-                                            Modifier
+                                            // Only reachable when no return is
+                                            // pending, so the two requesters can
+                                            // never be attached to one card.
+                                            index == 0 -> Modifier.focusRequester(
+                                                firstPartFocusRequester
+                                            )
+                                            else -> Modifier
                                         }
                                     )
                             )

@@ -587,9 +587,14 @@ class WatchedStatusRepository(
                 simklSetsFetchedAt
             }
 
-        val remoteSetsCold =
-            previousCompletedMovieKeys.isEmpty() ||
-                previousCompletedShowImdbIds.isEmpty()
+        // Cold means "this device has never fetched the Simkl sets", which is
+        // the one thing the TTL has to be measured from - and the only thing
+        // that makes a fetch owed regardless of the clock. Asking whether the
+        // sets are EMPTY made the answer true forever for an account with
+        // nothing finished in one of the two buckets (a movie-only viewer, or a
+        // show-only one), so every preload re-fetched Simkl for the rest of the
+        // session and the TTL never applied at all.
+        val remoteSetsCold = simklSetsFetchedAtBefore == 0L
 
         val remoteSetsStale =
             now - simklSetsFetchedAtBefore >=

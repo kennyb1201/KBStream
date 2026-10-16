@@ -199,6 +199,14 @@ object SupabaseSync {
     private const val TABLE_OVERRIDES = "sync_image_overrides"
     private const val KEY_OVERRIDES = "override_key"
 
+    /**
+     * The tables realtime subscribes, in join order. One channel each: a table
+     * is joined only when nothing is already tracking it (see [startRealtime]),
+     * so this list is a checklist rather than a batch of unconditional joins.
+     */
+    private val REALTIME_TABLES =
+        listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_OVERRIDES, TABLE_PREFS)
+
     /** Shown when auth is pressed in a build compiled without Supabase keys. */
     private const val SYNC_NOT_CONFIGURED_MESSAGE =
         "Sync isn't configured in this build. Add SUPABASE_URL and " +
@@ -2197,26 +2205,42 @@ object SupabaseSync {
      * exactly the state the plain "already subscribed?" check would skip. A
      * channel that is merely SUBSCRIBING is left alone — tearing that down
      * mid-join would race the SDK — and a healthy join needs nothing.
+     *
+     * Only tables with NO tracked subscription are joined, in either mode. A
+     * table that already has one — the SUBSCRIBING/UNSUBSCRIBING channel the
+     * drop above leaves in place, or one a setup that threw halfway left
+     * joined — must not get a second channel and collector, because nothing
+     * ever cleans those up and every remote change would then be applied
+     * twice to the same row.
      */
     private fun startRealtime(force: Boolean = false) {
         val c = client ?: return
 
         scope.launch {
             realtimeMutex.withLock {
-                if (realtimeSubscriptions.isNotEmpty()) {
-                    if (!force) return@withLock
+                if (!force && realtimeSubscriptions.isNotEmpty()) return@withLock
+                if (force) {
                     val dead = realtimeSubscriptions.filter {
                         it.channel.status.value ==
                             io.github.jan.supabase.realtime.RealtimeChannel.Status.UNSUBSCRIBED
                     }
-                    if (dead.isEmpty()) return@withLock
-                    Log.w(TAG, "realtime: ${dead.size} dead channel(s); re-joining")
-                    dead.forEach { sub ->
-                        realtimeSubscriptions.remove(sub)
-                        sub.collectorJob.cancel()
-                        runCatching { sub.channel.unsubscribe() }
+                    if (dead.isNotEmpty()) {
+                        Log.w(TAG, "realtime: ${dead.size} dead channel(s); re-joining")
+                        dead.forEach { sub ->
+                            realtimeSubscriptions.remove(sub)
+                            sub.collectorJob.cancel()
+                            runCatching { sub.channel.unsubscribe() }
+                        }
                     }
                 }
+                // Read AFTER the drop: a table whose dead channel was just
+                // removed has nothing tracking it again and has to re-join,
+                // while a healthy or mid-join table keeps the one channel it
+                // already has.
+                val missing = REALTIME_TABLES.filterNot { table ->
+                    realtimeSubscriptions.any { it.table == table }
+                }
+                if (missing.isEmpty()) return@withLock
                 // A fresh sign-in starts with a clean failure budget, so a
                 // deployment that has since enabled Realtime recovers. A
                 // foreground re-join deliberately KEEPS the budget: a table the
@@ -2227,11 +2251,14 @@ object SupabaseSync {
                 try {
                     // One channel per table; the flow must be created BEFORE the
                     // channel subscribes (supabase-kt requirement).
-                    listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_OVERRIDES, TABLE_PREFS)
-                        .forEach { table ->
-                            subscribeTable(c, table)
-                        }
-                    Log.i(TAG, "realtime subscribed to 4 tables")
+                    missing.forEach { table ->
+                        subscribeTable(c, table)
+                    }
+                    Log.i(
+                        TAG,
+                        "realtime subscribed to ${missing.size} new table(s); " +
+                            "${realtimeSubscriptions.size} tracked"
+                    )
                     _realtimeStatus.value = "live"
                     _realtimeChannelCount.value = realtimeSubscriptions.size
                     watchRealtimeHealth()

@@ -34,13 +34,22 @@ internal class AudioDelayProcessor : BaseAudioProcessor() {
 
         /** Matches the subtitle offset range, so both sliders feel the same. */
         const val MAX_MS = 5_000
-
-        /** Shared instance installed by the renderers factory. */
-        val instance = AudioDelayProcessor()
     }
 
+    /**
+     * The stream's byte scaling, both written on the AUDIO thread by
+     * [onConfigure] and read by the main thread's [setDelayMs] (through
+     * [bytesFor]) to size the delta for a slider move. They used to be plain
+     * fields: the reader could keep the previous sample rate's numbers for the
+     * rest of the stream, and a stale bytes-per-ms scales every offset the
+     * viewer then sets. Volatile is what makes the new rate visible.
+     */
+    @Volatile
     private var bytesPerMs = 0
+
+    @Volatile
     private var bytesPerFrame = 4
+
     private var appliedMs = 0
 
     /**

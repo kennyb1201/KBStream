@@ -203,7 +203,20 @@ internal object SubtitleTrackRules {
         val isSdh: (Candidate) -> Boolean = {
             SubtitleKindRules.of(it.title).contains(SubtitleKindRules.SDH)
         }
-        val isRegular: (Candidate) -> Boolean = { !it.forced && !isSdh(it) }
+        val isCommentaryOrMt: (Candidate) -> Boolean = {
+            val kinds = SubtitleKindRules.of(it.title)
+            kinds.contains(SubtitleKindRules.COMMENTARY) || kinds.contains(SubtitleKindRules.MT)
+        }
+        // A full translation, and neither of the two kinds that only READ like
+        // one: a commentary track and a machine-translated one both look
+        // "regular", so either could out-rank the film's own translation in the
+        // same language. MPV's ranking excludes exactly these two (see
+        // MpvPlayerView.isRegularTitle); this is the ExoPlayer side of that
+        // rule. They are still selected when nothing else matches - step 5's
+        // fallback takes them - so nothing is dropped, only the ordering.
+        val isRegular: (Candidate) -> Boolean = {
+            !it.forced && !isSdh(it) && !isCommentaryOrMt(it)
+        }
 
         // 1. The preferred language, most complete kind first: SDH, then a
         //    regular full translation. The forced flag is deliberately NOT
@@ -270,7 +283,17 @@ internal object SubtitleTrackRules {
         val isSdh: (Candidate) -> Boolean = {
             SubtitleKindRules.of(it.title).contains(SubtitleKindRules.SDH)
         }
-        val isRegular: (Candidate) -> Boolean = { !it.forced && !isSdh(it) }
+        // The same two exclusions as [choose]'s regular bucket. This pass runs
+        // on every READY and rebuffer, so a commentary or machine-translated
+        // track left counting as "regular" here re-armed itself moments after
+        // the kind-ranked initial selection had picked the plain translation.
+        val isCommentaryOrMt: (Candidate) -> Boolean = {
+            val kinds = SubtitleKindRules.of(it.title)
+            kinds.contains(SubtitleKindRules.COMMENTARY) || kinds.contains(SubtitleKindRules.MT)
+        }
+        val isRegular: (Candidate) -> Boolean = {
+            !it.forced && !isSdh(it) && !isCommentaryOrMt(it)
+        }
         candidates.forEachIndexed { index, candidate ->
             if (isSdh(candidate)) return index
         }

@@ -201,6 +201,14 @@ android {
         versionCode = ciVersionCode
         versionName = ciVersionName
 
+        // The self-update flow is compiled into every build's UI, but a Play
+        // build must not have it at all: `-PplayBuild` strips
+        // REQUEST_INSTALL_PACKAGES from the merged manifest, so the offer could
+        // only ever end in a failed install (and asking for it is a policy
+        // risk). The flag is what lets the Kotlin side hide the Settings row and
+        // no-op the check, exactly as the manifest overlay drops the permission
+        // (see `playBuild` above).
+        buildConfigField("Boolean", "PLAY_BUILD", playBuild.toString())
         buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")

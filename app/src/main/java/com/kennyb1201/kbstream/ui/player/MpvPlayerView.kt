@@ -256,6 +256,31 @@ class MpvPlayerView @JvmOverloads constructor(
     private var replacingPreviousFile = false
 
     /**
+     * Whether the load in flight has been answered yet (FILE_LOADED, or an
+     * END_FILE that was NOT one of ours). Set by [startPendingLoad], cleared by
+     * both answers.
+     */
+    // Volatile: written on the main thread, read on mpv's event thread.
+    @Volatile
+    private var loadInFlight = false
+
+    /**
+     * How many END_FILE events still belong to loads a LATER load superseded.
+     *
+     * The gap this closes: two source pushes in a row issue two `loadfile`s
+     * before either file can load, so mpv ends the first (never-opened) attempt
+     * with a plain END_FILE - and [replacingPreviousFile], which only knew about
+     * a file that had actually LOADED, no longer excused it. The verdict read
+     * that as [StreamEndRules.Verdict.OPEN_FAILED], so the open-failure ladder
+     * demoted the add-on of the source that was still opening and walked past
+     * it. A counter, not a flag: three rapid loads owe two such events, and the
+     * LAST load's own failure still has to reach the viewer.
+     */
+    // Volatile: written on the main thread, read on mpv's event thread.
+    @Volatile
+    private var supersededLoads = 0
+
+    /**
      * True once [stopPlayback] has issued mpv's own `stop`, for an engine
      * handoff. Ends a LOADED file, so it is the second thing that has to read as
      * "we asked for this" rather than "the stream died".
@@ -496,7 +521,13 @@ class MpvPlayerView @JvmOverloads constructor(
         if (!initialized) return
         stoppingDeliberately = true
         runCatching { MpvBackend.command("stop") }
-            .onFailure { Log.w(TAG, "stop for the engine handoff failed", it) }
+            .onFailure {
+                // No stop reached mpv, so no END_FILE is owed this flag: left
+                // set, it would excuse the NEXT file's end as our own doing and
+                // swallow a real failure.
+                stoppingDeliberately = false
+                Log.w(TAG, "stop for the engine handoff failed", it)
+            }
         fileLoaded = false
         endNotified = false
         cacheStall = false
@@ -1452,16 +1483,23 @@ class MpvPlayerView @JvmOverloads constructor(
         val maxBytes = if (lowLatency) LOW_LATENCY_MAX_BYTES else CACHE_MB * 1024 * 1024
         val backBytes = if (lowLatency) 0 else CACHE_MB * 1024 * 1024
         runCatching {
+            // Restored in BOTH directions, because it is a per-file option:
+            // leaving Low Latency on "0" meant every later file on the default
+            // profile opened with ZERO read-ahead, which is a stall on the first
+            // segment of a network stream - the option is what the low-latency
+            // path deliberately gave up, and the default profile has to get
+            // mpv's own default (1.0s) back.
+            val readahead = if (lowLatency) "0" else DEFAULT_READAHEAD_SECS
             if (initialized) {
                 MpvBackend.setPropertyBoolean("cache", !lowLatency)
                 MpvBackend.setPropertyInt("demuxer-max-bytes", maxBytes)
                 MpvBackend.setPropertyInt("demuxer-max-back-bytes", backBytes)
-                if (lowLatency) MpvBackend.setPropertyInt("demuxer-readahead-secs", 0)
+                MpvBackend.setPropertyString("demuxer-readahead-secs", readahead)
             } else {
                 MpvBackend.setOptionString("cache", if (lowLatency) "no" else "yes")
                 MpvBackend.setOptionString("demuxer-max-bytes", maxBytes.toString())
                 MpvBackend.setOptionString("demuxer-max-back-bytes", backBytes.toString())
-                if (lowLatency) MpvBackend.setOptionString("demuxer-readahead-secs", "0")
+                MpvBackend.setOptionString("demuxer-readahead-secs", readahead)
             }
         }.onFailure { Log.w(TAG, "cache profile $mode rejected", it) }
     }
@@ -1853,9 +1891,16 @@ class MpvPlayerView @JvmOverloads constructor(
     private fun startPendingLoad() {
         val request = pendingLoad ?: return
         pendingLoad = null
-        // Read BEFORE the flag is cleared: the outgoing file's END_FILE is
-        // classified from this (see [replacingPreviousFile]).
-        replacingPreviousFile = fileLoaded
+        // Read BEFORE the flag is cleared, and ORed rather than assigned: a
+        // second load issued before the first one's END_FILE arrived must not
+        // clear the "the file ending now was ours to end" the first one set (see
+        // [replacingPreviousFile]).
+        replacingPreviousFile = replacingPreviousFile || fileLoaded
+        // And a load that is still in flight when this one goes out can never
+        // reach the screen: mpv ends it, and that END_FILE has to be excused too
+        // (see [supersededLoads]).
+        if (loadInFlight) supersededLoads++
+        loadInFlight = true
         fileLoaded = false
         endNotified = false
         durationSec = null
@@ -1894,7 +1939,15 @@ class MpvPlayerView @JvmOverloads constructor(
         MpvBackend.setOptionString("start", "${request.startPositionMs.coerceAtLeast(0L) / 1000.0}")
 
         runCatching { MpvBackend.command("loadfile", request.url, "replace") }
-            .onFailure { Log.e(TAG, "loadfile failed", it) }
+            .onFailure {
+                // The command never reached mpv, so NO END_FILE is coming: without
+                // this the screen sat on "Switching source..." forever, because
+                // every verdict this class makes is made from that event. The
+                // failure goes down the same path an END_FILE open failure takes.
+                Log.e(TAG, "loadfile failed", it)
+                loadInFlight = false
+                reportOpenFailure(null)
+            }
 
         // Adaptive split stream: the video URL carries no audio, so the
         // separate track is added as an additional audio file.
@@ -1907,6 +1960,10 @@ class MpvPlayerView @JvmOverloads constructor(
     // --- mpv events ---------------------------------------------------------
 
     override fun event(eventId: Int) {
+        // Released is one-way and destroys the instance, so nothing this event
+        // would do is still meaningful (the Exo path's equivalent guard is what
+        // keeps a late callback off a dead player).
+        if (released) return
         // The event id is the whole signal here: the property values this class
         // acts on arrive through the typed `eventProperty` overloads below, and
         // the node the library also hands `event` was never read. [MpvBackend]
@@ -1917,6 +1974,7 @@ class MpvPlayerView @JvmOverloads constructor(
                 // The replacement is the file now: the previous one's END_FILE
                 // has already arrived (mpv unloads before it opens the next).
                 replacingPreviousFile = false
+                loadInFlight = false
                 applyPendingSeek()
                 // The container's rate is known from here, so a panel switch
                 // happens before the first frame rather than over it.
@@ -1937,9 +1995,15 @@ class MpvPlayerView @JvmOverloads constructor(
                 // then died mid-playback fell out of the bottom of the branch,
                 // leaving the last frame frozen on screen with keep-open and no
                 // callback, no log line and no card.
+                // A load a LATER load superseded is excused once, exactly like
+                // the replaced file: this event is that load ending, not the
+                // load on screen failing (see [supersededLoads]).
+                val superseded = supersededLoads > 0
+                if (superseded) supersededLoads--
+                val ourOwnStop = superseded || replacingPreviousFile || stoppingDeliberately
                 val verdict = StreamEndRules.verdict(
                     fileLoaded = fileLoaded,
-                    ourOwnStop = replacingPreviousFile || stoppingDeliberately,
+                    ourOwnStop = ourOwnStop,
                     released = released,
                     eofReached = endNotified,
                     positionMs = lastPositionMs,
@@ -1949,6 +2013,10 @@ class MpvPlayerView @JvmOverloads constructor(
                 // by now: the outgoing file has ended.
                 replacingPreviousFile = false
                 stoppingDeliberately = false
+                // Only an END_FILE that was NOT excused ends the load in flight:
+                // an excused one is an earlier load ending under the current
+                // one, which is still opening.
+                if (!ourOwnStop) loadInFlight = false
                 when (verdict) {
                     StreamEndRules.Verdict.IGNORE -> Unit
 
@@ -1996,33 +2064,11 @@ class MpvPlayerView @JvmOverloads constructor(
                         }
                     }
 
-                    StreamEndRules.Verdict.OPEN_FAILED -> {
+                    StreamEndRules.Verdict.OPEN_FAILED ->
                         // mpv's own words, when it had any: "HTTP error 403",
                         // "Protocol not found" and a refused connection are the
                         // same sentence on screen and want different fixes.
-                        val reason = lastErrorLine?.takeIf { it.isNotBlank() }
-                        val failureDetail = MpvErrorReason.failureDetail(reason, lastLoadHost)
-                        Log.w(TAG, "MPV could not open the stream: $failureDetail")
-                        // Same report line the ExoPlayer ladder writes to: an MPV
-                        // open that fails on a 403 or a refused connection is a
-                        // playback failure the diagnostics dump has to carry, and
-                        // this is the one place that knows mpv's own reason (see
-                        // PlaybackEngineTrace).
-                        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
-                            com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
-                                cause = "MPV could not open the stream",
-                                detail = failureDetail
-                            )
-                        )
-                        post {
-                            onPlaybackError?.invoke(
-                                when (reason) {
-                                    null -> "This stream could not be played."
-                                    else -> "This stream could not be played. $reason"
-                                }
-                            )
-                        }
-                    }
+                        reportOpenFailure(lastErrorLine?.takeIf { it.isNotBlank() })
                 }
             }
 
@@ -2032,6 +2078,36 @@ class MpvPlayerView @JvmOverloads constructor(
                 // one once the first frames have been decoded.
                 publishVideoFrameRate()
             }
+        }
+    }
+
+    /**
+     * Reports a stream that could not be opened, in one place: mpv's own log
+     * line when it has one, the diagnostics ring every engine writes to, and the
+     * card the open-failure ladder turns into "demote this add-on, try the next
+     * source". Used by the END_FILE verdict and by a `loadfile` that never
+     * reached mpv at all - the one failure where no END_FILE is coming.
+     */
+    private fun reportOpenFailure(reason: String?) {
+        val failureDetail = MpvErrorReason.failureDetail(reason, lastLoadHost)
+        Log.w(TAG, "MPV could not open the stream: $failureDetail")
+        // Same report line the ExoPlayer ladder writes to: an MPV open that
+        // fails on a 403 or a refused connection is a playback failure the
+        // diagnostics dump has to carry, and this is the one place that knows
+        // mpv's own reason (see PlaybackEngineTrace).
+        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+            com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                cause = "MPV could not open the stream",
+                detail = failureDetail
+            )
+        )
+        post {
+            onPlaybackError?.invoke(
+                when (reason) {
+                    null -> "This stream could not be played."
+                    else -> "This stream could not be played. $reason"
+                }
+            )
         }
     }
 
@@ -2085,6 +2161,7 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     override fun eventProperty(property: String, value: Long) {
+        if (released) return
         when (property) {
             // The file's layout is known from here on: place the dialogue
             // filter against the track actually playing.
@@ -2093,6 +2170,7 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     override fun eventProperty(property: String, value: Double) {
+        if (released) return
         when (property) {
             "time-pos" -> {
                 lastPositionMs = (value * 1000.0).toLong().coerceAtLeast(0L)
@@ -2108,6 +2186,7 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     override fun eventProperty(property: String, value: Boolean) {
+        if (released) return
         when (property) {
             "pause" -> {
                 pauseState = value
@@ -2137,6 +2216,7 @@ class MpvPlayerView @JvmOverloads constructor(
     }
 
     override fun eventProperty(property: String, value: String) {
+        if (released) return
         if (property == "media-title") {
             Log.i(TAG, "MPV media-title: $value")
         }
@@ -2363,6 +2443,14 @@ class MpvPlayerView @JvmOverloads constructor(
 
         /** Read-ahead cap in Low Latency mode: enough to bridge a hiccup. */
         const val LOW_LATENCY_MAX_BYTES = 8 * 1024 * 1024
+
+        /**
+         * mpv's own `demuxer-readahead-secs` default, restored by
+         * [applyCacheOptions] whenever the profile is NOT Low Latency: the
+         * option is per-file, so the 0 the low-latency path sets has to be
+         * undone for the next title (see there).
+         */
+        const val DEFAULT_READAHEAD_SECS = "1.0"
 
         /** mpv's own 100 = unity gain. */
         const val VOLUME_NORMAL = 100.0

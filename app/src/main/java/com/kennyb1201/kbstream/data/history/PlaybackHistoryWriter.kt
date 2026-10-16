@@ -242,7 +242,19 @@ internal object PlaybackHistoryWriter {
         dao: WatchHistoryDao
     ): List<String> {
         if (!entry.isCompleted) return emptyList()
-        val parents = listOf(entry.parentId).filter { it.isNotBlank() }
+        // The series' OTHER id flavor too, resolved offline (see
+        // [WatchHistoryDao.parentIdFlavors]): this completion was filed under
+        // whichever flavor launched the session, and a resume row written from a
+        // route that launched the twin ("tt..." vs "tmdb:<n>") is the same
+        // episode's leftover. Scoped to one flavor, that row survived and came
+        // back as a Continue Watching card at 99% - the field report's "it keeps
+        // returning to the ten minutes it has already finished".
+        val parents = runCatchingCancellable { dao.parentIdFlavors(entry.parentId) }
+            .onFailure { e ->
+                Log.w(TAG, "could not resolve the id flavors for ${entry.id}", e)
+            }
+            .getOrDefault(listOf(entry.parentId))
+            .filter { it.isNotBlank() }
         if (parents.isEmpty()) return emptyList()
         val ids = runCatchingCancellable {
             dao.getSupersededResumeIds(

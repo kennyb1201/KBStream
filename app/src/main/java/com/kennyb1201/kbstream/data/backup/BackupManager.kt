@@ -144,7 +144,13 @@ object BackupManager {
 
         val prefs = json.optJSONObject("prefs")
         restorePrefsMap(context, PLAYER_PREFS, prefs?.optJSONObject("player"))
-        restoreAddons(context, prefs?.optString("addons"))
+        // A backup that carries no add-on snapshot says NOTHING about this
+        // device's add-ons, so the restore steps aside instead of handing the
+        // empty string through (which wiped every installed add-on).
+        restoreAddons(
+            context,
+            prefs?.let { if (it.has("addons")) it.optString("addons") else null }
+        )
         restoreWatchedOverrides(context, prefs?.optJSONArray("watchedOverrides"))
 
         val db = WatchHistoryDatabase.getInstanceScoped(context)
@@ -207,6 +213,11 @@ object BackupManager {
     }
 
     private fun restoreAddons(context: Context, addonsJson: String?) {
+        // Null is "this backup has nothing to say about the add-ons", not
+        // "install none": the writer above stores null for a device with no
+        // add-ons, and the reader cannot tell the two apart - so only a backup
+        // that actually carries the key may replace them.
+        if (addonsJson == null) return
         scopedPrefs(context, ADDON_PREFS)
             .edit()
             .putString("installed_addons_json", addonsJson)

@@ -80,6 +80,16 @@ class MpvOpenFailureAdvanceContractTest {
             1,
             view.split("onPlaybackError?.invoke(").size - 1
         )
+        // ... and that one place is the shared open-failure report, which is
+        // what keeps the END_FILE arm and a `loadfile` that never reached mpv
+        // (no END_FILE is coming for that one) on the same card, the same
+        // trace line and the same demote-and-advance ladder.
+        assertTrue(
+            "the one raiser is the shared open-failure report",
+            view.substringAfter("private fun reportOpenFailure(reason: String?)")
+                .substringBefore("override fun eventProperty(property: String) = Unit")
+                .contains("onPlaybackError?.invoke(")
+        )
         // The END_FILE handler classifies its one event into four outcomes (see
         // StreamEndRules); the open-failure path is the OPEN_FAILED arm, and
         // that is where the callback may be raised from. A stream that PLAYED
@@ -91,7 +101,7 @@ class MpvOpenFailureAdvanceContractTest {
             "and only from the arm that saw END_FILE without a file to end",
             slice.contains("StreamEndRules.Verdict.OPEN_FAILED ->") &&
                 slice.substringAfter("StreamEndRules.Verdict.OPEN_FAILED ->")
-                    .contains("onPlaybackError?.invoke(")
+                    .contains("reportOpenFailure(")
         )
         assertTrue(
             "while a stream that died mid-playback goes to its own callback",

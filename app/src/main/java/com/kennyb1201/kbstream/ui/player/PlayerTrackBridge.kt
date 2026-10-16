@@ -837,6 +837,13 @@ internal object PlayerTrackBridge {
      * happens next (the activity's NeedsMpv handoff, the OpenSubtitles fetch)
      * instead of leaving a dead override behind.
      *
+     * An UNTAGGED text track is considered, behind the language-tagged ones
+     * (see the text branch): a rip whose tracks state no language at all is the
+     * common shape, and [SubtitleTrackRules.choose] already prefers such a
+     * track to no subtitles. Returning null for it made this pass DISABLE the
+     * very track the activity's own selection had just armed - subtitles that
+     * appeared for a moment and were then switched off.
+     *
      * The audio side keeps its plain first-match: this engine draws every audio
      * track it can select, and [fallbackAudioTrack] owns what happens when
      * nothing matches.
@@ -856,17 +863,37 @@ internal object PlayerTrackBridge {
             // runs on every READY and rebuffer, so a first-wins order re-armed
             // the forced track moments after the initial selection had picked
             // SDH (which is [SubtitleTrackRules.choose]'s preferred-language
-            // bucket, the same ranking). Collect the drawable language matches,
-            // then take the best kind - SDH, then regular, then forced.
-            val matches =
+            // bucket, the same ranking). Collect the drawable tracks, then take
+            // the best kind in the first block that has one.
+            //
+            // Two blocks, in the order [SubtitleTrackRules.choose] ranks them:
+            // the tracks tagged with the language asked for, then the ones that
+            // state no language this app can match. The second block is what
+            // makes this pass agree with the initial selection: on a file whose
+            // subtitle tracks are all untagged (the common rip shape) the
+            // activity arms one of them, and a pass that only knew about
+            // tagged matches answered "no track for 'en'" and DISABLED text - on
+            // the same READY.
+            val taggedLocations =
                 mutableListOf<Pair<androidx.media3.common.TrackGroup, Int>>()
-            val candidates = mutableListOf<SubtitleTrackRules.Candidate>()
+            val taggedCandidates = mutableListOf<SubtitleTrackRules.Candidate>()
+            val untaggedLocations =
+                mutableListOf<Pair<androidx.media3.common.TrackGroup, Int>>()
+            val untaggedCandidates = mutableListOf<SubtitleTrackRules.Candidate>()
             tracks.groups
                 .filter { it.type == type }
                 .forEach { group ->
                     for (i in 0 until group.length) {
                         val format = group.getTrackFormat(i)
-                        if (!LanguageMatch.matches(language, format.language)) continue
+                        val tagged = LanguageMatch.matches(language, format.language)
+                        // "States no language this app can match" - blank, or
+                        // one of the undetermined codes - is untagged, which is
+                        // also how [SubtitleTrackRules] reads a tag. Anything
+                        // else is a language the viewer did not ask for and is
+                        // left out, exactly as before.
+                        val untagged =
+                            !tagged && LanguageMatch.canonical(format.language) == null
+                        if (!tagged && !untagged) continue
                         val supported = group.isTrackSupported(i)
                         // A bitmap or unsupported track draws nothing; the
                         // caller's "no track" path (NeedsMpv handoff / fetch)
@@ -877,18 +904,30 @@ internal object PlayerTrackBridge {
                                 supported = supported
                             ) != null
                         ) continue
-                        matches += group.mediaTrackGroup to i
-                        candidates += SubtitleTrackRules.Candidate(
+                        val candidate = SubtitleTrackRules.Candidate(
                             language = format.language,
                             mimeType = format.sampleMimeType,
                             forced = format.selectionFlags and C.SELECTION_FLAG_FORCED != 0,
                             supported = supported,
                             title = format.label
                         )
+                        if (tagged) {
+                            taggedLocations += group.mediaTrackGroup to i
+                            taggedCandidates += candidate
+                        } else {
+                            untaggedLocations += group.mediaTrackGroup to i
+                            untaggedCandidates += candidate
+                        }
                     }
                 }
-            val best = SubtitleTrackRules.bestLanguageMatchIndex(candidates) ?: return null
-            val (group, index) = matches[best]
+            val taggedBest = SubtitleTrackRules.bestLanguageMatchIndex(taggedCandidates)
+            if (taggedBest != null) {
+                val (group, index) = taggedLocations[taggedBest]
+                return TrackSelectionOverride(group, index)
+            }
+            val untaggedBest = SubtitleTrackRules.bestLanguageMatchIndex(untaggedCandidates)
+                ?: return null
+            val (group, index) = untaggedLocations[untaggedBest]
             return TrackSelectionOverride(group, index)
         }
         var matched: TrackSelectionOverride? = null
@@ -911,6 +950,12 @@ internal object PlayerTrackBridge {
      * language matches, or (for subtitles) leave text disabled when nothing
      * matches — a subtitle language the stream does not carry must not
      * silently show the wrong track.
+     *
+     * "Nothing matches" is about tracks that state a language this app can
+     * read ([LanguageMatch]): a track that states none at all is the viewer's
+     * own language often enough that [SubtitleTrackRules.choose] already prefers
+     * it to no subtitles, and this pass follows that rule rather than turning
+     * off the track the same session had just armed (see [matchingOverride]).
      *
      * Matching goes through [LanguageMatch] because the stored preference is a
      * two-letter code and the file's tags are almost always three-letter ones.

@@ -84,7 +84,16 @@ interface WatchHistoryDao {
                 streamUrl = entry.streamUrl ?: existing?.streamUrl,
                 season = entry.season ?: existing?.season,
                 episode = entry.episode ?: existing?.episode,
-                episodeStreamId = entry.episodeStreamId ?: existing?.episodeStreamId
+                episodeStreamId = entry.episodeStreamId ?: existing?.episodeStreamId,
+                // A completed row whose stamp is missing keeps the stamp the
+                // stored row already had. The completion time is what the
+                // continue-watching rules read, and a remote row can arrive
+                // without it (the merge is not the thing that decides whether
+                // an episode was finished) - taking the null erased the local
+                // completion, and the late pause-save then re-opened the
+                // episode at 99% of its length.
+                completedAt = entry.completedAt
+                    ?: existing?.completedAt?.takeIf { entry.isCompleted }
             )
         )
     }
@@ -153,6 +162,29 @@ interface WatchHistoryDao {
         """
     )
     suspend fun getResumeForParents(parentIds: List<String>): WatchHistoryEntity?
+
+    /**
+     * The id flavors [parentId] is stored under: the id itself, plus its
+     * resolved flavor twin from the offline resolution cache ("tt..." vs
+     * "tmdb:<n>"), for a caller that has to read or clean up across BOTH.
+     *
+     * Offline by construction - it never issues a request, because its caller is
+     * a save path. When the twin is not cached the raw id is all it answers,
+     * exactly as before.
+     */
+    @Query(
+        """
+        SELECT :parentId AS parentId
+        UNION
+        SELECT 'tmdb:' || tmdbId FROM imdb_resolution_cache
+          WHERE imdbId = :parentId AND tmdbId > 0
+        UNION
+        SELECT imdbId FROM imdb_resolution_cache
+          WHERE key IN ('series::' || :parentId, 'series::' || REPLACE(:parentId, 'tmdb:', ''))
+            AND imdbId LIKE 'tt%'
+        """
+    )
+    suspend fun parentIdFlavors(parentId: String): List<String>
 
     /**
      * Every in-progress row for a parent, newest first. The detail screen

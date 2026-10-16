@@ -77,17 +77,23 @@ class ImageOverrideSyncWiringContractTest {
 
     @Test
     fun `realtime subscribes to four tables and says so`() {
-        val start = body(sync, "private fun startRealtime(force: Boolean = false) {", 2_000)
         assertTrue(
             "the new table must be in the subscription list, or changes only " +
                 "arrive on the next full pull",
-            start.contains("TABLE_OVERRIDES")
+            sync.contains(
+                "private val REALTIME_TABLES =\n" +
+                    "        listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_OVERRIDES, TABLE_PREFS)"
+            )
         )
+        // 4_000, not the 2_000 used elsewhere: the join carries the dead-channel
+        // drop, the tracked-set read and the budget note before it reaches the
+        // log line, and a slice that stops short of it would assert on nothing.
+        val start = body(sync, "private fun startRealtime(force: Boolean = false) {", 4_000)
         assertTrue(
-            "the channel-count log is what the field report reads, so it must " +
-                "not still claim three",
-            sync.contains("realtime subscribed to 4 tables") &&
-                !sync.contains("realtime subscribed to 3 tables")
+            "and the join walks that list, so the four tables are the four " +
+                "the log line counts",
+            start.contains("REALTIME_TABLES.filterNot") &&
+                start.contains("\"realtime subscribed to \${missing.size} new table(s); \"")
         )
     }
 

@@ -29,6 +29,49 @@ class SubtitleTrackRulesTest {
     private fun pgs(language: String? = null, forced: Boolean = false) =
         Candidate(language, MimeTypes.APPLICATION_PGS, forced, supported = false)
 
+    // ── A commentary is not the film's own translation ─────────────────────
+
+    @Test
+    fun `a commentary track does not out-rank the plain translation`() {
+        // MPV's ranking excludes commentary and machine-translated tracks (see
+        // MpvPlayerView.isRegularTitle), because neither is the film's dialogue
+        // as translated and both read as "regular". ExoPlayer counted both as
+        // regular, so the first of the two in the file won the same language.
+        val choice = SubtitleTrackRules.choose(
+            listOf(
+                srt("en", title = "English Commentary"),
+                srt("en", title = "English")
+            ),
+            "en"
+        )
+        assertEquals("the plain translation is the film's dialogue", Choice.Show(1), choice)
+    }
+
+    @Test
+    fun `a machine-translated track does not out-rank the plain translation`() {
+        val choice = SubtitleTrackRules.choose(
+            listOf(
+                srt("en", title = "English (auto translated)"),
+                srt("en", title = "English")
+            ),
+            "en"
+        )
+        assertEquals(Choice.Show(1), choice)
+    }
+
+    @Test
+    fun `a commentary is still chosen when it is all the file has`() {
+        val choice = SubtitleTrackRules.choose(
+            listOf(srt("en", title = "English Commentary")),
+            "en"
+        )
+        assertEquals(
+            "the fallback bucket takes it, so nothing is dropped - only the ordering",
+            Choice.Show(0),
+            choice
+        )
+    }
+
     // ── The silent failure: a bitmap track that draws nothing ──────────────
 
     @Test

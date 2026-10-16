@@ -235,7 +235,8 @@ class IptvRepository(
 
         Log.d(
             TAG,
-            "PLAYLIST CACHE WRITE START channels=${playlist.channels.size} source=$normalizedUrl"
+            "PLAYLIST CACHE WRITE START channels=${playlist.channels.size} " +
+                "source=${Redaction.url(normalizedUrl)}"
         )
 
         // Same reasoning as the guide writes: this replaces every cached
@@ -254,7 +255,8 @@ class IptvRepository(
 
         Log.d(
             TAG,
-            "PLAYLIST CACHE WRITE END channels=${playlist.channels.size} source=$normalizedUrl"
+            "PLAYLIST CACHE WRITE END channels=${playlist.channels.size} " +
+                "source=${Redaction.url(normalizedUrl)}"
         )
 
         playlist
@@ -599,7 +601,8 @@ class IptvRepository(
                 guideSnapshots[normalizedGuideUrl] = CachedGuideSnapshot(revision, snapshot)
                 Log.w(
                     TAG,
-                    "GUIDE SNAPSHOT BUILT channels=${guideChannels.size} epgUrl=$normalizedGuideUrl"
+                    "GUIDE SNAPSHOT BUILT channels=${guideChannels.size} " +
+                        "epgUrl=${Redaction.url(normalizedGuideUrl)}"
                 )
             }
         }
@@ -958,7 +961,8 @@ class IptvRepository(
 
         Log.w(
             TAG,
-            "PLAYLIST CACHE READ END channels=${channels.size} source=$normalizedUrl"
+            "PLAYLIST CACHE READ END channels=${channels.size} " +
+                "source=${Redaction.url(normalizedUrl)}"
         )
 
         if (channels.isEmpty()) {

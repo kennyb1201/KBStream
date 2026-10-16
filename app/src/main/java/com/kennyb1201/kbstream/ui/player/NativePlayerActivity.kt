@@ -916,6 +916,15 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var mediaSession: MediaSession? = null
 
     /**
+     * This player's own audio processors, owned by the factory that installs
+     * them (see [PlayerAudioProcessors]). Set in [createPlayer] and replaced
+     * with it, so the audio-offset slider can never be left talking to a
+     * processor no sink is carrying - and Home's hero trailer, which builds the
+     * same factory, has a pair of its own.
+     */
+    private var audioProcessors: PlayerAudioProcessors? = null
+
+    /**
      * Which rebuild the player field belongs to. A rebuild that has to leave
      * the box alone queues its own [createPlayer]; without this, an earlier
      * rebuild's queued create could fire *after* a later one had already built
@@ -3374,7 +3383,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         preferredAudioLang = PlayerTrackBridge.audioLanguage.ifBlank { globalAudioLang }
         preferredSubtitleLang = PlayerTrackBridge.subtitleLanguage.ifBlank { globalSubtitleLang }
         subtitleOffsetMs = PlayerTrackBridge.subtitleOffsetMs
-        AudioDelayProcessor.instance.setDelayMs(PlayerTrackBridge.audioDelayMs)
+        // The audio offset is applied by [createPlayer], which builds the pair
+        // that carries it: the processors are per-player now, so there is
+        // nothing here to set it on yet (see [PlayerAudioProcessors]).
+        audioProcessors = null
 
         // The playback panel lives in its own file and drives the running
         // player through these appliers (weak refs: a finished activity must
@@ -3388,7 +3400,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 bridgeSelf.get()?.applyChosenSubtitleLanguage(code)
             },
             applyAudioDelay = { ms ->
-                AudioDelayProcessor.instance.setDelayMs(ms)
+                // This activity's pair, never a process-wide one: a rebuild swaps
+                // both, and the slider follows the player on screen.
+                bridgeSelf.get()?.audioProcessors?.delay?.setDelayMs(ms)
             },
             applySubtitleOffset = { ms ->
                 bridgeSelf.get()?.applyChosenSubtitleOffset(ms)
@@ -4783,8 +4797,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         scope?.launch {
             // Random mode picks its own target (see resolveRandomChainTarget),
             // so the arithmetic next episode only applies outside it.
+            val arithmeticTarget = nextEpisodeTarget()
             val rawTarget = resolveRandomChainTarget(
-                this@NativePlayerActivity, randomEpisodes, nextEpisodeTarget(),
+                this@NativePlayerActivity, randomEpisodes, arithmeticTarget,
                 parentId, parentType, season, episode
             ) ?: return@launch
             // Same air-date gate as the end-of-playback panel: pressing Next
@@ -4794,8 +4809,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 this@NativePlayerActivity, rawTarget, resolveParentTmdbId(), parentId,
                 // The session's own season, so the gate can tell the invented
                 // season-end jump from a chain inside the season playing (see
-                // isSeasonBoundaryTarget).
-                sessionSeason = season
+                // isSeasonBoundaryTarget)...
+                sessionSeason = season,
+                // ...except when the target came out of a LISTING: random mode's
+                // pick is a real episode even when its season is a later one,
+                // and treating it as the fabricated jump lost the panel on any
+                // look-up hiccup (see [airedNextEpisodeTarget]).
+                fromListing = rawTarget != arithmeticTarget
             )
             if (target == null) {
                 // The next episode exists but is not out: say so rather than
@@ -5527,6 +5547,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 }
             }
         )
+        // This player's pair, and the session's offset re-applied to it: the
+        // processors are built with the factory, so a rebuild has to seed the
+        // new pair with the value the panel last set.
+        audioProcessors = renderersFactory.audioProcessors
+        renderersFactory.audioProcessors.delay.setDelayMs(PlayerTrackBridge.audioDelayMs)
         Log.i(
             "PLAYER_DV",
             "Renderer policy audioDecoder=$audioDecoderPriority (video always hardware)"
@@ -10124,13 +10149,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // episode that does not exist, instead of recommending something.
             // Random mode answers with another random aired episode - which is
             // also why the air-date gate below is a formality there.
+            val arithmeticTarget = nextEpisodeTarget()
             val target = resolveRandomChainTarget(
-                this@NativePlayerActivity, randomEpisodes, nextEpisodeTarget(),
+                this@NativePlayerActivity, randomEpisodes, arithmeticTarget,
                 parentId, parentType, season, episode
             )?.let {
                 airedNextEpisodeTarget(
                     this@NativePlayerActivity, it, resolveParentTmdbId(), parentId,
-                    sessionSeason = season
+                    sessionSeason = season,
+                    // A listing's own pick is never the invented jump (see
+                    // [airedNextEpisodeTarget]).
+                    fromListing = it != arithmeticTarget
                 )
             }
             when {

@@ -82,14 +82,29 @@ suspend fun airedNextEpisodeTarget(
     target: Pair<Int, Int>?,
     tmdbId: Int?,
     showId: String,
-    sessionSeason: Int? = null
+    sessionSeason: Int? = null,
+    /**
+     * True when [target] came out of a LISTING rather than out of the season
+     * scheme - a random (or previous) pick, which is an episode the show has
+     * listed. Such a target is never the invented jump, whatever season it
+     * names.
+     *
+     * The distinction is not cosmetic: a random pick that landed in a LATER
+     * season than the one playing was classified as the fabricated `(s + 1) to
+     * 1`, so a look-up hiccup answered null and the Up next panel disappeared
+     * for an episode the listing had just offered (a random-chain regression,
+     * because a scheme target in a later season IS only ever that jump).
+     */
+    fromListing: Boolean = false
 ): Pair<Int, Int>? {
     if (target == null) return null
 
     // Is this the invented jump? See [isSeasonBoundaryTarget]: the caller's own
     // season is what tells a target in an unlisted season from any other one,
     // and it is the difference between "cannot check" and "nothing to check".
-    val boundary = isSeasonBoundaryTarget(target, sessionSeason)
+    // A target that came out of a listing is excluded outright - the listing is
+    // what invented it, and it is checkable.
+    val boundary = !fromListing && isSeasonBoundaryTarget(target, sessionSeason)
 
     // Nothing to ask TMDB about: keep the existing behavior rather than drop a
     // chain we cannot check — except a boundary target, which is the one thing
@@ -136,7 +151,9 @@ suspend fun airedNextEpisodeTarget(
  * [sessionSeason] is a parameter rather than something read from the target
  * because the target cannot say which season it came from: `(19, 1)` is the
  * fabricated jump for a session in S18 and an ordinary random pick for a
- * session in S1.
+ * session in S1. That is exactly why [airedNextEpisodeTarget] takes
+ * `fromListing`: on its own this test cannot tell the two apart, and only the
+ * caller knows which season the target came out of.
  */
 internal fun isSeasonBoundaryTarget(target: Pair<Int, Int>, sessionSeason: Int?): Boolean =
     sessionSeason != null && target.first > sessionSeason

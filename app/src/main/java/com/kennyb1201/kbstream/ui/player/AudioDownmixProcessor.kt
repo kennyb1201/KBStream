@@ -47,14 +47,6 @@ import kotlin.math.roundToInt
  */
 internal class AudioDownmixProcessor : BaseAudioProcessor() {
 
-    companion object {
-        /**
-         * The instance the renderers factory installs. One per process, shared by
-         * every player the app builds (they are rebuilt on source switches), so
-         * what it reads is always the live tuning.
-         */
-        val instance = AudioDownmixProcessor()
-    }
 
     private var inputChannels = 0
     private var outputChannels = 0

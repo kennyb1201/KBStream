@@ -523,7 +523,14 @@ object PrefsPayloadBuilder {
             legacy.edit().clear().apply()
         }
         return buildJsonObject {
-            put("updatedAt", System.currentTimeMillis())
+            // The store's own last-known stamp, NOT the push's `now`. buildAll
+            // runs on every bulk push, so re-stamping here let any device that
+            // had merely opened the app win the last-write-wins race against a
+            // sibling's genuinely newer import and revert it - the same defect
+            // the home order and the chips already had fixed, which is why
+            // collections were the last blob still re-stamping (see
+            // [applyCollections], whose guard compares these stamps).
+            put("updatedAt", prefs.getLong("collections_synced_at", 0L))
             putJsonArray("profile_urls") {
                 prefs.getString("profile_urls", null).orEmpty()
                     .split('\n')

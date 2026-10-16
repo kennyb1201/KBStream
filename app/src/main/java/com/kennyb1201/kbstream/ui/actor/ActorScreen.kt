@@ -78,8 +78,10 @@ import com.kennyb1201.kbstream.ui.components.watchedMenuDescription
 import com.kennyb1201.kbstream.ui.components.LibraryAddTarget
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
+import com.kennyb1201.kbstream.ui.browse.BrowseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
+import com.kennyb1201.kbstream.ui.browse.browseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.revealBrowseReturnRail
 import com.kennyb1201.kbstream.ui.theme.KBSurfaceRaised
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
@@ -184,8 +186,16 @@ fun ActorScreen(
     var returnTarget by remember {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
-    // How many times this page has waited for the return's rail to land behind.
+    // How many LANDING tries this page has spent on the return's card - the
+    // recorded rail on screen, a request made, and it missed. Waiting for that
+    // rail to arrive at all spends none of it, which is the difference between
+    // a rail that builds slowly and a return that never lands (see
+    // [browseReturnDecision]).
     var returnAttempts by remember { mutableStateOf(0) }
+    // When the held record was first waited for, so a rail whose load failed
+    // hands the D-pad back to the first card instead of holding it for ever
+    // (see [BROWSE_RETURN_WAIT_MS]).
+    var returnWaitStartMs by remember { mutableStateOf(0L) }
     var focusPlaced by remember { mutableStateOf(false) }
     val returnFocusRequester = remember { FocusRequester() }
     val firstCreditFocusRequester = remember { FocusRequester() }
@@ -292,6 +302,16 @@ fun ActorScreen(
             val moviesRowIndex = if (p.biography.orEmpty().isNotBlank()) 2 else 1
             val tvRowIndex = moviesRowIndex + 2
 
+            // The rails this page paints, in the key space its return records
+            // use. A record naming a rail that is not in here yet is WAITED for
+            // rather than landed on, which is what keeps the page's other rail
+            // from spending the landing budget on its own arrival (see
+            // [browseReturnDecision]).
+            val arrivedRailKeys = buildList {
+                if (movies.isNotEmpty()) add(ACTOR_MOVIES_RAIL)
+                if (tvShows.isNotEmpty()) add(ACTOR_TV_RAIL)
+            }.toSet()
+
             /**
              * Puts the page back where the viewer left it: the rail on screen,
              * its row scrolled to the card, and the focus on that card. Answers
@@ -301,11 +321,7 @@ fun ActorScreen(
              */
             suspend fun restoreBrowseReturn(recorded: BrowseReturnTarget): Boolean {
                 val railKey = recorded.railKey ?: return false
-                val railKeys = buildList {
-                    if (movies.isNotEmpty()) add(ACTOR_MOVIES_RAIL)
-                    if (tvShows.isNotEmpty()) add(ACTOR_TV_RAIL)
-                }
-                if (railKey !in railKeys) return false
+                if (railKey !in arrivedRailKeys) return false
                 browseListState.revealBrowseReturnRail(railKey, recorded.railIndex)
                 var landed = false
                 var attempts = 0
@@ -325,8 +341,12 @@ fun ActorScreen(
              * something that happened to grab focus, so this is the landing an
              * ordinary open was missing. Retried for the same reason as the
              * other: the rail may not have composed its first card yet.
+             *
+             * Answers whether the focus actually landed, so a miss leaves the
+             * retry to the next rail that arrives instead of marking a page
+             * with nothing focused as done.
              */
-            suspend fun focusFirstCard() {
+            suspend fun focusFirstCard(): Boolean {
                 var landed = false
                 var attempts = 0
                 while (!landed && attempts < BROWSE_RETURN_FOCUS_STEPS) {
@@ -335,6 +355,7 @@ fun ActorScreen(
                         .getOrDefault(false)
                     attempts++
                 }
+                return landed
             }
 
             // A page reopened from one of its own Detail pages comes back on the
@@ -343,17 +364,66 @@ fun ActorScreen(
             // is HELD until honoured: the rail that holds the card can land
             // after the first one does, and a record read and then dropped
             // would lose the place it was raised for (see [BrowseReturnFocus]).
-            LaunchedEffect(movies, tvShows) {
-                if (!focusPlaced && (movies.isNotEmpty() || tvShows.isNotEmpty())) {
-                    val recorded = returnTarget ?: BrowseReturnFocus.consume(browseReturnKey)
-                    if (recorded != null && returnAttempts < BROWSE_RETURN_FOCUS_STEPS) {
-                        returnTarget = recorded
-                        returnAttempts++
-                        focusPlaced = restoreBrowseReturn(recorded)
-                        return@LaunchedEffect
+            // Two budgets, not one: waiting for the recorded rail to arrive is
+            // free and bounded by TIME, while a landing try - the rail on
+            // screen, a request made, and it missed - is what spends the
+            // twelve-attempt budget. Charging a try for an arrival is what ran
+            // this page's budget out on its OTHER rail and reopened it at the
+            // top (see [browseReturnDecision]).
+            LaunchedEffect(movies, tvShows, isLoading) {
+                if (isLoading) {
+                    focusPlaced = false
+                    // A new load is a new list: a position in the old one means nothing.
+                    returnTarget = null
+                    returnAttempts = 0
+                    returnWaitStartMs = 0L
+                } else if (!focusPlaced && (movies.isNotEmpty() || tvShows.isNotEmpty())) {
+                    // The wait starts when the record is read, not when a rail
+                    // arrives: it is what bounds holding the record at all.
+                    val recorded = returnTarget
+                        ?: BrowseReturnFocus.consume(browseReturnKey)
+                            .also { if (it != null) returnWaitStartMs = System.currentTimeMillis() }
+                    if (recorded != null) returnTarget = recorded
+                    when (
+                        browseReturnDecision(
+                            recorded = recorded,
+                            arrivedRailKeys = arrivedRailKeys,
+                            attemptsSpent = returnAttempts,
+                            waitStartMs = returnWaitStartMs,
+                            nowMs = System.currentTimeMillis()
+                        )
+                    ) {
+                        // The rail holding the card has not landed yet. Hold the
+                        // record and spend nothing: an arrival is not a landing
+                        // try, and charging one for it is what ran this page's
+                        // budget out on its other rail (see
+                        // [browseReturnDecision]).
+                        BrowseReturnDecision.WAIT_FOR_RAIL -> return@LaunchedEffect
+
+                        BrowseReturnDecision.TRY_LANDING -> {
+                            // Reachable only with a record in hand, by the
+                            // rule's own contract.
+                            val target = recorded ?: return@LaunchedEffect
+                            returnAttempts++
+                            // The landing is what marks the page focused; a
+                            // false leaves the retry to the next rail that
+                            // lands behind this one.
+                            focusPlaced = restoreBrowseReturn(target)
+                            return@LaunchedEffect
+                        }
+
+                        BrowseReturnDecision.FIRST_CARD -> {
+                            // The landing is what marks the page focused, exactly
+                            // as the return path does. A flag set BEFORE the
+                            // suspend request was the trap: this effect restarts
+                            // whenever another rail streams in, so an attempt
+                            // cancelled inside its delay left the flag true and
+                            // the restarted effect skipped the branch - an
+                            // ordinary first open with nothing focused and the
+                            // D-pad dead.
+                            focusPlaced = focusFirstCard()
+                        }
                     }
-                    focusPlaced = true
-                    focusFirstCard()
                 }
             }
 
@@ -825,12 +895,25 @@ private fun ActorCreditRail(
 ) {
     val rowState = rememberLazyListState()
 
-    // Puts this rail ON the card a return is coming back for: a rail the viewer
-    // scrolled twenty cards into has not composed that card, so it has no focus
-    // node yet (see [BrowseReturnFocus]).
-    LaunchedEffect(returnTarget) {
-        returnTarget?.let { target ->
-            runCatching { rowState.scrollToItem(target.position) }
+    // Where this rail's return lands, resolved by the card's OWN key rather
+    // than by the recorded position: a rail that has re-ordered under the
+    // viewer (a hidden title, a new release) still holds the card, and testing
+    // the position first meant NOTHING matched once the card had moved - the
+    // return requester attached to no card, its retry missed the budget, and
+    // the page fell through to its first-card path. The recorded position is
+    // only the fallback, for a card the record cannot name.
+    val returnIndex = returnTarget?.let { target ->
+        credits.indexOfFirst { it.id.toString() == target.itemId }
+            .takeIf { it >= 0 }
+            ?: target.position.takeIf { it in credits.indices }
+    }
+
+    // Puts this rail ON that card: a rail the viewer scrolled twenty cards into
+    // has not composed it, so it has no focus node yet (see
+    // [BrowseReturnFocus]).
+    LaunchedEffect(returnIndex) {
+        returnIndex?.let { index ->
+            runCatching { rowState.scrollToItem(index) }
         }
     }
 
@@ -861,13 +944,12 @@ private fun ActorCreditRail(
                 railKey = railKey,
                 railIndex = railIndex
             )
-            // The card the record names, by the key this rail keys it with, so
-            // a rail that has re-ordered under the viewer comes back on the
-            // card that is still there rather than on whatever took its place.
-            val isReturnItem =
-                returnTarget != null &&
-                    index == returnTarget.position &&
-                    cardKey == returnTarget.itemId
+            // Matched on the key alone (see [returnIndex]), which is what makes
+            // the promise true: the card is found by the key this rail keys it
+            // with, so a rail that has re-ordered under the viewer comes back
+            // on the card that is still there rather than on whatever took its
+            // place.
+            val isReturnItem = index == returnIndex
             val isFirstItem = isFirstRail && index == 0
 
             ActorCreditCard(

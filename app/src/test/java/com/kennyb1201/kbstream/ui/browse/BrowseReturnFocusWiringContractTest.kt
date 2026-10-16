@@ -57,6 +57,18 @@ class BrowseReturnFocusWiringContractTest {
             cardKey = "itemId = cardKey",
             recordMarker = "onBeforeOpenDetail(cardKey, itemIndex)",
             navigate = "viewModel.resolveAndNavigate("
+        ),
+        // The actor page is a browse page too, and the only one whose key
+        // builder lives beside the screen rather than in BrowseReturnFocus.kt:
+        // its rail keys are the two filmography rows it paints.
+        BrowseScreen(
+            label = "the actor page",
+            dir = "actor",
+            file = "ActorScreen.kt",
+            keyBuilder = "actorBrowseScreenKey(",
+            cardKey = "itemId = cardKey",
+            recordMarker = "BrowseReturnFocus.record(target)",
+            navigate = "viewModel.resolveAndNavigate("
         )
     )
 

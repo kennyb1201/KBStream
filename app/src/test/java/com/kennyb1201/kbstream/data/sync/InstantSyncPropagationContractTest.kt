@@ -291,13 +291,13 @@ class InstantSyncPropagationContractTest {
     }
 
     @Test
-    fun `the forced re-join drops only the dead channels`() {
+    fun `the forced re-join drops only the dead channels and joins only the untracked tables`() {
         val sync = readSource(SYNC)
         val body = slice(sync, "private fun startRealtime(force: Boolean = false) {", "\n    /**\n     * Creates a fresh channel")
 
         assertTrue(
             "the plain join must still bail when it is already subscribed",
-            body.contains("if (!force) return@withLock")
+            body.contains("if (!force && realtimeSubscriptions.isNotEmpty()) return@withLock")
         )
         assertTrue(
             "only UNSUBSCRIBED channels are dropped: a SUBSCRIBING one is " +
@@ -305,8 +305,21 @@ class InstantSyncPropagationContractTest {
             body.contains("Status.UNSUBSCRIBED")
         )
         assertTrue(
-            "and a healthy join must leave the channels alone",
-            body.contains("if (dead.isEmpty()) return@withLock")
+            "and the channels a healthy or mid-join table keeps are exactly the " +
+                "ones this join must NOT subscribe a second time: the entry is " +
+                "dropped for a dead channel and left alone otherwise, so the " +
+                "tracked set is read AFTER the drop",
+            body.contains("val missing = REALTIME_TABLES.filterNot { table ->") &&
+                body.contains("realtimeSubscriptions.any { it.table == table }") &&
+                body.contains("if (missing.isEmpty()) return@withLock")
+        )
+        assertTrue(
+            "only those tables are subscribed, so a channel stuck mid-join (or " +
+                "one a failed setup left behind) cannot end up with a second " +
+                "channel + collector that nothing cleans up and that applies " +
+                "every remote change twice",
+            body.contains("missing.forEach { table ->") &&
+                !body.contains("listOf(TABLE_HISTORY, TABLE_WATCHED, TABLE_OVERRIDES, TABLE_PREFS)")
         )
         assertTrue(
             "the health watcher's failure budget is untouched by a foreground " +

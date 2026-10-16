@@ -17,6 +17,14 @@ import org.junit.Test
  * to do something that grabbed focus; the only requests were the long-press
  * menu's dismiss restores.
  *
+ * This page then kept the FIRST shape of that mechanism while the browse pages
+ * moved on: it spent a landing try every time its credits arrived, which is what
+ * the Tag page's own field report pinned as the rail that builds slowly losing
+ * its place to the rail that built first. The rule is now the shared one -
+ * waiting for the recorded rail is free and bounded by time, a try is spent only
+ * where a landing was really attempted, and the card is resolved by the key its
+ * rail keys it with (see [browseReturnDecision]).
+ *
  * Read from the source: this is Compose wiring and D-pad focus, which need a
  * device and a remote to press.
  */
@@ -85,8 +93,19 @@ class ActorReturnFocusContractTest {
             source.contains("state = browseListState,")
         )
         assertTrue(
-            "while the rail itself scrolls its row to the recorded card",
-            source.contains("runCatching { rowState.scrollToItem(target.position) }")
+            "while the rail itself resolves the recorded card by the KEY its own " +
+                "rail keys it with, keeps the recorded position only as the " +
+                "fallback for a card the record cannot name, and scrolls to that " +
+                "resolved index",
+            source.contains(
+                "val returnIndex = returnTarget?.let { target -> " +
+                    "credits.indexOfFirst { it.id.toString() == target.itemId } " +
+                    ".takeIf { it >= 0 } " +
+                    "?: target.position.takeIf { it in credits.indices } }"
+            ) &&
+                source.contains("LaunchedEffect(returnIndex)") &&
+                source.contains("runCatching { rowState.scrollToItem(index) }") &&
+                !source.contains("rowState.scrollToItem(target.position)")
         )
     }
 
@@ -104,13 +123,64 @@ class ActorReturnFocusContractTest {
             source.contains("isSuccess")
         )
         assertTrue(
-            "only the card the record names carries the return requester",
+            "and the requester rides exactly the card the resolved index names, " +
+                "so a rail that has re-ordered under the viewer hands focus to " +
+                "the card that is still there - testing the position as well as " +
+                "the key meant that once it moved NOTHING matched, the requester " +
+                "attached to nothing and the page fell through to its first card",
+            source.contains("val isReturnItem = index == returnIndex") &&
+                source.contains("extraFocusRequester = returnFocusRequester.takeIf { isReturnItem }")
+        )
+    }
+
+    @Test
+    fun `waiting for the recorded rail is free, so the other rail cannot exhaust the budget`() {
+        assertTrue(
+            "which rail may be waited for is the shared rule's call, not this " +
+                "page's",
+            source.contains("browseReturnDecision(") &&
+                source.contains("arrivedRailKeys = arrivedRailKeys,") &&
+                source.contains("attemptsSpent = returnAttempts,") &&
+                source.contains("waitStartMs = returnWaitStartMs,")
+        )
+        assertTrue(
+            "and the two rails this page paints ARE that arrived key space, so a " +
+                "record for the filmography rail whose credits are still on the " +
+                "way is waited for instead of falling through to the first TV card",
             source.contains(
-                "val isReturnItem = returnTarget != null && " +
-                    "index == returnTarget.position && cardKey == returnTarget.itemId"
-            ) && source.contains(
-                "extraFocusRequester = returnFocusRequester.takeIf { isReturnItem }"
-            )
+                "val arrivedRailKeys = buildList { " +
+                    "if (movies.isNotEmpty()) add(ACTOR_MOVIES_RAIL) " +
+                    "if (tvShows.isNotEmpty()) add(ACTOR_TV_RAIL) }.toSet()"
+            ) && source.contains("if (railKey !in arrivedRailKeys) return false")
+        )
+        assertTrue(
+            "and the record is HELD through that wait - a record read and then " +
+                "dropped because its rail is not on screen yet is the place lost",
+            source.contains("if (recorded != null) returnTarget = recorded")
+        )
+        assertFalse(
+            "the wait is not a landing try either: a page that has already waited " +
+                "holds the record and spends nothing, rather than charging itself " +
+                "an attempt for an arrival it did not control",
+            source.contains("BrowseReturnDecision.WAIT_FOR_RAIL -> returnAttempts++")
+        )
+        val hold = source.indexOf("BrowseReturnDecision.WAIT_FOR_RAIL")
+        val landing = source.indexOf("BrowseReturnDecision.TRY_LANDING")
+        val spent = source.indexOf("returnAttempts++")
+        assertTrue(
+            "the one landing try is spent in the landing branch, reached only " +
+                "with an arrived rail - spending it where the record was read is " +
+                "what ran this page's budget out on the rail that built first",
+            hold in 0 until landing && spent > landing
+        )
+        assertTrue(
+            "and a new load drops a record left by the list before it: a " +
+                "position in the old list means nothing in the new one",
+            source.contains("var returnWaitStartMs by remember { mutableStateOf(0L) }") &&
+                source.contains("if (isLoading) {") &&
+                source.contains("returnTarget = null") &&
+                source.contains("returnAttempts = 0") &&
+                source.contains("returnWaitStartMs = 0L")
         )
     }
 
@@ -118,13 +188,20 @@ class ActorReturnFocusContractTest {
     fun `a fresh open lands focus on the first card, not nothing`() {
         assertTrue(
             "the page waits for the credits to land, then places focus",
-            source.contains("LaunchedEffect(movies, tvShows)") &&
+            source.contains("LaunchedEffect(movies, tvShows, isLoading)") &&
                 source.contains("focusFirstCard()")
         )
         assertTrue(
             "the landing is retried, because the rail may not have composed its " +
                 "first card yet - the same race as a return",
             source.contains("landed = runCatching { firstCreditFocusRequester.requestFocus() } .getOrDefault(false)")
+        )
+        assertTrue(
+            "and the entry focus is marked placed off the landing's OWN answer, " +
+                "so a miss is retried when the next rail arrives rather than " +
+                "leaving the page with nothing focused",
+            source.contains("focusPlaced = focusFirstCard()") &&
+                source.contains("suspend fun focusFirstCard(): Boolean")
         )
         assertTrue(
             "the first card of the first rail the page draws takes that requester",

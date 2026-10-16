@@ -3255,8 +3255,13 @@ private fun AboutSection(modifier: Modifier = Modifier) {
                 )
             }
         }
-        Spacer(modifier = Modifier.height(10.dp))
-        UpdateRow()
+        // Nothing to offer on a Play build: the update row drives a download +
+        // install that build's manifest cannot perform (see PLAY_BUILD). The
+        // changelog stays - it is informational.
+        if (!com.kennyb1201.kbstream.BuildConfig.PLAY_BUILD) {
+            Spacer(modifier = Modifier.height(10.dp))
+            UpdateRow()
+        }
         if (changelog.isNotBlank()) {
             Spacer(modifier = Modifier.height(10.dp))
             // Same non-focusable plate as the version line above: the
