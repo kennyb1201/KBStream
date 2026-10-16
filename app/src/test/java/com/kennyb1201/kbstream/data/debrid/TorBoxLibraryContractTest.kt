@@ -40,6 +40,7 @@ class TorBoxLibraryContractTest {
 
     private companion object {
         const val SYNC = "com/kennyb1201/kbstream/data/debrid/TorBoxLibrarySync.kt"
+        const val STORE = "com/kennyb1201/kbstream/data/debrid/TorBoxCloudStore.kt"
         const val WORKER = "com/kennyb1201/kbstream/work/TorBoxLibraryWorker.kt"
         const val PREFS = "com/kennyb1201/kbstream/data/settings/AppPreferences.kt"
         const val PREFS_PAYLOAD = "com/kennyb1201/kbstream/data/sync/SyncPrefsPayload.kt"
@@ -67,6 +68,39 @@ class TorBoxLibraryContractTest {
         assertTrue(
             "the setting needs a control in Settings",
             source(SETTINGS).contains("Add TorBox Cloud to Library")
+        )
+    }
+
+    @Test
+    fun `an empty search is retried before the torrent is recorded as handled`() {
+        val sync = source(SYNC)
+        assertTrue(
+            "the round must count the empty answer instead of dropping it",
+            sync.contains("store.noteEmptySearch(torrent.id)")
+        )
+        assertTrue(
+            "and give up only through the budget rule",
+            sync.contains("TorBoxCloudRules.retriesEmptySearch(attempts)")
+        )
+        assertTrue(
+            "a search that produced candidates clears the streak",
+            sync.contains("store.clearEmptySearch(torrent.id)")
+        )
+
+        val store = source(STORE)
+        assertTrue(
+            "the streak is kept apart from the processed set - the two answer " +
+                "opposite questions",
+            store.contains("torbox_library_empty_searches") &&
+                store.contains("torbox_library_processed")
+        )
+        assertTrue(
+            "and it is bounded like every other set this device keeps",
+            store.contains("private const val MAX_EMPTY_ATTEMPTS = ")
+        )
+        assertTrue(
+            "recording a torrent as handled ends its streak",
+            store.substringAfter("fun markProcessed(").contains("clearEmptySearch(torrentId)")
         )
     }
 

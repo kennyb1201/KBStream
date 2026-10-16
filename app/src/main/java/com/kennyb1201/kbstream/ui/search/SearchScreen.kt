@@ -30,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
@@ -121,11 +122,17 @@ fun SearchScreen(
     // Add-on search rail title toggles (addon name / catalog type). These
     // apply ONLY to the addon search rails below — the built-in TMDB
     // "Titles" row has no addon or catalog type to show.
+    //
+    // Both toggles are SYNCED prefs, so the reads are keyed on the sync
+    // revision: flipping one on the other TV has to relabel the add-on rails
+    // already on screen rather than at the next visit here (see
+    // [PrefsPayloadApplier.revision]).
     val context = LocalContext.current
-    val showRailType by remember {
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val showRailType by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getSearchRailShowCatalogType(context))
     }
-    val showRailAddon by remember {
+    val showRailAddon by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getSearchRailShowAddonName(context))
     }
 

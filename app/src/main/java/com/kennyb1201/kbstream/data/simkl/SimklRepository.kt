@@ -687,6 +687,16 @@ class SimklRepository(
             return
         }
 
+        // The profile this stamp belongs to, captured before the network call:
+        // the write below resolves the ACTIVE profile's scoped store at write
+        // time, and the activity token is compared per profile. A switch
+        // mid-fetch used to stamp the OLD account's token into the NEW
+        // profile's store, which then read the two as equal and skipped its own
+        // watched-activity refreshes - a stale badge set with a clean dashboard,
+        // the shape the poison sweep exists to clean up after.
+        val ownerAtStart =
+            activeOwner()
+
         val activities =
             runCatchingCancellable {
                 getActivities(
@@ -713,6 +723,16 @@ class SimklRepository(
         if (
             latest.isBlank()
         ) {
+            return
+        }
+
+        if (
+            activeOwner() != ownerAtStart
+        ) {
+            Log.w(
+                "SIMKL_REPO",
+                "watched-activity stamp dropped: profile switched mid-fetch"
+            )
             return
         }
 

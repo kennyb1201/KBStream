@@ -72,6 +72,10 @@ object ProfileManager {
     private const val KEY_PROFILES = "profiles_json"
     private const val KEY_ACTIVE = "active_profile_id"
     private const val KEY_MIGRATED = "default_profile_migrated"
+    // Ids of profiles this device has seen go away. A tombstone never expires:
+    // profile ids are UUIDs, so an id is never reused and there is nothing a
+    // stale entry could wrongly suppress (see [recordDeletion]).
+    private const val KEY_DELETED = "deleted_profile_ids"
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -500,19 +504,15 @@ object ProfileManager {
         val updated = loadProfiles(context).filterNot { it.id == profileId }
         saveProfiles(context, updated)
         _profiles.value = updated
+        // A delete has to SYNC as a delete. The merge only ever adds, so a
+        // sibling that still holds this profile would re-publish it on its next
+        // write and it would come straight back - so the id becomes a tombstone
+        // BEFORE the blob is published (see [recordDeletion]).
+        recordDeletion(context, profileId)
         pushProfilesBlob(context, updated)
 
         // Wipe the profile's local namespace.
-        ProfileStorage.namespaces(context).filter { it.startsWith("$profileId.") }.forEach { ns ->
-            context.getSharedPreferences(ns, Context.MODE_PRIVATE).edit().clear().apply()
-        }
-        // ...and drop the cached ENCRYPTED stores for that namespace. The files
-        // above are cleared, but the decrypted instances are held in
-        // SecureTokenStore's process cache; a profile recreated with the same id
-        // would otherwise inherit the deleted profile's secrets.
-        com.kennyb1201.kbstream.data.security.SecureTokenStore.evictProfile(profileId)
-        context.deleteDatabase(ProfileStorage.dbName(profileId, "kbstream_watch_history"))
-        context.deleteDatabase(ProfileStorage.dbName(profileId, "iptv_epg.db"))
+        wipeLocalProfileData(context, profileId)
 
         // ...plus the guide that is NOT named after the profile, when no profile
         // that is LEFT expects that file. Two profiles on one playlist share one
@@ -532,11 +532,6 @@ object ProfileManager {
             if (!stillExpected) context.deleteDatabase(guideName)
         }
 
-        // Remove any uploaded avatar files for this profile.
-        java.io.File(context.filesDir, "avatars").listFiles()
-            ?.filter { it.name == profileId || it.name.startsWith("$profileId.") }
-            ?.forEach { it.delete() }
-
         if (_activeProfile.value?.id == profileId) {
             val next = updated.firstOrNull()
             _activeProfile.value = next
@@ -552,6 +547,73 @@ object ProfileManager {
                 onActiveProfileChanged()
             }
         }
+    }
+
+    /**
+     * Every profile id this device has seen deleted - locally, or in a
+     * sibling's blob. Read from disk rather than kept in memory because both
+     * writers run on paths that can start before [init] (a pull during
+     * sign-in, a delete from Settings).
+     */
+    internal fun deletedIds(context: Context): Set<String> =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getStringSet(KEY_DELETED, emptySet())
+            ?.toSet()
+            ?: emptySet()
+
+    /**
+     * Records [profileId] as deleted, permanently.
+     *
+     * The merge in [applyProfilesPayload] is additive - `local + incoming` by
+     * id - so nothing in it can express a removal. Without this record a
+     * profile deleted on one TV was put back by the next pull of any device
+     * that still held it, and by that device's own next push (its blob still
+     * carried the profile and had no tombstone to say otherwise). The tombstone
+     * is what the removal travels in: it is published in the profiles blob and
+     * applied by every sibling, and it outranks a later blob that still lists
+     * the profile.
+     */
+    internal fun recordDeletion(context: Context, profileId: String) {
+        if (profileId.isBlank()) return
+        val merged = deletedIds(context) + profileId
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putStringSet(KEY_DELETED, merged).apply()
+    }
+
+    private fun recordDeletions(context: Context, ids: Collection<String>) {
+        val fresh = ids.filter { it.isNotBlank() }
+        if (fresh.isEmpty()) return
+        val merged = deletedIds(context) + fresh
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putStringSet(KEY_DELETED, merged).apply()
+    }
+
+    /**
+     * The local half of a delete - the same wipe whether the profile was
+     * removed here or on a sibling (a profile deleted elsewhere must not leave
+     * its watch history, addons and cached tokens on this device).
+     *
+     * The caller closes the scoped Room handles first when the profile being
+     * wiped was the ACTIVE one: Room keeps its file locked while open, and
+     * deleteDatabase on an open database silently fails.
+     */
+    private fun wipeLocalProfileData(context: Context, profileId: String) {
+        ProfileStorage.namespaces(context).filter { it.startsWith("$profileId.") }.forEach { ns ->
+            context.getSharedPreferences(ns, Context.MODE_PRIVATE).edit().clear().apply()
+        }
+        // ...and drop the cached ENCRYPTED stores for that namespace. The files
+        // above are cleared, but the decrypted instances are held in
+        // SecureTokenStore's process cache; a profile recreated with the same id
+        // would otherwise inherit the deleted profile's secrets.
+        runCatching {
+            com.kennyb1201.kbstream.data.security.SecureTokenStore.evictProfile(profileId)
+        }
+        context.deleteDatabase(ProfileStorage.dbName(profileId, "kbstream_watch_history"))
+        context.deleteDatabase(ProfileStorage.dbName(profileId, "iptv_epg.db"))
+        // Remove any uploaded avatar files for this profile.
+        java.io.File(context.filesDir, "avatars").listFiles()
+            ?.filter { it.name == profileId || it.name.startsWith("$profileId.") }
+            ?.forEach { it.delete() }
     }
 
     // ── Persistence + sync blob ─────────────────────────────────────
@@ -586,6 +648,14 @@ object ProfileManager {
     fun profilesSyncBlob(context: Context): JsonObject =
         buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
+            // The removals ride along with the list: without them a sibling
+            // cannot tell "this profile was deleted" from "this blob was built
+            // by a device that never had it" and puts it back (see
+            // [recordDeletion]). Sorted, so the same set always serializes to
+            // the same text.
+            putJsonArray("deletedProfiles") {
+                deletedIds(context).sorted().forEach { add(JsonPrimitive(it)) }
+            }
             putJsonArray("profiles") {
                 loadProfiles(context).forEach { p ->
                     add(
@@ -700,6 +770,17 @@ object ProfileManager {
     )
 
     // Used by SupabaseSync apply path.
+    /**
+     * Merges a sibling's profiles blob into this device's list.
+     *
+     * The merge is still additive - a profile that arrived from elsewhere is
+     * kept even when this blob does not list it - but it now runs against the
+     * deletions both sides know about: [recordDeletion]'s tombstones for this
+     * device and the payload's `deletedProfiles` for the sender. That is what
+     * stops a deleted profile from coming back. A pull that only carries
+     * tombstones (the last profile on the account was deleted) is a payload to
+     * apply, not an empty one to ignore.
+     */
     fun applyProfilesPayload(context: Context, payload: kotlinx.serialization.json.JsonObject) {
         val arr = payload["profiles"] as? JsonArray ?: return
         val list = arr.mapNotNull { el ->
@@ -729,16 +810,59 @@ object ProfileManager {
                 createdAt = lng("createdAt") ?: 0L
             )
         }
-        if (list.isEmpty()) return
+        val remoteDeleted = (payload["deletedProfiles"] as? JsonArray)
+            ?.mapNotNull { (it as? JsonPrimitive)?.content }
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
+        val deleted = deletedIds(context) + remoteDeleted
+        // A tombstone-only blob still has work to do (it can be the whole
+        // account's profiles going away), so an empty list is only a reason to
+        // stop when there is nothing deleted to apply either.
+        if (list.isEmpty() && deleted.isEmpty()) return
+
+        recordDeletions(context, remoteDeleted)
 
         val local = loadProfiles(context)
         val byId = (local + list).associateBy { it.id }
-        val merged = byId.values.sortedBy { it.createdAt }
+        val merged = byId.values
+            .filterNot { it.id in deleted }
+            .sortedBy { it.createdAt }
+        val removed = local.map { it.id }.filterNot { id -> merged.any { it.id == id } }
+
         saveProfiles(context, merged)
         _profiles.value = merged
-        if (_activeProfile.value == null) {
+
+        val activeBefore = _activeProfile.value?.id
+        if (activeBefore != null && activeBefore in removed) {
+            // The profile this device is SHOWING was deleted on another device.
+            // Rebind BEFORE the wipe below: the scoped Room handles are open on
+            // the active profile's files, and deleteDatabase on an open database
+            // silently fails - which is how a deleted profile's history used to
+            // survive. Same sequence the on-device delete runs.
+            runCatching {
+                com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
+                    .closeScopedInstanceForSwitch()
+            }
+            runCatching {
+                com.kennyb1201.kbstream.data.iptv.db.IptvDatabase
+                    .closeScopedInstanceForSwitch()
+            }
+            val next = merged.firstOrNull()
+            _activeProfile.value = next
+            if (next != null) {
+                setActive(context, next)
+            } else {
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().remove(KEY_ACTIVE).apply()
+                onActiveProfileChanged()
+            }
+        } else if (_activeProfile.value == null) {
             _activeProfile.value = merged.firstOrNull()
         }
+
+        // A profile that arrived deleted must not keep its local data either -
+        // the same wipe the on-device delete performs.
+        removed.forEach { wipeLocalProfileData(context, it) }
     }
 }
 

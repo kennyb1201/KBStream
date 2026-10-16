@@ -270,37 +270,80 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
 
+    // The account's display prefs, as of the last real change to them.
+    //
+    // Every control below that mirrors a SYNCED key is seeded through this
+    // revision, because those prefs belong to the ACCOUNT rather than to this
+    // box: a toggle flipped on another TV - or a blob pulled in live - has to
+    // move the control already on screen, and a bare
+    // `remember { mutableStateOf(...) }` kept whatever it read when the pane
+    // was first composed for as long as Settings stayed open. Keying on the
+    // revision re-seeds it exactly once per real change, and nothing is lost
+    // by that, because every handler writes its flip straight through to prefs
+    // (the in-memory state is a mirror of the store, not a buffer for it).
+    //
+    // The rows that stay BARE are the device-local ones on purpose - decoder,
+    // buffer, engine, aspect ratio, the external player, the API keys - so
+    // another box's answer can never move a control that describes this one
+    // (see PrefsPayloadBuilder.EXCLUDED_PREF_KEYS).
+    val syncedRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+
     var bufferMode by remember { mutableIntStateOf(AppPreferences.getDefaultBufferMode(context)) }
-    var subtitleSize by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context)) }
-    var subtitleBg by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context)) }
-    var cleanSdh by remember { mutableStateOf(AppPreferences.getCleanSdhCaptions(context)) }
-    var subtitlePosition by remember { mutableIntStateOf(AppPreferences.getDefaultSubtitlePosition(context)) }
-    var autoPlayNext by remember { mutableStateOf(AppPreferences.getAutoPlayNext(context)) }
-    var nextEpisodePopup by remember {
+    var subtitleSize by remember(syncedRevision) {
+        mutableIntStateOf(AppPreferences.getDefaultSubtitleSize(context))
+    }
+    var subtitleBg by remember(syncedRevision) {
+        mutableIntStateOf(AppPreferences.getDefaultSubtitleBackground(context))
+    }
+    var cleanSdh by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getCleanSdhCaptions(context))
+    }
+    var subtitlePosition by remember(syncedRevision) {
+        mutableIntStateOf(AppPreferences.getDefaultSubtitlePosition(context))
+    }
+    var autoPlayNext by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getAutoPlayNext(context))
+    }
+    var nextEpisodePopup by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getNextEpisodePopup(context))
     }
     // Tenths of a percent: the point moves in 0.5 steps.
-    var nextEpisodePopupPoint by remember {
+    var nextEpisodePopupPoint by remember(syncedRevision) {
         mutableIntStateOf(AppPreferences.getNextEpisodePopupPointTenths(context))
     }
-    var becauseYouWatched by remember {
+    var becauseYouWatched by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getBecauseYouWatched(context))
     }
-    var becauseYouWatchedPoint by remember {
+    var becauseYouWatchedPoint by remember(syncedRevision) {
         mutableIntStateOf(AppPreferences.getBecauseYouWatchedPointTenths(context))
     }
-    var autoSkipIntro by remember { mutableStateOf(AppPreferences.getAutoSkipIntro(context)) }
-    var autoSkipCredits by remember { mutableStateOf(AppPreferences.getAutoSkipCredits(context)) }
+    var autoSkipIntro by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getAutoSkipIntro(context))
+    }
+    var autoSkipCredits by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getAutoSkipCredits(context))
+    }
     var matchFrameRate by remember { mutableStateOf(AppPreferences.getMatchFrameRate(context)) }
-    var bingeGroupPrefer by remember { mutableStateOf(AppPreferences.getBingeGroupPrefer(context)) }
-    var bingeGroupReuse by remember { mutableStateOf(AppPreferences.getBingeGroupReuse(context)) }
-    var bingeGroupFallback by remember { mutableStateOf(AppPreferences.getBingeGroupFallback(context)) }
-    var stillTherePrompt by remember { mutableStateOf(AppPreferences.getStillTherePrompt(context)) }
-    var stillThereEpisodes by remember { mutableLongStateOf(AppPreferences.getStillThereEpisodes(context)) }
-    var newEpisodeNotifications by remember {
+    var bingeGroupPrefer by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getBingeGroupPrefer(context))
+    }
+    var bingeGroupReuse by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getBingeGroupReuse(context))
+    }
+    var bingeGroupFallback by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getBingeGroupFallback(context))
+    }
+    var stillTherePrompt by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getStillTherePrompt(context))
+    }
+    var stillThereEpisodes by remember(syncedRevision) {
+        mutableLongStateOf(AppPreferences.getStillThereEpisodes(context))
+    }
+    var newEpisodeNotifications by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getNewEpisodeNotifications(context))
     }
-    var liveReminderNotifications by remember {
+    var liveReminderNotifications by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getLiveReminderNotifications(context))
     }
     // Whether the OS will actually deliver an alert. Separate from the toggle:
@@ -344,8 +387,12 @@ fun SettingsScreen(
         }
     }
     var autoSelectStream by remember { mutableStateOf(AppPreferences.getAutoSelectStream(context)) }
-    var useStreamRanker by remember { mutableStateOf(AppPreferences.getUseStreamRanker(context)) }
-    var maxAutoPlayQuality by remember { mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context)) }
+    var useStreamRanker by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getUseStreamRanker(context))
+    }
+    var maxAutoPlayQuality by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getMaxAutoPlayQuality(context))
+    }
     var enableTunneling by remember { mutableStateOf(AppPreferences.getEnableTunneling(context)) }
     var enablePip by remember { mutableStateOf(AppPreferences.getEnablePip(context)) }
     // Fire TV OS doesn't support PiP for third-party apps; hide the toggle there.
@@ -358,28 +405,70 @@ fun SettingsScreen(
     var audioVolumeBoostDb by remember { mutableIntStateOf(AppPreferences.getAudioVolumeBoostDb(context)) }
     // Decode vs passthrough (device-level, like the audio decoder above).
     var audioOutput by remember { mutableIntStateOf(AppPreferences.getAudioOutput(context)) }
-    var heroTrailerAutoplay by remember { mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context)) }
-    var heroTrailerMuted by remember { mutableStateOf(AppPreferences.getHeroTrailerMuted(context)) }
-    var heroTrailerDelay by remember { mutableStateOf(AppPreferences.getHeroTrailerDelayMs(context)) }
-    var use24hClock by remember { mutableStateOf(AppPreferences.getUse24HourClock(context)) }
+    var heroTrailerAutoplay by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHeroTrailerAutoplay(context))
+    }
+    var heroTrailerMuted by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHeroTrailerMuted(context))
+    }
+    var heroTrailerDelay by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHeroTrailerDelayMs(context))
+    }
+    var use24hClock by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getUse24HourClock(context))
+    }
     var badgePackInput by remember { mutableStateOf(StreamBadgeEngine.getPackUrl(context)) }
-    var railShowType by remember { mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context)) }
-    var railShowAddon by remember { mutableStateOf(AppPreferences.getHomeRailShowAddonName(context)) }
-    var searchRailShowType by remember { mutableStateOf(AppPreferences.getSearchRailShowCatalogType(context)) }
-    var searchRailShowAddon by remember { mutableStateOf(AppPreferences.getSearchRailShowAddonName(context)) }
-    var captionTitle by remember { mutableStateOf(AppPreferences.getPosterCaptionTitle(context)) }
-    var captionYear by remember { mutableStateOf(AppPreferences.getPosterCaptionYear(context)) }
-    var captionRating by remember { mutableStateOf(AppPreferences.getPosterCaptionRating(context)) }
-    var posterSizeIdx by remember { mutableStateOf(AppPreferences.getPosterSize(context).toInt()) }
-    var railHideUpcoming by remember { mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context)) }
-    var browseEnglishOnly by remember { mutableStateOf(AppPreferences.getBrowseEnglishOnly(context)) }
-    var landscapeCards by remember { mutableStateOf(AppPreferences.getHomeLandscapeCards(context)) }
-    var landscapePosters by remember { mutableStateOf(AppPreferences.getLandscapePosters(context)) }
-    var partialWatchBadge by remember { mutableStateOf(AppPreferences.getPosterPartialWatchBadge(context)) }
-    var posterBorderIdx by remember { mutableIntStateOf(AppPreferences.getPosterBorderStrength(context)) }
-    var posterEdgeIdx by remember { mutableIntStateOf(AppPreferences.getPosterEdge(context)) }
-    var amoledBlack by remember { mutableStateOf(AppPreferences.getAmoledBlack(context)) }
-    var pureBlackSurface by remember { mutableStateOf(AppPreferences.getPureBlackSurface(context)) }
+    var railShowType by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHomeRailShowCatalogType(context))
+    }
+    var railShowAddon by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHomeRailShowAddonName(context))
+    }
+    var searchRailShowType by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getSearchRailShowCatalogType(context))
+    }
+    var searchRailShowAddon by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getSearchRailShowAddonName(context))
+    }
+    var captionTitle by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPosterCaptionTitle(context))
+    }
+    var captionYear by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPosterCaptionYear(context))
+    }
+    var captionRating by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPosterCaptionRating(context))
+    }
+    var posterSizeIdx by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPosterSize(context).toInt())
+    }
+    var railHideUpcoming by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHomeRailHideUpcoming(context))
+    }
+    var browseEnglishOnly by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getBrowseEnglishOnly(context))
+    }
+    var landscapeCards by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getHomeLandscapeCards(context))
+    }
+    var landscapePosters by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getLandscapePosters(context))
+    }
+    var partialWatchBadge by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPosterPartialWatchBadge(context))
+    }
+    var posterBorderIdx by remember(syncedRevision) {
+        mutableIntStateOf(AppPreferences.getPosterBorderStrength(context))
+    }
+    var posterEdgeIdx by remember(syncedRevision) {
+        mutableIntStateOf(AppPreferences.getPosterEdge(context))
+    }
+    var amoledBlack by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getAmoledBlack(context))
+    }
+    var pureBlackSurface by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPureBlackSurface(context))
+    }
     var clearingHistory by remember { mutableStateOf(false) }
     var historyClearedAt by remember { mutableStateOf<Long?>(null) }
     var showClearHistoryConfirm by remember { mutableStateOf(false) }
@@ -427,9 +516,13 @@ fun SettingsScreen(
     val p5ConversionRequired = AppPreferences.isP5ConversionRequired(context)
     var stripHdr10Plus by remember { mutableStateOf(AppPreferences.getStripHdr10Plus(context)) }
     var aspectRatio by remember { mutableIntStateOf(AppPreferences.getDefaultAspectRatio(context)) }
-    var preferredAudioLang by remember { mutableStateOf(AppPreferences.getPreferredAudioLanguage(context)) }
-    var preferredSubtitleLang by remember { mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context)) }
-    var subtitleMode by remember {
+    var preferredAudioLang by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPreferredAudioLanguage(context))
+    }
+    var preferredSubtitleLang by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getPreferredSubtitleLanguage(context))
+    }
+    var subtitleMode by remember(syncedRevision) {
         mutableIntStateOf(SubtitleModeRules.normalized(AppPreferences.getSubtitleMode(context)))
     }
     var backupStatus by remember { mutableStateOf<String?>(null) }
@@ -450,9 +543,15 @@ fun SettingsScreen(
     // this does not claim a connection it has not tested.
     var omdbKeyInput by remember { mutableStateOf(AppPreferences.getOmdbApiKey(context)) }
     var omdbKeySaved by remember { mutableStateOf(false) }
-    var autoFetchSubtitles by remember { mutableStateOf(AppPreferences.getAutoFetchSubtitles(context)) }
-    var spoilerFree by remember { mutableStateOf(AppPreferences.getSpoilerFree(context)) }
-    var torboxLibrarySync by remember { mutableStateOf(AppPreferences.getTorboxLibrarySync(context)) }
+    var autoFetchSubtitles by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getAutoFetchSubtitles(context))
+    }
+    var spoilerFree by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getSpoilerFree(context))
+    }
+    var torboxLibrarySync by remember(syncedRevision) {
+        mutableStateOf(AppPreferences.getTorboxLibrarySync(context))
+    }
 
     // Reopen on the pane last read (device-local, deliberately not synced):
     // the rail is ten panes deep and the one being tuned is rarely the first.
@@ -1042,7 +1141,7 @@ fun SettingsScreen(
                 SettingsSectionHeader("Badges")
 
                 val badgeFocusRequester = remember { FocusRequester() }
-                var badgesAboveFile by remember {
+                var badgesAboveFile by remember(syncedRevision) {
                     mutableStateOf(AppPreferences.getBadgesAboveFile(context))
                 }
                 KBCard(
@@ -3975,7 +4074,15 @@ private val CustomAccentHueBrush = Brush.horizontalGradient(
 @Composable
 private fun AccentColorPicker() {
     val context = LocalContext.current
-    var selectedIndex by remember {
+    // The accent INDEX is a synced pref (the custom colour beside it is
+    // synced too), so the grid's selection is keyed on the sync revision: an
+    // accent picked on another TV moves the ring here instead of at the next
+    // visit to this screen. The mixing bars are deliberately NOT keyed - they
+    // are an edit in progress, seeded once so a live change cannot yank the
+    // sliders out from under the viewer mid-mix.
+    val syncedRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+    var selectedIndex by remember(syncedRevision) {
         mutableStateOf(AppPreferences.getAccentIndex(context, DEFAULT_ACCENT_INDEX))
     }
     // The colour being mixed, as its three bars. Seeded once - from the stored

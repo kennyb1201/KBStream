@@ -140,15 +140,26 @@ internal object PlaybackHistoryWriter {
                     dao.upsert(row)
                     // The completion has landed, so the episode's resume point
                     // goes with it - the rows the upsert above does not reach
-                    // (see [clearSupersededResumeRows]).
-                    val cleared = clearSupersededResumeRows(row, dao)
+                    // (see [supersededResumeIds]).
+                    val cleared = supersededResumeIds(row, dao)
                     SupabaseSync.enqueueHistory(row, sessionProfileId)
                     // ...and the cloud copies of those rows are TOMBSTONED, not
                     // simply deleted: a row deleted only locally is re-inserted
                     // by the next pull, which is how a finished episode's
                     // resume card came back on the next sync.
+                    //
+                    // Published BEFORE the local rows go, deliberately: the
+                    // tombstone is the durable half (the outbox survives process
+                    // death), so a crash in between leaves rows whose cloud copy
+                    // is already gone and the pull's tombstone removes them here
+                    // too. The other order had nothing to repair it with - the
+                    // rows went, nothing was queued, and the next pull restored
+                    // the finished episode's resume card.
                     if (cleared.isNotEmpty()) {
                         SupabaseSync.deleteHistoryRows(cleared, sessionProfileId)
+                        runCatchingCancellable { dao.deleteByIds(cleared) }.onFailure { e ->
+                            Log.w(TAG, "could not delete the superseded resume rows for ${row.id}", e)
+                        }
                     }
                     // Only the rows the launcher can actually publish, not the
                     // whole table: a save happens on every position tick, and
@@ -191,12 +202,17 @@ internal object PlaybackHistoryWriter {
                 val dao = db.watchHistoryDao()
                 val row = preserveCompletion(entry, dao)
                 dao.upsert(row)
-                val cleared = clearSupersededResumeRows(row, dao)
+                val cleared = supersededResumeIds(row, dao)
                 // Already session-scoped: the cloud row carries the same
                 // profile the local row landed under.
                 SupabaseSync.enqueueHistory(row, target)
                 if (cleared.isNotEmpty()) {
+                    // Tombstone first, then delete locally - see the note on the
+                    // active-profile path above.
                     SupabaseSync.deleteHistoryRows(cleared, target)
+                    runCatchingCancellable { dao.deleteByIds(cleared) }.onFailure { e ->
+                        Log.w(TAG, "could not delete the superseded resume rows for ${row.id}", e)
+                    }
                 }
             } finally {
                 runCatching { db.close() }
@@ -237,7 +253,17 @@ internal object PlaybackHistoryWriter {
      * A lookup that fails is not fatal: the completion itself has already been
      * written, and the next session's completion retries the cleanup.
      */
-    private suspend fun clearSupersededResumeRows(
+    /**
+     * The rows a completion for [entry] supersedes - the READ half of the pair
+     * whose delete half is [WatchHistoryDao.deleteByIds].
+     *
+     * Split in two on purpose: the caller publishes the tombstone for these ids
+     * BEFORE it deletes them, so the durable half of the pair is in place first
+     * (see the call sites). Nothing here is transactional either way - the read
+     * and the delete were always two statements - so the split loses no
+     * guarantee and buys the crash-safe order.
+     */
+    private suspend fun supersededResumeIds(
         entry: WatchHistoryEntity,
         dao: WatchHistoryDao
     ): List<String> {
@@ -266,13 +292,7 @@ internal object PlaybackHistoryWriter {
         }.onFailure { e ->
             Log.w(TAG, "could not find the superseded resume rows for ${entry.id}", e)
         }.getOrDefault(emptyList())
-        if (ids.isEmpty()) return emptyList()
-        return runCatchingCancellable {
-            dao.deleteByIds(ids)
-            ids
-        }.onFailure { e ->
-            Log.w(TAG, "could not delete the superseded resume rows for ${entry.id}", e)
-        }.getOrDefault(emptyList())
+        return ids
     }
 
     /**

@@ -661,11 +661,19 @@ fun DetailScreen(
         lastSeasonFocusRequester?.requestFocus()
     }
 
-    // Spoiler-free mode, read once for the screen: the episode cards already
-    // hide an episode the viewer has not started, and the long-press menu they
-    // open has to agree with them (see the menu's heading).
+    // Spoiler-free mode: the episode cards already hide an episode the viewer
+    // has not started, and the long-press menu they open has to agree with them
+    // (see the menu's heading).
+    //
+    // Read through the synced revision, not once for the screen: the mode is a
+    // SYNCED pref, so a change made on another device (or a pull on this one)
+    // has to repaint what is already on screen. A bare `remember(context)` only
+    // re-read it when this screen was left and re-entered, so the menu kept the
+    // old answer (see [PrefsPayloadApplier.revision]).
     val spoilerFreeContext = LocalContext.current
-    val spoilerFreeEnabled = remember(spoilerFreeContext) {
+    val spoilerFreeRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+    val spoilerFreeEnabled = remember(spoilerFreeContext, spoilerFreeRevision) {
         AppPreferences.getSpoilerFree(spoilerFreeContext)
     }
 
@@ -6407,10 +6415,13 @@ private fun EpisodeCard(
     // without its own identity - no name, no synopsis, no frame from it - so
     // browsing a season cannot hand them a plot they have not reached. Watched
     // episodes and the one they are part-way through keep everything: the
-    // first is behind them, the second is where they left off. Read once per
-    // card; the mode is a preference and re-entering the screen re-reads it.
+    // first is behind them, the second is where they left off. Read through the
+    // synced revision, so a mode switched on another device un-hides (or hides)
+    // the cards already on screen rather than at the next screen entry.
     val spoilerFreeContext = LocalContext.current
-    val spoilerFree = remember(spoilerFreeContext) {
+    val spoilerFreeRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+    val spoilerFree = remember(spoilerFreeContext, spoilerFreeRevision) {
         AppPreferences.getSpoilerFree(spoilerFreeContext)
     }
     val hidesSpoiler = SpoilerFree.hidesIdentity(

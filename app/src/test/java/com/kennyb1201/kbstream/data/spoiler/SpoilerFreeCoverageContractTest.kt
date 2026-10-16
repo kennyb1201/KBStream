@@ -300,7 +300,13 @@ class SpoilerFreeCoverageContractTest {
         )
         assertTrue(
             "and the screen must read the mode's preference for it",
-            detail.contains("val spoilerFreeEnabled = remember(spoilerFreeContext)")
+            // The read is now also keyed on the sync revision (the mode is a
+            // SYNCED pref, so a change made elsewhere has to re-title the menu
+            // that is already open). Same intent, one more key - see
+            // SyncedPrefComposeReadsContractTest.
+            detail.contains(
+                "val spoilerFreeEnabled = remember(spoilerFreeContext, spoilerFreeRevision)"
+            )
         )
         assertFalse(
             "the heading must not be built straight from the episode's own name",

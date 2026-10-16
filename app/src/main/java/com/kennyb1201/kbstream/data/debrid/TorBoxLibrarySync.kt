@@ -60,9 +60,25 @@ internal object TorBoxLibrarySync {
             val candidates = searchCandidates(repository, torrent.name, parsed)
             if (candidates.isEmpty()) {
                 // A search that returned nothing is as likely to be a network
-                // blip as a missing title, so leave it unrecorded to retry.
+                // blip as a missing title, and the two need opposite treatment:
+                // recording the torrent on the first empty answer lost a title
+                // to one bad round, while leaving it unrecorded (which is what
+                // this did) spent a TMDB search on it on every launch and every
+                // schedule tick, forever. It is retried for
+                // [TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS] rounds and then
+                // recorded as handled.
+                val attempts = store.noteEmptySearch(torrent.id)
+                if (!TorBoxCloudRules.retriesEmptySearch(attempts)) {
+                    Log.i(
+                        TAG,
+                        "giving up on '${torrent.name}' after $attempts empty searches"
+                    )
+                    store.markProcessed(torrent.id)
+                }
                 continue
             }
+            // The name resolves, so any earlier empty-search streak is over.
+            store.clearEmptySearch(torrent.id)
 
             val match = TorBoxCloudRules.bestMatch(parsed, candidates)
             if (match == null) {

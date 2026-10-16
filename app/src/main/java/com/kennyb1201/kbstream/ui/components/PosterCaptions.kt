@@ -5,11 +5,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 
@@ -34,10 +38,16 @@ fun PosterCaptions(
     /** True while the tile this caption belongs to holds D-pad focus. */
     focused: Boolean = false
 ) {
+    // The three toggles are SYNCED prefs, so the captions are keyed on the sync
+    // revision: a part switched off on the other TV has to leave the tiles
+    // already on screen, and a bare pref read could not do that - Compose
+    // recomposes on observed state, and a SharedPreferences lookup is not state
+    // (see [PrefsPayloadApplier.revision]).
     val context = LocalContext.current
-    val showTitle = AppPreferences.getPosterCaptionTitle(context)
-    val showYear = AppPreferences.getPosterCaptionYear(context)
-    val showRating = AppPreferences.getPosterCaptionRating(context)
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val showTitle = remember(syncedRevision) { AppPreferences.getPosterCaptionTitle(context) }
+    val showYear = remember(syncedRevision) { AppPreferences.getPosterCaptionYear(context) }
+    val showRating = remember(syncedRevision) { AppPreferences.getPosterCaptionRating(context) }
 
     val titleLine = title?.takeIf { showTitle && it.isNotBlank() }
     val yearLine = year?.takeIf { showYear && it.isNotBlank() }

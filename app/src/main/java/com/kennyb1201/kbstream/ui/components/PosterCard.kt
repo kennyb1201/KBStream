@@ -24,10 +24,12 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.Icon
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBAccent
@@ -138,8 +140,19 @@ fun PosterCard(
 
     // Settings toggle: the eye badge (started-but-not-finished shows) can be
     // switched off app-wide; the completed checkmark is always unaffected.
-    val showEyeBadge = isPartiallyWatched &&
+    //
+    // Keyed on the sync revision, because the toggle is a SYNCED pref: a tile
+    // already on screen has to lose (or gain) its eye when the other TV flips
+    // it, and a plain read would only have followed the setting whenever
+    // something else invalidated the card (see [PrefsPayloadApplier.revision]).
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    // Read unconditionally: a `remember` behind `&&` is a CONDITIONAL call, and
+    // Compose's slot table is positional - the call would be skipped on the
+    // cards that are not partially watched, shifting every slot after it.
+    val eyeBadgeEnabled = remember(syncedRevision) {
         AppPreferences.getPosterPartialWatchBadge(context)
+    }
+    val showEyeBadge = isPartiallyWatched && eyeBadgeEnabled
 
     KBCard(
         onClick = onClick,

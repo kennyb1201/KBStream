@@ -118,6 +118,27 @@ internal object TorBoxCloudRules {
             ?.first
     }
 
+    /**
+     * How many rounds an EMPTY search result is retried for.
+     *
+     * A search that came back empty is as likely to be a network blip or a
+     * TMDB hiccup as a release name nothing will ever match, and the two need
+     * opposite treatment. Marked handled on the first empty answer, one blip
+     * lost the title for good (the field report: a TorBox film that never
+     * appeared in the Library, though the same name resolved the next day).
+     * Left unrecorded — which is what the sync did — every round spent a TMDB
+     * search on every unmatched torrent in the account, forever, on every
+     * launch and every schedule tick. Three rounds is the middle: a blip is
+     * retried, and a name TMDB does not know stops costing lookups.
+     */
+    const val EMPTY_SEARCH_ATTEMPTS = 3
+
+    /**
+     * Whether a torrent whose search came back empty [attempts] rounds running
+     * is still worth another look.
+     */
+    fun retriesEmptySearch(attempts: Int): Boolean = attempts < EMPTY_SEARCH_ATTEMPTS
+
     private fun score(candidate: Candidate, target: String, year: Int?): Double? {
         if (candidate.tmdbId <= 0) return null
         if (normalizedTitle(candidate.title) != target) return null

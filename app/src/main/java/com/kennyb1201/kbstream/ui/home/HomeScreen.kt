@@ -1955,7 +1955,13 @@ private fun homeRailTitle(
 @Composable
 private fun rememberHidesEpisodeTitle(inProgress: Boolean): Boolean {
     val context = LocalContext.current
-    val spoilerFree = remember(context) {
+    // Read through the synced revision, not once per card: the mode is a SYNCED
+    // pref, so switching it on another device has to re-title (or un-title) the
+    // cards already on screen instead of waiting for Home to be rebuilt
+    // (see [com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier.revision]).
+    val spoilerFreeRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+    val spoilerFree = remember(context, spoilerFreeRevision) {
         AppPreferences.getSpoilerFree(context)
     }
     return SpoilerFree.hidesIdentity(

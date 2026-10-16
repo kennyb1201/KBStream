@@ -60,7 +60,10 @@ class UnmarkClearsPlaybackContractTest {
         assertTrue(
             "the local resume/completed rows are a separate watched signal " +
                 "(isMovieLocallyWatched) and must be deleted too",
-            body.contains("historyDao.deleteById(") &&
+            // The bulk form is the same rule: the movie's one row is deleted by
+            // the ids the unmark just read (see
+            // [com.kennyb1201.kbstream.data.history.HistoryDeleteTombstoneOrderContractTest]).
+            body.contains("historyDao.deleteByIds(distinctRemovedIds)") &&
                 body.contains("historyDao.deleteResumeRowsForParents(") &&
                 body.contains("historyDao.deleteCompletedForParents(")
         )

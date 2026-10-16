@@ -153,4 +153,19 @@ class TorBoxCloudRulesTest {
             )
         )
     }
+
+    // ── the retry budget for an empty search ────────────────────────────────
+
+    @Test
+    fun `an empty search is retried for a few rounds and then given up on`() {
+        // One blip must not lose the title, and a name TMDB will never match
+        // must not cost a search on every round for the life of the install.
+        assertTrue(TorBoxCloudRules.retriesEmptySearch(1))
+        assertTrue(TorBoxCloudRules.retriesEmptySearch(TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS - 1))
+        assertTrue(
+            "the last retry is the one that gives up",
+            !TorBoxCloudRules.retriesEmptySearch(TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS)
+        )
+        assertTrue(!TorBoxCloudRules.retriesEmptySearch(TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS + 5))
+    }
 }

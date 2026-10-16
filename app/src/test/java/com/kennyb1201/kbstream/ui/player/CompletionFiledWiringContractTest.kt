@@ -241,7 +241,7 @@ class CompletionFiledWiringContractTest {
         assertTrue(
             "the writer is the one place a playback row is written, so the cleanup " +
                 "belongs here and reaches every engine",
-            writer.contains("clearSupersededResumeRows(row, dao)")
+            writer.contains("supersededResumeIds(row, dao)")
         )
         assertTrue(
             "and the cleanup must find the rows by the episode's identity",
@@ -249,22 +249,33 @@ class CompletionFiledWiringContractTest {
         )
         assertTrue(
             "deleting them, not merely overwriting the row the completion landed on",
-            writer.contains("dao.deleteByIds(ids)")
+            writer.contains("dao.deleteByIds(cleared)")
         )
     }
 
     @Test
-    fun `the deleted resume rows are tombstoned in the cloud`() {
+    fun `the deleted resume rows are tombstoned in the cloud before they go locally`() {
         assertTrue(
             "a resume row deleted only locally is re-inserted by the next pull, " +
                 "which is how the finished episode's card came back",
             writer.contains("SupabaseSync.deleteHistoryRows(cleared")
         )
+        // The order is the whole point of splitting the read from the delete:
+        // the tombstone is the durable half, so it is queued FIRST, and a local
+        // delete that then fails is repaired by the next pull's tombstone. The
+        // other order left the rows gone with nothing queued to say so.
+        val publish = writer.indexOf("SupabaseSync.deleteHistoryRows(cleared")
+        val localDelete = writer.indexOf("dao.deleteByIds(cleared)")
+        assertTrue("both halves must be present", publish >= 0 && localDelete >= 0)
+        assertTrue(
+            "the tombstone has to be published before the local rows go",
+            publish < localDelete
+        )
     }
 
     @Test
     fun `the cleanup runs only for a completion and only once per save`() {
-        val helper = body(writer, "private suspend fun clearSupersededResumeRows(", 1_800)
+        val helper = body(writer, "private suspend fun supersededResumeIds(", 1_800)
         assertTrue(
             "an in-progress save must not touch resume rows at all",
             helper.contains("if (!entry.isCompleted) return emptyList()")

@@ -29,10 +29,12 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.Text
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import coil3.request.crossfade
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.ui.theme.KBSurface
@@ -78,8 +80,19 @@ fun LandscapeCard(
 
     // Settings toggle: the eye badge (started-but-not-finished shows) can be
     // switched off app-wide; the completed checkmark is always unaffected.
-    val showEyeBadge = isPartiallyWatched &&
+    //
+    // Keyed on the sync revision, the same way [PosterCard] reads it: the toggle
+    // is a SYNCED pref, so a landscape tile already on screen has to lose (or
+    // gain) its eye when the other TV flips it rather than at the next rebuild
+    // (see [PrefsPayloadApplier.revision]).
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    // Read unconditionally: a `remember` behind `&&` is a CONDITIONAL call, and
+    // Compose's slot table is positional - the call would be skipped on the
+    // cards that are not partially watched, shifting every slot after it.
+    val eyeBadgeEnabled = remember(syncedRevision) {
         AppPreferences.getPosterPartialWatchBadge(context)
+    }
+    val showEyeBadge = isPartiallyWatched && eyeBadgeEnabled
     // Logo URL present but unloadable (dead TMDB path, CDN 404): fall back
     // to the plain title text instead of a silent blank corner.
     var logoFailed by remember(logoUrl) { mutableStateOf(false) }

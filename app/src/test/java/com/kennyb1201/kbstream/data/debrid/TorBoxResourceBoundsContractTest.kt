@@ -71,13 +71,20 @@ class TorBoxResourceBoundsContractTest {
     }
 
     @Test
-    fun `the set's read-modify-write is shared by both of its callers`() {
+    fun `every read-modify-write on the store's sets is locked`() {
         // Launch, the schedule and a manual "sync now" can all reach this, and
-        // the read-then-write it does is the shape that loses a whole round's
-        // ids when two overlap.
+        // the read-then-write each of these does is the shape that loses a
+        // whole round's ids when two overlap. Both stored sets are kept that
+        // way: the processed ids, and the empty-search streak that decides when
+        // a torrent stops being looked up (see
+        // [TorBoxCloudRules.EMPTY_SEARCH_ATTEMPTS]). Every member that reads
+        // and writes a set is listed here, so a new one cannot arrive unlocked.
         listOf(
             "@Synchronized\\s+fun processed\\(\\)",
-            "@Synchronized\\s+fun markProcessed\\("
+            "@Synchronized\\s+fun markProcessed\\(",
+            "@Synchronized\\s+fun emptySearchAttempts\\(",
+            "@Synchronized\\s+fun noteEmptySearch\\(",
+            "@Synchronized\\s+fun clearEmptySearch\\("
         ).forEach { signature ->
             assertTrue(
                 "missing lock: $signature",
@@ -85,8 +92,8 @@ class TorBoxResourceBoundsContractTest {
             )
         }
         assertEquals(
-            "no other member of the store should be locked",
-            2,
+            "no member that does not touch the stored sets should be locked",
+            5,
             Regex("@Synchronized[\\s\\S]{0,40}?fun ").findAll(store).count()
         )
     }

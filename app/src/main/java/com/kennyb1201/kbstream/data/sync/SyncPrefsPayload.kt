@@ -852,12 +852,25 @@ object PrefsPayloadBuilder {
     fun buildWatchedOverrides(context: Context): JsonObject =
         buildJsonObject {
             put("updatedAt", System.currentTimeMillis())
-            val overrides =
-                scopedPrefs(context, WatchedOverridesRules.STORE)
-                    .getStringSet(WatchedOverridesRules.SET_KEY, emptySet()).orEmpty()
+            val prefs = scopedPrefs(context, WatchedOverridesRules.STORE)
+            val overrides = prefs.getStringSet(WatchedOverridesRules.SET_KEY, emptySet()).orEmpty()
             put(WatchedOverridesRules.CLEARED_FIELD, overrides.isEmpty())
             putJsonArray("overrides") {
                 overrides.forEach { add(it) }
+            }
+            // Per key, so the title marked here is not erased by a sibling's
+            // later mark of a DIFFERENT title, and so the title unmarked here
+            // cannot be put back by a sibling's older mark (see
+            // [WatchedOverridesRules.merge]).
+            putJsonObject(WatchedOverridesRules.TIMESTAMPS_FIELD) {
+                WatchedOverridesRules.decodeStamps(
+                    prefs.getString(WatchedOverridesRules.KEY_STAMPS_KEY, null)
+                ).forEach { (key, at) -> put(key, at) }
+            }
+            putJsonObject(WatchedOverridesRules.REMOVED_FIELD) {
+                WatchedOverridesRules.decodeStamps(
+                    prefs.getString(WatchedOverridesRules.REMOVED_KEY, null)
+                ).forEach { (key, at) -> put(key, at) }
             }
         }
 
@@ -1596,10 +1609,89 @@ object PrefsPayloadApplier {
         }
 
         val appliedAt = payloadUpdatedAt(payload) ?: System.currentTimeMillis()
+        val localKeys =
+            prefs.getStringSet(WatchedOverridesRules.SET_KEY, emptySet()).orEmpty()
+        val localKeyStamps = WatchedOverridesRules.decodeStamps(
+            prefs.getString(WatchedOverridesRules.KEY_STAMPS_KEY, null)
+        )
+        val localRemoved = WatchedOverridesRules.decodeStamps(
+            prefs.getString(WatchedOverridesRules.REMOVED_KEY, null)
+        )
+
+        if (set.isEmpty() && deliberateClear) {
+            // The sender means to hold nothing, and that is an unmark of every
+            // key it held: recording each one is what stops an older mark still
+            // sitting on another device from putting the title back.
+            val unmarked = LinkedHashMap(localRemoved)
+            (localKeys + localKeyStamps.keys).forEach { key -> unmarked[key] = appliedAt }
+            prefs.edit()
+                .putStringSet(WatchedOverridesRules.SET_KEY, emptySet())
+                .putString(
+                    WatchedOverridesRules.KEY_STAMPS_KEY,
+                    WatchedOverridesRules.encodeStamps(emptyMap())
+                )
+                .putString(
+                    WatchedOverridesRules.REMOVED_KEY,
+                    WatchedOverridesRules.encodeStamps(unmarked)
+                )
+                .putLong(WatchedOverridesRules.SYNCED_AT_KEY, appliedAt)
+                .apply()
+            return
+        }
+
+        // Per key, not wholesale: what this device marked and the sender never
+        // heard about is KEPT, and the sender's own marks are adopted
+        // individually by their stamps (see [WatchedOverridesRules.merge]).
+        val merge = WatchedOverridesRules.merge(
+            incoming = set,
+            incomingStamps = stampsFrom(payload, WatchedOverridesRules.TIMESTAMPS_FIELD),
+            incomingRemoved = stampsFrom(payload, WatchedOverridesRules.REMOVED_FIELD),
+            localKeys = localKeys,
+            localStamps = WatchedOverridesRules.opinions(localKeyStamps, localRemoved)
+        )
+
+        val nextKeys = (localKeys + merge.added) - merge.removed
+        val nextKeyStamps = LinkedHashMap(localKeyStamps)
+        val nextRemoved = LinkedHashMap(localRemoved)
+        merge.stamps.forEach { (key, stamp) ->
+            if (key in merge.removed) {
+                nextKeyStamps.remove(key)
+                nextRemoved[key] = stamp
+            } else {
+                nextRemoved.remove(key)
+                nextKeyStamps[key] = stamp
+            }
+        }
+        // The stamp map only ever names keys the set holds: a key that left with
+        // no stamp of its own is the removed map's business, and a stale entry
+        // here would read as an opinion this device does not hold.
+        nextKeyStamps.keys.retainAll(nextKeys)
+
         prefs.edit()
-            .putStringSet(WatchedOverridesRules.SET_KEY, set)
+            .putStringSet(WatchedOverridesRules.SET_KEY, nextKeys)
+            .putString(
+                WatchedOverridesRules.KEY_STAMPS_KEY,
+                WatchedOverridesRules.encodeStamps(nextKeyStamps)
+            )
+            .putString(
+                WatchedOverridesRules.REMOVED_KEY,
+                WatchedOverridesRules.encodeStamps(nextRemoved)
+            )
             .putLong(WatchedOverridesRules.SYNCED_AT_KEY, appliedAt)
             .apply()
+    }
+
+    /** The `{key: stamp}` field of a payload as a map; absent reads as empty. */
+    private fun stampsFrom(payload: JsonObject, field: String): Map<String, Long> {
+        val obj = payload[field] as? JsonObject ?: return emptyMap()
+        return obj
+            .mapNotNull { (key, value) ->
+                (value as? kotlinx.serialization.json.JsonPrimitive)
+                    ?.content
+                    ?.toLongOrNull()
+                    ?.let { at -> key to at }
+            }
+            .toMap()
     }
 
     private fun payloadUpdatedAt(payload: JsonObject): Long? =

@@ -1,10 +1,14 @@
 package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.theme.CardShape
 import com.kennyb1201.kbstream.ui.theme.KBShapeSoftPill
 
@@ -53,12 +57,18 @@ enum class PosterEdge(val label: String) {
 /**
  * The shape a poster tile draws right now, from the saved edge setting.
  *
- * Read directly rather than remembered, like the poster border: the pref is a
- * cheap SharedPreferences hit, and this keeps the setting honest for a screen
- * that is already on screen when it changes.
+ * Read through the sync revision rather than "directly", like the poster
+ * border: the shape is a SYNCED pref, so an edge chosen on the other TV has to
+ * redraw the tiles already on screen, and a plain SharedPreferences read cannot
+ * do that on its own - Compose recomposes on observed state, and a pref read is
+ * not state, so the corners only followed the setting when the tile was
+ * invalidated for some other reason.
  */
 @Composable
 fun posterEdgeShape(): Shape {
     val context = LocalContext.current
-    return PosterEdge.fromStored(AppPreferences.getPosterEdge(context)).shape()
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    return remember(syncedRevision) {
+        PosterEdge.fromStored(AppPreferences.getPosterEdge(context)).shape()
+    }
 }

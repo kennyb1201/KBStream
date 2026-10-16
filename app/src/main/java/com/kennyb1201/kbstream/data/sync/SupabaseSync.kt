@@ -1035,6 +1035,77 @@ object SupabaseSync {
     }
 
     /**
+     * Publishes a cleared set of rows as WRITES instead of cloud deletes.
+     *
+     * Extracted from [clearWatchStateForActiveProfile] for the one-time
+     * in-progress reset (see [PoisonSweep.clearInProgressForActiveProfile]),
+     * which used to hard-DELETE its cloud rows. A real delete is invisible to a
+     * sibling that still holds its copy - a pull only iterates rows that still
+     * EXIST - so the other TV went on drawing the resume bar and the eye badge
+     * the viewer had just cleared on this one, and its next push put the row
+     * back here. Each row is therefore replaced by a history tombstone or a
+     * cleared watched marker through the durable outbox, the same "a delete is a
+     * newer write" mechanism every other delete uses (see
+     * [HistoryTombstoneRules] and [WatchedMarkerRules]).
+     *
+     * [historyIds] are BARE item ids; [watched] is the stored (already
+     * profile-scoped) key of each marker row with the payload the cloud copy
+     * carries. The pending outbox writes for those exact keys are dropped
+     * first: a queued upload of a row this call is deleting would otherwise
+     * flush afterwards and put it back.
+     */
+    internal fun publishInProgressClear(
+        historyIds: List<String>,
+        watched: List<Pair<String, JsonObject>>,
+        profileId: String?
+    ) {
+        if (!isSignedIn()) return
+        val ids = historyIds.mapNotNull { id -> id.trim().takeIf { it.isNotBlank() } }.distinct()
+        val markers = watched.filter { (storedKey, _) -> storedKey.isNotBlank() }
+        if (ids.isEmpty() && markers.isEmpty()) return
+
+        if (ids.isNotEmpty()) {
+            outbox.removeKeys(TABLE_HISTORY, "item_id", ids.map { id -> scopedKey(id, profileId) })
+        }
+        if (markers.isNotEmpty()) {
+            outbox.removeKeys(TABLE_WATCHED, "item_key", markers.map { (storedKey, _) -> storedKey })
+        }
+
+        val now = System.currentTimeMillis()
+        ids.forEach { id ->
+            outbox.put(
+                OutboxItem(
+                    TABLE_HISTORY,
+                    "item_id",
+                    scopedKey(id, profileId),
+                    HistoryTombstoneRules.tombstone(id, now)
+                )
+            )
+        }
+        markers.forEach { (storedKey, remote) ->
+            // A cleared watched row is a NEGATIVE marker with a fresh stamp,
+            // not a delete: the watched table has no tombstone field, so
+            // retracting a marker is how it syncs (see [WatchedMarkerRules]).
+            outbox.put(
+                OutboxItem(
+                    TABLE_WATCHED,
+                    "item_key",
+                    storedKey,
+                    WatchedMarkerRules.payload(
+                        key = remote.str("key") ?: unscopedKey(storedKey),
+                        imdbId = remote.str("imdbId") ?: "",
+                        mediaType = remote.str("mediaType") ?: "",
+                        isWatched = false,
+                        isPartiallyWatched = false,
+                        updatedAt = now
+                    )
+                )
+            )
+        }
+        scheduleFlush()
+    }
+
+    /**
      * Publishes one poster/backdrop override to the account.
      *
      * Called by the long-press menu's write ([ImageOverrides.choose]) right
@@ -1912,9 +1983,17 @@ object SupabaseSync {
             // would otherwise erase the account's profiles for every other
             // device (the sign-in race this guards against is fixed at the
             // call site, but any future caller ordering stays safe).
+            //
+            // It is empty AND tombstone-free that is the dangerous shape. A
+            // device whose last profile was deleted also pushes an empty list,
+            // and that push is the deletion itself: refusing it would strand
+            // the tombstone on the device that made it, leaving the profile on
+            // every sibling (the merge only ever adds).
             if (key == PrefsPayloadBuilder.KEY_PROFILES &&
                 (payload["profiles"] as? kotlinx.serialization.json.JsonArray)
-                    ?.isEmpty() == true
+                    ?.isEmpty() == true &&
+                (payload["deletedProfiles"] as? kotlinx.serialization.json.JsonArray)
+                    ?.isEmpty() != false
             ) {
                 return@forEach
             }
@@ -2040,7 +2119,16 @@ object SupabaseSync {
                             (it as? kotlinx.serialization.json.JsonPrimitive)?.content
                         }
                         .orEmpty()
-                if (!WatchedOverridesRules.shouldPublish(overrides.toSet())) {
+                // The unmarks count as content too: a device that only ever
+                // unmarked still has an edit to publish, and gating on the set
+                // alone would strand it (see
+                // [WatchedOverridesRules.shouldPublish]).
+                val unmarked =
+                    (payload[WatchedOverridesRules.REMOVED_FIELD]
+                        as? kotlinx.serialization.json.JsonObject)
+                        ?.keys
+                        .orEmpty()
+                if (!WatchedOverridesRules.shouldPublish(overrides.toSet(), unmarked)) {
                     return@forEach
                 }
             }

@@ -453,6 +453,61 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     suspend fun deleteResumeRowsForParents(parentIds: List<String>)
 
     /**
+     * [getInProgressForParents] and [deleteResumeRowsForParents] as ONE
+     * transaction, returning the ids it removed - the plural form of
+     * [removeResumeRowsForParentReturningIds], and for the same reason.
+     *
+     * Every caller of the pair TOMBSTONES the ids it gets back (a row deleted
+     * only locally is re-inserted by the next pull). Asking "which rows are
+     * gone" AFTER a delete is what made that unsafe: a completion that reused a
+     * resume row's id survives the delete as the completed marker, and a
+     * tombstone filed for it - the row that stays - erases the watched state on
+     * every other device. The answer is the transaction's own, so the caller no
+     * longer has to ask.
+     */
+    @Transaction
+    suspend fun removeResumeRowsForParentsReturningIds(parentIds: List<String>): List<String> {
+        val ids = getInProgressForParents(parentIds).map { it.id }
+        deleteResumeRowsForParents(parentIds)
+        return ids
+    }
+
+    /**
+     * The episode's resume rows, matched by BOTH identities, removed in one
+     * transaction that returns the ids that went.
+     *
+     * The two deletes are the season/episode match and the stream-id match (the
+     * identities can disagree - an add-on's numbering against TMDB's), and the
+     * rows they remove are exactly the in-progress rows of the same parents
+     * that carry either identity, which is what the Kotlin-side filter below
+     * reproduces. See [removeResumeRowsForParentsReturningIds] for why the ids
+     * have to come from the same transaction as the delete.
+     */
+    @Transaction
+    suspend fun removeResumeRowsForEpisodeReturningIds(
+        parentIds: List<String>,
+        streamIds: List<String>,
+        season: Int,
+        episode: Int
+    ): List<String> {
+        val ids = getInProgressForParents(parentIds)
+            .filter { row ->
+                (row.season == season && row.episode == episode) ||
+                    (row.episodeStreamId != null && row.episodeStreamId in streamIds)
+            }
+            .map { it.id }
+        deleteResumeRowsForParentsSeasonEpisode(
+            parentIds = parentIds,
+            season = season,
+            episode = episode
+        )
+        if (streamIds.isNotEmpty()) {
+            deleteResumeRowsForParentsStreamIds(parentIds = parentIds, streamIds = streamIds)
+        }
+        return ids
+    }
+
+    /**
      * Single-episode form of [deleteResumeRowsForParents]: marking one episode
      * - or a season's worth - watched has to take that episode's progress bar
      * with it, and the row holding that progress is not the completed marker

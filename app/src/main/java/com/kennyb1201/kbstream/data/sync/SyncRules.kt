@@ -3,9 +3,11 @@ package com.kennyb1201.kbstream.data.sync
 import com.kennyb1201.kbstream.data.cache.WatchedStatusEntity
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.images.ImageOverrideEntity
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
@@ -1444,6 +1446,16 @@ internal object ApiKeySyncRules {
  *    on every payload). A blank blob published by a build that predates the
  *    publish gate carries no such field and is ignored — otherwise the poison
  *    would still have to be applied once to be repaired.
+ *
+ * The set is also PER KEY now, for the other half of the same story: a single
+ * whole-set stamp made the blob last-writer-wins, so a title hand-marked on one
+ * TV was erased by the other TV's later mark of a DIFFERENT title (each device
+ * published its own set, and the newer one replaced it outright). Every key
+ * travels with its own edit time ([TIMESTAMPS_FIELD]), an unmark travels as an
+ * edit of its own ([REMOVED_FIELD], the only thing that stops an older mark on
+ * another device from putting the title back), and the apply is a per-key merge
+ * ([merge]) instead of a replacement. The whole-set stamp and the two gates
+ * above stay as the coarse "is this copy newer than what I know" guard.
  */
 internal object WatchedOverridesRules {
 
@@ -1458,8 +1470,125 @@ internal object WatchedOverridesRules {
     /** True in a payload that MEANS to carry an empty set. */
     const val CLEARED_FIELD = "cleared"
 
-    /** The bulk push never publishes an empty override set (see pushPrefsBlobs). */
-    fun shouldPublish(overrides: Set<String>): Boolean = overrides.isNotEmpty()
+    // ── Per-key state ───────────────────────────────────────────────
+    // The set used to travel as ONE set with ONE stamp, so whichever blob was
+    // newer replaced the whole thing: a title hand-marked on one TV was erased
+    // by the other TV's later mark of a DIFFERENT title. Each key therefore
+    // carries its own edit time, exactly like the display prefs and the service
+    // credentials, and the merge is per key.
+
+    /** key -> when this device last marked it (the key is in the set). */
+    const val KEY_STAMPS_KEY = "watched_overrides_key_stamps"
+
+    /**
+     * key -> when this device last UNMARKED it (the key is out of the set).
+     *
+     * An unmark is an edit like any other, and this is the only record that
+     * keeps the title the viewer just unmarked from being put back by a
+     * sibling's older mark.
+     */
+    const val REMOVED_KEY = "watched_overrides_removed"
+
+    /** Payload fields: the per-key mark stamps, and the unmarks. */
+    const val TIMESTAMPS_FIELD = "timestamps"
+    const val REMOVED_FIELD = "removed"
+
+    /**
+     * The bulk push never publishes an EMPTY override set (see pushPrefsBlobs).
+     * [removed] is the unmarks: a device that only ever unmarked still has
+     * something to say, so the gate is "nothing at all to report", not
+     * "no marks".
+     */
+    fun shouldPublish(overrides: Set<String>, removed: Set<String> = emptySet()): Boolean =
+        overrides.isNotEmpty() || removed.isNotEmpty()
+
+    /** What a pulled blob does to this device's set. */
+    data class Merge(
+        /** Keys to add to the local set. */
+        val added: Set<String>,
+        /** Keys to take out of the local set. */
+        val removed: Set<String>,
+        /** The per-key edit stamps this device adopts with them. */
+        val stamps: Map<String, Long>
+    ) {
+        val isEmpty: Boolean
+            get() = added.isEmpty() && removed.isEmpty() && stamps.isEmpty()
+    }
+
+    /**
+     * This device's opinion per key: the newer of a mark and an unmark.
+     *
+     * The merge compares against one stamp per key, so a key that is present
+     * must not hide an unmark of the same key that came later.
+     */
+    fun opinions(marks: Map<String, Long>, removed: Map<String, Long>): Map<String, Long> {
+        val out = LinkedHashMap(removed)
+        marks.forEach { (key, at) -> out[key] = maxOf(out[key] ?: 0L, at) }
+        return out
+    }
+
+    /**
+     * Per-key merge of a pulled blob.
+     *
+     * [localStamps] must carry every key this device has an opinion about - a
+     * mark OR an unmark (see [opinions]) - because the unmark is the only thing
+     * that stops a sibling's older mark from putting the title back. A key
+     * neither side names is left alone, and a remote opinion is adopted when
+     * its stamp is at least as new as this device's own: ties go to the sender,
+     * so two devices that mark the same title converge on one stamp instead of
+     * trading writes forever.
+     */
+    fun merge(
+        incoming: Set<String>,
+        incomingStamps: Map<String, Long>,
+        incomingRemoved: Map<String, Long>,
+        localKeys: Set<String>,
+        localStamps: Map<String, Long>
+    ): Merge {
+        // One opinion per key, the way the wire has one: a key is either marked
+        // with a stamp or unmarked with one. A payload that somehow names both
+        // is resolved by the later stamp rather than applied twice.
+        val opinions = LinkedHashMap<String, Pair<Boolean, Long>>()
+        (incoming + incomingStamps.keys).forEach { key ->
+            opinions[key] = true to (incomingStamps[key] ?: 0L)
+        }
+        incomingRemoved.forEach { (key, stamp) ->
+            val marked = opinions[key]
+            if (marked == null || stamp >= marked.second) opinions[key] = false to stamp
+        }
+
+        val added = mutableSetOf<String>()
+        val removed = mutableSetOf<String>()
+        val stamps = mutableMapOf<String, Long>()
+        opinions.forEach { (key, opinion) ->
+            if (key.isBlank()) return@forEach
+            val (marked, stamp) = opinion
+            if (stamp < (localStamps[key] ?: 0L)) return@forEach
+            stamps[key] = stamp
+            if (marked) {
+                added += key
+            } else if (key in localKeys) {
+                removed += key
+            }
+        }
+        return Merge(added, removed, stamps)
+    }
+
+    /** The per-key stamps as one JSON object string (the stored form). */
+    fun encodeStamps(stamps: Map<String, Long>): String =
+        JsonObject(stamps.mapValues { (_, at) -> JsonPrimitive(at) }).toString()
+
+    /** Reads [encodeStamps] back; anything unreadable reads as "no opinion". */
+    fun decodeStamps(raw: String?): Map<String, Long> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        val obj = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
+            ?: return emptyMap()
+        return obj
+            .mapNotNull { (key, value) ->
+                (value as? JsonPrimitive)?.content?.toLongOrNull()?.let { at -> key to at }
+            }
+            .toMap()
+    }
 
     /**
      * Whether a pulled blob may replace the local set. [localSyncedAt] is the

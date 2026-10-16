@@ -1413,11 +1413,40 @@ class WatchedStatusRepository(
                         }
                     })
 
+            // Per key as well as per set: the blob the sync layer publishes is
+            // merged key by key, so an edit that carried no stamp of its own
+            // would be indistinguishable from "this device never touched the
+            // key" and a sibling's older opinion would win (see
+            // [WatchedOverridesRules.merge]). An unmark is stamped too - it is
+            // the only thing that stops the title the viewer just cleared from
+            // being put back by the other device's mark.
+            val keyStamps = LinkedHashMap(readOverrideStamps(KEY_OVERRIDE_STAMPS))
+            val removedStamps = LinkedHashMap(readOverrideStamps(KEY_OVERRIDE_REMOVED))
+            keys.forEach { key ->
+                if (watched) {
+                    removedStamps.remove(key)
+                    keyStamps[key] = now
+                } else {
+                    keyStamps.remove(key)
+                    removedStamps[key] = now
+                }
+            }
+
             overridesPrefs
                 .edit()
                 .putStringSet(
                     KEY_WATCHED_OVERRIDES,
                     updatedKeys
+                )
+                .putString(
+                    KEY_OVERRIDE_STAMPS,
+                    com.kennyb1201.kbstream.data.sync.WatchedOverridesRules
+                        .encodeStamps(keyStamps)
+                )
+                .putString(
+                    KEY_OVERRIDE_REMOVED,
+                    com.kennyb1201.kbstream.data.sync.WatchedOverridesRules
+                        .encodeStamps(removedStamps)
                 )
                 // A hand-mark claims its own time as well: the pull guard
                 // refuses a blob older than this device's last override edit,
@@ -1618,6 +1647,16 @@ class WatchedStatusRepository(
             .orEmpty()
 
     /**
+     * One of the per-key stamp maps (marks or unmarks) the sync layer merges
+     * by. Read through [WatchedOverridesRules.decodeStamps], so a corrupt entry
+     * reads as "no opinion" rather than throwing on the badge path.
+     */
+    private fun readOverrideStamps(key: String): Map<String, Long> =
+        com.kennyb1201.kbstream.data.sync.WatchedOverridesRules.decodeStamps(
+            overridesPrefs.getString(key, null)
+        )
+
+    /**
      * Long-press "Mark as Watched": writes a persistent local override so
      * the poster badge shows immediately and survives restarts/remote
      * refreshes. Key format matches the rest of the watched pipeline
@@ -1680,29 +1719,23 @@ class WatchedStatusRepository(
         // why those two never showed the card, but the poster mark did).
         runCatchingCancellable {
             val parents = (idForms + normalizedId).toList()
-            val resumeRows = historyDao.getInProgressForParents(parents)
-            if (resumeRows.isNotEmpty()) {
-                historyDao.deleteResumeRowsForParents(parents)
+            // The read and the delete are ONE transaction that returns the ids
+            // it removed (see [WatchHistoryDao.removeResumeRowsForParentsReturningIds]).
+            // Asking "which rows are gone" AFTER the delete was the unsafe
+            // half: a completion that reused a resume row's id survives it as
+            // the completed marker, and a tombstone filed for the row that
+            // stays takes the watched state away from every other device. The
+            // tombstone set is therefore the delete's own answer.
+            val removedIds = historyDao.removeResumeRowsForParentsReturningIds(parents)
 
-                // Only ids that are GONE locally are sent: when the completed
-                // marker reused a resume row's id, the row still exists and
-                // its cloud copy must stay.
-                val removedIds = resumeRows
-                    .map { it.id }
-                    .distinct()
-                    .filter { id ->
-                        runCatchingCancellable { historyDao.getById(id) }.getOrNull() == null
-                    }
+            if (removedIds.isNotEmpty()) {
+                com.kennyb1201.kbstream.data.sync.SupabaseSync
+                    .deleteHistoryRows(removedIds)
 
-                if (removedIds.isNotEmpty()) {
-                    com.kennyb1201.kbstream.data.sync.SupabaseSync
-                        .deleteHistoryRows(removedIds)
-
-                    Log.i(
-                        "WATCHED_REPO",
-                        "mark watched: ended ${removedIds.size} cloud resume row(s)"
-                    )
-                }
+                Log.i(
+                    "WATCHED_REPO",
+                    "mark watched: ended ${removedIds.size} cloud resume row(s)"
+                )
             }
         }.onFailure { e ->
             Log.e("WATCHED_REPO", "mark watched resume cleanup failed", e)
@@ -1943,15 +1976,6 @@ class WatchedStatusRepository(
         // keys progress on, because the two identities can disagree (an
         // add-on's numbering against TMDB's).
         runCatchingCancellable {
-            val resumeRowsBefore =
-                historyDao.getInProgressForParents(parents)
-
-            historyDao.deleteResumeRowsForParentsSeasonEpisode(
-                parentIds = parents,
-                season = season,
-                episode = episode
-            )
-
             val streamIds =
                 listOfNotNull(
                     episodeStreamId
@@ -1959,23 +1983,18 @@ class WatchedStatusRepository(
                         ?.takeIf { it.isNotBlank() }
                 )
 
-            if (streamIds.isNotEmpty()) {
-                historyDao.deleteResumeRowsForParentsStreamIds(
-                    parentIds = parents,
-                    streamIds = streamIds
-                )
-            }
-
-            // Only rows that are GONE locally are sent: a completed marker
-            // that reused a resume row's id must keep its cloud copy.
+            // Both identities removed in ONE transaction that returns the ids
+            // that went (see [WatchHistoryDao.removeResumeRowsForEpisodeReturningIds]).
+            // Only rows that are GONE locally may be tombstoned: a completed
+            // marker that reused a resume row's id must keep its cloud copy -
+            // and "gone" is the delete's own answer, not a read taken after it.
             val removedIds =
-                resumeRowsBefore
-                    .map { it.id }
-                    .distinct()
-                    .filter { rowId ->
-                        runCatchingCancellable { historyDao.getById(rowId) }
-                            .getOrNull() == null
-                    }
+                historyDao.removeResumeRowsForEpisodeReturningIds(
+                    parentIds = parents,
+                    streamIds = streamIds,
+                    season = season,
+                    episode = episode
+                )
 
             if (removedIds.isNotEmpty()) {
                 com.kennyb1201.kbstream.data.sync.SupabaseSync
@@ -2102,15 +2121,11 @@ class WatchedStatusRepository(
 
         // 1. The manual "Mark as Watched" override is what painted the
         // checkmark; leaving it behind would flip the badge straight back on.
-        overridesPrefs
-            .edit()
-            .putStringSet(
-                KEY_WATCHED_OVERRIDES,
-                localWatchedOverrideKeys()
-                    .toMutableSet()
-                    .apply { removeAll(formKeys) }
-            )
-            .apply()
+        // Through [applyOverrideKeys], not a bare prefs write: the removal has
+        // to take the override mutex (a bare write raced the sync applier's own
+        // read-modify-write) and stamp the key, or the next pull re-adds the
+        // override from the cloud and the checkmark returns.
+        applyOverrideKeys(formKeys, now, watched = false)
 
         // 2. In memory: not completed, but started - and scrub every trace of
         // "completed" so the stale snapshot cannot resurrect the checkmark.
@@ -2310,12 +2325,9 @@ class WatchedStatusRepository(
 
             if (normalizedType == "movie") {
                 parents.forEach { form ->
-                    val row = runCatchingCancellable { historyDao.getById(form) }
+                    runCatchingCancellable { historyDao.getById(form) }
                         .getOrNull()
-                    if (row != null) {
-                        historyDao.deleteById(row.id)
-                        removedIds += row.id
-                    }
+                        ?.let { row -> removedIds += row.id }
                 }
             } else {
                 removedIds += historyDao
@@ -2324,15 +2336,28 @@ class WatchedStatusRepository(
                 removedIds += historyDao
                     .getCompletedForParents(parents)
                     .map { it.id }
-
-                historyDao.deleteResumeRowsForParents(parents)
-                historyDao.deleteCompletedForParents(parents)
             }
 
             val distinctRemovedIds = removedIds.distinct()
             if (distinctRemovedIds.isNotEmpty()) {
+                // Publish BEFORE the local delete, deliberately the other way
+                // round from the rows. The tombstone is the durable half of the
+                // pair - the outbox survives process death - so this order
+                // makes the pair repairable: a local delete that then fails
+                // leaves rows whose cloud copy is already gone, and the pull's
+                // tombstone (a newer stamp than the row it replaces) removes
+                // them here too. The old order, local delete first, had nothing
+                // to repair it with: the rows were gone with nothing queued to
+                // say so, and the next pull put them all back.
                 com.kennyb1201.kbstream.data.sync.SupabaseSync
                     .deleteHistoryRows(distinctRemovedIds)
+
+                if (normalizedType == "movie") {
+                    historyDao.deleteByIds(distinctRemovedIds)
+                } else {
+                    historyDao.deleteResumeRowsForParents(parents)
+                    historyDao.deleteCompletedForParents(parents)
+                }
 
                 Log.i(
                     "WATCHED_REPO",
@@ -2543,17 +2568,11 @@ class WatchedStatusRepository(
         val now =
             System.currentTimeMillis()
 
-        overridesPrefs
-            .edit()
-            .putStringSet(
-                KEY_WATCHED_OVERRIDES,
-                overrideKeys
-                    .toMutableSet()
-                    .apply {
-                        removeAll(formKeys)
-                    }
-            )
-            .apply()
+        // Through [applyOverrideKeys] for the same two reasons as the partial
+        // unmark: the mutex (a bare prefs write raced the sync applier) and the
+        // per-key stamp, without which the pull puts the override straight
+        // back and the checkmark returns.
+        applyOverrideKeys(formKeys, now, watched = false)
 
         // The manual mark is gone, so the cached row must go with it: left
         // in place it would keep answering "watched" until its TTL expires.
@@ -2906,6 +2925,12 @@ class WatchedStatusRepository(
 
         private const val KEY_WATCHED_OVERRIDES =
             "watched_overrides"
+
+        /** Per-key mark/unmark stamps, the sync layer's per-key merge input. */
+        private const val KEY_OVERRIDE_STAMPS =
+            com.kennyb1201.kbstream.data.sync.WatchedOverridesRules.KEY_STAMPS_KEY
+        private const val KEY_OVERRIDE_REMOVED =
+            com.kennyb1201.kbstream.data.sync.WatchedOverridesRules.REMOVED_KEY
 
         private const val CACHE_TTL_MS =
             6L * 60L * 60L * 1000L

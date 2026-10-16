@@ -319,6 +319,24 @@ class TmdbRepository private constructor(context: Context) :
     // awaits the pending fetch instead.
     private val detailFetchInFlight =
         ConcurrentHashMap<String, CompletableDeferred<TmdbDetail?>>()
+
+    /**
+     * In-flight ENRICHED fetches, keyed like [detailCache] - the same map as
+     * [detailFetchInFlight] one level up.
+     *
+     * [fetchEnrichedMetaCached] is the busiest path in this class: every rail,
+     * browse grid, KB folder and hero card resolves through it, and Home's
+     * enrichment fans out over many rows at once. Two consumers of one title
+     * (a rail card and the hero it sits under, or the same title on two rails)
+     * therefore both missed the memory cache - the first had not filled it yet
+     * - and fired a duplicate request each round. A concurrent caller awaits the
+     * pending fetch instead. The fetch is the FULL response regardless of the
+     * `full` flag (see the note on it), so a slim caller may share a full
+     * caller's request: that is already what happens for the caller that
+     * performs the fetch, which hands every caller the full object.
+     */
+    private val enrichedFetchInFlight =
+        ConcurrentHashMap<String, CompletableDeferred<TmdbDetail?>>()
     private val detailCacheTtlMs = 12L * 60L * 60L * 1000L
     private val detailCacheDiskTtlMs = 30L * 24L * 60L * 60L * 1000L
 
@@ -864,7 +882,27 @@ class TmdbRepository private constructor(context: Context) :
             }
         }
 
-        val result = runCatchingCancellable { fetchEnrichedMeta(imdbId, type) }.getOrNull()
+        // Another caller is already fetching this key: share its result instead
+        // of firing a duplicate request (see [enrichedFetchInFlight] -
+        // putIfAbsent closes the window between the check and the registration,
+        // so two callers that both missed the cache cannot both start a
+        // fetch).
+        enrichedFetchInFlight[key]?.let { pending -> return pending.await() }
+
+        val deferred = CompletableDeferred<TmdbDetail?>()
+        enrichedFetchInFlight.putIfAbsent(key, deferred)?.let { pending ->
+            return pending.await()
+        }
+
+        val result = try {
+            runCatchingCancellable { fetchEnrichedMeta(imdbId, type) }.getOrNull()
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            enrichedFetchInFlight.remove(key)
+            // Unblock anyone sharing this fetch with a miss rather than a
+            // cancellation they did not ask for.
+            deferred.complete(null)
+            throw cancellation
+        }
         // A MISS is deliberately not cached. A transient TMDB failure (or an
         // add-on-only title with no TMDB record) used to pin a null in the 12h
         // memory cache, after which every caller - the Detail screen included -
@@ -887,6 +925,10 @@ class TmdbRepository private constructor(context: Context) :
                 )
             }
         }
+        // Complete before dropping the in-flight marker, so a caller that
+        // arrives between the two sees the cache and never double-fetches.
+        deferred.complete(result)
+        enrichedFetchInFlight.remove(key)
         return result
     }
 

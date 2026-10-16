@@ -2,10 +2,14 @@ package com.kennyb1201.kbstream.ui.components
 
 import androidx.compose.foundation.border
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kennyb1201.kbstream.data.settings.AppPreferences
+import com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
 import com.kennyb1201.kbstream.ui.theme.KBTextHi
 
 /**
@@ -47,15 +51,21 @@ enum class PosterBorder(val label: String, val alpha: Float) {
  * an empty modifier for [PosterBorder.OFF], so a viewer who wants no edge
  * pays for no draw.
  *
- * Read directly rather than remembered: the pref is a cheap SharedPreferences
- * hit, and this keeps the setting honest for a screen that is already on
- * screen when it changes (the same reason [PosterCard] reads its eye-badge
- * toggle here).
+ * Read through the sync revision, not once and not "directly": the strength is
+ * a SYNCED pref, so a level picked on the other TV has to redraw the tiles
+ * already on screen. A bare read is not the same thing - Compose recomposes on
+ * observed STATE, and a SharedPreferences lookup is not state, so the edge only
+ * followed the setting when something else happened to invalidate the tile
+ * (the same reason [PosterCard] and [LandscapeCard] read their eye-badge toggle
+ * the same way).
  */
 @Composable
 fun posterBorderModifier(): Modifier {
     val context = LocalContext.current
-    val border = PosterBorder.fromStored(AppPreferences.getPosterBorderStrength(context))
+    val syncedRevision by PrefsPayloadApplier.revision.collectAsStateWithLifecycle()
+    val border = remember(syncedRevision) {
+        PosterBorder.fromStored(AppPreferences.getPosterBorderStrength(context))
+    }
     if (!border.isOn) return Modifier
     return Modifier.border(
         width = 1.dp,

@@ -231,26 +231,36 @@ internal object PoisonSweep {
         //     re-download on the next pull, and the markers would re-paint the
         //     badges seconds later — the reason earlier local-only attempts
         //     looked like they did nothing.
+        //
+        //     Published as WRITES, not as cloud DELETES. A delete is invisible
+        //     to a sibling that still holds the row — a pull only iterates rows
+        //     that still EXIST — so the other TV kept the resume bar and the eye
+        //     badge this reset had just cleared here, and its next push put the
+        //     row back on this one. Each row goes instead as a history tombstone
+        //     / a cleared watched marker through the same durable outbox every
+        //     other delete uses (see [SupabaseSync.publishInProgressClear]),
+        //     which also drops the queued writes for those keys first.
         var cloudRows = 0
         var note = ""
         val c = client()
         if (c == null || !isSignedIn()) {
             note = " · cloud skipped (sign in)"
         } else {
-            cloudRows += deleteCloudKeys(
-                c,
-                TABLE_HISTORY,
-                resumeRows.map { SyncKeys.scoped(it.id, pid) }
-            )
             val watchedRows = readCloudRows(c, TABLE_WATCHED)
+            val partialKeys =
+                watchedRows
+                    ?.let { rows -> PoisonDetector.partialMarkersForScope(rows, pid) }
+                    .orEmpty()
+            cloudRows += resumeRows.size + partialKeys.size
+            SupabaseSync.publishInProgressClear(
+                historyIds = resumeRows.map { it.id },
+                watched = watchedRows.orEmpty()
+                    .filter { row -> row.storedKey in partialKeys }
+                    .map { row -> row.storedKey to row.payload },
+                profileId = pid
+            )
             if (watchedRows == null) {
                 note = " · cloud read failed"
-            } else {
-                cloudRows += deleteCloudKeys(
-                    c,
-                    TABLE_WATCHED,
-                    PoisonDetector.partialMarkersForScope(watchedRows, pid)
-                )
             }
         }
 

@@ -97,6 +97,54 @@ class TmdbDetailInFlightContractTest {
         )
     }
 
+    /**
+     * The body of fetchEnrichedMetaCached, up to the next function declaration.
+     */
+    private fun enrichedBody(): String {
+        val src = repository
+        val start = src.indexOf("suspend fun fetchEnrichedMetaCached(")
+        assertTrue("fetchEnrichedMetaCached must exist", start >= 0)
+        val end = src.indexOf("suspend fun resolveImdbId(", start)
+        assertTrue("the body must be bounded by the next function", end > start)
+        return src.substring(start, end)
+    }
+
+    @Test
+    fun `the busier enriched path coalesces on the same rule`() {
+        // The detail path was only half of it: every rail, browse grid, KB
+        // folder and hero card resolves through fetchEnrichedMetaCached, and
+        // Home fans that out over many rows at once - so two consumers of one
+        // title (a card and the hero above it, or the same title on two rails)
+        // both missed the cache and both fired a request. Same map, same
+        // putIfAbsent, one level up.
+        assertTrue(
+            "the repository needs an in-flight map for the enriched fetch too",
+            repository.contains("enrichedFetchInFlight")
+        )
+        val body = enrichedBody()
+        assertTrue(
+            "the map must be consulted before the network call",
+            body.contains("enrichedFetchInFlight[key]?.let { pending -> return pending.await() }")
+        )
+        assertTrue(
+            "the check-then-register window must be closed with putIfAbsent",
+            body.contains("enrichedFetchInFlight.putIfAbsent(key, deferred)")
+        )
+        assertTrue(
+            "the shared deferred must be completed with the fetch result",
+            body.contains("deferred.complete(result)")
+        )
+        assertTrue(
+            "the in-flight marker must be dropped once the fetch settles",
+            body.contains("enrichedFetchInFlight.remove(key)")
+        )
+        assertFalse(
+            "the old shape fired an unconditional request - if that call site is " +
+                "back, so is the duplicate fetch",
+            body.contains("val result = runCatchingCancellable { fetchEnrichedMeta(")
+        )
+    }
+
     @Test
     fun `a miss is never pinned as this title's metadata`() {
         // fetchEnrichedMetaCached already refuses to remember a miss, and this
