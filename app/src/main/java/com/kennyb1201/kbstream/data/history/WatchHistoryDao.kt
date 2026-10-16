@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.history
 
 import androidx.room.Dao
 import androidx.room.Query
+import androidx.room.Transaction
 import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
@@ -389,6 +390,22 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
         """
     )
     suspend fun deleteResumeRowsForParent(parentId: String)
+
+    /**
+     * [getInProgressForParent] and [deleteResumeRowsForParent] as ONE
+     * transaction, returning the ids it removed. The read and the delete used
+     * to be two statements, so a completion landing between them was deleted
+     * as if it were still a resume row - and its caller then filed a cloud
+     * tombstone for a row that had just become a completed marker, letting a
+     * sibling lose the watched state. Room's @Transaction is what closes the
+     * window; the two statements cannot be observed apart.
+     */
+    @Transaction
+    suspend fun removeResumeRowsForParentReturningIds(parentId: String): List<String> {
+        val ids = getInProgressForParent(parentId).map { it.id }
+        deleteResumeRowsForParent(parentId)
+        return ids
+    }
 
     /** Flavor-tolerant form of [deleteResumeRowsForParent]: clearing the
      *  resume rows of a title that has been fully marked watched must reach

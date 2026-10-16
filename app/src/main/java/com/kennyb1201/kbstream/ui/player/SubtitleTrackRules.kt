@@ -258,6 +258,32 @@ internal object SubtitleTrackRules {
     }
 
     /**
+     * The index of the best track in an ALREADY language-matched drawable set:
+     * SDH, then a regular track, then a forced one. This is exactly the
+     * preferred-language bucket of [choose], split out for the re-assert pass
+     * ([PlayerTrackBridge.matchingOverride]) which runs on every READY and
+     * rebuffer and used to take the first match in file order - re-arming the
+     * forced track moments after the kind-ranked initial selection had picked
+     * SDH. All [candidates] are assumed drawable (supported, not bitmap).
+     */
+    fun bestLanguageMatchIndex(candidates: List<Candidate>): Int? {
+        val isSdh: (Candidate) -> Boolean = {
+            SubtitleKindRules.of(it.title).contains(SubtitleKindRules.SDH)
+        }
+        val isRegular: (Candidate) -> Boolean = { !it.forced && !isSdh(it) }
+        candidates.forEachIndexed { index, candidate ->
+            if (isSdh(candidate)) return index
+        }
+        candidates.forEachIndexed { index, candidate ->
+            if (isRegular(candidate)) return index
+        }
+        candidates.forEachIndexed { index, candidate ->
+            if (candidate.forced) return index
+        }
+        return null
+    }
+
+    /**
      * Decide the subtitle track for [candidates] under the viewer's [mode]
      * (see [SubtitleModeRules]). [ON] is the language rules in [choose]; [OFF]
      * is always off; [FORCED] only ever shows a forced track.

@@ -69,7 +69,6 @@ object InnerTubeExtractor {
      */
     private const val MAX_AUDIO_PROBES = 3
 
-    private const val FALLBACK_API_KEY = "AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8"
 
     private val VIDEO_ID_REGEX = Regex("^[a-zA-Z0-9_-]{11}$")
     private val API_KEY_REGEX = Regex("\"INNERTUBE_API_KEY\":\"([^\"]+)\"")
@@ -523,8 +522,11 @@ object InnerTubeExtractor {
                 throw IllegalStateException("Failed to fetch watch page (${watchResponse.status})")
             }
 
+            // The scraped key is the source of truth; the build-time
+            // BuildConfig value is an optional, blank-by-default fallback -
+            // never a key baked into the source (see app/build.gradle.kts).
             val apiKey = API_KEY_REGEX.find(watchResponse.body)?.groupValues?.getOrNull(1)
-                ?: FALLBACK_API_KEY
+                ?: com.kennyb1201.kbstream.BuildConfig.INNERTUBE_API_KEY
             val visitorData = VISITOR_DATA_REGEX.find(watchResponse.body)?.groupValues?.getOrNull(1)
 
             val newConfig = CachedConfig(

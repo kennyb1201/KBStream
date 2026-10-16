@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.addon
 
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.BackgroundWork
+import com.kennyb1201.kbstream.data.cache.DiskSweep
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.reporting.NetworkTraceInterceptor
@@ -904,9 +905,18 @@ class AddonRepository private constructor() {
     private fun cleanupExpiredCatalogCacheLocked(
         nowMs: Long
     ) {
+        // Evict on the SNAPSHOT store's horizon, not the freshness TTL.
+        // CATALOG_CACHE_TTL_MS decides "fresh vs stale" - a stale page is still
+        // SERVED while it revalidates behind the caller (see the stale branch
+        // in the catalog read) - and evicting at that same 10 minutes deleted
+        // every disk-seeded snapshot the instant [seedCatalogCacheFromDisk]
+        // loaded it (this cleanup runs on the next line, with `now`), so the
+        // cold-Home paint-from-disk path could never fire. Keeping entries to
+        // the disk store's own max age matches the design; the map is still
+        // bounded by MAX_CATALOG_CACHE_ENTRIES.
         catalogCache.entries.removeAll { entry ->
             nowMs - entry.value.cachedAtMs >=
-                CATALOG_CACHE_TTL_MS
+                CATALOG_CACHE_EVICT_TTL_MS
         }
 
         if (
@@ -1048,6 +1058,13 @@ class AddonRepository private constructor() {
 
         private const val CATALOG_CACHE_TTL_MS =
             10 * 60 * 1000L
+
+        /** The in-memory eviction horizon; longer than the freshness TTL so a
+         *  stale entry can be served while it revalidates (see
+         *  [cleanupExpiredCatalogCacheLocked]). Matches the on-disk store's
+         *  retention so a cold start's seeded snapshot survives to be served. */
+        private const val CATALOG_CACHE_EVICT_TTL_MS =
+            DiskSweep.ADDON_CATALOG_MAX_AGE_MS
 
         private const val MAX_CATALOG_CACHE_ENTRIES =
             500

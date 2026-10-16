@@ -100,6 +100,18 @@ class DisplayPrefsSyncTest {
     }
 
     @Test
+    fun `a device with no edit of its own publishes nothing`() {
+        // The wipe this closes: a fresh profile published defaults stamped
+        // updatedAt=now with an empty per-key map, and every missing stamp read
+        // as updatedAt on the receiving side.
+        assertFalse(DisplayPrefsRules.shouldPublish(newestLocalEdit = 0L, cloudUpdatedAt = 0L))
+        assertFalse(DisplayPrefsRules.shouldPublish(newestLocalEdit = 500L, cloudUpdatedAt = 500L))
+        assertFalse(DisplayPrefsRules.shouldPublish(newestLocalEdit = 499L, cloudUpdatedAt = 500L))
+        assertTrue(DisplayPrefsRules.shouldPublish(newestLocalEdit = 501L, cloudUpdatedAt = 500L))
+        assertTrue(DisplayPrefsRules.shouldPublish(newestLocalEdit = 100L, cloudUpdatedAt = 0L))
+    }
+
+    @Test
     fun `blob timestamp tracks the newest local edit, not the push time`() {
         assertEquals(
             300L,

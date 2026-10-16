@@ -115,9 +115,9 @@ class WatchHistoryRepository(private val appContext: Context) {
      */
     suspend fun deleteResumeRowsForParent(parentId: String): List<String> =
         WatchHistoryDatabase.withScopedDao(appContext) { dao ->
-            val removed = dao.getInProgressForParent(parentId).map { it.id }
-            dao.deleteResumeRowsForParent(parentId)
-            removed
+            // One transaction, so a completion landing between the read and the
+            // delete cannot be removed and tombstoned (see the DAO method).
+            dao.removeResumeRowsForParentReturningIds(parentId)
         }
 
     /**

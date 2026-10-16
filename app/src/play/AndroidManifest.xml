@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Play build only (applied with `-PplayBuild`, see app/build.gradle.kts).
+
+         REQUEST_INSTALL_PACKAGES is what the in-app self-updater needs to offer
+         the install prompt for a downloaded APK. The GitHub release is
+         sideloaded and not Play-managed, so it keeps the permission; a Play
+         build has no in-app self-update and Play rejects the listing that
+         carries this sensitive permission without a justification. Removing it
+         here - the overlay has the highest manifest-merge priority - keeps the
+         Play build installable without the declaration. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_INSTALL_PACKAGES"
+        tools:node="remove" />
+</manifest>

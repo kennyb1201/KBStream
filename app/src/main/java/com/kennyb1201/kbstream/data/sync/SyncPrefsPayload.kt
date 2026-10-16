@@ -821,6 +821,18 @@ object PrefsPayloadBuilder {
         scopedPrefs(context, "iptv_prefs").getLong(IPTV_SYNCED_AT_KEY, 0L)
 
     /**
+     * The display blob's own last-change time on this device (the newest
+     * per-key edit; 0 when there is no edit history yet), and the cloud copy's
+     * `updatedAt` this device last adopted. The push gate compares the two
+     * (see [DisplayPrefsRules.shouldPublish]).
+     */
+    fun displayEditedAt(context: Context): Long =
+        readDisplayTimestamps(scopedPrefs(context, DISPLAY_PREFS_STORE)).values.maxOrNull() ?: 0L
+
+    fun displayCloudAt(context: Context): Long =
+        scopedPrefs(context, DISPLAY_PREFS_STORE).getLong(DISPLAY_SYNCED_AT_KEY, 0L)
+
+    /**
      * The manual override set, and whether an empty one is MEANT.
      *
      * Every caller of this builder is a deliberate edit (a mark, an unmark, or
@@ -1238,10 +1250,16 @@ object PrefsPayloadApplier {
             val primitive = value as? kotlinx.serialization.json.JsonPrimitive ?: return@forEach
             val content = primitive.content
 
-            // Merge per key: a key this device edited MORE RECENTLY keeps its
-            // local value, which the next push publishes back.
+            // Merge per key. A per-key blob carries a stamp only for the keys
+            // its device actually edited, so a key with NO stamp is one the
+            // pusher has no opinion on and is left alone. The old
+            // `?: fallbackTs` read every unstamped key as edited at push time,
+            // which is what let a fresh profile's defaults win on each sibling;
+            // a legacy whole-blob (no timestamps map at all) still falls back to
+            // its own updatedAt.
             val editsAt =
-                remoteTimestamps[key] ?: fallbackTs
+                if (remoteTimestamps.isNotEmpty()) remoteTimestamps[key] else fallbackTs
+            if (editsAt == null) return@forEach
             if (!DisplayPrefsRules.remoteWins(editsAt, localTimestamps[key] ?: 0L)) {
                 return@forEach
             }

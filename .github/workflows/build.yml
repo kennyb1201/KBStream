@@ -49,7 +49,6 @@ jobs:
       # URL https://us.sentry.io" on every upload. The DSN the app itself uses
       # is a separate secret and is unaffected by this.
       SENTRY_URL: https://sentry.io
-      OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.SUPABASE_PUBLISHABLE_KEY }}
       # Every CI build gets a strictly increasing versionCode (the run number),
@@ -593,10 +592,17 @@ jobs:
           done
           exit $missing
 
+      # An empty keystore secret used to warn and continue, which produced an
+      # UNSIGNED release APK that the artifact below uploaded under the name
+      # "kbstream-release-signed". A release that cannot be signed must fail
+      # here, not degrade silently into a mislabeled artifact.
       - name: Restore release keystore
         run: |
           echo "${{ secrets.KBSTREAM_KEYSTORE_BASE64 }}" | base64 --decode > app/kbstream-release.jks
-          test -s app/kbstream-release.jks || echo "::warning::KBSTREAM_KEYSTORE_BASE64 secret is empty - the signed release step will be skipped or fail"
+          if [ ! -s app/kbstream-release.jks ]; then
+            echo "::error::KBSTREAM_KEYSTORE_BASE64 is empty - the release build cannot be signed. Set the keystore secret."
+            exit 1
+          fi
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -670,6 +676,19 @@ jobs:
       # separately below as a best-effort step.
       - name: Build signed release APK
         run: ./gradlew assembleRelease -x uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
+          KBSTREAM_STORE_FILE: kbstream-release.jks
+          KBSTREAM_STORE_PASSWORD: ${{ secrets.KBSTREAM_KEYSTORE_PASSWORD }}
+          KBSTREAM_KEY_ALIAS: ${{ secrets.KBSTREAM_KEY_ALIAS }}
+          KBSTREAM_KEY_PASSWORD: ${{ secrets.KBSTREAM_KEY_PASSWORD }}
+
+      # Play uploads are an Android App Bundle, not an APK: the signed APK
+      # above is what the self-update feed serves, and this is what a Play
+      # upload needs. Same signing config (the release one), same daemon
+      # arguments so it reuses the build already warm from assembleRelease.
+      - name: Build signed release AAB
+        run: ./gradlew bundleRelease -x uploadSentryProguardMappingsRelease --stacktrace --max-workers="$GRADLE_MAX_WORKERS" -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
           KBSTREAM_STORE_FILE: kbstream-release.jks
@@ -760,7 +779,19 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: kbstream-release-signed
-          path: app/build/outputs/apk/release/*.apk
+          # The SIGNED artifact only. The old `*.apk` glob also matched
+          # app-release-unsigned.apk, so an unsigned build shipped under this
+          # name; `app-release.apk` is what the signing config produces and
+          # `if-no-files-found: error` makes a missing signature a red run.
+          path: app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+
+      - name: Upload signed release AAB
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: kbstream-release-aab
+          path: app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
 
       # ─── Self-update feed ────────────────────────────────────────────────
       # This is the only way a build reaches installs: the "latest" GitHub

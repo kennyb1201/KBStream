@@ -763,7 +763,15 @@ internal object DolbyVisionCompat {
                     // caller asked.
                     seiWalk = HevcSeiAudit.walk(buf, header + 2, nalEnd)
                 }
-                if (keep && declaredDvSuffixSei) {
+                // One exception, and it is the ordering ebd3ad1c's keep-whole
+                // rule needs: a suffix SEI whose only messages are HDR10+ (T35
+                // type 4, which the vendor-only set counts as vendor) is NOT
+                // dropped whole - it falls to the HDR10+ branch below, which
+                // removes just the HDR10+ message and keeps the NAL. Every
+                // other declared-DV suffix SEI still goes the way of the RPU.
+                if (keep && declaredDvSuffixSei &&
+                    !hdr10PlusSeiNal(buf, nalType, header + 2, nalEnd, stripHdr10Plus)
+                ) {
                     val walk = seiWalk ?: HevcSeiAudit.walk(buf, header + 2, nalEnd)
                     keep = false
                     accounting?.record(
@@ -983,7 +991,12 @@ internal object DolbyVisionCompat {
                 ) {
                     seiWalk = HevcSeiAudit.walk(buf, payload + 2, payload + nal)
                 }
-                if (keep && declaredDvSuffixSei) {
+                // Same HDR10+ exception as [stripAnnexB]: a suffix SEI carrying
+                // only HDR10+ falls to the branch below instead of being dropped
+                // whole (ebd3ad1c's keep-whole rule).
+                if (keep && declaredDvSuffixSei &&
+                    !hdr10PlusSeiNal(buf, nalType, payload + 2, payload + nal, stripHdr10Plus)
+                ) {
                     val walk = seiWalk ?: HevcSeiAudit.walk(buf, payload + 2, payload + nal)
                     keep = false
                     accounting?.record(
@@ -2280,6 +2293,25 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * Whether this NAL is a prefix/suffix SEI the HDR10+ branch would handle:
+     * HDR10+ rides in a T35 (type 4) user-data payload, and type 4 is OUTSIDE
+     * [HevcSeiAudit.DECODER_RELEVANT_TYPES], so a suffix SEI carrying only
+     * HDR10+ reads as "vendor only" to [dvSuffixSeiVendorOnly] and would be
+     * dropped whole - contradicting ebd3ad1c's keep-whole rule for exactly the
+     * NAL whose HDR10+ has to be surgically removed rather than the NAL. Seeing
+     * it here lets that rule defer to the HDR10+ branch for this NAL.
+     */
+    private fun hdr10PlusSeiNal(
+        buf: ByteArray,
+        nalType: Int,
+        payloadStart: Int,
+        nalEnd: Int,
+        stripHdr10Plus: Boolean
+    ): Boolean =
+        stripHdr10Plus && isHdr10PlusSeiNal(nalType) &&
+            seiCarriesHdr10Plus(buf, payloadStart, nalEnd)
+
+    /**
      * DV-strip transform for Annex-B samples: rewrites the VPS to plain
      * single-layer HDR10, drops RPU (62) / EL (63 and any layerId &gt; 0) NALs,
      * and removes HDR10+ prefix SEIs when [stripHdr10Plus]. Returns the new
@@ -2384,7 +2416,7 @@ internal object DolbyVisionCompat {
                     dvSuffixSeiVendorOnly(
                         buf, nalType, header + 2, nalEnd,
                         longEnough = nalBytes >= 4, declaredDv = declaredDv
-                    ) -> {
+                    ) && !hdr10PlusSeiNal(buf, nalType, header + 2, nalEnd, stripHdr10Plus) -> {
                         keep = false
                         changed = true
                         if (stats != null) {
@@ -3187,12 +3219,36 @@ internal object DolbyVisionCompat {
          */
         internal data class Walk(val types: List<Int>, val complete: Boolean)
 
-        /** The payload types of every SEI message in [from, to), in order. */
+        /**
+         * The payload types of every SEI message in [from, to), in order.
+         *
+         * Two things the old walk got wrong, and both are what made a
+         * well-formed `sei_rbsp()` never reach [Walk.complete]:
+         *
+         *  - its trailing `rbsp_trailing_bits()` is a lone `0x80`, which the
+         *    bare `while (pos + 1 <= end)` read as a phantom message header
+         *    (`payloadType=128`) and then failed on the missing size byte, so
+         *    every complete NAL came back `complete=false`; and
+         *  - the payload region is EBSP, so an emulation-prevention `0x03`
+         *    after a `0x00 0x00` run was counted as one of [payloadSize] and
+         *    walked the message boundary off by a byte.
+         *
+         * Now the trailing byte terminates the walk as a success, and the
+         * payload advance skips EPBs (they are not RBSP bytes), so a
+         * well-formed NAL reports `complete=true` while a genuinely truncated
+         * one still reports false.
+         */
         fun walk(buf: ByteArray, from: Int, to: Int): Walk {
             val end = minOf(to, buf.size)
             val types = mutableListOf<Int>()
             var pos = from
-            while (pos + 1 <= end) {
+            while (true) {
+                // rbsp_trailing_bits: the message list ends at the lone stop
+                // bit before the byte-aligned end of the rbsp.
+                if (pos == end - 1 && (buf[pos].toInt() and 0xFF) == 0x80) {
+                    return Walk(types, true)
+                }
+                if (pos >= end) return Walk(types, pos == end)
                 var payloadType = 0
                 var b: Int
                 do {
@@ -3208,11 +3264,23 @@ internal object DolbyVisionCompat {
                     payloadSize += b
                     pos++
                 } while (b == 0xFF)
-                if (payloadSize > end - pos) return Walk(types, false)
+                // Advance [payloadSize] RBSP bytes, stepping over any
+                // emulation-prevention 0x03 inserted after a 0x00 0x00 run.
+                // The type is only recorded once its payload fits, so a
+                // truncated message contributes nothing to [types] - an
+                // incomplete parse is not vendor-only whatever the header said.
+                var remaining = payloadSize
+                while (remaining > 0) {
+                    if (pos >= end) return Walk(types, false)
+                    val v = buf[pos].toInt() and 0xFF
+                    pos++
+                    val epb = v == 0x03 && pos >= 3 &&
+                        (buf[pos - 2].toInt() and 0xFF) == 0x00 &&
+                        (buf[pos - 3].toInt() and 0xFF) == 0x00
+                    if (!epb) remaining--
+                }
                 types += payloadType
-                pos += payloadSize
             }
-            return Walk(types, pos == end)
         }
 
         /** "137,144", or "none" when nothing parsed. */

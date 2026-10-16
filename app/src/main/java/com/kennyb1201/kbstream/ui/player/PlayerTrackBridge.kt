@@ -851,6 +851,46 @@ internal object PlayerTrackBridge {
         type: Int,
         language: String
     ): TrackSelectionOverride? {
+        if (type == C.TRACK_TYPE_TEXT) {
+            // Text is KIND-ranked within the language, not first-wins: this pass
+            // runs on every READY and rebuffer, so a first-wins order re-armed
+            // the forced track moments after the initial selection had picked
+            // SDH (which is [SubtitleTrackRules.choose]'s preferred-language
+            // bucket, the same ranking). Collect the drawable language matches,
+            // then take the best kind - SDH, then regular, then forced.
+            val matches =
+                mutableListOf<Pair<androidx.media3.common.TrackGroup, Int>>()
+            val candidates = mutableListOf<SubtitleTrackRules.Candidate>()
+            tracks.groups
+                .filter { it.type == type }
+                .forEach { group ->
+                    for (i in 0 until group.length) {
+                        val format = group.getTrackFormat(i)
+                        if (!LanguageMatch.matches(language, format.language)) continue
+                        val supported = group.isTrackSupported(i)
+                        // A bitmap or unsupported track draws nothing; the
+                        // caller's "no track" path (NeedsMpv handoff / fetch)
+                        // owns it, exactly as the old skip did.
+                        if (
+                            SubtitleTrackRules.cannotDrawNote(
+                                mimeType = format.sampleMimeType,
+                                supported = supported
+                            ) != null
+                        ) continue
+                        matches += group.mediaTrackGroup to i
+                        candidates += SubtitleTrackRules.Candidate(
+                            language = format.language,
+                            mimeType = format.sampleMimeType,
+                            forced = format.selectionFlags and C.SELECTION_FLAG_FORCED != 0,
+                            supported = supported,
+                            title = format.label
+                        )
+                    }
+                }
+            val best = SubtitleTrackRules.bestLanguageMatchIndex(candidates) ?: return null
+            val (group, index) = matches[best]
+            return TrackSelectionOverride(group, index)
+        }
         var matched: TrackSelectionOverride? = null
         tracks.groups
             .filter { it.type == type }
@@ -859,15 +899,6 @@ internal object PlayerTrackBridge {
                 for (i in 0 until group.length) {
                     val format = group.getTrackFormat(i)
                     if (!LanguageMatch.matches(language, format.language)) continue
-                    // Text only: an audio track has no bitmap format, and the
-                    // untagged-audio fallback owns the audio side.
-                    if (
-                        type == C.TRACK_TYPE_TEXT &&
-                        SubtitleTrackRules.cannotDrawNote(
-                            mimeType = format.sampleMimeType,
-                            supported = group.isTrackSupported(i)
-                        ) != null
-                    ) continue
                     matched = TrackSelectionOverride(group.mediaTrackGroup, i)
                     return@forEach
                 }

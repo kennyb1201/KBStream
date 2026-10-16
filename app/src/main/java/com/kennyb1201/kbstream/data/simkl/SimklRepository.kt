@@ -2569,47 +2569,6 @@ class SimklRepository(
         }
     }
 
-    private fun buildIdRefs(
-        imdbIds: List<String>,
-        simklIds: List<Int>
-    ): List<SimklPlaybackIdsRef> {
-
-        val refs =
-            mutableListOf<
-                SimklPlaybackIdsRef
-                >()
-
-        imdbIds
-            .asSequence()
-            .map {
-                it.trim()
-            }
-            .filter {
-                it.isNotBlank()
-            }
-            .distinct()
-            .forEach { imdb ->
-                refs +=
-                    SimklPlaybackIdsRef(
-                        imdb =
-                            imdb
-                    )
-            }
-
-        simklIds
-            .asSequence()
-            .distinct()
-            .forEach { simkl ->
-                refs +=
-                    SimklPlaybackIdsRef(
-                        simkl =
-                            simkl
-                    )
-            }
-
-        return refs
-    }
-
     private fun scoreContinueWatchingItem(
         item: SimklContinueWatchingItem
     ): Int {

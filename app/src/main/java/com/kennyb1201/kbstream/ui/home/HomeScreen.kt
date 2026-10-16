@@ -88,6 +88,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
+import com.kennyb1201.kbstream.ui.player.SplitModeRenderersFactory
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
@@ -652,12 +653,20 @@ private fun HeroInlineTrailerPlayer(
 
     val exoPlayer = remember {
         TrailerPlayerPool.acquire {
+            // SplitModeRenderersFactory, not a plain DefaultRenderersFactory: it
+            // is what installs the downmix sink/processor, and the pipeline only
+            // has to fold a >8-channel FLTP layout down to the output's channel
+            // count for libswresample's swr_convert not to overflow its output
+            // buffer (the ANDROID-Z SIGSEGV). A trailer is almost always <=5.1,
+            // but "almost always" is not a guard - a stray 7.1 trailer would
+            // crash Home the same way it once crashed the player. Same factory
+            // the full player builds, same extension-renderer mode it used to
+            // have (ON), so audio behavior is unchanged.
             val renderersFactory =
-                DefaultRenderersFactory(context.applicationContext)
-                    .setExtensionRendererMode(
-                        DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
-                    )
-                    .setEnableDecoderFallback(true)
+                SplitModeRenderersFactory(
+                    context.applicationContext,
+                    DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
+                )
 
             ExoPlayer.Builder(context.applicationContext, renderersFactory)
                 .setLoadControl(
@@ -3335,11 +3344,6 @@ fun HomeScreen(
         mutableStateOf<Int?>(null)
     }
 
-    var lastFocusedItemKey by remember {
-        mutableStateOf<String?>(null)
-    }
-
-
     // Seed hero = first focusable card: the first Continue Watching item
     // when that rail exists, else the first catalog poster. Keeps the hero
     // in sync with where D-pad focus lands on entry (the topmost card);
@@ -3426,8 +3430,9 @@ fun HomeScreen(
         }
     }
 
-    // Every rail card's requester, keyed the way [lastFocusedItemKey] is, so the
-    // card the viewer left Home on can be asked for focus when they come back.
+    // Every rail card's requester, keyed the same way the remembered card is
+    // (see HomeViewModel.lastFocusedRailItemKey), so the card the viewer left
+    // Home on can be asked for focus when they come back.
     // Registered by the cards themselves (they own their requesters).
     val railFocusRequesters = remember {
         mutableMapOf<String, FocusRequester>()
@@ -4426,7 +4431,6 @@ fun HomeScreen(
                                                     .onFocusChanged { focusState ->
                                                         if (focusState.isFocused) {
                                                             val cardKey = "${meta.type}:${meta.id}"
-                                                            lastFocusedItemKey = cardKey
                                                             // Remembered past this composable's
                                                             // life too: the card the viewer left
                                                             // Home on is what focus has to land on

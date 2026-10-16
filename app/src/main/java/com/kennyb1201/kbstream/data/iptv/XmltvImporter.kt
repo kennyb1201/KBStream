@@ -330,7 +330,7 @@ private suspend fun flushPrograms(batch: MutableList<EpgProgramEntity>) {
         Log.i(
             TAG,
             "IMPORT PROGRESS channels=$parsedChannels parsedPrograms=$parsedPrograms " +
-                "keptPrograms=$keptPrograms source=$sourceUrl"
+                "keptPrograms=$keptPrograms source=${Redaction.url(sourceUrl)}"
         )
     }
 

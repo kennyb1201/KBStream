@@ -35,6 +35,17 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
+// A Play-distributed build must not request REQUEST_INSTALL_PACKAGES: Play
+// treats it as a sensitive permission and rejects a listing that carries it
+// without a justification, and a Play build has no in-app self-update to run
+// anyway. `-PplayBuild` overlays app/src/play/AndroidManifest.xml, which
+// REMOVES the permission from the merged manifest; the default build (no
+// property) is byte-for-byte unchanged, so the GitHub self-update release
+// keeps it. The overlay is added through the variant API rather than a
+// product flavor so the default task names (assembleRelease and friends) do
+// not change for the release pipeline.
+val playBuild = project.hasProperty("playBuild")
+
 val localProps = Properties()
 val localPropsFile = rootProject.file("local.properties")
 if (localPropsFile.exists()) {
@@ -69,6 +80,18 @@ val sentryDsn = localProps.getProperty("SENTRY_DSN")
 val mdbListApiKey = localProps.getProperty("MDBLIST_API_KEY")
     ?: System.getenv("MDBLIST_API_KEY")
     ?: ""
+
+// The YouTube InnerTube web API key is deliberately NOT hardcoded in the
+// source. It is a shared, public-client key, but baking a live key into a
+// public GPL-3.0 repo (and into every distributed APK, where a `strings` scan
+// recovers it) invites third parties to burn its quota. The extractor already
+// scrapes the key from the watch page it fetches at runtime
+// (`INNERTUBE_API_KEY` in that page); this is only the optional build-time
+// fallback for a scrape miss, supplied like every other key through
+// local.properties / an environment variable and blank by default.
+val innertubeApiKey = (localProps.getProperty("INNERTUBE_API_KEY")
+    ?: System.getenv("INNERTUBE_API_KEY")
+    ?: "").trim()
 
 // Trim(): a pasted secret or local.properties value with a trailing
 // newline/space silently corrupts the apikey header -> Supabase answers
@@ -182,6 +205,7 @@ android {
         buildConfigField("String", "SIMKL_CLIENT_ID", "\"$simklClientId\"")
         buildConfigField("String", "SENTRY_DSN", "\"$sentryDsn\"")
         buildConfigField("String", "MDBLIST_API_KEY", "\"$mdbListApiKey\"")
+        buildConfigField("String", "INNERTUBE_API_KEY", "\"$innertubeApiKey\"")
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
         buildConfigField("String", "GIT_SHA", "\"$ciGitSha\"")
@@ -677,4 +701,19 @@ dependencies {
     // auto-installs from its own provider, so no app code changes, and being
     // debugImplementation means nothing ships in release.
     debugImplementation(libs.leakcanary.android)
+}
+
+// The Play-build manifest overlay (see `playBuild` above). Added last, so it
+// has the highest priority in manifest merging: the `tools:node="remove"`
+// lines in it drop REQUEST_INSTALL_PACKAGES from the merged manifest for the
+// Play build only. Without `-PplayBuild` this block adds nothing and the
+// release manifest is unchanged.
+androidComponents {
+    onVariants { variant ->
+        if (playBuild) {
+            variant.sources.manifests.addStaticManifestFile(
+                "src/play/AndroidManifest.xml"
+            )
+        }
+    }
 }

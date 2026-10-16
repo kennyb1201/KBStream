@@ -187,6 +187,29 @@ internal object DisplayPrefsRules {
         remoteTs >= localTs
 
     /**
+     * Whether this device has anything of its own to publish.
+     *
+     * [newestLocalEdit] is the newest value in the per-key timestamp map (0
+     * when the device has no edit history), and [cloudUpdatedAt] is the
+     * `updatedAt` of the account copy this device last adopted. A device
+     * publishes only when it has an edit of its own NEWER than the cloud copy
+     * it last adopted - the same rule [AddonsConfigRules] and [IptvConfigRules]
+     * use - so an untouched device never re-seeds and an adopted value is never
+     * echoed back.
+     *
+     * Without this gate the FIRST build on a fresh profile published a blob
+     * stamped `updatedAt=now` with an EMPTY per-key timestamp map. The applier
+     * reads each missing per-key stamp as `updatedAt`
+     * (`remoteTimestamps[key] ?: fallbackTs`), so every default value on the
+     * pusher won last-write-wins on each sibling and replaced that sibling's
+     * customized display prefs with defaults - and the stamps it then adopted
+     * stopped the victim pushing its own values back. This is the same wipe the
+     * watched-overrides gate ([WatchedOverridesRules.shouldPublish]) closes.
+     */
+    fun shouldPublish(newestLocalEdit: Long, cloudUpdatedAt: Long): Boolean =
+        newestLocalEdit > 0L && newestLocalEdit > cloudUpdatedAt
+
+    /**
      * Timestamps after observing [current] values, given the [previous]
      * observation. Only keys whose value actually CHANGED are stamped, so an
      * unrelated edit cannot re-publish — and thereby clobber — another

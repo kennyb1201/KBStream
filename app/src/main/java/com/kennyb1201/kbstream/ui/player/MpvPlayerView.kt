@@ -180,6 +180,13 @@ class MpvPlayerView @JvmOverloads constructor(
     var onVideoFrameRateChanged: ((Double) -> Unit)? = null
 
     private var initialized = false
+
+    /**
+     * Volatile because [event] runs on mpv's event thread while [release] runs
+     * on the main thread: a stale read there is the END_FILE handler running
+     * against a view that is already gone.
+     */
+    @Volatile
     private var released = false
 
     /** Set by [load] before the surface exists; consumed by [surfaceCreated]. */
@@ -228,6 +235,9 @@ class MpvPlayerView @JvmOverloads constructor(
      */
     private var pendingSeekMs = 0L
 
+    // Volatile: set on the main thread by [startPendingLoad]/[load], read on
+    // mpv's event thread by [event] to classify END_FILE.
+    @Volatile
     private var fileLoaded = false
     private var endNotified = false
 
@@ -241,6 +251,8 @@ class MpvPlayerView @JvmOverloads constructor(
      * END_FILE with `fileLoaded` false, which is why the old handler read a
      * source switch as an unplayable source.
      */
+    // Volatile: written on the main thread, read on mpv's event thread.
+    @Volatile
     private var replacingPreviousFile = false
 
     /**
@@ -248,6 +260,8 @@ class MpvPlayerView @JvmOverloads constructor(
      * handoff. Ends a LOADED file, so it is the second thing that has to read as
      * "we asked for this" rather than "the stream died".
      */
+    // Volatile: written on the main thread, read on mpv's event thread.
+    @Volatile
     private var stoppingDeliberately = false
 
     /**

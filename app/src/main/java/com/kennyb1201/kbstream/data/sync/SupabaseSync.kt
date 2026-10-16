@@ -1921,6 +1921,23 @@ object SupabaseSync {
             ) {
                 return@forEach
             }
+            // Display prefs are merged per key, and a blob with no per-key
+            // timestamps carries no evidence of a local edit. This bulk push
+            // runs on every sign-in / Sync now, so a freshly created profile
+            // used to publish its defaults with `updatedAt=now` and an empty
+            // timestamp map here - and the applier, reading each missing stamp
+            // as `updatedAt`, let every default win on each sibling and
+            // replaced that sibling's customized display prefs with them. Publish
+            // only when this device has an edit of its own newer than the
+            // account copy it last adopted (see [DisplayPrefsRules]).
+            if (key == PrefsPayloadBuilder.KEY_DISPLAY_PREFS &&
+                !DisplayPrefsRules.shouldPublish(
+                    PrefsPayloadBuilder.displayEditedAt(context),
+                    PrefsPayloadBuilder.displayCloudAt(context)
+                )
+            ) {
+                return@forEach
+            }
             // Catalog naming/ordering/hiding lives in this blob. Publish it
             // only when this device's configuration is newer than the account
             // copy it last adopted, so an untouched device never re-seeds the

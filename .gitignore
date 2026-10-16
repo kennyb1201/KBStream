@@ -26,3 +26,9 @@ libs/
 # reason as libs/: a multi-MB native binary that the app must keep working
 # without (AssNative.available reports its absence).
 app/src/main/jniLibs/
+# Signing material must never be committed. The release keystore is written by
+# CI from the KBSTREAM_KEYSTORE_BASE64 secret (see .github/workflows/build.yml);
+# a locally supplied one lives beside it. Belt-and-braces: no keystore of any
+# name or location belongs in a public GPL repo.
+*.jks
+*.keystore

@@ -1098,23 +1098,6 @@ class TmdbRepository private constructor(context: Context) :
             .getOrDefault(emptyList())
     }
 
-    private suspend fun readGenresFromDisk(key: String): List<TmdbGenre>? {
-        val now = System.currentTimeMillis()
-        val diskCached = runCatchingCancellable {
-            tmdbJsonCacheDao.getByKey("genres:$key")
-        }.getOrNull()
-        if (diskCached != null && now - diskCached.updatedAt < detailCacheDiskTtlMs) {
-            return runCatching {
-                genresJsonAdapter.fromJson(diskCached.json)
-            }.getOrNull()
-        }
-        return null
-    }
-
-    private suspend fun writeGenresToDisk(key: String, genres: List<TmdbGenre>) {
-        cacheJson("genres:$key", genresJsonAdapter.toJson(genres), System.currentTimeMillis())
-    }
-
     /**
      * The RAW (unfiltered) collection detail for [collectionId], read through
      * the shared in-memory cache and filled from the API on a miss. Null when

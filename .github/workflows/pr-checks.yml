@@ -15,8 +15,11 @@ name: PR checks
 # steps would fail for reasons that have nothing to do with the bump, and a
 # red check that means "no secrets" is worse than no check at all.
 #
-# What runs here is the two gates that need neither a secret nor a device:
-# ktlint and the JVM unit suite. The FFmpeg video extension is deliberately
+# What runs here are the gates that need neither a secret nor a device:
+# ktlint, Android Lint and the JVM unit suite. (Lint used to run only on
+# build.yml's push to main, so a lint error could land on main unremarked and
+# only surface on the next push; it is cheap enough on a PR runner to gate
+# here too.) The FFmpeg video extension is deliberately
 # not built -- the app falls back to the published audio-only decoder, exactly
 # as a local build does, and nothing in the unit suite plays video.
 on:
@@ -74,5 +77,7 @@ jobs:
       - name: Fetch MPV engine AAR
         run: bash scripts/fetch_mpv_aar.sh
 
-      - name: Lint and unit tests
-        run: ./gradlew ktlintCheck testDebugUnitTest --console=plain --no-daemon
+      - name: Lint, Android Lint and unit tests
+        run: ./gradlew ktlintCheck lintDebug testDebugUnitTest --console=plain --no-daemon
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"

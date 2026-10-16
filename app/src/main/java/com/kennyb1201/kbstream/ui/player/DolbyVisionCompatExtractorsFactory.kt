@@ -914,6 +914,15 @@ private class VideoCompatTrackOutput(
             // format through and let the ladder move on (another renderer,
             // the FFmpeg software path, the MPV engine).
             val stripped = runCatching {
+                // Deliberately the GUESSED string, not the SPS-derived relabel
+                // string: in THIS arm the mutating strip rewrites the codec
+                // config's own parameter sets too (see rewriteInitData below)
+                // and transformAnnexB rewrites the in-sample ones, so an
+                // SPS-derived string taken from the PRE-rewrite csd SPS would
+                // describe a parameter set this path no longer sends. Only the
+                // relabel arms, which keep the config SPS byte-identical, may
+                // advertise the SPS-derived string (see
+                // [DolbyVisionHevcCodecFromSpsTest]).
                 var builder = format.buildUpon().setCodecs(rewriteCodec)
                 // Keep the original declared DV codec (e.g. "dvhe.08.06") on the
                 // label so the player UI can badge the profile playing as HDR10.
