@@ -81,6 +81,51 @@ class RedactionTest {
     }
 
     @Test
+    fun `an xtream live url's path credentials are masked`() {
+        // The shape [Redaction.url] cannot help with: the account is in the
+        // PATH, not in a key=value pair, so nothing marks it as a credential.
+        val url = "http://iptv.example/live/alice/s3cret/12345.ts"
+
+        val masked = Redaction.streamUrl(url)
+
+        assertFalse(masked, masked.contains("alice"))
+        assertFalse(masked, masked.contains("s3cret"))
+        assertTrue("the host, the shape and the file stay readable", masked.contains("iptv.example/live"))
+        assertTrue(masked, masked.contains("12345.ts"))
+        assertEquals("http://iptv.example/live/***/***/12345.ts", masked)
+    }
+
+    @Test
+    fun `a movie or series url is masked the same way, query and all`() {
+        assertEquals(
+            "http://iptv.example/movie/***/***/99.mp4?token=***",
+            Redaction.streamUrl("http://iptv.example/movie/bob/hunter2/99.mp4?token=abc")
+        )
+    }
+
+    @Test
+    fun `a short path has nothing to hide and is left alone`() {
+        assertEquals(
+            "https://cdn.example/stream.m3u8",
+            Redaction.streamUrl("https://cdn.example/stream.m3u8")
+        )
+        assertEquals(
+            "https://cdn.example/epg.xml",
+            Redaction.streamUrl("https://cdn.example/epg.xml")
+        )
+        assertEquals("http://192.168.1.10:8080", Redaction.streamUrl("http://192.168.1.10:8080"))
+    }
+
+    @Test
+    fun `a value that is not a parseable url is returned text-redacted`() {
+        val value = "http://iptv.example/live/a b/c.ts?username=alice"
+
+        val masked = Redaction.streamUrl(value)
+
+        assertFalse(masked, masked.contains("alice"))
+    }
+
+    @Test
     fun `clean text is left alone`() {
         val message = "new row violates row-level security policy for table sync_prefs"
         assertEquals(message, Redaction.text(message))

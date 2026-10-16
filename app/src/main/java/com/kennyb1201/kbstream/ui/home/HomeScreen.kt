@@ -119,6 +119,7 @@ import com.kennyb1201.kbstream.data.youtube.TrailerPlayerPool
 import com.kennyb1201.kbstream.data.images.ImageOverrides
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.components.BrandMarkLogo
 import com.kennyb1201.kbstream.ui.components.InfiniteScrollEffect
 import com.kennyb1201.kbstream.ui.components.KBProgressBar
@@ -203,6 +204,20 @@ private const val HERO_RESOLVE_DEBOUNCE_MS = 150L
  * pages), and is far longer than either surface actually needs.
  */
 private const val HOME_FOCUS_RETRY_FRAMES = 12
+
+/**
+ * The key families Home's own rail cards report their focus under (see
+ * [HomeViewModel.lastFocusedRailItemKey] and this screen's
+ * `railFocusRequesters`).
+ *
+ * A catalog card keys itself by content ("movie:123"). A built-in row's cards
+ * are not catalog content, so each names its own family rather than borrowing
+ * that shape: the same title can be a Continue Watching card, an Upcoming card
+ * and a catalog card at once, and one key must never mean two places to put
+ * the D-pad back.
+ */
+private const val CONTINUE_WATCHING_CARD_KEY_PREFIX = "upnext:"
+private const val UPCOMING_CARD_KEY_PREFIX = "upcoming:"
 
 private val HomeHeroHeight = 300.dp
 
@@ -2388,11 +2403,28 @@ private fun BuiltinContinueWatchingRail(
     onTitleHeight: (Int) -> Unit,
     onCardFocusRequester: (FocusRequester) -> Unit,
     /**
-     * The card D-pad focus has just landed on, reported on every focus change.
-     * This is what keeps Home's [focusedCardRequester] current, so a hold-Up
-     * from anywhere in this rail comes back to where the viewer was.
+     * Every card's own [FocusRequester], keyed by the key its focus reports and
+     * dropped again when the card leaves, filled as the cards COMPOSE (see the
+     * registration in the items block below).
+     *
+     * Home's return-from-Detail restore looks the remembered card up in here
+     * (the screen's `railFocusRequesters`), and it can only do that if the cards
+     * registered themselves: the composition that owns a requester is the one
+     * being built on the way back, so a map filled only when a card takes focus
+     * is empty for the whole restore window.
      */
-    onFocusedCardRequester: (FocusRequester) -> Unit,
+    cardFocusRequesters: MutableMap<String, FocusRequester>,
+    /**
+     * The card D-pad focus has just landed on: its key and its own requester,
+     * reported on every focus change.
+     *
+     * The requester is what keeps Home's [focusedCardRequester] current, so a
+     * hold-Up from anywhere in this rail comes back to where the viewer was; the
+     * key rides along because it is what Home remembers for the return from
+     * Detail (see [HomeViewModel.lastFocusedRailItemKey]), and only the card
+     * knows its own name.
+     */
+    onFocusedCard: (key: String, requester: FocusRequester) -> Unit,
     onOpenUpNext: (UpNextItem) -> Unit,
     onLongPress: (UpNextItem) -> Unit,
     onSelectHero: (MetaPreview, UpNextItem) -> Unit,
@@ -2571,6 +2603,17 @@ private fun BuiltinContinueWatchingRail(
                         ownRequester
                     }
 
+                    // This card's key, in this rail's own family: what Home
+                    // remembers when focus lands here and what its return-from-
+                    // Detail restore looks up. Registered as the card composes,
+                    // and dropped as it leaves, so a disposed node is never
+                    // asked for focus (see [cardFocusRequesters]).
+                    val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + item.id
+                    DisposableEffect(requester, cardKey) {
+                        cardFocusRequesters[cardKey] = requester
+                        onDispose { cardFocusRequesters.remove(cardKey) }
+                    }
+
                     // Carry the row's own backdrop + clearLogo into the hero
                     // preview: while TMDB resolution is pending the hero renders
                     // THESE instead of falling back to the poster (which showed
@@ -2597,7 +2640,7 @@ private fun BuiltinContinueWatchingRail(
                             // Where the viewer actually is: hold-Up from this
                             // card, and the bar's dismiss, come back HERE (see
                             // focusedCardRequester).
-                            onFocusedCardRequester(requester)
+                            onFocusedCard(cardKey, requester)
                             if (continueWatchingWalkedByFocus(index)) {
                                 // The viewer's own place in the rail, not the
                                 // landing's (which asks for index 0): from here
@@ -2640,10 +2683,17 @@ private fun BuiltinUpcomingRail(
     onOpenDetails: (UpNextItem) -> Unit,
     onSelectHero: (MetaPreview, UpNextItem) -> Unit,
     /**
-     * The card D-pad focus has just landed on (see
-     * [BuiltinContinueWatchingRail.onFocusedCardRequester]).
+     * The card D-pad focus has just landed on, with its key - the same contract
+     * [BuiltinContinueWatchingRail] has, and for the same reason (see
+     * [BuiltinContinueWatchingRail.onFocusedCard]).
      */
-    onFocusedCardRequester: (FocusRequester) -> Unit,
+    onFocusedCard: (key: String, requester: FocusRequester) -> Unit,
+    /**
+     * Every card's own [FocusRequester] under the key its focus reports, filled
+     * as the cards compose - see
+     * [BuiltinContinueWatchingRail.cardFocusRequesters].
+     */
+    cardFocusRequesters: MutableMap<String, FocusRequester>,
     /**
      * A long press on a card, with that card's own [FocusRequester]: Home
      * raises the same "Go to Details" + "Hide" menu every other poster card
@@ -2727,6 +2777,15 @@ private fun BuiltinUpcomingRail(
                     } else {
                         ownRequester
                     }
+
+                    // This card's key and its requester together, registered as
+                    // the card composes (see
+                    // [BuiltinContinueWatchingRail.cardFocusRequesters]).
+                    val cardKey = UPCOMING_CARD_KEY_PREFIX + upcoming.id
+                    DisposableEffect(requester, cardKey) {
+                        cardFocusRequesters[cardKey] = requester
+                        onDispose { cardFocusRequesters.remove(cardKey) }
+                    }
                     val heroItem = UpNextItem(
                         id = upcoming.id,
                         title = upcoming.title,
@@ -2759,7 +2818,7 @@ private fun BuiltinUpcomingRail(
                             onFocus = {
                                 // Where the viewer actually is (see
                                 // focusedCardRequester).
-                                onFocusedCardRequester(requester)
+                                onFocusedCard(cardKey, requester)
                                 onSelectHero(
                                     MetaPreview(
                                         id = upcoming.parentId,
@@ -3444,6 +3503,30 @@ fun HomeScreen(
         mutableMapOf<String, FocusRequester>()
     }
 
+    // Whether this composition of Home is a fresh ENTRY rather than a return to
+    // it - the screen's own return signal, asked of the ViewModel (see
+    // [HomeViewModel.recordHomeEntry]).
+    //
+    // It is NOT "no card remembered". Those were the same thing while only the
+    // catalog rails reported a key, and the two readings diverge exactly where
+    // it matters: a viewer coming back from a Detail the Continue Watching, the
+    // Upcoming or the Browse cards opened has a place to return to and a
+    // remembered key, and a viewer whose remembered place is gone has neither.
+    // Read from a null key, a return could look like an arrival and move focus
+    // off the place the viewer came back to; read the other way round, a fresh
+    // entry could be dragged to a card left over from an earlier visit. Each
+    // side of the screen owns one case: a return is the restore below, a fresh
+    // entry is the Continue Watching landing (see
+    // [continueWatchingLandsOnFreshEntry]).
+    //
+    // Held for the life of the composition, so a recomposition cannot change
+    // the answer mid-visit.
+    val isFreshEntry = remember { viewModel.recordHomeEntry() }
+
+    // The restore window: 20 frames at the shared hand-back cadence, the same
+    // ~1s the rails get to compose the card the viewer left Home on.
+    val HOME_RETURN_FOCUS_STEPS = 20
+
     // The other half of the restore: the scroll seed above puts the remembered
     // rail back in the viewport, and this asks that card for focus. The rails
     // compose lazily, so the target may not exist for a frame or two after the
@@ -3451,17 +3534,36 @@ fun HomeScreen(
     // correct: the rails are back where they were, which is already the
     // difference the viewer notices, and a longer wait would fight whatever
     // they do next.
+    //
+    // Two things the first version of this loop got wrong, and both made the
+    // restore a no-op rather than a best effort.
+    //
+    // The LOOKUP is retried with the request. Cards are registered when they
+    // COMPOSE (see the card's own [DisposableEffect]), the rails build lazily,
+    // so on a return this map is filled a frame or more AFTER this effect runs -
+    // reading it once and giving up looked up nothing at all.
+    //
+    // And the request's own ANSWER is read: requestFocus() returns FALSE for a
+    // node that is not attached yet rather than throwing, so
+    // `runCatching { requestFocus() }` reported success for a landing that never
+    // happened and returned on the first frame. The app's one rule for a
+    // hand-back reads the boolean (see
+    // [com.kennyb1201.kbstream.ui.browse.landFocusOn]); a false here means "not
+    // composed yet", which is a retry, not a landing.
     LaunchedEffect(Unit) {
+        // A fresh entry has nothing to come back to: whatever key an earlier
+        // visit left in the ViewModel is not a place this viewer was, and the
+        // Continue Watching landing owns focus on an arrival.
+        if (isFreshEntry) return@LaunchedEffect
         val wanted = viewModel.lastFocusedRailItemKey ?: return@LaunchedEffect
-        repeat(20) {
+        repeat(HOME_RETURN_FOCUS_STEPS) {
             val requester = railFocusRequesters[wanted]
             if (requester != null) {
-                // Not attached yet (or already gone): a request against a
-                // disposed node throws, and the retry below is the answer.
-                runCatching { requester.requestFocus() }
-                return@LaunchedEffect
+                val landed = runCatching { requester.requestFocus() }
+                    .getOrDefault(false)
+                if (landed) return@LaunchedEffect
             }
-            delay(50L)
+            delay(BROWSE_RETURN_FOCUS_DELAY_MS)
         }
     }
 
@@ -3929,8 +4031,13 @@ fun HomeScreen(
                     onCardFocusRequester = { requester ->
                         lastPosterFocusRequester = requester
                     },
-                    onFocusedCardRequester = { requester ->
+                    cardFocusRequesters = railFocusRequesters,
+                    onFocusedCard = { cardKey, requester ->
                         focusedCardRequester = requester
+                        // Remembered past this composable's life: the card the
+                        // viewer left Home on is what the restore above asks
+                        // for when they come back from Detail.
+                        viewModel.lastFocusedRailItemKey = cardKey
                     },
                     onOpenUpNext = { item -> openUpNext(item) },
                     onLongPress = { item -> openContinueWatchingMenu(item) },
@@ -3938,10 +4045,11 @@ fun HomeScreen(
                         selectContinueWatchingHero(hero, item)
                     },
                     landOnHeadSignal = continueWatchingLandOnHeadSignal,
-                    // A return from Detail has a restore target (the ViewModel
-                    // seed) and its own restore; a null one is a fresh entry,
-                    // which is the only case the landing below completes.
-                    isFreshEntry = viewModel.lastFocusedRailItemKey == null,
+                    // A return to Home is the remembered-place restore's, which
+                    // owns focus there (see [HomeViewModel.recordHomeEntry] and
+                    // the effect above); only a fresh entry may complete the
+                    // landing on this rail's head.
+                    isFreshEntry = isFreshEntry,
                     chipRowHasFocus = focusedBrowseChipRowIndex != null,
                     onUpPressed = upHook
                 )
@@ -3961,8 +4069,10 @@ fun HomeScreen(
                     onSelectHero = { meta, item ->
                         selectContinueWatchingHero(meta, item)
                     },
-                    onFocusedCardRequester = { requester ->
+                    cardFocusRequesters = railFocusRequesters,
+                    onFocusedCard = { cardKey, requester ->
                         focusedCardRequester = requester
+                        viewModel.lastFocusedRailItemKey = cardKey
                     },
                     onLongPress = { episode, requester ->
                         // Same contract the Continue Watching cards have:
@@ -4288,8 +4398,12 @@ fun HomeScreen(
                                                 focusedContinueWatchingItem = null
                                                 focusedBrowseShortcut = shortcut
                                             },
-                                            onFocusedCardRequester = { requester ->
+                                            cardFocusRequesters =
+                                                railFocusRequesters,
+                                            onFocusedCard = { cardKey, requester ->
                                                 focusedCardRequester = requester
+                                                viewModel.lastFocusedRailItemKey =
+                                                    cardKey
                                             },
                                             // Reported by ROW index, so the row
                                             // that loses focus cannot clear one
@@ -4315,8 +4429,12 @@ fun HomeScreen(
                                                 focusedContinueWatchingItem = null
                                                 focusedBrowseShortcut = null
                                             },
-                                            onFocusedCardRequester = { requester ->
+                                            cardFocusRequesters =
+                                                railFocusRequesters,
+                                            onFocusedCard = { cardKey, requester ->
                                                 focusedCardRequester = requester
+                                                viewModel.lastFocusedRailItemKey =
+                                                    cardKey
                                             },
                                             onUpPressed = topRailUpHook(entryIndex)
                                         )
@@ -4414,6 +4532,25 @@ fun HomeScreen(
                                                         HomePosterWidth
                                                     }
 
+                                                // Registered at COMPOSITION, not when a
+                                                // card takes focus. Home is disposed while
+                                                // its Detail page is open, so on the way
+                                                // back this map has to be filled by the
+                                                // cards that compose - keyed off the one
+                                                // card that happened to take focus first,
+                                                // it stayed empty for the whole restore
+                                                // window and the remembered place was
+                                                // never asked for at all. (The key is
+                                                // still remembered on focus, below.)
+                                                DisposableEffect(requester) {
+                                                    val cardKey =
+                                                        "${meta.type}:${meta.id}"
+                                                    railFocusRequesters[cardKey] = requester
+                                                    onDispose {
+                                                        railFocusRequesters.remove(cardKey)
+                                                    }
+                                                }
+
                                                 val cardHeight =
                                                     if (landscapeCards) {
                                                         HomeLandscapeHeight
@@ -4444,7 +4581,6 @@ fun HomeScreen(
                                                             // HomeViewModel.lastFocusedRailItemKey).
                                                             viewModel.lastFocusedRailItemKey =
                                                                 cardKey
-                                                            railFocusRequesters[cardKey] = requester
                                                             // The card focus is
                                                             // on (see
                                                             // focusedCardRequester).

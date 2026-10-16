@@ -54,6 +54,12 @@ class HomeReturnRestoreContractTest {
             "HomeViewModel must hold the card focus was on",
             viewModel.contains("var lastFocusedRailItemKey")
         )
+        assertTrue(
+            "and the return signal itself: whether the screen about to compose " +
+                "is a return or a fresh entry is a fact about the ViewModel's " +
+                "life, not about whether some card happened to be remembered",
+            viewModel.contains("fun recordHomeEntry(): Boolean {")
+        )
     }
 
     @Test
@@ -81,6 +87,12 @@ class HomeReturnRestoreContractTest {
         assertTrue(
             "and used by the restore effect",
             screen.contains("railFocusRequesters[wanted]")
+        )
+        assertTrue(
+            "a fresh entry skips the restore: whatever key an earlier visit " +
+                "left behind is not a place this viewer was, and the landing on " +
+                "Continue Watching owns focus on an arrival",
+            screen.contains("if (isFreshEntry) return@LaunchedEffect")
         )
     }
 }

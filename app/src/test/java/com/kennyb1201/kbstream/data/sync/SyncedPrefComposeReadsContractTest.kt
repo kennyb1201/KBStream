@@ -33,6 +33,10 @@ import org.junit.Test
  * buffer pref keyed on the revision would drag the other TV's answer onto this
  * box, which is why [PrefsPayloadBuilder.EXCLUDED_PREF_KEYS] exists and why
  * keying everything would not be a fix.
+ *
+ * The scan can only see reads that are REMEMBERED (it cannot tell a composable's
+ * own read from an event handler's), so the surfaces that read a synced pref
+ * PLAIN are pinned by name: a plain read is not a reactive read either.
  */
 class SyncedPrefComposeReadsContractTest {
 
@@ -151,6 +155,34 @@ class SyncedPrefComposeReadsContractTest {
                 "and cache its read on it, so the tile repaints on a real " +
                     "change instead of at the next rebuild",
                 body.contains("remember(syncedRevision)")
+            )
+        }
+    }
+
+    @Test
+    fun `the surfaces that read a synced pref PLAIN collect the revision too`() {
+        // A plain read is no more reactive than a bare `remember`: Compose
+        // recomposes on observed state, and a SharedPreferences lookup is not
+        // state either way. The scan above can only see the REMEMBERED seeds
+        // (it cannot tell a composable's own read from a handler's), so the
+        // plain-read surfaces are pinned here by name instead - the folder
+        // hero's trailer controls and the folder grid's landscape choice, whose
+        // siblings elsewhere in the same file already gate on the revision.
+        listOf(
+            KB_FOLDER_LAYOUTS to "private fun FolderHero(",
+            KB_FOLDER_LAYOUTS to "private fun FollowHomeLayout(",
+            KB_FOLDER_LAYOUTS to "private fun GridLayout("
+        ).forEach { (path, header) ->
+            val body = functionBody(readSource(path), header)
+            assertTrue(
+                "$header reads a synced pref, so it has to collect the sync " +
+                    "revision to repaint when that pref changes elsewhere: $body",
+                body.contains("PrefsPayloadApplier")
+            )
+            assertTrue(
+                "and its remembered read has to be keyed on it",
+                body.contains("remember(syncedRevision)") ||
+                    body.contains("remember(syncRevision)")
             )
         }
     }
@@ -279,6 +311,7 @@ class SyncedPrefComposeReadsContractTest {
         const val POSTER_CAPTIONS = "$PACKAGE/ui/components/PosterCaptions.kt"
         const val POSTER_BORDER = "$PACKAGE/ui/components/PosterBorder.kt"
         const val POSTER_EDGE = "$PACKAGE/ui/components/PosterEdge.kt"
+        const val KB_FOLDER_LAYOUTS = "$PACKAGE/ui/kb/KBFolderLayouts.kt"
         const val SEARCH_SCREEN = "$PACKAGE/ui/search/SearchScreen.kt"
         const val SETTINGS_SCREEN = "$PACKAGE/ui/settings/SettingsScreen.kt"
     }

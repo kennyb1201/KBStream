@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -580,6 +581,17 @@ internal fun collectionRailTiles(folders: List<KBFolder>): List<Pair<String, KBF
 internal fun collectionRailKey(index: Int, tile: Pair<String, KBFolder>): String =
     "${tile.first}#$index"
 
+/**
+ * The key families this file's tiles report their focus under.
+ *
+ * Prefixed so a tile here can never share a key with a catalog card
+ * ("movie:123") or with a built-in rail's card: the key is what Home remembers
+ * on focus and what its return-from-Detail restore looks up, and two tiles
+ * answering to one key would mean the viewer landing on the wrong one.
+ */
+private const val COLLECTION_CARD_KEY_PREFIX = "folder:"
+private const val BROWSE_CARD_KEY_PREFIX = "shortcut:"
+
 // LocalBringIntoViewSpec is still experimental; the rails that install their
 // own landing spec opt in the same way (see HomeScreen's rail column).
 @OptIn(ExperimentalFoundationApi::class)
@@ -589,12 +601,24 @@ fun KBHomeCollectionRail(
     onOpenFolder: (String) -> Unit,
     onFolderFocused: ((KBFolder) -> Unit)? = null,
     /**
-     * The tile D-pad focus has just landed on, reported with its own
-     * FocusRequester. Home keeps the requester of the card focus is ON (it is
-     * what a hold-Up restore and the top bar's dismiss come back to), and a
+     * The tile D-pad focus has just landed on, reported with its KEY and its
+     * own FocusRequester. Home keeps the requester of the card focus is ON (it
+     * is what a hold-Up restore and the top bar's dismiss come back to), and a
      * tile's requester is made inside the row, where only this rail can see it.
+     * The key rides along because Home remembers it for the return from Detail
+     * (see HomeScreen's railFocusRequesters): the card the viewer left Home on
+     * has to be nameable on the way back, and only the tile knows its own name.
      */
-    onFocusedCardRequester: ((FocusRequester) -> Unit)? = null,
+    onFocusedCard: ((cardKey: String, requester: FocusRequester) -> Unit)? = null,
+    /**
+     * The same map of one FocusRequester per tile, owned by the caller (Home's
+     * railFocusRequesters). Filled as the tiles COMPOSE rather than when one
+     * takes focus: the composition being built on the way back from Detail is
+     * the one that owns the requesters, so a map only focus filled would be
+     * empty for the whole restore. Null keeps the old behaviour (nothing
+     * registered), for a caller with no return to restore.
+     */
+    cardFocusRequesters: MutableMap<String, FocusRequester>? = null,
     // Non-null only for the rail Home draws first (see [homeTopRailUpHook]).
     onUpPressed: ((FocusRequester) -> Unit)? = null
 ) {
@@ -661,17 +685,24 @@ fun KBHomeCollectionRail(
                     // Every item emits a tile - the null guard and its empty
                     // branch are gone, so no position can be a focusable no-op.
                     val requester = remember { FocusRequester() }
+                    // The tile's key and requester together, registered as the
+                    // tile composes (see [cardFocusRequesters]).
+                    val cardKey = COLLECTION_CARD_KEY_PREFIX + folderId
+                    DisposableEffect(requester, cardKey) {
+                        cardFocusRequesters?.put(cardKey, requester)
+                        onDispose { cardFocusRequesters?.remove(cardKey) }
+                    }
                     CollectionFolderTile(
                         folder = folder,
                         onClick = { onOpenFolder(folderId) },
                         onFocus = if (
-                            onFolderFocused == null && onFocusedCardRequester == null
+                            onFolderFocused == null && onFocusedCard == null
                         ) {
                             null
                         } else {
                             {
                                 onFolderFocused?.invoke(folder)
-                                onFocusedCardRequester?.invoke(requester)
+                                onFocusedCard?.invoke(cardKey, requester)
                             }
                         },
                         modifier = Modifier
@@ -913,11 +944,19 @@ fun KBHomeBrowseRail(
     onOpenShortcut: (BrowseHomeShortcut) -> Unit,
     onShortcutFocused: ((BrowseHomeShortcut) -> Unit)? = null,
     /**
-     * The tile D-pad focus has just landed on, with its own FocusRequester -
-     * the same contract [KBHomeCollectionRail] has, and for the same reason:
-     * the requester is made inside the row (see [onFocusedCardRequester]).
+     * The tile D-pad focus has just landed on, with its KEY and its own
+     * FocusRequester - the same contract [KBHomeCollectionRail] has, and for
+     * the same reason: the requester is made inside the row (see
+     * [onFocusedCard]).
      */
-    onFocusedCardRequester: ((FocusRequester) -> Unit)? = null,
+    onFocusedCard: ((cardKey: String, requester: FocusRequester) -> Unit)? = null,
+    /**
+     * The caller-owned map of one FocusRequester per chip, filled as the chips
+     * compose - the same contract as [chipFocusRequesters] and
+     * [KBHomeCollectionRail.cardFocusRequesters], and keyed the same way the
+     * tiles report their focus. Home's return-from-Detail restore reads it.
+     */
+    cardFocusRequesters: MutableMap<String, FocusRequester>? = null,
     // Long-press on a tile, with that tile's own FocusRequester. Home raises
     // its "Remove from Home" menu from here, and the requester is what lets the
     // menu hand focus back to the tile it came from - the same contract the
@@ -989,6 +1028,15 @@ fun KBHomeBrowseRail(
                     chipFocusRequesters?.getOrPut(chipKey) { FocusRequester() }
                         ?: FocusRequester()
                 }
+                // The chip's key, in this rail's own key family (a chip key is
+                // a category plus a name, which no catalog card shape can
+                // produce - but the family is named anyway, so a future key
+                // scheme cannot quietly collide with this one).
+                val cardKey = BROWSE_CARD_KEY_PREFIX + chipKey
+                DisposableEffect(requester, cardKey) {
+                    cardFocusRequesters?.put(cardKey, requester)
+                    onDispose { cardFocusRequesters?.remove(cardKey) }
+                }
                 BrowseShortcutTile(
                     shortcut = shortcut,
                     art = artByKey[shortcut.chipKey()],
@@ -997,13 +1045,13 @@ fun KBHomeBrowseRail(
                         { callback(shortcut, requester) }
                     },
                     onFocus = if (
-                        onShortcutFocused == null && onFocusedCardRequester == null
+                        onShortcutFocused == null && onFocusedCard == null
                     ) {
                         null
                     } else {
                         {
                             onShortcutFocused?.invoke(shortcut)
-                            onFocusedCardRequester?.invoke(requester)
+                            onFocusedCard?.invoke(cardKey, requester)
                         }
                     },
                     modifier = Modifier

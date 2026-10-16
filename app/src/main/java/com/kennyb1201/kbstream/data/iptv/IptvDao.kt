@@ -203,7 +203,24 @@ interface IptvDao {
 
         rekeyChannelsSource(oldUrl = stagingUrl, newUrl = sourceUrl)
         rekeyProgramsSource(oldUrl = stagingUrl, newUrl = sourceUrl)
+
+        // The staging source row goes with the rows that named it. It was
+        // created above and by the import that is being promoted, and nothing
+        // referenced it once the re-key moved its channels and programmes onto
+        // the live URL - so leaving it behind added one dead `epg_sources` row
+        // per import, for the life of the database (there is no other sweep of
+        // that table). Deleted AFTER the re-keys, so no row is orphaned by a
+        // delete that ran first.
+        deleteSource(stagingUrl)
     }
+
+    /**
+     * Removes one source row by its URL. Only ever called for a STAGING url,
+     * whose rows the promotion has just re-keyed onto the live one; the live
+     * rows' own cleanup is [clearGuideBySource]'s job.
+     */
+    @Query("DELETE FROM epg_sources WHERE url = :url")
+    suspend fun deleteSource(url: String)
 
     @Query(
         """

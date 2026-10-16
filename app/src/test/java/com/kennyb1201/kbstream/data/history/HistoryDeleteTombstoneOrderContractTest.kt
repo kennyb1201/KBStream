@@ -121,6 +121,35 @@ class HistoryDeleteTombstoneOrderContractTest {
         )
     }
 
+    @Test
+    fun `the launcher republish is outside the save's success verdict`() {
+        val writer = read(WRITER)
+        val start = writer.indexOf("suspend fun write(")
+        val end = writer.indexOf("private suspend fun supersededResumeIds(", start)
+        assertTrue("the writer's entry point must exist", start >= 0)
+        assertTrue("and its body must be bounded by the next declaration", end > start)
+        val body = writer.substring(start, end)
+
+        val verdict = body.indexOf("}.isSuccess")
+        val publish =
+            body.indexOf("TvLauncherPublisher.sync(context, dao.getResumeRowsForLauncher())")
+        assertTrue("the write's verdict must exist", verdict >= 0)
+        assertTrue("and the launcher republish must exist", publish >= 0)
+        assertTrue(
+            "inside the verdict it decided the SAVE: a launcher publish that " +
+                "failed reported a row that had landed as a failed write, which " +
+                "sent every caller down its failure path. It mirrors a table the " +
+                "save has already written, so it goes after the verdict",
+            verdict < publish
+        )
+        assertTrue(
+            "and it is still best-effort and cancellable, like the redirect " +
+                "branch's own republish",
+            body.substring((publish - 300).coerceAtLeast(0), publish)
+                .contains("runCatchingCancellable {")
+        )
+    }
+
     private companion object {
         const val DAO = "com/kennyb1201/kbstream/data/history/WatchHistoryDao.kt"
         const val REPOSITORY =

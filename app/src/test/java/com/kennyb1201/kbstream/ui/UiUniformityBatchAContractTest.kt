@@ -180,8 +180,20 @@ class UiUniformityBatchAContractTest {
             "the strip must resolve that key to the tab's focus requester, " +
                 "retrying across frames because an unattached request is " +
                 "silently missed",
-            browser.contains("tabFocusRequesters[key]?.requestFocus() ?: false") &&
+            browser.contains("val requester = tabFocusRequesters[key]") &&
+                browser.contains(
+                    "focused = runCatching { requester.requestFocus() }.getOrDefault(false)"
+                ) &&
                 browser.contains("modifier = Modifier.focusRequester(tabFocusRequester)")
+        )
+        assertTrue(
+            "and a tab that has not REGISTERED yet is an arrival, not a missed " +
+                "landing: charging the frame budget for it spent all twelve on " +
+                "the strip composing and left the arm unconsumed, so the wait is " +
+                "bounded by time instead (the same two budgets as the browse " +
+                "pages' own hand-back)",
+            browser.contains("if (requester == null) {") &&
+                browser.contains("BROWSE_RETURN_WAIT_MS")
         )
         assertTrue(
             "the tab composable has to take that modifier to be focusable by it",

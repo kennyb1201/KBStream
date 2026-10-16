@@ -183,7 +183,13 @@ fun ActorScreen(
     // the top (see [BrowseReturnFocus]).
     val browseReturnKey = remember(actorId) { actorBrowseScreenKey(actorId) }
     val browseListState = rememberLazyListState()
-    var returnTarget by remember {
+    // All four of these are PER ACTOR, so they are keyed on [actorId]: this
+    // screen is one composable for every actor, and a page opened FROM another
+    // actor's page (a cast list, a "More Like This" poster) reuses it. Unkeyed,
+    // the new actor's page inherited the previous one's return record and tried
+    // to put the focus back on a card that is not on this page at all - and it
+    // had already spent that record's budget getting there.
+    var returnTarget by remember(actorId) {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
     // How many LANDING tries this page has spent on the return's card - the
@@ -191,12 +197,12 @@ fun ActorScreen(
     // rail to arrive at all spends none of it, which is the difference between
     // a rail that builds slowly and a return that never lands (see
     // [browseReturnDecision]).
-    var returnAttempts by remember { mutableStateOf(0) }
+    var returnAttempts by remember(actorId) { mutableStateOf(0) }
     // When the held record was first waited for, so a rail whose load failed
     // hands the D-pad back to the first card instead of holding it for ever
     // (see [BROWSE_RETURN_WAIT_MS]).
-    var returnWaitStartMs by remember { mutableStateOf(0L) }
-    var focusPlaced by remember { mutableStateOf(false) }
+    var returnWaitStartMs by remember(actorId) { mutableStateOf(0L) }
+    var focusPlaced by remember(actorId) { mutableStateOf(false) }
     val returnFocusRequester = remember { FocusRequester() }
     val firstCreditFocusRequester = remember { FocusRequester() }
 

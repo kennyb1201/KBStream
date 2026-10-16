@@ -1058,6 +1058,25 @@ class WatchedStatusRepository(
 
                 simklSetsFetchedAt =
                     0L
+
+                // And MDBList's snapshot on the same terms. Clearing ONLY the
+                // Simkl sets left this copy of the MDBList watched snapshot
+                // live for [REMOTE_SET_TTL_MS], so the state the viewer had
+                // just cleared came straight back on the next read - the same
+                // one-caller-and-not-the-second shape
+                // [invalidateRemoteWatchSets] documents above, which is this
+                // same four-field reset.
+                mdbListMovieKeys =
+                    emptySet()
+
+                mdbListEpisodeKeys =
+                    emptySet()
+
+                mdbListStartedShowKeys =
+                    emptySet()
+
+                mdbListFetchedAt =
+                    0L
             }
 
             try {
@@ -1863,7 +1882,7 @@ class WatchedStatusRepository(
      * must not fail the mark.
      */
     private suspend fun publishLauncherWatchNext() {
-        runCatching {
+        runCatchingCancellable {
             WatchHistoryDatabase.withScopedDao(context) { dao ->
                 TvLauncherPublisher.sync(context, dao.getResumeRowsForLauncher())
             }
@@ -2077,6 +2096,44 @@ class WatchedStatusRepository(
 
         _watchedStateVersion.value = now
         invalidateRemoteWatchSets()
+
+        // The badge bus, which this write alone never spoke to. Every other
+        // local write in this file announces its result ([markPartiallyWatchedLocal]
+        // two functions down, [markUnwatchedLocal] below), so an episode marked
+        // from the episode list or a season mark left the tile it was marked
+        // FROM - a Continue Watching card, a Search result, a Detail poster -
+        // painting the badge it had before the mark, while the marker itself
+        // was already on disk: the eye appeared on the next marker preload, or
+        // on nothing at all until the rails were rebuilt.
+        //
+        // Announced through the same resolver the preload uses
+        // ([resolveWithMergedRemoteSets]) rather than a hand-rolled flag: the
+        // answer for a series is "the override / tracker sets, then Simkl, then
+        // MDBList, then local history", and repeating that rule here is how the
+        // two would drift. It is written to the cache and the disk row as well,
+        // exactly as a preload would, so the next preload inside this entry's
+        // TTL reads what the bus just announced instead of the pre-write row.
+        val resolvedForms =
+            runCatchingCancellable {
+                resolveWithMergedRemoteSets(
+                    items = parents.map { form -> form to normalizedType },
+                    now = now
+                )
+            }.getOrDefault(emptyList())
+
+        if (resolvedForms.isNotEmpty()) {
+            runCatchingCancellable {
+                persistResolvedEntities(resolvedForms, now)
+            }
+            resolvedForms.forEach { entity ->
+                WatchStateBus.notifyChanged(
+                    watchedKey = entity.key,
+                    isWatched = entity.isWatched,
+                    isPartiallyWatched =
+                        entity.isPartiallyWatched && !entity.isWatched
+                )
+            }
+        }
 
         // Same signal as [markWatchedLocal]: this episode's mark was pushed to
         // the trackers, so Home must re-merge Continue Watching now. The CW

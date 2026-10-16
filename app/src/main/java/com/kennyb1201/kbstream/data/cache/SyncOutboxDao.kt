@@ -20,6 +20,13 @@ interface SyncOutboxDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: SyncOutboxEntity)
 
+    /**
+     * The batch form of [upsert], for the tombstone/delete paths: one awaited
+     * write for every row a delete produces (see `OutboxStore.replaceNow`).
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(items: List<SyncOutboxEntity>)
+
     @Query("DELETE FROM sync_outbox WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 

@@ -160,6 +160,50 @@ class AddonSubtitleBulkDownloadContractTest {
     }
 
     @Test
+    fun `a batch aborts a dead host inside the batch, and a new attach starts clean`() {
+        assertTrue(
+            "the batch must own an abort scope of its own",
+            attach.contains("val batch = AddonSubtitleSource.BatchAbort()")
+        )
+        assertTrue(
+            "and hand it to every download that batch makes",
+            attach.contains("download(offer.url, batch)")
+        )
+        assertTrue(
+            "the scope is an object per attach rather than another process-wide " +
+                "map: nothing carries over from one batch to the next, which is " +
+                "what makes a new attach a new batch, and the process-wide memo " +
+                "cannot do this job - it is written when the first failure lands, " +
+                "by which time this batch's other offers to that host are already " +
+                "in flight, each holding one of the four permits",
+            source.contains("internal class BatchAbort {") &&
+                source.contains("ConcurrentHashMap.newKeySet<String>()")
+        )
+        assertTrue(
+            "its dead-host check runs before a connection is opened",
+            source.indexOf("batch?.isDead(requestHost)") in 0 until
+                source.indexOf("downloadClient.newCall(request)")
+        )
+        assertTrue(
+            "the calls it has out are registered, or there is nothing to abort",
+            source.contains("batch?.inFlightFor(requestHost)") &&
+                source.contains("inFlight?.add(call)") &&
+                source.contains("inFlight?.remove(call)")
+        )
+        assertTrue(
+            "and a host-level failure aborts them, so their permits come back " +
+                "now instead of one full read timeout from now",
+            source.contains("batch?.markDead(failedHost)") &&
+                source.contains("call.cancel()")
+        )
+        assertTrue(
+            "the one-off downloads - the pickers' \"use this track\" tap - pass no " +
+                "batch: there is nothing to abort, and the memo is the guard there",
+            source.contains("batch: BatchAbort? = null")
+        )
+    }
+
+    @Test
     fun `the failure classification is the dead-host set`() {
         assertTrue(AddonSubtitleSource.isConnectionFailure(ConnectException("refused")))
         assertTrue(AddonSubtitleSource.isConnectionFailure(UnknownHostException("no dns")))

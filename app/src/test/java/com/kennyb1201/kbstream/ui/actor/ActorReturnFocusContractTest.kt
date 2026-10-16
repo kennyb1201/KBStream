@@ -42,6 +42,25 @@ class ActorReturnFocusContractTest {
     }
 
     @Test
+    fun `the page's per-actor return state is keyed by the actor`() {
+        listOf(
+            "var returnTarget by remember(actorId) {",
+            "var returnAttempts by remember(actorId) {",
+            "var returnWaitStartMs by remember(actorId) {",
+            "var focusPlaced by remember(actorId) {"
+        ).forEach { declaration ->
+            assertTrue(
+                "one composable serves every actor, so an unkeyed $declaration " +
+                    "outlives the actor it was recorded for: the next actor's page " +
+                    "inherits the previous one's return record AND its spent " +
+                    "landing budget, and spends what is left of it looking for a " +
+                    "card that is not on this page",
+                source.contains(declaration)
+            )
+        }
+    }
+
+    @Test
     fun `a credit press records the card before it resolves`() {
         val record = source.indexOf("BrowseReturnFocus.record(target)")
         assertTrue("the rail has to raise the record on the way into a title", record >= 0)
@@ -176,7 +195,7 @@ class ActorReturnFocusContractTest {
         assertTrue(
             "and a new load drops a record left by the list before it: a " +
                 "position in the old list means nothing in the new one",
-            source.contains("var returnWaitStartMs by remember { mutableStateOf(0L) }") &&
+            source.contains("var returnWaitStartMs by remember(actorId) { mutableStateOf(0L) }") &&
                 source.contains("if (isLoading) {") &&
                 source.contains("returnTarget = null") &&
                 source.contains("returnAttempts = 0") &&
@@ -211,7 +230,7 @@ class ActorReturnFocusContractTest {
         assertTrue(
             "an entry focus that could not land is retried when the next rail " +
                 "arrives, while a placed one is left alone",
-            source.contains("var focusPlaced by remember { mutableStateOf(false) }") &&
+            source.contains("var focusPlaced by remember(actorId) { mutableStateOf(false) }") &&
                 source.contains("if (!focusPlaced && (movies.isNotEmpty() || tvShows.isNotEmpty()))")
         )
     }

@@ -52,6 +52,13 @@ class P5VideoGlesView(
     @Volatile
     var onFirstFrameRendered: (() -> Unit)? = null
 
+    // @Volatile because the two halves are on different threads: [clearFirstFrame]
+    // runs per player build, on whichever thread builds the player, while this is
+    // set on the GL thread in onDrawFrame. Unpublished, a clear that the GL
+    // thread never saw left the flag true, the one-shot report for the NEW session
+    // was never fired, and the black-video watchdog (whose "video output works"
+    // signal this is) was left waiting on a frame that had already been drawn.
+    @Volatile
     private var firstFrameReported = false
 
     /** Resets the one-shot first-frame report (called per player build). */

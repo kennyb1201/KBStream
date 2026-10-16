@@ -1282,7 +1282,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         val probe = SourcePlaybackProbe(sessionDeadAddons, probeHttpClient)
         lifecycleScope.launch {
             val (candidates, addons) = probeOrder()
-            val pick = runCatching {
+            // Cancellable: the probe SUSPENDS, and this launch is the
+            // activity's own scope. Swallowed, a cancellation arriving
+            // mid-probe was read as a probe INFRASTRUCTURE failure - `pick`
+            // null - and the launch carried on down the head-source path; the
+            // guard below only stands in for that when the activity happens to
+            // be finishing. Rethrown, the launch dies with the scope, which is
+            // what a canceled session means.
+            val pick = runCatchingCancellable {
                 probe.pickLiveSource(candidates, addons) { stream -> stream.requestHeaders }
             }.getOrNull()
             if (isFinishing || isDestroyed) return@launch

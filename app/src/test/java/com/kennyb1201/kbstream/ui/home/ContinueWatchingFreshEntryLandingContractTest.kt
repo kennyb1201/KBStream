@@ -18,10 +18,12 @@ import org.junit.Test
  * it. The viewer scrolled up to reach the rail they came for.
  *
  * The fix completes the landing without weakening the old gate: on a FRESH entry
- * (no Detail-return restore target), with CW data now present and focus still on
- * the chip row, the rail lands on its head. Focus on the chip row is the
- * framework's default rather than a choice, so moving is finishing the landing;
- * focus anywhere else is the viewer having navigated, and is left alone.
+ * (the ViewModel's own return signal - see [HomeViewModel.recordHomeEntry]), with
+ * CW data now present and focus still on the chip row, the rail lands on its
+ * head. Focus on the chip row is the framework's default rather than a choice,
+ * so moving is finishing the landing; focus anywhere else is the viewer having
+ * navigated, and is left alone. A return to Home is never a fresh entry, even
+ * when the card the viewer left on could not name itself.
  *
  * The rule is a plain function (asserted directly) and the wiring that applies
  * it - the one-shot, the key list, the shared scroll and retry - is asserted
@@ -209,15 +211,31 @@ class ContinueWatchingFreshEntryLandingContractTest {
     // ------------------------------------------------------ home supplies them --
 
     @Test
-    fun `home reads the fresh entry from the ViewModel's restore target`() {
+    fun `home reads the fresh entry from the ViewModel's own return signal`() {
+        val viewModel = source(HOME_VIEW_MODEL)
         assertTrue(
-            "non-null exactly when a Detail return has a restore target, so a " +
-                "null one is the fresh entry (see the ViewModel's own contract)",
+            "the signal lives in the ViewModel, the only thing that outlives " +
+                "the screen: Home is a route, so leaving it disposes everything " +
+                "remembered inside",
+            viewModel.contains("private var homeEntered = false") &&
+                viewModel.contains("fun recordHomeEntry(): Boolean {")
+        )
+        assertFalse(
+            "and it is NOT the remembered card. `no card remembered` and `a " +
+                "fresh entry` are different facts: a return from Detail on a " +
+                "card that could not name itself left a null key, which read " +
+                "as an arrival and let the landing below move focus off the " +
+                "place the viewer had come back to",
             home.contains("isFreshEntry = viewModel.lastFocusedRailItemKey == null")
         )
         assertTrue(
-            "and hands the literal null-comparison's result to the rail, not a " +
-                "second reading of the property inside it",
+            "asked once per composition and held, so a recomposition cannot " +
+                "change the answer mid-visit",
+            home.contains("val isFreshEntry = remember { viewModel.recordHomeEntry() }")
+        )
+        assertTrue(
+            "and the answer is handed to the rail, not a second reading of " +
+                "anything inside it",
             rail.contains("isFreshEntry = isFreshEntry,")
         )
     }
@@ -285,6 +303,7 @@ class ContinueWatchingFreshEntryLandingContractTest {
 
     private companion object {
         const val HOME_SCREEN = "com/kennyb1201/kbstream/ui/home/HomeScreen.kt"
+        const val HOME_VIEW_MODEL = "com/kennyb1201/kbstream/ui/home/HomeViewModel.kt"
         const val KB_HOME_SLOTS = "com/kennyb1201/kbstream/ui/kb/KBHomeSlots.kt"
     }
 }

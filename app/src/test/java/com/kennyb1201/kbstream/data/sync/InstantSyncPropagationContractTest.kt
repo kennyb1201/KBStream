@@ -178,6 +178,18 @@ class InstantSyncPropagationContractTest {
             "and that handle is closed when the apply is done",
             sync.contains("runCatching { oneShot.close() }")
         )
+        val helper = functionBody(sync, "private suspend fun withOwningProfileDb(")
+        assertEquals(
+            "BOTH branches pin the profile across the database resolve. The " +
+                "scoped one cannot be aimed at the wrong file (its target comes " +
+                "from the key alone), but the LEGACY branch reads the active " +
+                "profile to decide whether the row applies at all and only then " +
+                "resolves the database - two steps with a suspension and a " +
+                "switch possible in between, so it has to re-ask after the " +
+                "resolve exactly like the scoped branch does.",
+            2,
+            helper.split("if (currentProfileId() != active) return").size - 1
+        )
         listOf(
             "private suspend fun applyHistoryRow(row: SyncRowDto) {",
             "private suspend fun applyWatchedRow(row: SyncRowDto) {",
@@ -326,6 +338,31 @@ class InstantSyncPropagationContractTest {
                 "re-join: a rejected table must not be retried forever just " +
                 "because the app came back",
             body.contains("if (!force) realtimeRebuildAttempts.clear()")
+        )
+    }
+
+    @Test
+    fun `the sync stamp is only written for a pull that actually ran`() {
+        val sync = readSource(SYNC)
+        listOf("pullPrefs", "pullHistory", "pullWatched", "pullOverrides").forEach { name ->
+            assertTrue(
+                "$name must ANSWER whether it ran: it swallows its own failure " +
+                    "(one unreachable table cannot abort the other three), so the " +
+                    "caller has nothing else to go on",
+                sync.contains("private suspend fun $name(context: Context): Boolean {")
+            )
+        }
+        val body = functionBody(sync, "private suspend fun pullAllNow(context: Context) {")
+        assertTrue(
+            "all four answering false is not a slow sync, it is no sync - the " +
+                "client gone, the tables unreachable, every read thrown - and " +
+                "\"last sync\" is the number the sync-health panel reports",
+            body.contains("val ran =") && body.contains("if (ran.none { it }) return")
+        )
+        assertTrue(
+            "while a PARTIAL run still stamps: three tables really did land",
+            body.indexOf("if (ran.none { it }) return") <
+                body.indexOf("_lastPullAtMs.value = pulledAt")
         )
     }
 

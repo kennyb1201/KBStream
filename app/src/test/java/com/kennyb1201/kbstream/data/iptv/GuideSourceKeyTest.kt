@@ -84,6 +84,50 @@ class GuideSourceKeyTest {
     }
 
     @Test
+    fun `promoting a staged import leaves no staging source row behind`() = runBlocking {
+        // An import stages its rows under a temporary key and the promotion
+        // re-keys them onto the real one. The staging SOURCE row is not
+        // re-keyed by that - it was created to hold the staged rows and nothing
+        // names it afterwards - so leaving it behind added one dead `epg_sources`
+        // row per import, for the life of the database (nothing else sweeps that
+        // table).
+        val staging = "$guideA&staging=1"
+        dao.insertChannels(channels(dao.ensureSourceId(staging), 2))
+        dao.insertPrograms(programs(dao.ensureSourceId(staging), 2))
+        assertEquals(
+            "only the staging row exists before the promotion - the live guide " +
+                "is a first import's brand-new key",
+            1,
+            countOf("epg_sources")
+        )
+
+        dao.swapStagedGuideIntoLive(sourceUrl = guideA, stagingUrl = staging)
+
+        assertEquals(
+            "the staged rows now name the live guide",
+            2,
+            countOf("epg_channels")
+        )
+        assertEquals(
+            "and exactly ONE source row survives - the live one. Without the " +
+                "delete the staging row stayed in epg_sources for the life of the " +
+                "database, one more per import",
+            1,
+            countOf("epg_sources")
+        )
+        assertEquals(
+            "and they are readable as the live guide's own",
+            2,
+            dao.getChannelsBySource(guideA).size
+        )
+        assertEquals(
+            "with nothing left under the staging URL",
+            0,
+            dao.getChannelsBySource(staging).size
+        )
+    }
+
+    @Test
     fun `a source id is stable for one URL and distinct across URLs`() = runBlocking {
         val first = dao.ensureSourceId(guideA)
         val again = dao.ensureSourceId(guideA)

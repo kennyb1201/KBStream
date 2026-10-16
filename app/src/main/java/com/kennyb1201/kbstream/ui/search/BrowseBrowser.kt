@@ -61,6 +61,7 @@ import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
 import com.kennyb1201.kbstream.ui.theme.KBFocusPressed
 import com.kennyb1201.kbstream.ui.theme.KBShapeChip
@@ -185,13 +186,29 @@ internal fun SearchBrowseBrowser(
 
     LaunchedEffect(returnCategoryKey) {
         val key = returnCategoryKey ?: return@LaunchedEffect
+        // Two budgets, not one - the same rule the browse pages' own hand-back
+        // states (see [browseReturnDecision]): a tab whose requester has not
+        // been REGISTERED yet is an arrival, not a missed landing. Spending an
+        // attempt on it burned the twelve-frame budget on the frames before
+        // the strip composed, and the arm was then left unconsumed - which is
+        // the tab menu closing with the D-pad nowhere. The arrival is waited
+        // for on TIME instead; only a request made against a node that exists
+        // spends an attempt (and an unattached request answers false rather
+        // than throwing, which is why the answer is read).
         var focused = false
         var attempts = 0
+        val waitStartMs = System.currentTimeMillis()
         while (!focused && attempts < TAB_RETURN_FOCUS_STEPS) {
+            val requester = tabFocusRequesters[key]
+            if (requester == null) {
+                if (System.currentTimeMillis() - waitStartMs > BROWSE_RETURN_WAIT_MS) {
+                    break
+                }
+                awaitFrame()
+                continue
+            }
             awaitFrame()
-            focused = runCatching {
-                tabFocusRequesters[key]?.requestFocus() ?: false
-            }.getOrDefault(false)
+            focused = runCatching { requester.requestFocus() }.getOrDefault(false)
             attempts++
         }
         if (focused) onReturnCategoryKeyConsumed()

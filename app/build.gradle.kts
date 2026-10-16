@@ -246,6 +246,26 @@ android {
 
     buildTypes {
         release {
+            // A release built without the KBSTREAM_* variables is UNSIGNED, and
+            // AGP says nothing about it: the task still succeeds, the output is
+            // `app-release-unsigned.apk`, and a developer who then installs or
+            // hands out that file finds out at the worst possible moment. The
+            // warning is per CONFIGURATION and only when a release task is
+            // actually being asked for, so a debug build stays quiet; CI always
+            // passes the variables, so this never fires there.
+            if (!releaseSigningConfigured &&
+                gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+            ) {
+                logger.warn(
+                    "KBSTREAM: this build asks for a release variant with no " +
+                        "KBSTREAM_STORE_FILE / _STORE_PASSWORD / _KEY_ALIAS / " +
+                        "_KEY_PASSWORD in the environment, so the APK will be " +
+                        "UNSIGNED (app-release-unsigned.apk) and cannot be " +
+                        "installed over a signed one. " +
+                        "See README > Baseline profile for the debug-keystore " +
+                        "values, or export the real keystore's."
+                )
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

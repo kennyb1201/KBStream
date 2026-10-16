@@ -55,7 +55,13 @@ fun KBCard(
     shape: Shape = CardShape,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    // Timestamp of the most recent "fresh" KeyDown (repeatCount == 0).
+    // Timestamp of the most recent "fresh" KeyDown (repeatCount == 0), or 0L
+    // when no Select/Enter press is armed. The sentinel is the point: a KeyUp
+    // that arrives WITHOUT its own KeyDown - the press began before this card
+    // composed, or focus moved onto the card while the button was already down
+    // - used to be measured against this 0L, read as "held since the epoch",
+    // and fired onLongClick on a press the viewer never held. Cleared again on
+    // KeyUp, so one press yields exactly one verdict.
     var pressStartTime by remember { mutableLongStateOf(0L) }
     // Whether the current press has already fired onLongClick, so the
     // matching KeyUp can be swallowed instead of also firing onClick.
@@ -114,7 +120,9 @@ fun KBCard(
                 }
 
                 KeyEventType.KeyUp -> {
+                    if (pressStartTime == 0L) return@onPreviewKeyEvent false
                     val heldMs = System.currentTimeMillis() - pressStartTime
+                    pressStartTime = 0L
                     if (heldMs >= LONG_PRESS_THRESHOLD_MS) {
                         longPressTriggered = true
                         onLongClick()
@@ -142,6 +150,9 @@ fun KBCard(
  */
 @Composable
 fun rememberLongPressModifier(onLongClick: (() -> Unit)?): Modifier {
+    // 0L = no press armed, for the same reason [KBCard]'s own timestamp has one:
+    // a KeyUp whose KeyDown this surface never saw must not be read as a hold
+    // since the epoch, and must not fire onLongClick.
     var pressStartTime by remember { mutableLongStateOf(0L) }
 
     return Modifier.onPreviewKeyEvent { event ->
@@ -161,9 +172,10 @@ fun rememberLongPressModifier(onLongClick: (() -> Unit)?): Modifier {
             }
 
             KeyEventType.KeyUp -> {
-                if (System.currentTimeMillis() - pressStartTime >=
-                    LONG_PRESS_THRESHOLD_MS
-                ) {
+                if (pressStartTime == 0L) return@onPreviewKeyEvent false
+                val heldMs = System.currentTimeMillis() - pressStartTime
+                pressStartTime = 0L
+                if (heldMs >= LONG_PRESS_THRESHOLD_MS) {
                     onLongClick()
                     true // swallow so the surface does not also fire onClick
                 } else {

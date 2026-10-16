@@ -67,6 +67,38 @@ object Redaction {
     fun url(input: String?): String = text(input)
 
     /**
+     * A STREAM URL reduced to what a log line can be diagnosed from: its host,
+     * the shape of its path, and the file it names.
+     *
+     * [text] cannot do this job. It masks a value that follows a recognizable
+     * key, and an Xtream provider names the account in the PATH -
+     * `http://host/live/<username>/<password>/12345.ts`, and the same for
+     * `/movie/` and `/series/` - where no field name marks those segments as a
+     * credential, so [url] leaves them in place. The segments between the
+     * path's first element and the media file are masked here instead, which is
+     * exactly where such a provider puts them, while everything that makes the
+     * line useful (host, the `live`/`movie`/`series` shape, the id and the
+     * extension) is kept.
+     *
+     * A path with fewer than three segments - a typical
+     * `https://cdn.example/stream.m3u8`, or a bare host - has nothing to hide
+     * between a shape and a file, so it is returned with [text]'s own rules
+     * applied and nothing further.
+     */
+    fun streamUrl(input: String?): String {
+        val value = text(input).trim()
+        if (value.isEmpty()) return value
+        val uri = runCatching { java.net.URI(value) }.getOrNull() ?: return value
+        val path = uri.path ?: return value
+        val segments = path.trim('/').split('/')
+        if (segments.size < 3) return value
+        val masked = segments.mapIndexed { index, segment ->
+            if (index == 0 || index == segments.lastIndex) segment else MASK
+        }.joinToString("/")
+        return value.replace(path, "/$masked")
+    }
+
+    /**
      * Masks an email to its first character plus the domain — enough to tell
      * two accounts apart without naming one: `alice@example.com` →
      * `a***@example.com`. A value that is not an email is returned unchanged.

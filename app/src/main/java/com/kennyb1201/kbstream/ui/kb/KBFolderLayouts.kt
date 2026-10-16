@@ -509,8 +509,21 @@ private fun FolderHero(
         )
     } ?: return
 
-    val autoPlay = heroTrailerReady &&
+    // Both hero-trailer controls are SYNCED prefs, so the hero reads them
+    // through the sync revision rather than bare: a mute (or autoplay) flipped
+    // on the other TV has to reach a folder that is already open, not wait for
+    // the next visit. Read unconditionally - a `remember` behind `&&` is a
+    // CONDITIONAL call, and Compose's slot table is positional, so the skipped
+    // call would shift every slot after it (see [PrefsPayloadApplier.revision]).
+    val syncedRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+        .revision.collectAsStateWithLifecycle()
+    val trailerAutoPlay = remember(syncedRevision) {
         AppPreferences.getHeroTrailerAutoplay(context)
+    }
+    val trailerMuted = remember(syncedRevision) {
+        AppPreferences.getHeroTrailerMuted(context)
+    }
+    val autoPlay = heroTrailerReady && trailerAutoPlay
 
     HomeHeroArtwork(
         preview = preview,
@@ -520,7 +533,7 @@ private fun FolderHero(
         heroLogoUrl = heroLogoUrl,
         trailerKey = heroTrailerKey,
         autoPlayTrailer = autoPlay,
-        muted = AppPreferences.getHeroTrailerMuted(context),
+        muted = trailerMuted,
         heroHeight = heroComputedHeight
     )
 }
@@ -739,11 +752,21 @@ private fun FollowHomeLayout(
     // Home's exact focus pipeline: resolve on stop, the viewer's dwell, then
     // the trailer. Same setting for both heroes (Settings → Hero Trailer
     // Delay), so the two cannot drift apart.
+    //
+    // The dwell is the same synced pref as the hero's autoplay, so it is read
+    // through the revision the layout already collects rather than bare. It is
+    // deliberately NOT an effect key: the revision ticks for every change to the
+    // profile, so keying on it would restart the dwell - and cancel a trailer
+    // mid-play - because a poster size changed on another TV. A new dwell value
+    // applies to the next dwell, which is what the row promises.
+    val heroTrailerDelayMs = remember(syncRevision) {
+        AppPreferences.getHeroTrailerDelayMs(context)
+    }
     LaunchedEffect(heroItem?.id, heroItem?.type) {
         val target = heroItem ?: return@LaunchedEffect
         heroTrailerReady = false
         viewModel.resolveHero(target)
-        delay(AppPreferences.getHeroTrailerDelayMs(context))
+        delay(heroTrailerDelayMs)
         heroTrailerReady = true
     }
 
@@ -1079,19 +1102,42 @@ private fun GridLayout(
                 .filter { seen.add(kbFolderCardKey(it)) }
         }
 
+        // The poster/landscape choice is a SYNCED pref, so the grid's read goes
+        // through the sync revision: a "Landscape Posters" toggle flipped on the
+        // other TV has to reshape the posters already on screen. Every other
+        // folder layout gates on the revision; this grid read it bare
+        // (see [PrefsPayloadApplier.revision]).
+        val syncedRevision by com.kennyb1201.kbstream.data.sync.PrefsPayloadApplier
+            .revision.collectAsStateWithLifecycle()
+        val gridLandscape = remember(syncedRevision) {
+            AppPreferences.getLandscapePosters(context)
+        }
+
         // Puts the grid ON the card a return out of Detail is coming back for:
         // the card by its own key, or its recorded position for one this grid
         // cannot name. A poster the scroll left behind has not composed at all,
         // so it has no focus node until this runs; the focus itself belongs to
         // the screen, which retries while this scroll settles.
-        LaunchedEffect(returnTarget, gridItems) {
-            val target = returnTarget ?: return@LaunchedEffect
-            val index = gridItems
+        //
+        // ONE index for both halves of the return, the way the rails above do
+        // it (see [FolderRailPageHandler]'s returnIndex): the card the record
+        // NAMES, and only for a card the record cannot name the position it was
+        // pressed at. The scroll below and the cell that publishes the
+        // return-focus requester used to compute this separately - the scroll
+        // key-first, the cell an AND of position and key - so a grid that
+        // re-ordered while the viewer was in Detail scrolled to the right card
+        // and then focused NOTHING: the requester is attached by the cell this
+        // index names, and the cell the AND named was a different one (or none).
+        val gridReturnIndex = returnTarget?.let { target ->
+            gridItems
                 .indexOfFirst { kbFolderCardKey(it) == target.itemId }
                 .takeIf { it >= 0 }
                 ?: target.position.takeIf { it in gridItems.indices }
-                ?: return@LaunchedEffect
-            runCatching { gridState.scrollToItem(index) }
+        }
+        LaunchedEffect(gridReturnIndex, gridItems) {
+            gridReturnIndex?.let { index ->
+                runCatching { gridState.scrollToItem(index) }
+            }
         }
 
         when {
@@ -1137,9 +1183,7 @@ private fun GridLayout(
                         // successor's, which is the one a Hide lands on.
                         val cardRequester = remember(cardKey) { FocusRequester() }
                         focusRegistry[cardKey] = cardRequester
-                        val isReturnItem = returnTarget != null &&
-                            itemIndex == returnTarget.position &&
-                            cardKey == returnTarget.itemId
+                        val isReturnItem = itemIndex == gridReturnIndex
                         // The grid has no rail, so its record names the card and
                         // its place and nothing else (see [BrowseReturnFocus]).
                         val target = BrowseReturnTarget(
@@ -1175,7 +1219,7 @@ private fun GridLayout(
                                 artType = item.type,
                                 // Only the global setting reshapes the Grid;
                                 // the Home-rails toggle keeps it posters.
-                                landscape = AppPreferences.getLandscapePosters(context),
+                                landscape = gridLandscape,
                                 modifier = Modifier
                                     .focusRequester(cardRequester)
                                     .then(

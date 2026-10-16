@@ -43,6 +43,7 @@ import com.kennyb1201.kbstream.data.library.LocalLibraryStore
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListEntry
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBDanger
 import com.kennyb1201.kbstream.ui.theme.KBFocusGlowSmall
@@ -265,11 +266,27 @@ fun LibraryAddToListDialog(
         memberships = member
     }
 
+    // The dialog's first landing, and a VERIFIED one.
+    //
+    // Two separate faults lived here. `requestFocus()` answers FALSE for a node
+    // that is not attached rather than throwing, so `runCatching { requestFocus()
+    // }` reported success for a landing that never happened - a dialog that
+    // opened with the D-pad nowhere, which on a remote is a dialog the viewer
+    // cannot steer - and the fixed 80ms before it was a guess about when the
+    // first row composes (the rows are only assigned once the remote list fetch
+    // has returned). It is retried across frames instead, on the app's one
+    // hand-back rule (see [landFocusOn]).
+    //
+    // And it lands ONCE per dialog open: the rows arrive in two waves (local
+    // instantly, remote after) and [createList] appends another, and re-running
+    // the landing on those changes yanked the D-pad back to the top of the list
+    // mid-interaction, away from the + CREATE LIST row the viewer had just
+    // used. A landing that never succeeded leaves the flag clear, so the next
+    // arrival spends another budget instead of stranding the dialog.
+    var focusLanded by remember { mutableStateOf(false) }
     LaunchedEffect(rows) {
-        if (rows.isNotEmpty()) {
-            kotlinx.coroutines.delay(80)
-            runCatching { focusRequester.requestFocus() }
-        }
+        if (focusLanded || rows.isEmpty()) return@LaunchedEffect
+        focusLanded = landFocusOn(focusRequester)
     }
 
     fun rowKey(row: LibraryPickerRow): String = when {

@@ -57,6 +57,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayRuntimeMinutes
 import com.kennyb1201.kbstream.data.tmdb.episodeCountForSeason
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
+import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import kotlin.math.round
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -347,6 +348,38 @@ class HomeViewModel(
     var railScrollIndex: Int = 0
     var railScrollOffset: Int = 0
     var lastFocusedRailItemKey: String? = null
+
+    /**
+     * Whether Home has been composed for this ViewModel yet.
+     *
+     * This is the screen's RETURN SIGNAL, and it is deliberately not derived
+     * from [lastFocusedRailItemKey]. "No card remembered" and "a fresh entry"
+     * are two different facts, and reading one as the other was a bug: the
+     * fresh-entry landing on Continue Watching (see
+     * [continueWatchingLandsOnFreshEntry]) asks for a place the viewer did not
+     * choose, so it must not run for somebody coming back - including a return
+     * from a Detail whose card could not name itself, where the remembered key
+     * is null exactly because nothing knew how to report it.
+     *
+     * Read through [recordHomeEntry], which flips it. Home is a route in the
+     * same activity (see [railScrollIndex]), so a second composition of the
+     * screen is always a return to it - from a Detail, a KB folder, Search or
+     * Settings - and never a fresh entry.
+     */
+    private var homeEntered = false
+
+    /**
+     * Records that Home is composing, and answers whether this is its FIRST
+     * composition for this ViewModel: true = a fresh entry, false = a return.
+     *
+     * The answer is read once per Home composition and held for its life (see
+     * the screen's `isFreshEntry`), so a recomposition cannot change it.
+     */
+    fun recordHomeEntry(): Boolean {
+        val fresh = !homeEntered
+        homeEntered = true
+        return fresh
+    }
 
     private val _rails =
         MutableStateFlow<List<Rail>>(
@@ -3788,6 +3821,47 @@ Log.d(
     private fun previousSimklUpNextItems(): List<UpNextItem> =
         _upNext.value.filter { it.historyRowId == null }
 
+    /**
+     * A STORED episode stream id, re-rooted under the root this show's verified
+     * TMDB record says the add-ons know it by (see
+     * [rerootedEpisodeStreamId] for why the rail may not hand a history row's
+     * own id on as-is).
+     *
+     * [tmdbId] is the show's TMDB id, which the card's own resolution has
+     * already resolved - it is what filled in the episode titles, ratings and
+     * stills - so the lookup inside this is a memory- or disk-cache read in
+     * every ordinary case, and a network round trip only on a cold first use of
+     * a title nothing has resolved yet. The type is "series" because only an id
+     * that parses as a `season:episode` request reaches the lookup at all.
+     *
+     * Nothing is rewritten when the resolution cannot answer (no API key, an
+     * offline device, a show TMDB has no record for): [TmdbRepository.streamRootIdFor]
+     * answers the stored root there, and the id the caller already had stands -
+     * the same rule every other reader of that resolver follows.
+     */
+    private suspend fun rerootStoredStreamId(
+        storedStreamId: String?,
+        tmdbId: Int?
+    ): String? {
+        val stored =
+            storedStreamId
+                ?.takeIf { it.isNotBlank() }
+                ?: return storedStreamId
+
+        val storedRoot =
+            EpisodeMatch.seriesRootFrom(stored)
+                ?: return storedStreamId
+
+        val resolvedRoot =
+            tmdbRepository.streamRootIdFor(
+                routeId = storedRoot,
+                tmdbId = tmdbId,
+                type = "series"
+            )
+
+        return rerootedEpisodeStreamId(stored, resolvedRoot)
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private fun observeUpNext() {
 
@@ -4143,10 +4217,17 @@ Log.d(
 
         // A stream id keys an episode; the row's own is kept only when the row
         // named one, otherwise the resolved episode's stream opens the right
-        // thing.
+        // thing. A stored id is re-rooted first - it is the id this card's play
+        // press names the add-on request by, and the one path that press can
+        // take ("Play Manually" from the rail's long-press menu) never opens
+        // the detail screen, so nothing downstream of here re-reads it (see
+        // [rerootStoredStreamId]).
         val cardEpisodeStreamId =
-            entry.episodeStreamId
-                .takeIf { namedRowEpisode != null }
+            rerootStoredStreamId(
+                entry.episodeStreamId
+                    .takeIf { namedRowEpisode != null },
+                capturedTmdbId
+            )
                 ?: resolvedSeriesTarget?.streamId
 
         UpNextItem(
@@ -6083,8 +6164,16 @@ private suspend fun resolveSeriesTargetFromSharedWatchedState(
                     matchedResumeEpisode
                         .episodeNumber,
 
+                // The row's own id, re-rooted: a resume filed before the root
+                // was verified carries the catalog's instead of TMDB's, and
+                // this is the id the card hands the player and the streams
+                // picker (see [rerootStoredStreamId]). The listing's own id is
+                // the fallback, and it is already rooted in the verified id.
                 streamId =
-                    resume.episodeStreamId
+                    rerootStoredStreamId(
+                        resume.episodeStreamId,
+                        tmdbId
+                    )
                         ?: matchedResumeEpisode
                             .streamId,
 

@@ -2,6 +2,8 @@ package com.kennyb1201.kbstream.ui.player
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -17,6 +19,17 @@ import java.nio.file.Files
  * that are missing or misplaced, on a television, with no error anywhere.
  */
 class AssSubtitleSourceTest {
+
+    /**
+     * A sidecar carrying every section libass insists on and every entry the
+     * repair would insert, ending in exactly one newline: byte-for-byte what
+     * `normalize` produces, which is the only input the untouched path is
+     * allowed to hand straight back.
+     */
+    private val completeScript = "[Script Info]\nScriptType: v4.00+\n\n[V4+ Styles]\n" +
+        "Format: Name, Fontname, Fontsize\nStyle: Default,Arial,20\n\n[Events]\n" +
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n" +
+        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hi\n"
 
     // --- Detection ---------------------------------------------------------
 
@@ -166,6 +179,33 @@ class AssSubtitleSourceTest {
         assertFalse(out.contains("\uFEFF"))
         assertFalse(out.contains("\r"))
         assertTrue(out.endsWith("\n"))
+    }
+
+    @Test
+    fun `a script that needs no repair is handed back untouched`() {
+        // The repair path is an allocation decision as well as a formatting
+        // one: rebuilding a complete script copies the whole file, and this
+        // runs per attach, on the frame the overlay comes up. So a script with
+        // nothing to fix must come back as the caller's own object.
+        assertSame(completeScript, AssSubtitleSource.normalize(completeScript))
+    }
+
+    @Test
+    fun `a script that does need a repair is rebuilt`() {
+        val out = AssSubtitleSource.normalize(completeScript.trimEnd('\n'))
+
+        assertNotSame(completeScript, out)
+        assertTrue("the missing trailing newline is added", out.endsWith("Hi\n"))
+    }
+
+    @Test
+    fun `a trailing blank line is still collapsed`() {
+        // The untouched path must not skip the trailing-newline rule: a file
+        // that ends with blank lines still comes back with exactly one.
+        val out = AssSubtitleSource.normalize(completeScript + "\n")
+
+        assertTrue(out.endsWith("Hi\n"))
+        assertFalse(out.endsWith("Hi\n\n"))
     }
 
     // --- Fonts -------------------------------------------------------------

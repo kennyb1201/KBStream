@@ -127,11 +127,16 @@ jobs:
       # and jitpack.io) into an empty Gradle home on every run; restoring
       # ~/.gradle/caches skips that, and nothing else.
       #
-      # What is NOT cached is the point: app/build is never restored, so
+      # What is NOT cached is the point: app/build is never restored, and
+      # neither is ~/.gradle/caches/build-cache-1. That second part matters
+      # because org.gradle.caching is TRUE in gradle.properties - this comment
+      # used to claim the property was off, which it never was. The build
+      # cache's own directory is deliberately left out of the `path:` list
+      # below, so every run starts with an EMPTY one and
       # :app:compileDebugKotlin, :app:compileReleaseKotlin, dexing and R8 all
-      # execute for real on every single run, and org.gradle.caching is left
-      # off so the build cache cannot answer a task with a previously-produced
-      # output either. "Faster" here must never mean "compiled less".
+      # execute for real on every single run. Within one run a later step may
+      # still reuse an earlier step's own output, which is what an incremental
+      # build does anyway. "Faster" here must never mean "compiled less".
       #
       # The last two paths follow Gradle's own layout: since Gradle 9 the
       # per-version cache is caches/<gradle version>/ (the exploded AARs live at
@@ -715,34 +720,62 @@ jobs:
       - name: Verify 16 KB page alignment of native libraries
         run: |
           set -euo pipefail
-          APK="$(ls app/build/outputs/apk/release/*.apk | head -n1)"
+          fail=0
+          checked=0
+          # One scan, both artifacts. $1 is the extraction root and $2 the path
+          # PREFIX that root's entries carry: an APK holds `lib/<abi>/*.so` at
+          # the top level, an AAB holds the same tree under `base/`.
+          scan() {
+            local root="$1" prefix="$2" abi so align
+            for abi in arm64-v8a x86_64; do
+              [ -d "$root/${prefix}lib/$abi" ] || continue
+              while IFS= read -r so; do
+                checked=$((checked + 1))
+                while IFS= read -r align; do
+                  case "$align" in
+                    # Positively-detected 4 KB (or smaller) alignment is the only
+                    # failure, so a parsing quirk cannot spuriously block a release.
+                    0x1000|0x800|0x400|0x200)
+                      echo "::error file=$so::LOAD segment not 16 KB aligned ($align)"
+                      fail=1
+                      ;;
+                  esac
+                done < <(readelf -lW "$so" | awk '/^[[:space:]]*LOAD/{print $NF}')
+              done < <(find "$root/${prefix}lib/$abi" -name '*.so' | sort)
+            done
+          }
+          # The SIGNED apk, explicitly. `*.apk` is not one file: Gradle emits
+          # app-release-unsigned.apk beside app-release.apk, and because '-'
+          # sorts before '.', `head -n1` picked the UNSIGNED one - so this gate
+          # could come up green on a run whose shipped APK it never opened.
+          # The metadata step below filters unsigned output the same way.
+          APK="$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -n1)"
+          if [ -z "$APK" ]; then
+            echo "::error::no signed release APK found; this check would be vacuous"
+            exit 1
+          fi
           echo "Checking native libraries in $APK"
           rm -rf /tmp/apk-libs && mkdir -p /tmp/apk-libs
           unzip -o -q "$APK" 'lib/*' -d /tmp/apk-libs
-          fail=0
-          checked=0
-          for abi in arm64-v8a x86_64; do
-            dir="/tmp/apk-libs/lib/$abi"
-            [ -d "$dir" ] || continue
-            while IFS= read -r so; do
-              checked=$((checked + 1))
-              while IFS= read -r align; do
-                case "$align" in
-                  # Positively-detected 4 KB (or smaller) alignment is the only
-                  # failure, so a parsing quirk cannot spuriously block a release.
-                  0x1000|0x800|0x400|0x200)
-                    echo "::error file=$so::LOAD segment not 16 KB aligned ($align)"
-                    fail=1
-                    ;;
-                esac
-              done < <(readelf -lW "$so" | awk '/^[[:space:]]*LOAD/{print $NF}')
-            done < <(find "$dir" -name '*.so' | sort)
-          done
-          # A vacuous pass is worse than a failure: if the APK layout moved and
-          # nothing was checked, this gate would silently stop guarding the
+          scan /tmp/apk-libs ""
+          # And the PLAY artifact, which this gate never looked at: an AAB is a
+          # zip of base/lib/<abi>/*.so, and Play is stricter than the APK
+          # path - an unaligned library there is a rejected upload, and it is
+          # the only artifact that reaches Play at all.
+          AAB="$(ls app/build/outputs/bundle/release/*.aab 2>/dev/null | head -n1 || true)"
+          if [ -n "$AAB" ]; then
+            echo "Checking native libraries in $AAB"
+            rm -rf /tmp/aab-libs && mkdir -p /tmp/aab-libs
+            unzip -o -q "$AAB" 'base/lib/*' -d /tmp/aab-libs
+            scan /tmp/aab-libs "base/"
+          else
+            echo "No release AAB in the outputs; the Play artifact is not checked in this run."
+          fi
+          # A vacuous pass is worse than a failure: if the archive layout moved
+          # and nothing was checked, this gate would silently stop guarding the
           # release.
           if [ "$checked" -eq 0 ]; then
-            echo "::error::no 64-bit native libraries found in $APK; the layout changed and this check would be vacuous"
+            echo "::error::no 64-bit native libraries found; the layout changed and this check would be vacuous"
             exit 1
           fi
           if [ "$fail" -ne 0 ]; then
@@ -774,6 +807,44 @@ jobs:
         with:
           name: kbstream-debug
           path: app/build/outputs/apk/debug/*.apk
+
+      # The Play build is a FLAG, not a flavor: `-PplayBuild` overlays
+      # app/src/play/AndroidManifest.xml and flips BuildConfig.PLAY_BUILD, and
+      # NOTHING in CI ever passed it - so the overlay and every Play-only code
+      # path could rot in a tree where all the gates stayed green, and the first
+      # place either was exercised was the Play upload. This assembles the debug
+      # variant with the flag and proves the overlay actually APPLIED: the
+      # merged manifest must no longer carry REQUEST_INSTALL_PACKAGES, the
+      # sensitive permission a Play listing is rejected for.
+      #
+      # After the debug artifact is uploaded, because this leaves the Play
+      # variant in app/build/outputs/apk/debug/. The manifest is taken by
+      # MTIME: this is the last debug build of the run, so whichever merged
+      # manifest is newest is the one the overlay was merged into - a path
+      # guess would be wrong the moment AGP moves the directory.
+      - name: Build Play-overlay debug APK and verify the overlay applied
+        run: |
+          set -euo pipefail
+          ./gradlew assembleDebug -PplayBuild --stacktrace \
+            --max-workers="$GRADLE_MAX_WORKERS" \
+            -Dorg.gradle.jvmargs="$GRADLE_DAEMON_JVMARGS"
+          # `*/debug/*` rather than `*debug*`: the unit-test manifest
+          # (merged_manifest/debugUnitTest/...) is merged from the same app
+          # manifest and would otherwise be a candidate.
+          MERGED="$(find app/build/intermediates -path '*merged_manifest*' \
+            -name AndroidManifest.xml -path '*/debug/*' -printf '%T@ %p\n' \
+            | sort -n | tail -n1 | cut -d' ' -f2-)"
+          if [ -z "$MERGED" ]; then
+            echo "::error::the Play build produced no merged manifest to check"
+            exit 1
+          fi
+          echo "Checking $MERGED"
+          if grep -q 'REQUEST_INSTALL_PACKAGES' "$MERGED"; then
+            echo "::error::$MERGED still declares REQUEST_INSTALL_PACKAGES, so -PplayBuild did not overlay the Play manifest"
+            exit 1
+          fi
+        env:
+          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=1g"
 
       - name: Upload signed release APK
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -920,21 +991,33 @@ jobs:
           echo "{\"versionCode\": ${GITHUB_RUN_NUMBER}, \"versionName\": \"${VERSION_NAME}\", \"sha256\": \"$SHA\", \"gitSha\": \"$(git rev-parse HEAD)\"}" > metadata.json
           cat metadata.json
 
-      - name: Delete in-progress release tag
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ github.token }}
-
       - name: Publish latest release (self-update feed)
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         run: |
+          set -euo pipefail
+          # Delete, re-create and upload in ONE step. As separate steps they
+          # left the published feed GONE for the whole window between the
+          # delete and the create - and this workflow cancels in-progress runs
+          # for the same ref (`cancel-in-progress: true`), so a second dispatch
+          # or tag push could cancel a run inside that window and leave every
+          # install polling a release that no longer exists until some later
+          # run happened to publish one. Inside one shell the window is a
+          # couple of milliseconds of `gh` calls instead of a step boundary.
+          #
+          # The SIGNED apk, explicitly: the `*.apk` glob uploaded BOTH outputs,
+          # so a release could carry an unsigned APK beside the signed one, and
+          # what the app's updater downloads is whichever asset it asks for by
+          # name. Same filter the metadata step uses.
+          APK="$(ls app/build/outputs/apk/release/*.apk | grep -v unsigned | head -n1)"
+          if [ -z "$APK" ]; then
+            echo "::error::no signed release APK to publish"
+            exit 1
+          fi
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
           gh release create latest \
             --title "KBStream ${VERSION_NAME}" \
             --notes-file /tmp/release-notes.md \
             --latest
-          gh release upload latest \
-            app/build/outputs/apk/release/*.apk \
-            metadata.json
+          gh release upload latest "$APK" metadata.json
         env:
           GH_TOKEN: ${{ github.token }}

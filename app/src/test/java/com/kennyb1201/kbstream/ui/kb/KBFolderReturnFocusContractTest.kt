@@ -140,22 +140,28 @@ class KBFolderReturnFocusContractTest {
                 layouts.contains("runCatching { listState.scrollToItem(index) }")
         )
         assertTrue(
-            "the grid does the same on its own state",
-            layouts.contains("LaunchedEffect(returnTarget, gridItems) {") &&
-                layouts.contains("runCatching { gridState.scrollToItem(index) }")
+            "the grid does the same on its own state - through ONE index, the " +
+                "same one the cell that publishes the requester reads: computed " +
+                "separately (as the scroll and the cell used to) the two could " +
+                "name different cards, so a grid that re-ordered under the " +
+                "viewer scrolled onto the right one and then focused nothing",
+            layouts.contains("val gridReturnIndex = returnTarget?.let { target ->") &&
+                layouts.contains("LaunchedEffect(gridReturnIndex, gridItems) {") &&
+                layouts.contains("runCatching { gridState.scrollToItem(index) }") &&
+                layouts.contains("val isReturnItem = itemIndex == gridReturnIndex")
         )
     }
 
     @Test
     fun `the card a return is coming back for is the one attached to the requester`() {
         assertTrue(
-            "one card, by key and position",
-            layouts.contains("isReturnItem = itemIndex == returnIndex") ||
-                layouts.contains(
-                    "val isReturnItem = returnTarget != null &&\n" +
-                        "                            itemIndex == returnTarget.position &&\n" +
-                        "                            cardKey == returnTarget.itemId"
-                )
+            "one card, named by ONE index that resolves the key first and the " +
+                "position only as the fallback - the grid used to mark its cell " +
+                "with an AND of position and key, which is a different cell (or " +
+                "none) the moment the grid changes shape",
+            layouts.contains("isReturnItem = itemIndex == returnIndex") &&
+                layouts.contains("val isReturnItem = itemIndex == gridReturnIndex") &&
+                !layouts.contains("itemIndex == returnTarget.position")
         )
         assertTrue(
             "and it carries the page's requester alongside its own",

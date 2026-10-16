@@ -37,6 +37,27 @@ internal interface OutboxStore {
 
     /** Drop EVERY stored row (sign-out: nothing may survive into another account). */
     fun clear()
+
+    /**
+     * ONE ordered, awaited durable write for a DELETE: the rows for
+     * [removedIds] go away and [items] land in their place, in that order,
+     * before this returns.
+     *
+     * [save] and [delete] are fire-and-forget on purpose - an ordinary queued
+     * write that is lost only costs a re-push - but a delete has no second
+     * chance: the local row is already gone, so the tombstone IS the repair.
+     * The two calls above are also issued as separate launches on a pooled
+     * dispatcher, which makes them unordered against each other: a delete whose
+     * [delete] landed after its [save] dropped the tombstone it had just
+     * stored, and one that lost the process before either landed left the
+     * superseded row behind for the next startup to hydrate and flush - which
+     * is how a deleted title comes back on the next pull. So a delete waits for
+     * its write, and the drop and the tombstone share one lane.
+     *
+     * Returns whether the write is known to have landed. This is a user-visible
+     * delete, so a false is a real failure, logged where this is implemented.
+     */
+    fun replaceNow(removedIds: Collection<String>, items: List<OutboxItem>): Boolean
 }
 
 /**
@@ -121,6 +142,11 @@ internal class OutboxQueue(
      * Matched with the same profile-scope rule the sync layer uses, so a
      * sibling profile's pending writes are never touched.
      *
+     * A wipe that publishes tombstones uses [replaceProfileScoped] instead:
+     * dropping alone leaves the durable row for the next startup to hydrate and
+     * flush. This is the drop-only form, for a caller with nothing to write in
+     * its place.
+     *
      * Returns how many pending writes went.
      */
     fun removeProfileScoped(
@@ -147,6 +173,68 @@ internal class OutboxQueue(
             onChange(rows.size)
         }
         return removed
+    }
+
+    /**
+     * The tombstone/delete form of [removeKeys] + [put]: the pending writes for
+     * [keys] go, [items] take their place, and the two reach the durable table
+     * as ONE ordered write the caller waits for (see [OutboxStore.replaceNow]).
+     *
+     * Used by every path that turns a local delete into a cloud tombstone, so
+     * the pair can no longer be reordered against each other or lost in the
+     * window between the local delete and the write that repairs it.
+     */
+    fun replaceKeys(
+        table: String,
+        keyColumn: String,
+        keys: Collection<String>,
+        items: List<OutboxItem>
+    ): Boolean {
+        val dropped = mutableListOf<String>()
+        keys.forEach { key ->
+            val rowId = id(table, keyColumn, key)
+            if (rows.remove(rowId) != null) dropped += rowId
+        }
+        return replace(dropped, items)
+    }
+
+    /**
+     * [replaceKeys] for a profile-wide wipe (the Settings "Clear Continue
+     * Watching" reset): every pending write in [table]/[keyColumn] belonging to
+     * [profileId] goes, [items] take their place, and the pair is one awaited
+     * write. Matched with the same profile-scope rule [removeProfileScoped]
+     * uses, so a sibling profile's pending writes are never touched.
+     */
+    fun replaceProfileScoped(
+        table: String,
+        keyColumn: String,
+        profileId: String?,
+        items: List<OutboxItem>
+    ): Boolean {
+        val dropped = mutableListOf<String>()
+        rows.values.forEach { row ->
+            if (
+                row.table == table &&
+                row.keyColumn == keyColumn &&
+                SyncKeys.matchesProfile(row.key, profileId) &&
+                rows.remove(id(row), row)
+            ) {
+                dropped += id(row)
+            }
+        }
+        return replace(dropped, items)
+    }
+
+    /**
+     * Installs [items] in memory and hands [removedIds] and [items] to the
+     * store as one awaited write - never as a [save]/[delete] pair. True when
+     * the write landed, which is also the answer when there is no store to
+     * write to.
+     */
+    private fun replace(removedIds: List<String>, items: List<OutboxItem>): Boolean {
+        items.forEach { row -> rows[id(row)] = row }
+        onChange(rows.size)
+        return store?.replaceNow(removedIds, items) ?: true
     }
 
     /**

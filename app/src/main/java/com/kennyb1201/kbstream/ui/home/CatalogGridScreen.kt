@@ -162,6 +162,16 @@ fun CatalogGridScreen(
     val tileHeight =
         if (landscape) landscapeTileHeight(posterSize.width) else posterSize.height
 
+    // HOISTED above the loading branch, not declared beside the grid. A lazy
+    // list state that is created with the grid is created on the first frame
+    // that has content, and it is disposed again on any frame that does not -
+    // so the un-seeded frame this screen opens with (and any transient one
+    // after it) dropped the scroll position with the state that carried it, and
+    // the grid came back at the top. Created here it belongs to the screen for
+    // as long as the screen is composed, which is what the grid's own scroll is
+    // supposed to survive.
+    val gridState = rememberLazyGridState()
+
     if (openHeader == null || lazyItems == null) {
         // Grid not seeded yet. On a fresh open the effect above seeds it
         // within a frame; this is just that one loading frame (plus a
@@ -193,8 +203,6 @@ fun CatalogGridScreen(
         }
         return
     }
-
-    val gridState = rememberLazyGridState()
 
     val refreshState = lazyItems.loadState.refresh
     val appendState = lazyItems.loadState.append

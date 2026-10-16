@@ -5,6 +5,7 @@ import android.os.Looper
 import android.util.Log
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.player.StreamUserAgent
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import okhttp3.Call
@@ -136,7 +137,15 @@ internal fun okHttpPrefetchTransport(client: OkHttpClient): PrefetchTransport {
                     object : Callback {
                         override fun onFailure(call: Call, e: IOException) {
                             inFlight.remove(call)
-                            Log.d(TAG, "prefetch missed $url: ${e.message}")
+                            // Redacted on both counts: a LAN/IPTV stream URL is
+                            // the shape [Redaction.streamUrl] exists for (an
+                            // Xtream provider names the account in its path),
+                            // and OkHttp's own message quotes that URL back.
+                            Log.d(
+                                TAG,
+                                "prefetch missed ${Redaction.streamUrl(url)}: " +
+                                    Redaction.text(e.message)
+                            )
                             onBody(null)
                         }
 
@@ -147,7 +156,7 @@ internal fun okHttpPrefetchTransport(client: OkHttpClient): PrefetchTransport {
                     }
                 )
             }.onFailure {
-                Log.d(TAG, "prefetch failed: ${it.message}")
+                Log.d(TAG, "prefetch failed: ${Redaction.text(it.message)}")
                 onBody(null)
             }
         }

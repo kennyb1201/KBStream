@@ -161,14 +161,26 @@ internal object PlaybackHistoryWriter {
                             Log.w(TAG, "could not delete the superseded resume rows for ${row.id}", e)
                         }
                     }
-                    // Only the rows the launcher can actually publish, not the
-                    // whole table: a save happens on every position tick, and
-                    // getAll() dragged every completed row back with it.
-                    TvLauncherPublisher.sync(context, dao.getResumeRowsForLauncher())
                 }
             }.onFailure { e ->
                 Log.w(TAG, "could not write watch history for ${entry.id}", e)
             }.isSuccess
+
+            // The launcher republish is NOT part of that verdict. It mirrors a
+            // table this save has already written, so a failure here is a
+            // missed Watch Next row, not a lost resume point - and folded into
+            // the same runCatching it reported the SAVE as failed, which sent
+            // callers down their failure path for a row that had landed.
+            // Best-effort and cancellable, exactly like the redirect branch
+            // below. Only the rows the launcher can actually publish, not the
+            // whole table: a save happens on every position tick, and getAll()
+            // dragged every completed row back with it.
+            runCatchingCancellable {
+                WatchHistoryDatabase.withScopedDao(context) { dao ->
+                    TvLauncherPublisher.sync(context, dao.getResumeRowsForLauncher())
+                }
+            }
+
             return WriteResult(ok = ok, profileId = sessionProfileId)
         }
 
@@ -224,7 +236,17 @@ internal object PlaybackHistoryWriter {
         // The TV launcher mirrors the ACTIVE profile, never the departed
         // session: republish the active profile's own rows (best-effort, and
         // deliberately outside the success verdict above).
-        runCatching {
+        //
+        // Cancellable, though, and this is the one place in the app that had
+        // the block on plain `runCatching` alone: it SUSPENDS (the scoped dao
+        // and the publisher both do), so a cancellation arriving mid-save - a
+        // profile switch, a player teardown - was captured as a launcher-sync
+        // FAILURE, logged, and the coroutine then carried on to the `return`
+        // below reporting a save it never got to finish. Best-effort means a
+        // failed publish does not fail the save (see the sibling
+        // WatchedStatusRepository.publishLauncherWatchNext, which is this same
+        // block); it does not mean a cancellation is a fault.
+        runCatchingCancellable {
             WatchHistoryDatabase.withScopedDao(context) { dao ->
                 TvLauncherPublisher.sync(context, dao.getResumeRowsForLauncher())
             }

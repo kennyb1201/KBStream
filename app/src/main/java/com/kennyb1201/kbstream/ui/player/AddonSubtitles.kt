@@ -285,11 +285,19 @@ class AddonSubtitleController(
             // runCatchingCancellable keeps a cancellation a cancellation.)
             val resolved = supervisorScope {
                 val permits = Semaphore(BULK_DOWNLOAD_PARALLELISM)
+                // ONE abort scope for this batch, and a new one for the next
+                // attach (see [AddonSubtitleSource.BatchAbort]). It is what the
+                // process-wide dead-host memo cannot be: the memo is written
+                // when a failure LANDS, and by then this batch's other offers
+                // to that host are already in flight, each holding one of the
+                // four permits for its own full timeout while the batch's
+                // working hosts queue behind them.
+                val batch = AddonSubtitleSource.BatchAbort()
                 offers.map { offer ->
                     async {
                         permits.withPermit {
                             runCatchingCancellable {
-                                val uri = downloadCache[offer.url] ?: download(offer.url)
+                                val uri = downloadCache[offer.url] ?: download(offer.url, batch)
                                 uri?.let {
                                     ResolvedSubtitle(
                                         url = offer.url,
@@ -386,9 +394,11 @@ class AddonSubtitleController(
      * download of the same track, so every use re-downloaded it AND left
      * another file behind, forever.
      */
-    private fun download(url: String): Uri? =
+    private fun download(url: String, batch: AddonSubtitleSource.BatchAbort?): Uri? =
         downloadCache[url]
-            ?: AddonSubtitleSource.download(appContext, url)?.also { downloadCache[url] = it }
+            ?: AddonSubtitleSource.download(appContext, url, batch)?.also {
+                downloadCache[url] = it
+            }
 }
 
 /**
@@ -437,6 +447,53 @@ internal object AddonSubtitleSource {
      */
     private val deadHosts = ConcurrentHashMap<String, Long>()
     private const val DEAD_HOST_TTL_MS = 10 * 60 * 1000L
+
+    /**
+     * One fetch's abort scope: the hosts that have already failed while THIS
+     * batch of offers was being fetched, and the calls that batch still has in
+     * flight to each of them.
+     *
+     * The memo above is process-wide and time-based, and it cannot do this job.
+     * It stops a dead host being re-attempted at all, but it is written when a
+     * failure LANDS - and a batch starts its offers together, so by the time the
+     * first one fails the batch's other offers to that host are already out,
+     * each holding one of [BULK_DOWNLOAD_PARALLELISM]'s permits for its own
+     * timeout. That is the field shape: six working tracks waiting while a host
+     * that accepts the connection and never answers is asked once per track. A
+     * batch-scoped scope can ABORT, because the first host-level failure cancels
+     * the calls this batch still has to that host, and the queued offers behind
+     * them are turned away before a request is even built.
+     *
+     * The identity is the BATCH, stated by construction: one instance per
+     * attach, owned by that attach, garbage-collected with it. A new attach is a
+     * new batch, so nothing carries over - the process-wide memo, with its TTL,
+     * stays the only thing that outlives a fetch.
+     */
+    internal class BatchAbort {
+        private val deadHosts = ConcurrentHashMap.newKeySet<String>()
+        private val inFlight = ConcurrentHashMap<String, MutableSet<okhttp3.Call>>()
+
+        /** Whether this batch has already seen [host] fail at connection level. */
+        internal fun isDead(host: String): Boolean = host in deadHosts
+
+        /** The calls this batch currently has out to [host], to register one in. */
+        internal fun inFlightFor(host: String): MutableSet<okhttp3.Call> =
+            inFlight.computeIfAbsent(host) { ConcurrentHashMap.newKeySet() }
+
+        /**
+         * [host] failed at connection level in this batch: nothing else this
+         * batch has out to it can succeed, so every other call is cancelled and
+         * the host is turned away for the rest of the batch. Cancelling an
+         * already-finished call is a no-op, so the caller does not have to
+         * exclude its own.
+         */
+        internal fun markDead(host: String) {
+            deadHosts += host
+            inFlightFor(host).forEach { call ->
+                if (!call.isCanceled()) call.cancel()
+            }
+        }
+    }
 
     private val repository = AddonRepository.getInstance()
 
@@ -508,7 +565,16 @@ internal object AddonSubtitleSource {
      * the clock, so a second use of the same track reuses one file instead of
      * downloading it again and leaving another behind.
      */
-    fun download(context: Context, url: String): Uri? {
+    fun download(
+        context: Context,
+        url: String,
+        /**
+         * The abort scope of the batch this download belongs to, or null for a
+         * one-off download (the pickers' "use this track" tap), where there is
+         * no batch to abort and the process-wide memo is the only guard.
+         */
+        batch: BatchAbort? = null
+    ): Uri? {
         val extension = url
             .substringBefore('?')
             .substringAfterLast('.', missingDelimiterValue = "")
@@ -529,6 +595,14 @@ internal object AddonSubtitleSource {
             val requestHost = request.url.host
             host = requestHost
 
+            // This batch's own abort, before a connection is even opened: a host
+            // that has already failed once while these offers were being
+            // fetched is not worth a second one (see [BatchAbort]).
+            if (batch?.isDead(requestHost) == true) {
+                Log.d(TAG, "Aborted subtitle host for this batch: $requestHost")
+                return null
+            }
+
             // One refused host used to be re-attempted once per track in a
             // batch. Skip it instead, until the memo expires.
             deadHosts[requestHost]?.let { failedAt ->
@@ -540,14 +614,24 @@ internal object AddonSubtitleSource {
                 deadHosts.remove(requestHost)
             }
 
-            downloadClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return null
-                val body = response.body ?: return null
-                val file = DiskSweep.targetSubtitleFile(context.applicationContext, url, extension)
-                file.outputStream().use { out ->
-                    body.byteStream().copyTo(out)
+            // Registered while it runs, so this batch can cancel it the moment
+            // its host fails (see [BatchAbort]).
+            val call = downloadClient.newCall(request)
+            val inFlight = batch?.inFlightFor(requestHost)
+            inFlight?.add(call)
+            try {
+                call.execute().use { response ->
+                    if (!response.isSuccessful) return null
+                    val body = response.body ?: return null
+                    val file =
+                        DiskSweep.targetSubtitleFile(context.applicationContext, url, extension)
+                    file.outputStream().use { out ->
+                        body.byteStream().copyTo(out)
+                    }
+                    Uri.fromFile(file)
                 }
-                Uri.fromFile(file)
+            } finally {
+                inFlight?.remove(call)
             }
         } catch (e: Exception) {
             // Only a HOST-level failure blackholes the host: one that refused,
@@ -558,6 +642,10 @@ internal object AddonSubtitleSource {
             val failedHost = host
             if (failedHost != null && isConnectionFailure(e)) {
                 deadHosts[failedHost] = SystemClock.elapsedRealtime()
+                // And abort the rest of THIS batch's offers to it: the calls
+                // already out give their permits back now, instead of one full
+                // read timeout from now.
+                batch?.markDead(failedHost)
             }
             Log.w(TAG, "Subtitle download failed: $url", e)
             null

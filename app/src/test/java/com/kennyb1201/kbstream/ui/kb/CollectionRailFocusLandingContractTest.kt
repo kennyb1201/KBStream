@@ -175,10 +175,12 @@ class CollectionRailFocusLandingContractTest {
             rail.contains("onFolderFocused?.invoke(folder)")
         )
         assertTrue(
-            "and the tile's own requester is reported with it: Home keeps the " +
-                "requester of the card focus is ON, and a tile's requester is " +
-                "made inside this row, where only the rail can see it",
-            rail.contains("onFocusedCardRequester?.invoke(requester)")
+            "and the tile's own requester is reported with it, under the tile's " +
+                "key: Home keeps the requester of the card focus is ON, and a " +
+                "tile's requester is made inside this row, where only the rail " +
+                "can see it",
+            rail.contains("onFocusedCard?.invoke(cardKey, requester)") &&
+                rail.contains("val cardKey = COLLECTION_CARD_KEY_PREFIX + folderId")
         )
         assertTrue(
             "and the first-rail up hook goes with it",

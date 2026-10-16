@@ -178,7 +178,7 @@ object SupabaseSync {
     // Sentry capture instead of a dead app. Behavior is unchanged when
     // everything works.
     private val uncaughtHandler = CoroutineExceptionHandler { _, throwable ->
-        Log.e(TAG, "sync task failed hard", throwable)
+        Log.e(TAG, "sync task failed hard", Redaction.throwable(throwable))
         com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
             throwable, mapOf("source" to "supabase_sync_scope")
         )
@@ -298,13 +298,21 @@ object SupabaseSync {
                 if (status is SessionStatus.Authenticated) {
                     val ctx = appContextRef?.get() ?: return@collect
                     runCatchingCancellable { persistSessionFromClient(ctx) }
-                        .onFailure { Log.w(TAG, "session persist failed", it) }
+                        .onFailure {
+                            // Redacted: a supabase-kt exception carries the
+                            // request URL, and the auth URL carries nothing
+                            // secret - but the sign-in/sign-up bodies it also
+                            // quotes do (see [Redaction.throwable]).
+                            Log.w(TAG, "session persist failed", Redaction.throwable(it))
+                        }
                     // The cloud half of the one-time cross-profile poison
                     // sweep needs a session; the ProfileManager.init call
                     // usually runs before auth restores, so retry here on
                     // every Authenticated event (flag-guarded → once).
                     runCatching { runOneTimePoisonSweep(ctx) }
-                        .onFailure { Log.w(TAG, "poison sweep trigger failed", it) }
+                        .onFailure {
+                            Log.w(TAG, "poison sweep trigger failed", Redaction.throwable(it))
+                        }
                 }
             }
         }
@@ -421,7 +429,7 @@ object SupabaseSync {
                 if (e is CancellationException) throw e
                 // Any unexpected error path: keep the saved token — the
                 // next launch can still restore from it.
-                Log.e(TAG, "restoreSession failed (token kept)", e)
+                Log.e(TAG, "restoreSession failed (token kept)", Redaction.throwable(e))
                 _authState.value = AuthState.SignedOut
             } catch (t: Throwable) {
                 if (t is CancellationException) throw t
@@ -429,7 +437,7 @@ object SupabaseSync {
                 // release build) are NOT Exceptions — letting one escape this
                 // launch kills the process at every cold start on signed-in
                 // devices. Swallow to the crash reporter and mark signed out.
-                Log.e(TAG, "restoreSession crashed (token kept)", t)
+                Log.e(TAG, "restoreSession crashed (token kept)", Redaction.throwable(t))
                 com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
                     t, mapOf("source" to "restore_session")
                 )
@@ -486,7 +494,7 @@ object SupabaseSync {
                 ensureBackgroundPull(context)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.e(TAG, "signIn failed", e)
+                Log.e(TAG, "signIn failed", Redaction.throwable(e))
                 _authState.value =
                     AuthState.Error(Redaction.text(e.message).ifBlank { "Sign-in failed" })
             }
@@ -527,7 +535,7 @@ object SupabaseSync {
                 pushAll(context)
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.e(TAG, "signUp failed", e)
+                Log.e(TAG, "signUp failed", Redaction.throwable(e))
                 _authState.value =
                     AuthState.Error(Redaction.text(e.message).ifBlank { "Sign-up failed" })
             }
@@ -663,6 +671,35 @@ object SupabaseSync {
                     .onFailure { Log.w(TAG, "outbox clear failed: ${Redaction.text(it.message)}") }
             }
         }
+
+        /**
+         * The delete form of [save]/[delete] - see [OutboxStore.replaceNow] for
+         * why a tombstone cannot ride the fire-and-forget pair above.
+         *
+         * Blocking on purpose, and for a stronger reason than the sign-in
+         * bridge ([persistSessionFromClient]) has: the caller has already
+         * deleted the local row, so the tombstone is the ONLY half that can
+         * repair the pair, and an ordinary launch is one process death away
+         * from losing it. Room's suspend DAO runs on its own executor, so this
+         * waits on a background write rather than performing one - no disk I/O
+         * on the caller's thread - and it is one small write per user delete.
+         */
+        override fun replaceNow(
+            removedIds: Collection<String>,
+            items: List<OutboxItem>
+        ): Boolean = runCatchingCancellable {
+            kotlinx.coroutines.runBlocking {
+                val dao = outboxDao()
+                if (dao != null) {
+                    // The drop goes first: the items below carry those same ids,
+                    // and the other order would leave neither.
+                    if (removedIds.isNotEmpty()) dao.deleteByIds(removedIds.toList())
+                    if (items.isNotEmpty()) dao.upsertAll(items.map { it.toEntity() })
+                }
+            }
+        }.onFailure {
+            Log.w(TAG, "outbox delete persist failed: ${Redaction.text(it.message)}")
+        }.isSuccess
     }
 
     private val outbox = OutboxQueue(
@@ -910,22 +947,29 @@ object SupabaseSync {
             ids.mapNotNull { id -> id.trim().takeIf { it.isNotBlank() } }.distinct()
         if (cleanIds.isEmpty()) return
 
-        outbox.removeKeys(
-            TABLE_HISTORY,
-            "item_id",
-            cleanIds.map { id -> scopedKey(id, profileId) }
-        )
-
         val now = System.currentTimeMillis()
-        cleanIds.forEach { id ->
-            outbox.put(
-                OutboxItem(
-                    TABLE_HISTORY,
-                    "item_id",
-                    scopedKey(id, profileId),
-                    HistoryTombstoneRules.tombstone(id, now)
-                )
+        val tombstones = cleanIds.map { id ->
+            OutboxItem(
+                TABLE_HISTORY,
+                "item_id",
+                scopedKey(id, profileId),
+                HistoryTombstoneRules.tombstone(id, now)
             )
+        }
+        // ONE awaited write for the pair: the queued uploads for these keys go
+        // and the tombstones land, in that order, before this returns. The
+        // local row is already gone here, so the tombstone is the only half
+        // that can repair the delete - it may not sit in a launch the drop can
+        // outrun, nor one a process death can lose (see
+        // [OutboxStore.replaceNow]).
+        if (!outbox.replaceKeys(
+                TABLE_HISTORY,
+                "item_id",
+                cleanIds.map { id -> scopedKey(id, profileId) },
+                tombstones
+            )
+        ) {
+            Log.w(TAG, "history delete: ${cleanIds.size} tombstone(s) queued, not yet durable")
         }
         scheduleFlush()
     }
@@ -941,11 +985,13 @@ object SupabaseSync {
      * the completed markers came back too, so the episode card showed a
      * checkmark WITH a progress bar.
      *
-     * Pending outbox writes for the profile are dropped first (see
-     * [OutboxQueue.removeProfileScoped]); a queued progress write would
-     * otherwise flush after the wipe and resurrect the row. Then the cloud
-     * rows are deleted by their profile-scoped key, so only this profile's
-     * state is touched.
+     * Pending outbox writes for the profile and the tombstones that supersede
+     * them go out as ONE awaited durable write per table (see
+     * [OutboxQueue.replaceProfileScoped]): a queued progress write would
+     * otherwise flush after the wipe and resurrect the row, and a tombstone
+     * left in a fire-and-forget launch is one process death away from being
+     * lost. The cloud rows are matched by their profile-scoped key, so only
+     * this profile's state is touched.
      *
      * Signed out: the cloud rows still exist but cannot be enumerated (that
      * needs a session), so the wipe is STAGED from the local rows instead,
@@ -961,11 +1007,6 @@ object SupabaseSync {
             return
         }
 
-        // Drop the queued writes BEFORE the tombstones: a queued progress
-        // write would otherwise flush after the wipe and resurrect the row.
-        outbox.removeProfileScoped(TABLE_HISTORY, "item_id", pid)
-        outbox.removeProfileScoped(TABLE_WATCHED, "item_key", pid)
-
         // The wipe is a WRITE now, not a cloud DELETE. A real delete is
         // invisible to a sibling that still holds the row - a pull only iterates
         // rows that still EXIST - so the sibling kept its resume bar and
@@ -976,57 +1017,81 @@ object SupabaseSync {
         // mechanism single-row deletes use (see [HistoryTombstoneRules]), so
         // every merge path on every device deletes the row too.
         withContext(Dispatchers.IO) {
-            val c = client ?: return@withContext
+            val c = client
             val now = System.currentTimeMillis()
 
-            runCatching {
-                c.from(TABLE_HISTORY)
-                    .select()
-                    .decodeList<SyncRowDto>()
-                    .mapNotNull { row -> row.itemId }
-                    .filter { storedKeyMatchesProfile(it, pid) }
-                    .forEach { storedId ->
-                        outbox.put(
+            // What replaces each cloud row, read before anything is written:
+            // the queued writes for this profile and the tombstones that
+            // supersede them have to reach the durable table together (see the
+            // pair of writes below).
+            val tombstones = if (c == null) {
+                emptyList()
+            } else {
+                runCatching {
+                    c.from(TABLE_HISTORY)
+                        .select()
+                        .decodeList<SyncRowDto>()
+                        .mapNotNull { row -> row.itemId }
+                        .filter { storedKeyMatchesProfile(it, pid) }
+                        .map { storedId ->
                             OutboxItem(
                                 TABLE_HISTORY,
                                 "item_id",
                                 storedId,
                                 HistoryTombstoneRules.tombstone(unscopedKey(storedId), now)
                             )
-                        )
-                    }
-            }.onFailure { e ->
-                Log.w(TAG, "clearWatchState history failed: ${Redaction.text(e.message)}")
-                (e as? Exception)?.let { recordSyncError("Clear", it) }
+                        }
+                }.onFailure { e ->
+                    Log.w(TAG, "clearWatchState history failed: ${Redaction.text(e.message)}")
+                    (e as? Exception)?.let { recordSyncError("Clear", it) }
+                }.getOrDefault(emptyList())
             }
 
-            runCatching {
-                c.from(TABLE_WATCHED)
-                    .select()
-                    .decodeList<SyncRowDto>()
-                    .forEach { row ->
-                        val storedKey = row.itemKey ?: return@forEach
-                        if (!storedKeyMatchesProfile(storedKey, pid)) return@forEach
-                        val remote = row.payload
-                        // A cleared watched row is a NEGATIVE marker with a
-                        // fresh stamp, not a delete: the watched table has no
-                        // tombstone field, so retracting a marker is how it
-                        // syncs (see [WatchedMarkerRules]).
-                        val cleared = WatchedMarkerRules.payload(
-                            key = remote.str("key") ?: unscopedKey(storedKey),
-                            imdbId = remote.str("imdbId") ?: "",
-                            mediaType = remote.str("mediaType") ?: "",
-                            isWatched = false,
-                            isPartiallyWatched = false,
-                            updatedAt = now
-                        )
-                        outbox.put(
-                            OutboxItem(TABLE_WATCHED, "item_key", storedKey, cleared)
-                        )
-                    }
-            }.onFailure { e ->
-                Log.w(TAG, "clearWatchState watched failed: ${Redaction.text(e.message)}")
-                (e as? Exception)?.let { recordSyncError("Clear", it) }
+            val clearedMarkers = if (c == null) {
+                emptyList()
+            } else {
+                runCatching {
+                    c.from(TABLE_WATCHED)
+                        .select()
+                        .decodeList<SyncRowDto>()
+                        .mapNotNull { row ->
+                            val storedKey = row.itemKey ?: return@mapNotNull null
+                            if (!storedKeyMatchesProfile(storedKey, pid)) return@mapNotNull null
+                            val remote = row.payload
+                            // A cleared watched row is a NEGATIVE marker with a
+                            // fresh stamp, not a delete: the watched table has
+                            // no tombstone field, so retracting a marker is how
+                            // it syncs (see [WatchedMarkerRules]).
+                            OutboxItem(
+                                TABLE_WATCHED,
+                                "item_key",
+                                storedKey,
+                                WatchedMarkerRules.payload(
+                                    key = remote.str("key") ?: unscopedKey(storedKey),
+                                    imdbId = remote.str("imdbId") ?: "",
+                                    mediaType = remote.str("mediaType") ?: "",
+                                    isWatched = false,
+                                    isPartiallyWatched = false,
+                                    updatedAt = now
+                                )
+                            )
+                        }
+                }.onFailure { e ->
+                    Log.w(TAG, "clearWatchState watched failed: ${Redaction.text(e.message)}")
+                    (e as? Exception)?.let { recordSyncError("Clear", it) }
+                }.getOrDefault(emptyList())
+            }
+
+            // ONE awaited write per table, and both run even when the
+            // enumeration above failed: dropping the queued writes is not
+            // optional, or one of them flushes after the wipe and puts the row
+            // straight back (see [OutboxStore.replaceNow]).
+            val historyDurable =
+                outbox.replaceProfileScoped(TABLE_HISTORY, "item_id", pid, tombstones)
+            val watchedDurable =
+                outbox.replaceProfileScoped(TABLE_WATCHED, "item_key", pid, clearedMarkers)
+            if (!historyDurable || !watchedDurable) {
+                Log.w(TAG, "clearWatchState: tombstones queued for profile=$pid, not yet durable")
             }
             Log.i(TAG, "clearWatchState: queued tombstones for profile=$pid")
         }
@@ -1064,43 +1129,57 @@ object SupabaseSync {
         val markers = watched.filter { (storedKey, _) -> storedKey.isNotBlank() }
         if (ids.isEmpty() && markers.isEmpty()) return
 
-        if (ids.isNotEmpty()) {
-            outbox.removeKeys(TABLE_HISTORY, "item_id", ids.map { id -> scopedKey(id, profileId) })
-        }
-        if (markers.isNotEmpty()) {
-            outbox.removeKeys(TABLE_WATCHED, "item_key", markers.map { (storedKey, _) -> storedKey })
-        }
-
         val now = System.currentTimeMillis()
-        ids.forEach { id ->
-            outbox.put(
-                OutboxItem(
-                    TABLE_HISTORY,
-                    "item_id",
-                    scopedKey(id, profileId),
-                    HistoryTombstoneRules.tombstone(id, now)
-                )
+        val historyTombstones = ids.map { id ->
+            OutboxItem(
+                TABLE_HISTORY,
+                "item_id",
+                scopedKey(id, profileId),
+                HistoryTombstoneRules.tombstone(id, now)
             )
         }
-        markers.forEach { (storedKey, remote) ->
+        val clearedMarkers = markers.map { (storedKey, remote) ->
             // A cleared watched row is a NEGATIVE marker with a fresh stamp,
             // not a delete: the watched table has no tombstone field, so
             // retracting a marker is how it syncs (see [WatchedMarkerRules]).
-            outbox.put(
-                OutboxItem(
-                    TABLE_WATCHED,
-                    "item_key",
-                    storedKey,
-                    WatchedMarkerRules.payload(
-                        key = remote.str("key") ?: unscopedKey(storedKey),
-                        imdbId = remote.str("imdbId") ?: "",
-                        mediaType = remote.str("mediaType") ?: "",
-                        isWatched = false,
-                        isPartiallyWatched = false,
-                        updatedAt = now
-                    )
+            OutboxItem(
+                TABLE_WATCHED,
+                "item_key",
+                storedKey,
+                WatchedMarkerRules.payload(
+                    key = remote.str("key") ?: unscopedKey(storedKey),
+                    imdbId = remote.str("imdbId") ?: "",
+                    mediaType = remote.str("mediaType") ?: "",
+                    isWatched = false,
+                    isPartiallyWatched = false,
+                    updatedAt = now
                 )
             )
+        }
+        // One awaited write per table: the queued writes for these keys go and
+        // the clear lands in their place, in that order, before this returns.
+        // The local rows are already gone, so a clear left in a
+        // fire-and-forget launch is one process death away from putting them
+        // back (see [OutboxStore.replaceNow]).
+        if (ids.isNotEmpty() &&
+            !outbox.replaceKeys(
+                TABLE_HISTORY,
+                "item_id",
+                ids.map { id -> scopedKey(id, profileId) },
+                historyTombstones
+            )
+        ) {
+            Log.w(TAG, "in-progress clear: ${ids.size} tombstone(s) queued, not yet durable")
+        }
+        if (markers.isNotEmpty() &&
+            !outbox.replaceKeys(
+                TABLE_WATCHED,
+                "item_key",
+                markers.map { (storedKey, _) -> storedKey },
+                clearedMarkers
+            )
+        ) {
+            Log.w(TAG, "in-progress clear: ${markers.size} clear(s) queued, not yet durable")
         }
         scheduleFlush()
     }
@@ -1156,21 +1235,27 @@ object SupabaseSync {
             stageSignedOutOverrideClear(clean, profileId)
             return
         }
-        outbox.removeKeys(
-            TABLE_OVERRIDES,
-            KEY_OVERRIDES,
-            clean.map { key -> scopedKey(key, profileId) }
-        )
         val now = System.currentTimeMillis()
-        clean.forEach { key ->
-            outbox.put(
-                OutboxItem(
-                    TABLE_OVERRIDES,
-                    KEY_OVERRIDES,
-                    scopedKey(key, profileId),
-                    ImageOverrideRowRules.tombstone(key, now)
-                )
+        val tombstones = clean.map { key ->
+            OutboxItem(
+                TABLE_OVERRIDES,
+                KEY_OVERRIDES,
+                scopedKey(key, profileId),
+                ImageOverrideRowRules.tombstone(key, now)
             )
+        }
+        // One awaited write for the pair, for the reason every other delete
+        // path takes one: the local rows are gone, so the tombstone is the only
+        // repair and may not lag a process death (see
+        // [OutboxStore.replaceNow]).
+        if (!outbox.replaceKeys(
+                TABLE_OVERRIDES,
+                KEY_OVERRIDES,
+                clean.map { key -> scopedKey(key, profileId) },
+                tombstones
+            )
+        ) {
+            Log.w(TAG, "override reset: ${clean.size} tombstone(s) queued, not yet durable")
         }
         scheduleFlush()
     }
@@ -1462,10 +1547,27 @@ object SupabaseSync {
      * transferred nothing, even when the pull itself succeeded).
      */
     private suspend fun pullAllNow(context: Context) {
-        pullPrefs(context)
-        pullHistory(context)
-        pullWatched(context)
-        pullOverrides(context)
+        // The four pulls answer whether they RAN (see [pullHistory]). The order
+        // is unchanged and still load-bearing: prefs FIRST, because the
+        // profiles blob inside it creates/activates the account's profile on a
+        // fresh device, and the history/watched pulls below filter rows by the
+        // ACTIVE profile - running them before the profile exists would drop
+        // every scoped row (the fresh-device sign-in transferred nothing, even
+        // when the pull itself succeeded).
+        val ran =
+            listOf(
+                pullPrefs(context),
+                pullHistory(context),
+                pullWatched(context),
+                pullOverrides(context)
+            )
+        // All four false is not a slow sync, it is no sync: the client is gone
+        // (signed out, or the session died under it), the tables are
+        // unreachable, or every read threw. Stamping the timestamps there made
+        // the sync-health panel report a sync that never happened - and "last
+        // sync" is the number a viewer reads to decide whether to trust what is
+        // on screen. A PARTIAL run still stamps: three tables really did land.
+        if (ran.none { it }) return
         val pulledAt = System.currentTimeMillis()
         _lastSyncAtMs.value = pulledAt
         _lastPullAtMs.value = pulledAt
@@ -1514,13 +1616,18 @@ object SupabaseSync {
         }
     }
 
-    private suspend fun pullHistory(context: Context) {
-        val c = client ?: return
+    private suspend fun pullHistory(context: Context): Boolean {
+        val c = client ?: return false
         // Scope the whole pull to the profile active at START: a switch
         // mid-pull would otherwise filter rows against the NEW profile while
         // still writing into the OLD profile's Room instance (captured
         // below), stranding rows in the wrong database.
         val pid = currentProfileId()
+        // Whether this pull actually RAN. [pullAllNow] stamps "last sync" from
+        // the four answers: a pull that fails swallows its exception here (it
+        // must - one broken table cannot abort the other three), so without an
+        // answer the stamp below claimed a sync that never happened.
+        var ok = true
         try {
             val rows = c.from(TABLE_HISTORY)
                 .select()
@@ -1553,7 +1660,7 @@ object SupabaseSync {
             for (row in rows) {
                 // Bail on a mid-pull profile switch: remaining rows belong
                 // to a filter/DB pair that no longer matches.
-                if (currentProfileId() != pid) return
+                if (currentProfileId() != pid) return false
                 val remote = row.payload
                 val remoteUpdated = remote["updatedAt"]?.jsonPrimitive?.content?.toLongOrNull() ?: continue
                 val storedId = row.itemId ?: continue
@@ -1661,19 +1768,23 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            ok = false
             Log.w(TAG, "pullHistory failed: ${Redaction.text(e.message)}")
             recordSyncError("History sync", e)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
+            ok = false
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_history"))
             Log.e(TAG, "pullHistory crashed: ${Redaction.text(t.message)}")
         }
+        return ok
     }
 
-    private suspend fun pullWatched(context: Context) {
-        val c = client ?: return
+    private suspend fun pullWatched(context: Context): Boolean {
+        val c = client ?: return false
         // Same captured-scope rule as pullHistory above.
         val pid = currentProfileId()
+        var ok = true
         try {
             val rows = c.from(TABLE_WATCHED)
                 .select()
@@ -1696,7 +1807,7 @@ object SupabaseSync {
             var applied = 0
             for (row in rows) {
                 // Bail on a mid-pull profile switch (same rule as pullHistory).
-                if (currentProfileId() != pid) return
+                if (currentProfileId() != pid) return false
                 val remote = row.payload
                 val storedKey = row.itemKey ?: continue
                 if (!storedKeyMatchesProfile(storedKey, pid)) continue
@@ -1722,13 +1833,16 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            ok = false
             Log.w(TAG, "pullWatched failed: ${Redaction.text(e.message)}")
             recordSyncError("Watched sync", e)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
+            ok = false
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_watched"))
             Log.e(TAG, "pullWatched crashed: ${Redaction.text(t.message)}")
         }
+        return ok
     }
 
     /**
@@ -1746,17 +1860,18 @@ object SupabaseSync {
      * line below is the row count the account holds, not the number that
      * actually changed.
      */
-    private suspend fun pullOverrides(context: Context) {
-        val c = client ?: return
+    private suspend fun pullOverrides(context: Context): Boolean {
+        val c = client ?: return false
         // Same captured-scope rule as pullHistory above.
         val pid = currentProfileId()
+        var ok = true
         try {
             val rows = c.from(TABLE_OVERRIDES)
                 .select()
                 .decodeList<SyncRowDto>()
             for (row in rows) {
                 // Bail on a mid-pull profile switch (same rule as pullHistory).
-                if (currentProfileId() != pid) return
+                if (currentProfileId() != pid) return false
                 val storedKey = row.overrideKey ?: continue
                 if (!storedKeyMatchesProfile(storedKey, pid)) continue
                 applyImageOverrideRow(row)
@@ -1766,13 +1881,16 @@ object SupabaseSync {
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            ok = false
             Log.w(TAG, "pullOverrides failed: ${Redaction.text(e.message)}")
             recordSyncError("Artwork sync", e)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
+            ok = false
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_overrides"))
             Log.e(TAG, "pullOverrides crashed: ${Redaction.text(t.message)}")
         }
+        return ok
     }
 
     /**
@@ -1815,8 +1933,12 @@ object SupabaseSync {
         flushOutbox()
     }
 
-    private suspend fun pullPrefs(context: Context) {
-        val c = client ?: return
+    private suspend fun pullPrefs(context: Context): Boolean {
+        val c = client ?: return false
+        // Declared before the try, not inside it: the catchers are what set it
+        // to false, and a variable declared in the try body is not in their
+        // scope (same rule as the three pulls above).
+        var ok = true
         try {
             val rows = c.from(TABLE_PREFS)
                 .select()
@@ -1840,18 +1962,21 @@ object SupabaseSync {
                 // ACTIVE profile's prefs files at apply time, so continuing
                 // here would land the previous profile's blobs (watched
                 // overrides included) in the new profile's stores.
-                if (currentProfileId() != pid) return
+                if (currentProfileId() != pid) return false
                 PrefsPayloadApplier.apply(context, unscopedKey(storedKey), row.payload)
             }
         } catch (e: Exception) {
             if (e is CancellationException) throw e
+            ok = false
             Log.w(TAG, "pullPrefs failed: ${Redaction.text(e.message)}")
             recordSyncError("Settings sync", e)
         } catch (t: Throwable) {
             if (t is CancellationException) throw t
+            ok = false
             CrashReporter.recordNonFatal(t, mapOf("source" to "pull_prefs"))
             Log.e(TAG, "pullPrefs crashed: ${Redaction.text(t.message)}")
         }
+        return ok
     }
 
     // ── Push (initial seed / manual sync-now) ───────────────────────
@@ -2578,9 +2703,20 @@ object SupabaseSync {
     ) {
         val owner = SyncKeys.scopeOf(storedKey)
         if (owner == null) {
+            // The legacy unscoped row gets the SAME pin as the scoped branch
+            // below, and for the same reason: the profile is read to decide
+            // whether the row applies at all, and then the database is
+            // resolved - two steps with a suspension and a switch possible in
+            // between. Checking only before the resolve filed the row under
+            // whatever profile had become active by the time the DB opened,
+            // which is the defect the scoped branch's own re-check exists to
+            // prevent (`owner` is derived from the key there, so that branch
+            // cannot be aimed at the wrong profile - this one has to re-ask).
             val active = currentProfileId()
             if (!storedKeyMatchesProfile(storedKey, active)) return
-            block(WatchHistoryDatabase.getInstanceScoped(context), true)
+            val db = WatchHistoryDatabase.getInstanceScoped(context)
+            if (currentProfileId() != active) return
+            block(db, true)
             return
         }
         val active = currentProfileId()
@@ -2623,6 +2759,28 @@ object SupabaseSync {
             if (deletedAt != null) {
                 if (local != null &&
                     HistoryTombstoneRules.tombstoneWins(deletedAt, local.updatedAt)
+                ) {
+                    db.watchHistoryDao().deleteById(id)
+                    if (live) WatchedStatusRepository.invalidateAllCaches()
+                }
+                return@withOwningProfileDb
+            }
+
+            // A delete this device has QUEUED (and not yet flushed) outranks
+            // this still-live cloud copy, exactly as it does on the pull path
+            // ([pullHistory]'s own guard). The live channel used to skip that
+            // check: a row the viewer had just removed came back the moment a
+            // sibling - or this device's own earlier copy - re-published it,
+            // and the queued tombstone then only removed the cloud copy, so the
+            // row survived locally for good. Applying the queued delete locally
+            // instead is what keeps a removal final across both channels.
+            val pendingTombstone = outbox.pending(TABLE_HISTORY, "item_id", storedId)
+                ?.takeIf { HistoryTombstoneRules.isTombstone(it.payload) }
+            if (pendingTombstone != null) {
+                val pendingDeletedAt = HistoryTombstoneRules.deletedAt(pendingTombstone.payload)
+                if (local != null &&
+                    pendingDeletedAt != null &&
+                    HistoryTombstoneRules.tombstoneWins(pendingDeletedAt, local.updatedAt)
                 ) {
                     db.watchHistoryDao().deleteById(id)
                     if (live) WatchedStatusRepository.invalidateAllCaches()

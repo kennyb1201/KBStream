@@ -102,19 +102,65 @@ class HomeFocusedCardContractTest {
         assertTrue(
             "and the card's key reaches the return-from-Detail restore, so the " +
                 "focus the viewer left Home with is one it can land on again",
-            catalogFocusBlock.contains("viewModel.lastFocusedRailItemKey") &&
-                catalogFocusBlock.contains("railFocusRequesters[cardKey] = requester")
+            catalogFocusBlock.contains("viewModel.lastFocusedRailItemKey")
+        )
+        // ...and its REQUESTER is registered when the card composes, not when a
+        // card happens to take focus. Home is disposed while its Detail page is
+        // open, so a map only focus filled was empty for the whole restore
+        // window on the way back - which made the remembered place impossible to
+        // land on (see the card's DisposableEffect).
+        val cardRegistrationBlock = home.substringAfter("DisposableEffect(requester) {")
+            .substringBefore("onDispose {")
+        assertTrue(
+            "the requester is registered under the card's own key as it composes",
+            cardRegistrationBlock.contains("railFocusRequesters[cardKey] = requester")
         )
         assertTrue(
-            "the Continue Watching rail reports the card its focus lands on",
-            home.contains("onFocusedCardRequester(requester)") &&
-                home.contains("onFocusedCardRequester = { requester -> focusedCardRequester = requester }")
+            "and dropped again when the card leaves, so a disposed node is " +
+                "never asked for focus",
+            home.contains("railFocusRequesters.remove(cardKey)")
+        )
+        assertTrue(
+            "the Continue Watching rail reports the card its focus lands on, " +
+                "with its KEY: the key is what the return-from-Detail restore " +
+                "looks up, and a rail that reported only a requester left the " +
+                "remembered place nameless",
+            home.contains("onFocusedCard(cardKey, requester)") &&
+                home.contains("onFocusedCard = { cardKey, requester ->") &&
+                home.contains("viewModel.lastFocusedRailItemKey = cardKey")
         )
         assertTrue(
             "and the rails whose requester is made inside the row - the KB " +
-                "collection tiles and the browse tiles - hand it up too",
-            slots.contains("onFocusedCardRequester?.invoke(requester)") &&
-                slots.contains("onFocusedCardRequester: ((FocusRequester) -> Unit)? = null")
+                "collection tiles and the browse tiles - hand it up too, under " +
+                "the same key their requester is registered with",
+            slots.contains("onFocusedCard?.invoke(cardKey, requester)") &&
+                slots.contains(
+                    "onFocusedCard: ((cardKey: String, requester: FocusRequester) -> Unit)? = null"
+                )
+        )
+    }
+
+    @Test
+    fun `every rail kind registers its cards under its own key as they compose`() {
+        assertTrue(
+            "the Continue Watching cards, in the built-in row's own key family - " +
+                "one title can be a catalog card and a Continue Watching card at " +
+                "once, and one key must not mean two places to put the D-pad back",
+            home.contains("val cardKey = CONTINUE_WATCHING_CARD_KEY_PREFIX + item.id") &&
+                home.contains(
+                    "private const val CONTINUE_WATCHING_CARD_KEY_PREFIX = \"upnext:\""
+                )
+        )
+        assertTrue(
+            "and the Upcoming cards, likewise",
+            home.contains("val cardKey = UPCOMING_CARD_KEY_PREFIX + upcoming.id") &&
+                home.contains("private const val UPCOMING_CARD_KEY_PREFIX = \"upcoming:\"")
+        )
+        assertTrue(
+            "and the KB tiles put themselves in Home's map rather than only " +
+                "reporting the one focus happens to be on",
+            slots.contains("cardFocusRequesters?.put(cardKey, requester)") &&
+                slots.contains("cardFocusRequesters?.remove(cardKey)")
         )
     }
 

@@ -81,32 +81,55 @@ internal object AssSubtitleSource {
      * normalised, and whichever of `[Script Info]`, `[V4+ Styles]` and
      * `[Events]` the file is missing filled in with sane defaults.
      *
-     * A file that is already complete comes back with only the line-ending
-     * and BOM normalisation applied, so this is safe to run over every
-     * sidecar.
+     * A file that is already complete comes back as the caller's own string:
+     * rebuilding it would only produce a second copy of it, and this runs on
+     * every attach. Only a file that needs a repair is rebuilt.
      */
     fun normalize(raw: String): String {
         if (raw.isEmpty()) return raw
         val text = raw.removePrefix("\uFEFF").replace("\r\n", "\n").replace('\r', '\n')
         val lines = text.split('\n').toMutableList()
 
-        if (sectionRange(lines, SCRIPT_INFO) == null) {
+        val info = sectionRange(lines, SCRIPT_INFO)
+        val styles = sectionRange(lines, "[V4+ Styles]")
+            ?: sectionRange(lines, "[V4 Styles]")
+        val events = sectionRange(lines, "[Events]")
+
+        // Nothing to repair: every section libass insists on is present, every
+        // entry this function would insert is already there, and the line
+        // endings, BOM and trailing newline are already what the rebuild below
+        // would produce. The result would be byte-identical to the input, so
+        // hand back the caller's own string instead of building a second copy
+        // of it. A sidecar runs to a few hundred KB and its caller is holding
+        // at least one other copy already.
+        if (text == raw &&
+            raw.endsWith("\n") &&
+            !raw.endsWith("\n\n") &&
+            info != null && hasEntry(lines, info, "ScriptType:") &&
+            styles != null &&
+            events != null && hasEntry(lines, events, "Format:")
+        ) {
+            return raw
+        }
+
+        if (info == null) {
             lines.add(0, DEFAULT_SCRIPT_TYPE)
             lines.add(0, SCRIPT_INFO)
         }
-        val info = sectionRange(lines, SCRIPT_INFO)
-        if (info != null && !hasEntry(lines, info, "ScriptType:")) {
-            lines.add(info.first + 1, DEFAULT_SCRIPT_TYPE)
+        val repairedInfo = sectionRange(lines, SCRIPT_INFO)
+        if (repairedInfo != null && !hasEntry(lines, repairedInfo, "ScriptType:")) {
+            lines.add(repairedInfo.first + 1, DEFAULT_SCRIPT_TYPE)
         }
 
-        if (sectionRange(lines, "[V4+ Styles]") == null && sectionRange(lines, "[V4 Styles]") == null) {
+        if (styles == null) {
             lines += DEFAULT_STYLES
         }
 
-        val events = sectionRange(lines, "[Events]")
+        val repairedEvents = sectionRange(lines, "[Events]")
         when {
-            events == null -> lines += listOf("[Events]", EVENTS_FORMAT)
-            !hasEntry(lines, events, "Format:") -> lines.add(events.first + 1, EVENTS_FORMAT)
+            repairedEvents == null -> lines += listOf("[Events]", EVENTS_FORMAT)
+            !hasEntry(lines, repairedEvents, "Format:") ->
+                lines.add(repairedEvents.first + 1, EVENTS_FORMAT)
         }
 
         return lines.joinToString("\n").trimEnd('\n') + "\n"

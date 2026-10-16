@@ -150,6 +150,57 @@ class AutoSubtitleFetchGateContractTest {
         assertFalse("a rejected body must not raise a toast", mpvReject.contains("showToast"))
     }
 
+    /**
+     * The second arrival hazard for the same route: a bad body is refused above,
+     * and a *good* body for the wrong video is refused here.
+     *
+     * The search and the download are network round trips, and the playback they
+     * were started for can be replaced while they run - the credits advance to
+     * the next episode, a pick from the end panel switches episodes, a stream
+     * handoff re-opens the same screen with new extras. Attaching on arrival
+     * then draws the previous episode's text over the new picture and remembers
+     * it for that video, which is a worse outcome than no subtitle: the viewer
+     * cannot tell it is the wrong track.
+     */
+    @Test
+    fun `the auto-fetch is bound to the video it was launched for`() {
+        val capture = nativeAuto.indexOf("val launchIdentity = videoIdentity()")
+        assertTrue("the identity must be captured at launch", capture >= 0)
+        assertTrue(
+            "and before the first request goes out",
+            capture < nativeAuto.indexOf("SubtitleSearchHelper.search(")
+        )
+
+        val attach = nativeAuto.indexOf("attachExternalSubtitle(uri)")
+        assertTrue("the route must still attach", attach > capture)
+        assertTrue(
+            "the identity must be re-checked right before the attach",
+            nativeAuto.lastIndexOf("stillSameVideo(launchIdentity)", attach) > capture
+        )
+        val recheck = nativeAuto.substring(0, attach)
+        assertTrue(
+            "a download for another video must not reach the player",
+            nativeAuto.substring(recheck.lastIndexOf("stillSameVideo(launchIdentity)"), attach)
+                .contains("return@launch")
+        )
+    }
+
+    @Test
+    fun `the video identity is the episode, not the stream url`() {
+        // A source switch, a failover or a rebuild re-opens the same episode
+        // under a new URL; keying on that would throw away a track that is
+        // still the right one.
+        val line = readSource(NATIVE)
+            .lineSequence()
+            .firstOrNull { it.contains("private fun videoIdentity()") }
+        assertTrue("videoIdentity must exist", line != null)
+        val body = line.orEmpty()
+        assertTrue(body.contains("itemName"))
+        assertTrue(body.contains("season"))
+        assertTrue(body.contains("episode"))
+        assertFalse("the stream url is not the video's identity", body.contains("currentUrl"))
+    }
+
     private companion object {
         private const val NATIVE =
             "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"

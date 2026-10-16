@@ -185,6 +185,15 @@ fun KBFolderScreen(
                 // the rails and the grid scroll themselves onto the card from
                 // the record they are handed above.
                 returnHandled = landFocusOn(returnFocusRequester)
+                // The record is SPENT once the landing succeeded. Left in state
+                // it is handed on to the layouts, whose scroll effects key on it
+                // AND on the item list itself - so a Hide (the hidden title
+                // leaves the list, changing that key) or a source-tab switch
+                // re-ran the scroll straight back onto the card the viewer had
+                // just left, fighting the successor-key restore the card
+                // registry had resolved for the menu. A landing that did NOT
+                // succeed keeps it: the retry budget is still spending it.
+                if (returnHandled) returnTarget = null
             }
 
             // This effect never placed an initial focus of its own, so the

@@ -16,6 +16,7 @@ class OutboxQueueStoreTest {
     private class RecordingStore : OutboxStore {
         val saved = mutableListOf<OutboxItem>()
         val deleted = mutableListOf<String>()
+        val replaced = mutableListOf<Pair<List<String>, List<OutboxItem>>>()
         var cleared = false
 
         override fun save(item: OutboxItem) {
@@ -24,6 +25,14 @@ class OutboxQueueStoreTest {
 
         override fun delete(ids: Collection<String>) {
             deleted += ids
+        }
+
+        override fun replaceNow(
+            removedIds: Collection<String>,
+            items: List<OutboxItem>
+        ): Boolean {
+            replaced += removedIds.toList() to items
+            return true
         }
 
         override fun clear() {
@@ -80,6 +89,89 @@ class OutboxQueueStoreTest {
             listOf(OutboxQueue.id("sync_watch_history", "item_key", "p:a:tt1")),
             store.deleted
         )
+    }
+
+    @Test
+    fun `a delete hands its drop and its tombstone over as one awaited write`() {
+        // The delete paths go through `replaceNow` instead of `removeKeys` +
+        // `put`: the two fire-and-forget calls above are separate launches on a
+        // pooled dispatcher, so the drop could land AFTER the tombstone it was
+        // meant to precede - dropping the tombstone - and either could be lost
+        // to process death in the window where the local row is already gone.
+        val store = RecordingStore()
+        val queue = OutboxQueue(store)
+        queue.put(item("p:a:tt1", table = "sync_watch_history"))
+        store.saved.clear()
+        val tombstone = OutboxItem(
+            table = "sync_watch_history",
+            keyColumn = "item_key",
+            key = "p:a:tt1",
+            payload = buildJsonObject { put("deletedAt", 5L) },
+            enqueuedAtMs = 5L
+        )
+
+        assertTrue(
+            queue.replaceKeys(
+                "sync_watch_history",
+                "item_key",
+                listOf("p:a:tt1"),
+                listOf(tombstone)
+            )
+        )
+
+        assertEquals(1, store.replaced.size)
+        assertEquals(
+            listOf(OutboxQueue.id("sync_watch_history", "item_key", "p:a:tt1")),
+            store.replaced.single().first
+        )
+        assertEquals(listOf(tombstone), store.replaced.single().second)
+        assertTrue(
+            "the pair must not go out through the unordered calls",
+            store.deleted.isEmpty() && store.saved.isEmpty()
+        )
+        assertEquals(
+            "and the queue holds the tombstone, not the superseded write",
+            listOf(tombstone),
+            queue.snapshot()
+        )
+    }
+
+    @Test
+    fun `a profile wipe replaces that profile's writes in one awaited write`() {
+        val store = RecordingStore()
+        val queue = OutboxQueue(store)
+        queue.put(item("p:a:tt1", table = "sync_watch_history"))
+        queue.put(item("p:a:tt2", table = "sync_watch_history"))
+        queue.put(item("p:b:tt3", table = "sync_watch_history"))
+        store.saved.clear()
+        val cleared = OutboxItem(
+            table = "sync_watch_history",
+            keyColumn = "item_key",
+            key = "p:a:tt1",
+            payload = buildJsonObject { put("deletedAt", 7L) },
+            enqueuedAtMs = 7L
+        )
+
+        assertTrue(
+            queue.replaceProfileScoped("sync_watch_history", "item_key", "a", listOf(cleared))
+        )
+
+        assertEquals(1, store.replaced.size)
+        assertEquals(
+            "only this profile's queued writes go",
+            listOf(
+                OutboxQueue.id("sync_watch_history", "item_key", "p:a:tt1"),
+                OutboxQueue.id("sync_watch_history", "item_key", "p:a:tt2")
+            ).sorted(),
+            store.replaced.single().first.sorted()
+        )
+        assertTrue(store.deleted.isEmpty())
+        assertEquals(
+            "the sibling profile's write is untouched, and the clear took its place",
+            listOf("p:a:tt1", "p:b:tt3"),
+            queue.snapshot().map { it.key }.sorted()
+        )
+        assertTrue(queue.snapshot().contains(cleared))
     }
 
     @Test

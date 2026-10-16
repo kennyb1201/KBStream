@@ -167,12 +167,17 @@ class DetailNetworkChipUpTrapContractTest {
         val scroll = topOfPage.indexOf("scrollToItem(0)")
         val rail = topOfPage.indexOf("movieDetailsFocusRequester.requestFocus()")
         val button = topOfPage.indexOf("playButtonFocusRequester.requestFocus()")
-        assertTrue("the focus request must follow the scroll", scroll in 0 until rail)
+        assertTrue("the focus request must follow the scroll", scroll in 0 until button)
         assertTrue(
             "and the PLAY button - in the fixed header ABOVE the list, so " +
-                "always composed - is the anchor behind the rail: a page with " +
-                "no people rail is exactly the case the old bare request threw on",
-            rail in 0 until button
+                "always composed - is asked FIRST, because it is the row UP " +
+                "points at. Asked the other way round the landing was the " +
+                "people rail, an item INSIDE the list below the header: UP on a " +
+                "genre chip scrolled to the top and then dropped the focus into " +
+                "the actors rail, whose own UP hands the viewer back to the " +
+                "chips - the reported loop, with the header and the top bar " +
+                "unreachable from a chip",
+            button in 0 until rail
         )
         assertTrue(
             "the request is retried while the page recomposes, not tried once",

@@ -32,6 +32,36 @@ class WatchNextPublishContractTest {
     }
 
     @Test
+    fun `the episode mark announces the badge on the watched-state bus`() {
+        val body = functionBody("suspend fun markEpisodeWatchedLocal(")
+        assertTrue(
+            "every other local write in this file announces its result, but this " +
+                "one never told the bus anything: the marker landed on disk and the " +
+                "tile the mark was made FROM - a Continue Watching card, a Search " +
+                "result - kept the badge it had until the next marker preload",
+            body.contains("WatchStateBus.notifyChanged(")
+        )
+        assertTrue(
+            "announced through the resolver the preload itself uses, not a " +
+                "hand-rolled pair of flags: a series resolves as override/tracker " +
+                "sets, then Simkl, then MDBList, then local history, and a second " +
+                "copy of that rule here is how the two drift apart",
+            body.contains("resolveWithMergedRemoteSets(")
+        )
+        assertTrue(
+            "and the answer is persisted the way the resolver's own callers do, so " +
+                "a preload inside this entry's TTL reads what the bus just " +
+                "announced instead of the pre-write row",
+            body.contains("persistResolvedEntities(")
+        )
+        assertTrue(
+            "the checkmark is not cleared by an episode mark: the resolved entity's " +
+                "own isWatched travels, and the eye only when it is not also watched",
+            body.contains("entity.isPartiallyWatched && !entity.isWatched")
+        )
+    }
+
+    @Test
     fun `the republish mirrors the active profile's own resume rows`() {
         val body = functionBody("private suspend fun publishLauncherWatchNext(")
         assertTrue(
@@ -45,6 +75,14 @@ class WatchNextPublishContractTest {
         assertTrue(
             "through the launcher publisher",
             body.contains("TvLauncherPublisher.sync(context,")
+        )
+        assertTrue(
+            "and best-effort means a FAILED sync does not fail the mark - not " +
+                "that cancellation is swallowed. The block suspends (the scoped " +
+                "dao and the publisher both do), so plain runCatching would turn " +
+                "\"this coroutine was canceled\" into a reported failure AND let " +
+                "the coroutine run on (see runCatchingCancellable)",
+            body.contains("runCatchingCancellable {") && !body.contains("runCatching {")
         )
     }
 

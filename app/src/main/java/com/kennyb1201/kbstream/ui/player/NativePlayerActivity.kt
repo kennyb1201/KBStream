@@ -74,6 +74,7 @@ import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.memory.MemoryPressure
 import com.kennyb1201.kbstream.data.memory.releaseImageMemoryCache
 import com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace
+import com.kennyb1201.kbstream.data.reporting.Redaction
 import com.kennyb1201.kbstream.data.reporting.PlaybackSessionTrace
 import com.kennyb1201.kbstream.data.iptv.LiveChannelZapRegistry
 import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
@@ -1029,6 +1030,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private var wasPlayingBeforeScrub = false
 
+    /** Whether a scrub is in flight, so a re-entry cannot re-capture the play state. */
+    private var scrubInFlight = false
+
     /** Uptime of the last touch-drag follow-seek, this path's own throttle. */
     private var lastFollowSeekMs = 0L
 
@@ -1171,6 +1175,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * overlay tick and the sample feed drive the same native state.
      */
     private val assRenderer: AssSubtitleRenderer by lazy { AssSubtitleRenderer() }
+
+    /**
+     * True while a script load is running off the main thread (see
+     * [loadAssScript]). The tick must not start a second one, and must not
+     * fall back either: until the load answers, "not loaded" does not mean
+     * "will not load".
+     */
+    private var assLoadInFlight = false
 
     private lateinit var subtitleAssImage: ImageView
 
@@ -5026,7 +5038,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     }
                     .build()
             )
-            Log.i("PLAYER_DRM", "Widevine DRM configured: $drmLicenseUrl")
+            // Redacted: a Widevine licence URL routinely carries the token that
+            // authorizes the request in its query string, and this line is
+            // logged on every DRM launch (see [Redaction]).
+            Log.i("PLAYER_DRM", "Widevine DRM configured: ${Redaction.url(drmLicenseUrl)}")
         }
         return builder
     }
@@ -7859,6 +7874,32 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var autoSubtitleFetchInFlight = false
 
     /**
+     * The video an automatic subtitle fetch belongs to: the title and the
+     * episode, which is what a subtitle is FOR.
+     *
+     * Deliberately not the stream URL: that changes for the same episode on a
+     * source switch, a rebuild or a failover, and a track fetched for the
+     * episode is still the right track afterwards.
+     */
+    private fun videoIdentity(): String = "$itemName|${season ?: -1}|${episode ?: -1}"
+
+    /**
+     * Whether the playback a fetch was launched for is still the one on screen.
+     *
+     * The search and the download are network round trips, and the video can
+     * be replaced while they run - the credits advance to the next episode, the
+     * end panel switches episodes, a handoff re-opens this screen with new
+     * extras. Attaching on arrival then puts the previous episode's subtitle on
+     * the new picture, which is worse than no subtitle at all: it is wrong text
+     * over the right one, and it is remembered for that video.
+     */
+    private fun stillSameVideo(identity: String): Boolean {
+        if (videoIdentity() == identity) return true
+        Log.i("PLAYER_LANG", "auto subtitle fetch: the video changed while fetching; ignoring the download")
+        return false
+    }
+
+    /**
      * Set once the NEXT episode's subtitle has been asked for. The end panels
      * are raised from more than one place (the credits trigger and the real
      * end), so without this each of them would start its own fetch.
@@ -8149,6 +8190,9 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         if (queryTitle.isBlank()) return
         autoSubtitleFetchTried = true
         autoSubtitleFetchInFlight = true
+        // Captured before the first request goes out and re-checked before the
+        // attach (see [stillSameVideo]): everything below this line is async.
+        val launchIdentity = videoIdentity()
         val lang = AppPreferences.getPreferredSubtitleLanguage(this)
         lifecycleScope.launch {
             try {
@@ -8164,6 +8208,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     episode = episode,
                     language = lang
                 )?.let { hit ->
+                    if (!stillSameVideo(launchIdentity)) return@launch
                     Log.i("PLAYER_LANG", "auto subtitle fetch: using prefetched ${hit.fileName}")
                     attachExternalSubtitle(hit.uri)
                     Toast.makeText(
@@ -8205,6 +8250,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             )
                             return@launch
                         }
+                        // Last gate before the player is touched: the download
+                        // belongs to the video that asked for it, not to
+                        // whatever is playing now.
+                        if (!stillSameVideo(launchIdentity)) return@launch
                         val uri = SubtitleSearchHelper.toCacheUri(
                             this@NativePlayerActivity,
                             pick,
@@ -8268,6 +8317,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun beginScrubPause() {
         val player = exoPlayer ?: return
         if (player.duration <= 0L) return
+        // Re-entry: a second press while a scrub is ALREADY in flight must not
+        // re-capture the play state. The first capture paused the player, so
+        // `playWhenReady` is false by now - overwriting the flag with that false
+        // is what made a re-entered scrub resume nothing on release, leaving the
+        // viewer paused after a scrub they made while playing.
+        if (scrubInFlight) return
+        scrubInFlight = true
         wasPlayingBeforeScrub = player.playWhenReady
         player.pause()
     }
@@ -8280,6 +8336,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private fun endScrubPause() {
         if (wasPlayingBeforeScrub) exoPlayer?.play()
         wasPlayingBeforeScrub = false
+        scrubInFlight = false
     }
 
     /**
@@ -8728,13 +8785,28 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             }
         }
 
-        /** Drops pending work, clears the text, and re-syncs position mode. */
+        /**
+         * Clears the cues this handler holds and the pending work that belongs
+         * to them - and nothing else.
+         *
+         * It deliberately does NOT re-arm the tick. [updateFromPosition]
+         * removes `positionTick` and re-posts it, so the old "and re-sync
+         * position mode" line below started a tick on a handler that every
+         * caller is about to throw away: [recreatePlayer] and
+         * [lightSwitchLiveChannel] replace it, and `onStop`/`onDestroy` null
+         * it. Nothing holds a reference to a discarded handler, so nothing
+         * could ever cancel the tick it posted - it kept running for the rest
+         * of the session, one more per rebuild, each rendering from the shared
+         * cue list into the shared text view and racing the live handler's own
+         * tick. Every path that needs the tick starts it on the handler that
+         * KEEPS it: the READY handler, [updateFromPosition] from the cue and
+         * attach paths, and [reapplyOffset] for an offset nudge.
+         */
         fun cancelPending() {
             handler.removeCallbacks(delayedShow)
             handler.removeCallbacks(positionTick)
             currentCues = emptyList()
             renderText("")
-            if (positionDriven) updateFromPosition()
         }
 
         /**
@@ -8971,8 +9043,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             val renderer = assRenderer
             val script = assSubtitleContent
             if (script != null) {
-                if (!renderer.active && !startAssSubtitle(script, renderer)) {
-                    fallBackFromAss(script)
+                if (!renderer.active) {
+                    // The load is left to [loadAssScript] and the tick waits for
+                    // its answer rather than doing the work inline; a second
+                    // load while one is in flight would parse the same script
+                    // twice and race the first one's result.
+                    if (assLoadInFlight) return
+                    loadAssScript(script, renderer)
                     return
                 }
             } else if (!renderer.active) {
@@ -8980,6 +9057,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // until one arrives (see armEmbeddedAssOverlay).
                 return
             }
+            // The overlay owns the subtitle area only while something is still
+            // attached. A load that answers after its script was detached
+            // leaves an instance with no script behind it, and drawing that one
+            // would cover the picture with a subtitle the viewer just removed.
+            if (assOverlaySource == AssOverlaySource.NONE) return
             // The pipeline still emits flattened cues for the same file, and
             // they would draw behind the rendered frame: the overlay owns the
             // subtitle area while it is active.
@@ -9015,6 +9097,33 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val configPath = AssSubtitleRenderer.installFontConfig(assets, filesDir)
         val fonts = AssSubtitleSource.collectFonts(listOf(File(filesDir, ASS_FONT_DIR)))
         return renderer.load(content, fonts, configPath, cacheDir.absolutePath)
+    }
+
+    /**
+     * Loads [content] into [renderer] off the main thread, and posts only the
+     * result.
+     *
+     * The tick used to do this inline: [startAssSubtitle] installs the
+     * fontconfig file and lists the fonts, and [AssSubtitleRenderer.load]
+     * normalises and parses the script. A sidecar runs to a few hundred KB, so
+     * that is a main-thread stall on the frame the overlay first comes up - and
+     * the same work runs again on every player rebuild, which the overlay tick
+     * is the reloader for. Both are I/O plus a parse and touch nothing that
+     * needs the main thread; the tick is what does, so it is re-armed here once
+     * the answer is known and the fall-back keeps its place in the order.
+     */
+    private fun loadAssScript(content: String, renderer: AssSubtitleRenderer) {
+        assLoadInFlight = true
+        lifecycleScope.launch {
+            val loaded = withContext(Dispatchers.IO) { startAssSubtitle(content, renderer) }
+            assLoadInFlight = false
+            // Only fall back for the script still attached: a different one has
+            // its own load, and this failure is about the text that was
+            // replaced, not about the one on screen now.
+            if (!loaded && assSubtitleContent === content) fallBackFromAss(content)
+            handler.removeCallbacks(assFrameTick)
+            handler.post(assFrameTick)
+        }
     }
 
     /**
@@ -12441,7 +12550,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val probe = SourcePlaybackProbe(sessionDeadAddons, httpClient)
         lifecycleScope.launch {
             val (candidates, addons) = probeOrder()
-            val pick = runCatching {
+            // Cancellable: the probe SUSPENDS, and this launch is the
+            // activity's own scope. Swallowed, a cancellation arriving
+            // mid-probe was read as a probe INFRASTRUCTURE failure - `pick`
+            // null - and the launch carried on down the head-source path; the
+            // guard below only stands in for that when the activity happens to
+            // be finishing. Rethrown, the launch dies with the scope, which is
+            // what a canceled session means.
+            val pick = runCatchingCancellable {
                 probe.pickLiveSource(candidates, addons) { stream -> stream.requestHeaders }
             }.getOrNull()
             if (isFinishing || isDestroyed) return@launch

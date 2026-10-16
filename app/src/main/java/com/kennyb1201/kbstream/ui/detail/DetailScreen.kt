@@ -121,6 +121,7 @@ import com.kennyb1201.kbstream.data.tmdb.writers
 import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
+import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBImdbTint
@@ -1280,13 +1281,22 @@ fun DetailScreen(
      * The last resort of a vertical chip press whose target rail does not exist
      * at all - the other half of [revealAndFocusChipColumn], which covers the
      * rail that does exist but has been disposed. The list goes back to its
-     * top and the focus goes to the page's own controls: the people rail's
-     * requester, which the movie path already uses to jump into that rail, or
-     * the PLAY button, which lives in the fixed header ABOVE the list and so is
-     * always composed. Requesting the rail's focus without this scroll - and
-     * with no node behind it when there is no rail - is the only thing that
-     * could throw, and a request that threw left the viewer trapped on the chip
-     * they pressed.
+     * top and the focus goes to the page's own controls, in this order: the
+     * PLAY button, which lives in the fixed header ABOVE the list and is the
+     * row an UP press out of the genre chips names (see the chips' own
+     * handler), then the people rail's requester, which is what the movie path
+     * uses to jump into that rail.
+     *
+     * The order is the whole of the fix for the reported UP trap. The people
+     * rail is an item INSIDE the list, below the header, so a landing there is
+     * the press's own direction reversed: UP on a genre chip scrolled the page
+     * to its top and then dropped the focus into the actors rail, whose own UP
+     * hands it straight back to the chips - a loop with the header, the PLAY
+     * button and the top bar all unreachable. Requesting that rail's focus
+     * without this scroll - and with no node behind it when there is no rail -
+     * is the only thing that could throw, and a request that threw left the
+     * viewer trapped on the chip they pressed, which is why the header control
+     * goes first and the rail is kept only as the last resort.
      *
      * Consumes the press by construction: the launched block owns the move, so
      * every caller answers true rather than letting the default search - and the
@@ -1307,9 +1317,13 @@ fun DetailScreen(
         runCatching { detailListState.scrollToItem(0) }
         var attempts = 0
         while (attempts < RETURN_FOCUS_STEPS) {
+            // Header control first, the in-list people rail only if the header
+            // cannot take it: the header is the row UP points at, and it is
+            // composed whatever the list has scrolled away (see the trap note
+            // above).
             val landed =
-                runCatching { movieDetailsFocusRequester.requestFocus() }.getOrDefault(false) ||
-                    runCatching { playButtonFocusRequester.requestFocus() }.getOrDefault(false)
+                runCatching { playButtonFocusRequester.requestFocus() }.getOrDefault(false) ||
+                    runCatching { movieDetailsFocusRequester.requestFocus() }.getOrDefault(false)
             if (landed) return true
             delay(RETURN_FOCUS_DELAY_MS)
             attempts += 1
@@ -2870,10 +2884,31 @@ fun DetailScreen(
                         runCatching { rowState.scrollToItem(target.itemIndex) }
                     }
 
+                    // Two budgets, not one - the same rule the browse pages'
+                    // own hand-back states ([browseReturnDecision]): a card that
+                    // has not COMPOSED yet has no requester in this map, and
+                    // that is an arrival, not a missed landing. Charging the
+                    // landing budget for it spent every one of these attempts
+                    // on the rail still building itself, so the loop gave up a
+                    // frame or two before the card it was returning to
+                    // existed - and the page reopened with the focus where the
+                    // reopen had left it. The arrival is waited for on TIME
+                    // instead, and only a request made against a card that has
+                    // a focus node spends an attempt.
+                    val waitStartMs = System.currentTimeMillis()
                     var attempts = 0
                     var focused = false
                     while (!focused && attempts < RETURN_FOCUS_STEPS) {
                         val requester = railFocusRequesters[target.targetKey]
+                        if (requester == null) {
+                            if (System.currentTimeMillis() - waitStartMs >
+                                BROWSE_RETURN_WAIT_MS
+                            ) {
+                                break
+                            }
+                            delay(RETURN_FOCUS_DELAY_MS)
+                            continue
+                        }
                         // The landing is the request's own answer, not "the
                         // call did not throw": a requester whose card the rail
                         // has not composed returns false rather than throwing,
@@ -2881,10 +2916,8 @@ fun DetailScreen(
                         // left the focus wherever the reopen had put it - the
                         // stranding this record exists to undo (see
                         // [focusChipColumn] and [BrowseReturnFocus]).
-                        focused =
-                            requester != null &&
-                                runCatching { requester.requestFocus() }
-                                    .getOrDefault(false)
+                        focused = runCatching { requester.requestFocus() }
+                            .getOrDefault(false)
                         if (!focused) {
                             delay(RETURN_FOCUS_DELAY_MS)
                         }

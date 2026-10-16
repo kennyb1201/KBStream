@@ -150,7 +150,11 @@ class ImageOverrideSyncWiringContractTest {
 
     @Test
     fun `the pull and the push both include the new table`() {
-        assertTrue(body(sync, "private suspend fun pullAllNow(", 500).contains("pullOverrides(context)"))
+        // The pull's span covers its whole body, comments included: the stamp
+        // guard that now follows the four calls (see
+        // InstantSyncPropagationContractTest) made it longer than the 500
+        // characters this assertion used to be satisfied inside.
+        assertTrue(body(sync, "private suspend fun pullAllNow(", 1_500).contains("pullOverrides(context)"))
         assertTrue(body(sync, "private suspend fun pushAllNow(", 500).contains("pushOverrides(context)"))
     }
 

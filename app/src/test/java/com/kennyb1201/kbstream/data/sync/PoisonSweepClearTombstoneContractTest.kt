@@ -44,18 +44,35 @@ class PoisonSweepClearTombstoneContractTest {
     }
 
     @Test
-    fun `the queued writes for those keys go before the tombstones`() {
+    fun `the queued writes for those keys go with the tombstones, drops first`() {
         val body = functionBody(SYNC, "internal fun publishInProgressClear(")
-        val dropHistory = body.indexOf("outbox.removeKeys(TABLE_HISTORY")
-        val dropWatched = body.indexOf("outbox.removeKeys(TABLE_WATCHED")
-        val stamp = body.indexOf("HistoryTombstoneRules.tombstone(")
-        assertTrue("the queued history writes must be dropped", dropHistory >= 0)
-        assertTrue("the queued marker writes must be dropped", dropWatched >= 0)
-        assertTrue("the history tombstone must be written", stamp >= 0)
         assertTrue(
-            "the drops must come FIRST: after the tombstone is queued the live " +
-                "upload is already in the outbox and flushes as the newer write",
-            dropHistory in 0 until stamp && dropWatched in 0 until stamp
+            "the history rows must be published",
+            body.contains("outbox.replaceKeys(") && body.contains("TABLE_HISTORY,")
+        )
+        assertTrue("the marker rows must be published", body.contains("TABLE_WATCHED,"))
+        assertTrue(
+            "the history tombstone must be written",
+            body.contains("HistoryTombstoneRules.tombstone(")
+        )
+        assertTrue(
+            "the queued history writes must be dropped, and the markers'",
+            body.contains("ids.map { id -> scopedKey(id, profileId) }") &&
+                body.contains("markers.map { (storedKey, _) -> storedKey }")
+        )
+        // The drop now travels WITH the tombstone as one awaited write
+        // (`replaceKeys` drops those ids and stores the items in one lane,
+        // which is the ordering the old removeKeys/put pair had to be written
+        // in by hand - and which process death could still lose).
+        assertTrue(
+            "the drop and the tombstone must leave as ONE write, or the live " +
+                "upload can outrun the tombstone that supersedes it",
+            !body.contains("outbox.removeKeys(") && !body.contains("outbox.put(")
+        )
+        assertTrue(
+            "and that write must be awaited, since the local rows are already gone",
+            body.contains("if (ids.isNotEmpty() &&") &&
+                body.contains("if (markers.isNotEmpty() &&")
         )
         assertTrue(
             "a cleared marker is published as both flags false - the watched " +
@@ -76,7 +93,9 @@ class PoisonSweepClearTombstoneContractTest {
         // once, by the same rule every other writer uses.
         assertTrue(
             "a marker row must not be re-scoped on the way out",
-            body.contains("outbox.put(\n                OutboxItem(\n                    TABLE_WATCHED,\n                    \"item_key\",\n                    storedKey,")
+            body.contains(
+                "TABLE_WATCHED,\n                \"item_key\",\n                storedKey,"
+            )
         )
         assertTrue(body.contains("scopedKey(id, profileId)"))
         assertTrue(
