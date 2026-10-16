@@ -4,6 +4,7 @@ import android.content.Context
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.ui.home.rerootedEpisodeStreamId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
@@ -152,12 +153,20 @@ suspend fun randomAiredEpisode(
 
     val pick = chooseRandomEpisode(gathered, excludeSeason, excludeEpisode)
         ?: return@withContext null
-    // The TMDB row carries the Stremio-style id when the app already knows it;
-    // build one otherwise so every caller has a playable id - in FILE numbering,
-    // like the listing it came from, because that is what the addons resolve and
-    // what the watch-history row is filed under (see EpisodeScheme).
-    pick.copy(
-        streamId = pick.streamId.takeIf { it.isNotBlank() }
-            ?: fileEpisodeStreamId(context, showId, tmdbId, pick.season, pick.episode)
-    )
+    // The root the listing roots its own ids at: the TMDB row carries the
+    // Stremio-style id when the app already knows it, and one is built below
+    // otherwise - in FILE numbering, like the listing it came from, because that
+    // is what the addons resolve and what the watch-history row is filed under
+    // (see EpisodeScheme). "series" is the listing's own type argument, mirrored
+    // so the two answer the same root for the same show (see
+    // TmdbRepository.getSeasonEpisodes).
+    val root = repository.streamRootIdFor(showId, tmdbId, "series")
+    val streamId = pick.streamId.takeIf { it.isNotBlank() }
+        ?: fileEpisodeStreamId(context, root, tmdbId, pick.season, pick.episode)
+    // The id that PLAYS is re-rooted at that same root, keeping its file
+    // numbering: a hop off a route opened as "tmdb:<n>" - or with the catalog's
+    // own id, which can be another title's - names the show the picker does.
+    // One rule, shared with the resume rows that re-read a stored id (see
+    // HomeUpNext.rerootedEpisodeStreamId).
+    pick.copy(streamId = rerootedEpisodeStreamId(streamId, root))
 }

@@ -156,6 +156,51 @@ class AddonSubtitleVideoIdTest {
         )
     }
 
+    @Test
+    fun `without a session id the fallback is asked about under the verified root`() {
+        clearStore()
+        // The route was opened as "tmdb:57532" (a kids rail, a TMDB search row),
+        // while every episode id the listing builds - and every id an add-on
+        // publishes subtitles against - is rooted at the show's verified
+        // "tt...". Keyed by the route's flavor the scheme below would not be
+        // found either, so the mapping would answer 1:1 and ask about a file
+        // that does not hold the episode.
+        val verified = "tt200"
+        EpisodeSchemeStore.put(context, verified, EpisodeScheme(SchemeKind.SEGMENTS_PER_FILE, 2))
+        assertEquals(
+            "TMDB episode 3 lives in file 2, under the root the add-on indexes",
+            "$verified:1:2",
+            addonSubtitleVideoId(
+                context,
+                parentId = "tmdb:57532",
+                parentType = "series",
+                sessionStreamId = null,
+                season = 1,
+                episode = 3,
+                rootId = verified
+            )
+        )
+    }
+
+    @Test
+    fun `a blank or absent root leaves the fallback on the route's own id`() {
+        clearStore()
+        // Nothing resolved: exactly the id the app asked with before any of this
+        // existed, rather than a key built from a blank.
+        assertEquals(
+            "tt700:1:3",
+            addonSubtitleVideoId(
+                context,
+                parentId = "tt700",
+                parentType = "series",
+                sessionStreamId = null,
+                season = 1,
+                episode = 3,
+                rootId = "   "
+            )
+        )
+    }
+
     private fun prefs() =
         context.getSharedPreferences("kbstream_episode_scheme", Context.MODE_PRIVATE)
 

@@ -279,6 +279,23 @@ class EpisodeSchemeWiringContractTest {
                 "function, so the two engines cannot ask about different videos",
             read(MPV).contains("addonSubtitleVideoId(")
         )
+        assertTrue(
+            "the fallback for a session with no episode id must name the show the way the " +
+                "listing names it - the VERIFIED root, not the flavor the route was opened " +
+                "with - or it asks an add-on about an id it publishes nothing against",
+            addon.contains("addonSubtitleRootId(") && addon.contains("streamRootIdFor(")
+        )
+        assertTrue(
+            "and that root must reach the id builder, which keeps the route's id only when " +
+                "nothing resolved",
+            addon.contains("rootId = rootId?.takeIf { it.isNotBlank() } ?: parentId") &&
+                addon.contains("val root = addonSubtitleRootId(")
+        )
+        assertTrue(
+            "MpvPlayerActivity must resolve that same root, or the two engines ask about " +
+                "different shows after a deep link",
+            read(MPV).contains("addonSubtitleRootId(this@MpvPlayerActivity")
+        )
     }
 
     @Test
@@ -295,10 +312,62 @@ class EpisodeSchemeWiringContractTest {
         )
     }
 
+    @Test
+    fun `every engine files the detected scheme under the root it is playing`() {
+        listOf(NATIVE, MPV, EXTERNAL).forEach { path ->
+            val src = read(path)
+            assertFalse(
+                "$path must not key the scheme store by the route's parent id: the season " +
+                    "listing files every episode id, and reads the scheme back, under the " +
+                    "ROOT that id names, so a session keyed by its route's id flavor stores " +
+                    "a detection the listing can never see (and reads past one it did)",
+                src.contains("EpisodeSchemeStore.stableShowId(")
+            )
+            val calls = Regex("PlaybackHistoryIds\\.schemeStoreKey\\(([^)]*)\\)")
+                .findAll(src)
+                .map { it.groupValues[1] }
+                .toList()
+            assertTrue(
+                "$path must read and file the scheme through PlaybackHistoryIds.schemeStoreKey " +
+                    "(found ${calls.size} site(s))",
+                calls.size >= 2
+            )
+            calls.forEach { args ->
+                assertTrue(
+                    "$path must hand that rule the session's own episode id - the id whose " +
+                        "root every builder used (got: $args)",
+                    args.contains("episodeStreamId")
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a row-less random episode id is rooted the way the listing roots its own`() {
+        val src = read(RANDOM_EPISODE)
+        assertTrue(
+            "RandomEpisode must build a row-less id on the show's VERIFIED root, or a random " +
+                "hop off a route opened as \"tmdb:<n>\" (or with the catalog's own id) asks " +
+                "the add-ons for another title's streams",
+            src.contains("repository.streamRootIdFor(")
+        )
+        assertTrue(
+            "and it must root the id there, not at the route's own id",
+            src.contains("fileEpisodeStreamId(context, root, tmdbId, pick.season, pick.episode)")
+        )
+        assertTrue(
+            "the id that PLAYS must be re-rooted at that verified root as well - the fix is " +
+                "the rule, not one branch of it - so a hop off a stale-id route cannot name " +
+                "another title's streams",
+            src.contains("rerootedEpisodeStreamId(streamId, root)")
+        )
+    }
+
     private companion object {
         const val NATIVE = "com/kennyb1201/kbstream/ui/player/NativePlayerActivity.kt"
         const val MPV = "com/kennyb1201/kbstream/ui/player/MpvPlayerActivity.kt"
         const val EXTERNAL = "com/kennyb1201/kbstream/ui/player/ExternalPlayerActivity.kt"
         const val ADDON_SUBTITLES = "com/kennyb1201/kbstream/ui/player/AddonSubtitles.kt"
+        const val RANDOM_EPISODE = "com/kennyb1201/kbstream/ui/player/RandomEpisode.kt"
     }
 }

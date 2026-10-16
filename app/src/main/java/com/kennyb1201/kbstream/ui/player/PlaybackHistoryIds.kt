@@ -3,6 +3,7 @@ package com.kennyb1201.kbstream.ui.player
 import android.content.Context
 import android.util.Log
 import com.kennyb1201.kbstream.data.player.EpisodeScheme
+import com.kennyb1201.kbstream.data.player.EpisodeSchemeStore
 import com.kennyb1201.kbstream.data.player.SchemeKind
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
@@ -39,6 +40,38 @@ object PlaybackHistoryIds {
         season != null && episode != null -> "$parentId:$season:$episode"
         else -> parentId
     }
+
+    /**
+     * The id the show's detected episode scheme is filed under, read from the
+     * SESSION: the root the playing episode id names, and the route's parent id
+     * only when the session has no episode id to read.
+     *
+     * The scheme store has to be keyed by ONE id per show, and the id that makes
+     * that true is the root of the id the session is playing - because that is
+     * exactly what every builder of an episode id keys it by
+     * ([com.kennyb1201.kbstream.data.player.fileEpisodeStreamId] files a
+     * `"<root>:<season>:<episode>"` under its own root) and because a session's
+     * `parent_id` is not that root: it is the id flavor the ROUTE was opened
+     * with, which is `tmdb:<n>` for the kids rails and TMDB search rows and the
+     * catalog's own id for a deep link. Keyed by the flavor, the two sides
+     * missed each other in both directions - a show watched from a kids rail
+     * stored its detection under `tmdb:57532` while the season listing looked it
+     * up under the verified `tt4873036`, so the listing kept naming the file the
+     * 1:1 mapping chose, which on a segmented show (PAW Patrol) is a file that
+     * does not hold the episode.
+     *
+     * The fallback covers the two sessions with no episode root to read: a film,
+     * whose id names no show-plus-episode pair, and an episode launched with no
+     * episode id at all.
+     */
+    fun schemeStoreKey(
+        parentId: String,
+        episodeStreamId: String?,
+        tmdbId: Int? = null
+    ): String? = EpisodeSchemeStore.stableShowId(
+        EpisodeMatch.seriesRootFrom(episodeStreamId) ?: parentId,
+        tmdbId
+    )
 
     /**
      * The parent id the playback-history row should be stored under.

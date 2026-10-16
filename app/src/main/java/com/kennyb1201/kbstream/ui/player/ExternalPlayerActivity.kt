@@ -308,10 +308,13 @@ class ExternalPlayerActivity : ComponentActivity() {
         // custom global accent and the AMOLED / pure-black toggles both have to
         // be re-applied over the whole tree.
         retintPlayerChrome(findViewById(android.R.id.content), this)
-        // The scheme a previous session detected for this show, if any. The imdb
-        // parent id answers it here; a tmdb-only parent is re-keyed from tmdbId()
-        // on the first suspend path that needs the scheme (see loadBingeScheme).
-        schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, null)
+        // The scheme a previous session detected for this show, if any. The
+        // session's own episode id answers it here, since the season listing
+        // files every episode id - and the scheme it reads - under that root
+        // (see PlaybackHistoryIds.schemeStoreKey); a session with no episode id
+        // and a tmdb-only parent is re-keyed from tmdbId() on the first suspend
+        // path that needs the scheme (see loadBingeScheme).
+        schemeStoreKey = PlaybackHistoryIds.schemeStoreKey(parentId, episodeStreamId)
         bingeScheme = EpisodeSchemeStore.get(this, schemeStoreKey)
         // The stream id names the FILE; the scheme maps the file to its TMDB
         // episode(s). When the intent's s/e disagree with that mapping, the file
@@ -970,7 +973,11 @@ class ExternalPlayerActivity : ComponentActivity() {
      */
     private suspend fun loadBingeScheme() {
         if (schemeStoreKey == null) {
-            schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, tmdbId())
+            schemeStoreKey = PlaybackHistoryIds.schemeStoreKey(
+                parentId,
+                episodeStreamId,
+                tmdbId()
+            )
             bingeScheme = EpisodeSchemeStore.get(this, schemeStoreKey)
         }
     }

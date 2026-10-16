@@ -224,4 +224,53 @@ class PlaybackHistoryIdsTest {
             PlaybackHistoryIds.playbackSessionLine(null, null, "tt0111161", "tt0111161")
         )
     }
+
+    // ── the id the detected scheme is filed under ──────────────────────────
+    //
+    // One key per show, and it has to be the root the session's own episode id
+    // names: that is what the season listing files every episode id - and the
+    // scheme it reads back - under. Keyed by the route's parent id instead, a
+    // show watched from a kids rail ("tmdb:57532") stored its detection under a
+    // key the listing (which resolves "tt4873036") never read, so the listing
+    // kept naming the 1:1 file of a segmented show.
+
+    @Test
+    fun `the scheme key is the root the playing episode id names`() {
+        assertEquals(
+            "the route's flavor is not the key: the id's own root is",
+            "tt4873036",
+            PlaybackHistoryIds.schemeStoreKey("tmdb:57532", "tt4873036:7:3", 57532)
+        )
+        assertEquals(
+            "and a stale catalog id is re-rooted by the id that is playing",
+            "tt4873036",
+            PlaybackHistoryIds.schemeStoreKey("tt3121722", "tt4873036:7:3", 57532)
+        )
+        // The root answers even when nothing resolved a tmdb id for the session.
+        assertEquals(
+            "tt4873036",
+            PlaybackHistoryIds.schemeStoreKey("tmdb:57532", "tt4873036:7:3")
+        )
+        // An id a builder itself rooted at "tmdb:<n>" keeps that root, so the
+        // session and that builder still agree.
+        assertEquals(
+            "tmdb:57532",
+            PlaybackHistoryIds.schemeStoreKey("tmdb:57532", "tmdb:57532:7:3", 57532)
+        )
+    }
+
+    @Test
+    fun `a session with no episode root is keyed by its parent id`() {
+        // An episode launched without an id, and a film - whose id names no
+        // show-plus-episode pair, so it is not read as a root.
+        assertEquals("tt1534800", PlaybackHistoryIds.schemeStoreKey("tt1534800", null))
+        assertEquals("tt1534800", PlaybackHistoryIds.schemeStoreKey("tt1534800", "  "))
+        assertEquals("tmdb:57532", PlaybackHistoryIds.schemeStoreKey("tmdb:57532", null, 57532))
+        assertEquals(
+            "tt0111161",
+            PlaybackHistoryIds.schemeStoreKey("tt0111161", "tt0111161", 13)
+        )
+        // Nothing usable at all: no key, which the store reads as "no entry".
+        assertNull(PlaybackHistoryIds.schemeStoreKey("tmdb:57532", null))
+    }
 }

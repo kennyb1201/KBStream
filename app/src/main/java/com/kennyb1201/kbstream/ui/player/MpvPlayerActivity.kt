@@ -2369,16 +2369,28 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      */
     private fun loadAddonSubtitleOffers() {
         if (parentType == "channel") return
-        val videoId = addonSubtitleVideoId(
-            context = this,
-            parentId = parentId,
-            parentType = parentType,
-            sessionStreamId = episodeStreamId,
-            season = season,
-            episode = episode
-        ) ?: return
         val contentType = if (parentType == "series") "series" else "movie"
         addonSubtitleFetchJob = lifecycleScope.launch {
+            // A session with no episode id of its own - a deep link, an older
+            // handoff - has to name the show the way the listing names it: by
+            // the root TMDB verified, not the flavor its route was opened with
+            // (see addonSubtitleRootId). Only that case pays the resolve; a
+            // session carrying its own id is the video, and a film answers by
+            // its own id.
+            val rootId = if (parentType == "series" && episodeStreamId?.trim().isNullOrEmpty()) {
+                addonSubtitleRootId(this@MpvPlayerActivity, parentId, parentType, tmdbId())
+            } else {
+                null
+            }
+            val videoId = addonSubtitleVideoId(
+                context = this@MpvPlayerActivity,
+                parentId = parentId,
+                parentType = parentType,
+                sessionStreamId = episodeStreamId,
+                season = season,
+                episode = episode,
+                rootId = rootId
+            ) ?: return@launch
             val offers = withContext(Dispatchers.IO) {
                 AddonSubtitleSource.discover(this@MpvPlayerActivity, videoId, contentType)
             }
@@ -3374,7 +3386,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * re-learning the mapping from whichever file it happens to open.
      */
     private fun initBingeScheme() {
-        schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, resolvedTmdbId)
+        schemeStoreKey = PlaybackHistoryIds.schemeStoreKey(
+            parentId,
+            episodeStreamId,
+            resolvedTmdbId
+        )
         bingeScheme = EpisodeSchemeStore.get(this, schemeStoreKey)
     }
 
@@ -3446,7 +3462,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         if (fileMs <= 0L && fromName == null) return
         lifecycleScope.launch {
             if (schemeStoreKey == null) {
-                schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, tmdbId())
+                schemeStoreKey = PlaybackHistoryIds.schemeStoreKey(
+                    parentId,
+                    episodeStreamId,
+                    tmdbId()
+                )
                 bingeScheme = EpisodeSchemeStore.get(this@MpvPlayerActivity, schemeStoreKey)
             }
             val tmdbMs = if (fromName != null) {

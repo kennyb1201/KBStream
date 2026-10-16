@@ -10480,15 +10480,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * before starts on the right file instead of re-learning the mapping from
      * whichever file it happens to open.
      *
-     * [EpisodeSchemeStore.stableShowId] prefers the imdb parent id - the same
-     * string the history rows are filed under - and falls back to a resolved
-     * `tmdb:<n>`. That fallback is not available this early
-     * ([resolveParentTmdbId] suspends), so a tmdb-only parent gets its key the
-     * first time [maybeDetectScheme] resolves that id.
+     * The key is the root the session's own episode id names, not the route's
+     * parent id (see [PlaybackHistoryIds.schemeStoreKey]): the season listing
+     * builds every episode id, and reads the scheme back, under THAT id, so a
+     * session that keyed the store by the flavor its route was opened with
+     * (`tmdb:<n>` from a kids rail) stored a detection the listing could never
+     * see. The tmdb id is the fallback key half, and it is not available this
+     * early ([resolveParentTmdbId] suspends), so a session with no episode id
+     * and a tmdb-only parent gets its key the first time [maybeDetectScheme]
+     * resolves that id.
      */
     private fun initBingeScheme() {
         if (isLiveChannel) return
-        schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, resolvedParentTmdbId)
+        schemeStoreKey = PlaybackHistoryIds.schemeStoreKey(
+            parentId,
+            episodeStreamId,
+            resolvedParentTmdbId
+        )
         bingeScheme = EpisodeSchemeStore.get(this, schemeStoreKey)
     }
 
@@ -10574,7 +10582,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val sessionScope = scope ?: return
         sessionScope.launch {
             if (schemeStoreKey == null) {
-                schemeStoreKey = EpisodeSchemeStore.stableShowId(parentId, resolveParentTmdbId())
+                schemeStoreKey = PlaybackHistoryIds.schemeStoreKey(
+                    parentId,
+                    episodeStreamId,
+                    resolveParentTmdbId()
+                )
                 bingeScheme = EpisodeSchemeStore.get(this@NativePlayerActivity, schemeStoreKey)
             }
             val tmdbMs = if (fromName != null) {

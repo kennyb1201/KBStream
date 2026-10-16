@@ -17,6 +17,7 @@ import com.kennyb1201.kbstream.data.addon.SubtitleEntry
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import com.kennyb1201.kbstream.data.runCatchingCancellable
+import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +31,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -182,6 +184,27 @@ class AddonSubtitleController(
         }
         view.onViewDetached = {
             release()
+        }
+
+        // A series that arrived without an episode id of its own has to name
+        // the show the way the listing names it - the root TMDB verified, not
+        // the flavor its route was opened with (see [addonSubtitleRootId]) - and
+        // that resolve suspends, so it runs on this controller's own scope. A
+        // session carrying its own id, and a film, answer with no lookup at all.
+        if (parentType == "series" && episodeStreamId?.trim().isNullOrEmpty()) {
+            scope.launch {
+                val root = addonSubtitleRootId(appContext, parentId, parentType)
+                addonSubtitleVideoId(
+                    context = appContext,
+                    parentId = parentId,
+                    parentType = parentType,
+                    sessionStreamId = episodeStreamId,
+                    season = season,
+                    episode = episode,
+                    rootId = root
+                )?.let { fetchIfNeeded(it, parentType) }
+            }
+            return
         }
 
         val videoId = addonSubtitleVideoId(
@@ -773,7 +796,8 @@ internal fun addonSubtitleVideoId(
     parentType: String,
     sessionStreamId: String?,
     season: Int?,
-    episode: Int?
+    episode: Int?,
+    rootId: String? = null
 ): String? {
     if (parentType != "series" || season == null || episode == null) {
         return parentId.takeIf { it.isNotBlank() }
@@ -784,9 +808,50 @@ internal fun addonSubtitleVideoId(
         ?.let { return it }
     return fileEpisodeStreamId(
         context = context,
-        rootId = parentId,
+        // The show's VERIFIED root when the caller resolved one (see
+        // [addonSubtitleRootId]). A route opened as "tmdb:<n>", or with a
+        // catalog id that names no title TMDB knows, is not an id an add-on
+        // publishes subtitles against - and the episode scheme this mapping
+        // reads is filed under the verified root too, so keyed by the route's
+        // flavor it answered 1:1 for a segmented show.
+        rootId = rootId?.takeIf { it.isNotBlank() } ?: parentId,
         tmdbId = null,
         season = season,
         tmdbEpisode = episode
     )
+}
+
+/**
+ * The show's verified stream root, for the one case [addonSubtitleVideoId] cannot
+ * answer from the session alone: a series that arrived with no episode id (a
+ * deep link, an older handoff).
+ *
+ * The root it returns is the id every episode id is built on - TMDB's own
+ * external-ids answer when it has one, the route's id when it does not (see
+ * TmdbRepository.streamRootIdFor) - so the fallback asks the add-on about the
+ * same show the season listing would, whatever flavor the route was opened
+ * with. A film, a live channel or a blank parent has nothing to resolve: null,
+ * which leaves [addonSubtitleVideoId] on its previous behavior.
+ *
+ * Bounded and cached, because this runs on the window from bind to the first
+ * fetch: the resolution is memory- and disk-cached, and a slow network leaves
+ * the fallback id unrooted rather than holding the subtitle fetch up.
+ */
+internal suspend fun addonSubtitleRootId(
+    context: Context,
+    parentId: String,
+    parentType: String,
+    tmdbId: Int? = null
+): String? {
+    if (parentType != "series" || parentId.isBlank()) return null
+    return withTimeoutOrNull(2_500L) {
+        withContext(Dispatchers.IO) {
+            runCatchingCancellable {
+                val repository = TmdbRepository.getInstance(context)
+                val tmdb = tmdbId?.takeIf { it > 0 }
+                    ?: PlaybackHistoryIds.resolveTmdbId(context, parentId, parentType)
+                repository.streamRootIdFor(parentId, tmdb, "series")
+            }.getOrNull()
+        }
+    }
 }
