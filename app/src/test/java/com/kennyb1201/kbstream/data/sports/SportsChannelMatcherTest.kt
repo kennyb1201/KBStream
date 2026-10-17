@@ -755,10 +755,92 @@ class SportsChannelMatcherTest {
             programs = emptyList(),
         )
 
-        // Exact first, then the word-boundary hits shortest-name-first, then the
-        // one that only contains the name - the same strength order the single
-        // pick used, now with everything it used to discard behind it.
-        assertEquals(listOf(espn, espn2, news, contains), found)
+        // Exact first, then the domestic qualified names ("ESPN News", shortest
+        // first), then the prefix family ("ESPN2"), then the one that only
+        // contains the name - the same strength order the single pick used, now
+        // with everything it used to discard behind it.
+        assertEquals(listOf(espn, news, espn2, contains), found)
+    }
+
+    @Test
+    fun `tier two prefers a qualified domestic feed over a different channel sharing the prefix`() {
+        val espn2 = channel("espn2", "ESPN2")
+        val espnHd = channel("espnhd", "ESPN HD")
+
+        // The pick must not depend on playlist order: ESPN HD is a domestic feed
+        // of the brand, ESPN2 is a different channel sharing its prefix.
+        listOf(
+            listOf(espn2, espnHd),
+            listOf(espnHd, espn2),
+        ).forEach { channels ->
+            assertEquals(
+                "the domestic feed wins in either playlist order",
+                espnHd,
+                SportsChannelMatcher.match(
+                    game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+                    channels = channels,
+                    programs = emptyList(),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `tier two demotes an international variant below the domestic feed`() {
+        // The Georgia/Auburn game of 2026-10-17: ESPN's own scoreboard said the
+        // broadcast was "ESPN", and the hub served "ESPN AU" because both names
+        // tied at the old strength 2 and the tie fell to playlist order.
+        val espnAu = channel("espnau", "ESPN AU")
+        val espnHd = channel("espnhd", "ESPN HD")
+
+        listOf(
+            listOf(espnAu, espnHd),
+            listOf(espnHd, espnAu),
+        ).forEach { channels ->
+            assertEquals(
+                "the domestic feed wins in either playlist order",
+                espnHd,
+                SportsChannelMatcher.match(
+                    game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+                    channels = channels,
+                    programs = emptyList(),
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `an international variant stays in the backups behind the domestic feed`() {
+        val espnHd = channel("espnhd", "ESPN HD")
+        val espnAu = channel("espnau", "ESPN AU")
+        val espn2 = channel("espn2", "ESPN2")
+
+        val found = SportsChannelMatcher.matches(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+            channels = listOf(espnAu, espn2, espnHd),
+            programs = emptyList(),
+        )
+
+        // The variant is demoted, not excluded: it may genuinely carry the game,
+        // so it beats "not in your playlist" while staying behind the feed the
+        // broadcast actually means.
+        assertEquals(listOf(espnHd, espnAu, espn2), found)
+    }
+
+    @Test
+    fun `a region code only counts as a trailing token`() {
+        val auFirst = channel("auespn", "AU ESPN")
+        val espn2 = channel("espn2", "ESPN2")
+
+        val hit = SportsChannelMatcher.match(
+            game = game(yankees, redSox, broadcasts = listOf("ESPN")),
+            channels = listOf(auFirst, espn2),
+            programs = emptyList(),
+        )
+
+        // "AU ESPN" only contains the name (band 1); a leading token is not a
+        // region suffix, so the prefix family still outranks it.
+        assertEquals(espn2, hit)
     }
 
     @Test

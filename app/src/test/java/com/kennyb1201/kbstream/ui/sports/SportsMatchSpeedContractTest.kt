@@ -171,7 +171,8 @@ class SportsMatchSpeedContractTest {
         assertTrue(
             "the names are normalized in the index's own build, from the same fields the tier used",
             index.contains("canonicalNetwork(name)") &&
-                index.contains("words(name).firstOrNull()") &&
+                index.contains("val nameWords = words(name)") &&
+                index.contains("nameWords.firstOrNull()") &&
                 index.contains("compact(name).length")
         )
         val scan = slice(index, "private fun networkChannels(network: String)", "companion object {")

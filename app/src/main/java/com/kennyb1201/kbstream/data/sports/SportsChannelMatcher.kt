@@ -58,8 +58,9 @@ data class TeamVariants(
  *     national, an RSN, or a team channel - without knowing the network in
  *     advance. A single-team hit is a pregame show or a repeat, not the game.
  *  2. **Broadcast network match.** ESPN's own `broadcasts[].names` resolved
- *     against the playlist by normalized name: exact, then prefix/word-boundary,
- *     then contains. "ESPN" must not land on "ESPN2" when a plain "ESPN" exists.
+ *     against the playlist by normalized name. "ESPN" must not land on "ESPN2"
+ *     - or on "ESPN AU" - when an ESPN feed is in the playlist: exact, then the
+ *     qualified domestic feed, then the international variant, then the family.
  *     A streaming-exclusive name ([STREAMING_EXCLUSIVES]) never matches here at
  *     all - no cable channel carries it - so a game ESPN+ streams is found by
  *     the EPG tier (the RSN or local channel simulcasting it) or the team's own
@@ -138,6 +139,23 @@ internal object SportsChannelMatcher {
         "dazn",
         "paramount+",
     )
+
+    /**
+     * Two-letter region codes marking a channel as a non-domestic feed of its
+     * brand ("ESPN AU"). Only codes that cannot be mistaken for ordinary words:
+     * "in", "us", "it", "is" and their kin are deliberately absent, so a name
+     * like "ESPN Inside" can never read as international.
+     *
+     * Data, not code: grown from observed misses like STREAMING_EXCLUSIVES and
+     * TEAM_SHORT_FORMS - "au" is the Georgia/Auburn miss of 2026-10-17, when the
+     * hub served ESPN AU for an ESPN broadcast. A code earns its place the same
+     * way: a real card that picked the wrong region's feed.
+     */
+    private val INTERNATIONAL_REGION_CODES: Set<String> = setOf("au", "uk", "ca", "nz", "ie")
+
+    /** True when the name's last token is a region code from [INTERNATIONAL_REGION_CODES]. */
+    private fun List<String>.isInternationalVariant(): Boolean =
+        lastOrNull()?.let { it.length == 2 && it in INTERNATIONAL_REGION_CODES } == true
 
     /**
      * Alternate names a provider's EPG uses in place of a team's own, keyed by
@@ -686,24 +704,31 @@ internal object SportsChannelMatcher {
             val canonical: String,
             /**
              * The raw name's first word, which is where a broadcast name lands
-             * - a prefix only counts at a word boundary in the ORIGINAL name, so
-             * "ESPN2" is a weaker match for "ESPN" than "ESPN News" is.
+             * - "ESPN HD" is the same feed under a qualified name, while "ESPN2"
+             * is a different channel sharing the prefix.
              */
             val firstWord: String,
+            /**
+             * Whether the name ends in a foreign-region code ("ESPN AU"): the same
+             * brand, not the feed the broadcast means.
+             */
+            val international: Boolean,
             /** [compact] length of the raw name: the tie-break between equals. */
             val length: Int,
             val channel: IptvChannel,
         ) {
             /**
-             * The old `networkStrength`: 3 for the same normalized name, 2 for a
-             * first word or a prefix, 1 for appearing anywhere inside, 0 for no
-             * match. Read off the precomputed strings, so a comparison across the
-             * whole playlist allocates nothing.
+             * 5 for the same normalized name, 4 for the same brand under a domestic
+             * qualified name ("ESPN HD"), 3 for the brand's foreign-region variant
+             * ("ESPN AU"), 2 for a different channel sharing the prefix ("ESPN2"),
+             * 1 for appearing anywhere inside, 0 for no match. Read off the
+             * precomputed strings, so a comparison across the whole playlist
+             * allocates nothing.
              */
             fun strength(target: String): Int {
                 if (canonical.isEmpty()) return 0
-                if (canonical == target) return 3
-                if (firstWord == target) return 2
+                if (canonical == target) return 5
+                if (firstWord == target) return if (international) 3 else 4
                 if (canonical.startsWith(target)) return 2
                 if (canonical.contains(target)) return 1
                 return 0
@@ -715,9 +740,10 @@ internal object SportsChannelMatcher {
 
         /**
          * Every channel naming [network], best first: by descending strength
-         * (exact equals, then a prefix at a word boundary, then anywhere inside)
-         * and, among equals, the shortest name - "ESPN" over "ESPN
-         * International".
+         * (exact equals, then the same brand under a domestic qualified name,
+         * then the brand's foreign-region variant, then a different channel
+         * sharing the prefix, then anywhere inside) and, among equals, the
+         * shortest name - "ESPN" over "ESPN International".
          *
          * The head is the single channel this used to pick, so a backup can never
          * displace the primary; the rest are the same family (ESPN2 and ESPNews
@@ -764,9 +790,11 @@ internal object SportsChannelMatcher {
                     ChannelIndex(
                         channels.map { channel ->
                             val name = channel.displayName.ifBlank { channel.name }
+                            val nameWords = words(name)
                             Fact(
                                 canonical = canonicalNetwork(name),
-                                firstWord = words(name).firstOrNull().orEmpty(),
+                                firstWord = nameWords.firstOrNull().orEmpty(),
+                                international = nameWords.isInternationalVariant(),
                                 length = compact(name).length,
                                 channel = channel,
                             )
