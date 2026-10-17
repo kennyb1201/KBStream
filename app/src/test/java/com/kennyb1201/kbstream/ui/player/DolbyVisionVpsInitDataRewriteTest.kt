@@ -123,13 +123,13 @@ class DolbyVisionVpsInitDataRewriteTest {
      * that offset and derives the field capture's string, which is what the
      * assertions below hold it to.
      */
-    private fun fullP8Sps(tier: Int, dvExtension: Boolean): ByteArray {
+    private fun fullP8Sps(tier: Int, dvExtension: Boolean, levelIdc: Int = 150): ByteArray {
         val bits = Bits()
             .u(0, 4).u(0, 3).u(1, 1) // sps_video_parameter_set_id, max_sub_layers_minus1, nesting
             .u(0, 2).u(tier, 1).u(2, 5) // profile_space, tier, profile_idc 2 (Main10)
             .u(0x20000000, 32) // compatibility flag[2] (Main10) — read back as hex 4
             .u(0xB, 4).u(0, 44) // constraint indicator flags, first byte 0xB0
-            .u(150, 8) // general_level_idc (Level 5.0)
+            .u(levelIdc, 8) // general_level_idc
             .ue(0) // sps_seq_parameter_set_id
             .ue(1) // chroma_format_idc 4:2:0
             .ue(3840).ue(1608) // resolution
@@ -372,6 +372,67 @@ class DolbyVisionVpsInitDataRewriteTest {
         )
     }
 
+    /**
+     * The two bits after vps_video_parameter_set_id are the base layer's
+     * internal/available flags, not a reserved field, and H.265 ties neither of
+     * them to the layer count. The rewrite used to demand both set ("base layer
+     * present"), so a VPS declaring its base layer unavailable was left
+     * DV-flagged in the codec config — the one outcome this path exists to
+     * prevent, since the config is parsed before any sample.
+     */
+    @Test
+    fun `a VPS whose base-layer flags are clear is rewritten instead of kept`() {
+        // The fixture with vps_base_layer_internal_flag and
+        // vps_base_layer_available_flag cleared (bits 4 and 5 of the first RBSP
+        // byte), layer count and everything else untouched: valid H.265, and
+        // exactly the set the old gate refused.
+        val noBaseLayer = dvVpsRbsp.copyOf().also { it[0] = 0x00 }
+        val vps = nal(32, noBaseLayer)
+        assertFalse("the variant must differ from the fixture", vps.contentEquals(dvVps))
+
+        val outcome = DolbyVisionCompat.rewriteVpsToHdr10(vps, 2, vps.size)
+        val rewritten = when (outcome) {
+            is DolbyVisionCompat.VpsRewriteOutcome.Rewritten -> outcome.rbsp
+            else -> throw AssertionError("the set was not rewritten: $outcome")
+        }
+        assertEquals(
+            "the source's base-layer flags ride through verbatim, as every other " +
+                "header bit does — the rewrite owns the layer count, not the flags",
+            0x00,
+            rewritten[0].toInt() and 0xFF
+        )
+        assertEquals(
+            "and the sub-layer count / nesting flag / 0xFFFF reserved field are the source's",
+            0x01,
+            rewritten[1].toInt() and 0xFF
+        )
+        assertFalse(
+            "the set really changed: the High tier is patched and the DV extension dropped",
+            rewritten.contentEquals(noBaseLayer)
+        )
+        // The rewrite emits an emulation-prevention-escaped RBSP, so its length
+        // is not comparable with this unescaped fixture's; the property that
+        // matters is that a second pass finds nothing left. It parses the
+        // emitted header, finds the patched Main10 PTL and a cleared extension
+        // flag — i.e. the DV signaling is gone and no High tier survives.
+        val emitted = nal(32, rewritten)
+        assertEquals(
+            "nothing DV-flagged is left in the emitted set",
+            DolbyVisionCompat.VpsRewriteOutcome.NoDvExtension,
+            DolbyVisionCompat.rewriteVpsToHdr10(emitted, 2, emitted.size)
+        )
+
+        // The field-relevant claim: the config this path ships is the rewrite,
+        // never the source DV VPS.
+        val result = DolbyVisionCompat.rewriteRelabelInitData(listOf(lengthDelimited(vps, pps)))
+        assertTrue("the config's VPS verdict says rewritten", result.vpsRewritten)
+        assertArrayEquals(
+            "and the set that ships is the rewritten one, header preserved",
+            lengthDelimited(vps.copyOf(2) + rewritten, pps),
+            result.initData.single()
+        )
+    }
+
     @Test
     fun `a config with nothing rewritable comes back as the very same list`() {
         // The small fixture's SPS is a DV-flagged PTL the parser cannot walk end
@@ -482,20 +543,42 @@ class DolbyVisionVpsInitDataRewriteTest {
             advertised,
             rewrittenString
         )
-        // Known open issue, and deliberately not pinned further: the rewritten
-        // SPS does NOT read back as Main10 through this parser (it comes back
-        // `hvc1.0.<compat>.L150.B0` — profile_idc 0), because
-        // [DolbyVisionCompat.rewriteSpsToHdr10] skips a two-bit `reserved` field
+        // The rewritten config SPS has to read back as the Main10 it was patched
+        // to. It did not: with the rewrite consuming a two-bit `reserved` field
         // the H.265 SPS syntax does not have (general_profile_space starts at
-        // RBSP bit 8; the two reserved bits belong to the VPS). The relabel's
-        // advertised string is taken from the source SPS, so nothing here
-        // advertises that reading — but the displacement is why this assertion
-        // exists: if `rewriteSpsToHdr10`'s offset is fixed, this is the test that
-        // says so, and it should then read Main10 Main-tier at the same level.
-        assertFalse(
-            "the rewritten SPS is not readable as the Main10 it is meant to be: " +
-                "$rewrittenString",
-            rewrittenString != null && rewrittenString.startsWith("hvc1.2.")
+        // RBSP bit 8; the two reserved bits belong to the VPS header), the whole
+        // general PTL came back displaced by two bits — the field's own config
+        // SPS read `hvc1.0.<compat>.L150.B0`, profile_idc 0, when the set it now
+        // ships declares Main10. Only the tier is patched (High → Main); the
+        // level and the constraint byte are the source's, bit-exact.
+        assertEquals(
+            "the rewritten config SPS must read back as Main10 Main tier at the " +
+                "source's own level: $rewrittenString",
+            "hvc1.2.4.L150.B0",
+            rewrittenString
+        )
+        assertTrue(
+            "the source's level and constraint byte survive the patch: $rewrittenString",
+            rewrittenString != null && rewrittenString.endsWith(".L150.B0")
+        )
+    }
+
+    @Test
+    fun `the rewritten config SPS keeps a level other than the field capture's`() {
+        // "At the same level" is not a property of the 150 fixture: the level and
+        // the constraint byte sit AFTER the general PTL fields the patch
+        // rewrites, so they are copied bit-exact whatever they say. A rewrite
+        // offset that drifted into the level would advertise a level the source
+        // never declared — the advertised-string-vs-SPS disagreement the whole
+        // MTK stall class is made of.
+        val spsMain = fullP8Sps(tier = 0, dvExtension = true, levelIdc = 93)
+        val result = DolbyVisionCompat.rewriteRelabelInitData(listOf(annexB(dvVps, spsMain, pps)))
+
+        assertEquals("the SPS is rewritten", "applied", spsRewriteOutcome(false, result.spsOutcome))
+        assertEquals(
+            "Main10 Main tier at the source's own Level 3.1",
+            "hvc1.2.4.L93.B0",
+            DolbyVisionCompat.hevcCodecFromInitData(result.initData)
         )
     }
 

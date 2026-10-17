@@ -1398,10 +1398,21 @@ internal object DolbyVisionCompat {
         if (rbsp.size < 6) return VpsRewriteOutcome.Failed("short-rbsp")
         val br = VpsBitReader(rbsp)
 
-        // Fixed header: id(4) reserved(=3)(2) max_layers(6) max_sub_layers(3)
-        // nesting(1) reserved_ffff(16) = 32 bits.
+        // Fixed header: vps_video_parameter_set_id(4), the base layer
+        // internal/available flags(1+1), vps_max_layers_minus1(6),
+        // vps_max_sub_layers_minus1(3), vps_temporal_id_nesting_flag(1),
+        // vps_reserved_0xffff_16bits(16) = 32 bits.
         if (br.readBits(4) == -1L) return VpsRewriteOutcome.Failed("header")
-        if (br.readBits(2) != 3L) return VpsRewriteOutcome.Failed("reserved-3bits")
+        // Those two bits are vps_base_layer_internal_flag and
+        // vps_base_layer_available_flag — the base layer's status, not a
+        // reserved field — and H.265 ties neither of them to the layer count
+        // (the two describe different things, and both are copied through
+        // verbatim in the rebuild below). This used to demand 3, i.e. "base
+        // layer present and available": a VPS that said otherwise made the
+        // whole rewrite bail, and a bailed rewrite KEEPS the DV-flagged
+        // parameter set in-band — the stall this module exists to close. Read
+        // them; do not gate on them.
+        if (br.readBits(2) == -1L) return VpsRewriteOutcome.Failed("base-layer-flags")
         val maxLayers = br.readBits(6).toInt() + 1
         if (maxLayers <= 0) return VpsRewriteOutcome.Failed("max-layers")
         val maxSubLayers = br.readBits(3).toInt() + 1
@@ -1653,7 +1664,9 @@ internal object DolbyVisionCompat {
     /**
      * Rewrites a Dolby Vision SPS payload (RBSP, EPB bytes allowed) into a
      * clean single-layer HDR10 SPS: the general profile_tier_level is patched
-     * to Main10 (profile_idc 2, Main tier, Main10 compatibility flag) and the
+     * to Main10 (profile_idc 2, Main tier, Main10 compatibility flag) with the
+     * source's level and constraint flags kept, so the set reads back through
+     * [hevcCodecFromInitData] as Main10 Main tier at the source's level, and the
      * SPS extension that carries DV signaling is removed
      * (sps_extension_present_flag = 0, then rbsp trailing bits). The full SPS
      * is skip-parsed first (ITU-T H.265 7.3.2.2.1 — scaling lists, short-term
@@ -1671,13 +1684,19 @@ internal object DolbyVisionCompat {
         val br = VpsBitReader(rbsp)
 
         // sps_video_parameter_set_id(4) sps_max_sub_layers_minus1(3)
-        // sps_temporal_id_nesting_flag(1) reserved_zero_2bits(2)
+        // sps_temporal_id_nesting_flag(1), then profile_tier_level(1, ...),
+        // whose general_profile_space is RBSP bit 8 — that is 8 header bits and
+        // no more (ITU-T H.265 7.3.2.2.1: the SPS has no reserved_zero_2bits
+        // field; the two reserved bits belong to the VPS header). Consuming two
+        // bits here displaced the whole PTL by two, so the set this rewrote
+        // re-read as a profile the SPS never declared (field: the config SPS
+        // came back `hvc1.0.<compat>.L150.B0` — profile_idc 0 — instead of the
+        // Main10 it was patched to).
         if (br.readBits(4) == -1L) return SpsRewriteOutcome.Failed("vps-id")
         val maxSubLayersBits = br.readBits(3)
         if (maxSubLayersBits == -1L) return SpsRewriteOutcome.Failed("sub-layers")
         val maxSubLayers = maxSubLayersBits.toInt() + 1
         if (br.readBits(1) == -1L) return SpsRewriteOutcome.Failed("nesting")
-        if (br.readBits(2) == -1L) return SpsRewriteOutcome.Failed("reserved")
 
         // profile_tier_level(1, maxSubLayers - 1) — the SPS copy of the PTL is
         // patched to clean Main10 during the rebuild below: Dolby Vision
@@ -1809,16 +1828,21 @@ internal object DolbyVisionCompat {
             return SpsRewriteOutcome.NoDvExtension
         }
         val out = VpsBitWriter()
-        if (!br.copyBits(0, 10, out)) return SpsRewriteOutcome.Failed("copy-sps")
+        // Header through sps_temporal_id_nesting_flag (8 bits), the general PTL
+        // fields rewritten in place (40 bits, ending at bit 48), then everything
+        // from the constraint flags on. The 8/48 pair is the SPS layout: shifting
+        // it by the VPS's two reserved bits is what made the rewrite emit a set
+        // whose PTL did not parse as the Main10 it declares.
+        if (!br.copyBits(0, 8, out)) return SpsRewriteOutcome.Failed("copy-sps")
         writeMain10GeneralPtl(out, compatFlags)
         if (stripDvExtension) {
-            if (!br.copyBits(50, extFlagPos, out)) return SpsRewriteOutcome.Failed("copy-sps")
+            if (!br.copyBits(48, extFlagPos, out)) return SpsRewriteOutcome.Failed("copy-sps")
             out.writeBits(0L, 1) // sps_extension_present_flag = 0
             out.writeBits(1L, 1) // rbsp_stop_one_bit
         } else {
             // Constraint flags, reserved bits, level, sub-layer PTL blocks and
             // the extension / trailing bits ride along bit-exact.
-            if (!br.copyBits(50, rbsp.size * 8, out)) return SpsRewriteOutcome.Failed("copy-sps")
+            if (!br.copyBits(48, rbsp.size * 8, out)) return SpsRewriteOutcome.Failed("copy-sps")
         }
         return SpsRewriteOutcome.Rewritten(addEmulationPrevention(out.finish()))
     }
@@ -3064,8 +3088,8 @@ internal object DolbyVisionCompat {
                     .append(":").append(shortDigest(payload))
                 // `from + 2` is the offset every other caller passes: the NAL
                 // header is not part of the RBSP, and handing it to the parser
-                // is what made this audit report failed(reserved-3bits) on a
-                // VPS the strip itself rewrites happily.
+                // is what made this audit report a VPS rewrite failure on a VPS
+                // the strip itself rewrites happily.
                 append(" vpsRewrite=").append(
                     renderOutcome(
                         if (vps.to - vps.from >= 4) {
