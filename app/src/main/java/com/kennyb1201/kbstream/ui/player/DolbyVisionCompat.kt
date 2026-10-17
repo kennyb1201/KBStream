@@ -1385,8 +1385,10 @@ internal object DolbyVisionCompat {
     /**
      * Rewrites a Dolby Vision VPS payload (RBSP, EPB bytes allowed) into a
      * clean single-layer HDR10 VPS: the Dolby Vision extension is removed,
-     * the layer count forced to 1, and the general profile_tier_level patched
-     * to Main10 (profile_idc 2, Main tier, Main10 compatibility flag) — even
+     * the layer count forced to 1 with the base layer's own flags set (the one
+     * layer this set declares is the base layer, and it is present in what the
+     * decoder is handed), and the general profile_tier_level patched to Main10
+     * (profile_idc 2, Main tier, Main10 compatibility flag) — even
      * on single-layer VPSs with no extension byte, whose PTL can still
      * declare High tier or a DV-adjacent profile. See [VpsRewriteOutcome] for
      * the three outcomes; a failed parse keeps the original VPS rather than
@@ -1517,7 +1519,19 @@ internal object DolbyVisionCompat {
         // compatibility bits), everything else verbatim, extension flag
         // cleared, rbsp trailing bits.
         val out = VpsBitWriter()
-        if (!br.copyBits(0, 6, out)) return VpsRewriteOutcome.Failed("copy-header")
+        // vps_video_parameter_set_id is the only header bit the source owns; the
+        // rest are the rewrite's own description of what it emits. The base
+        // layer's two flags are therefore FORCED to 1 rather than copied: the
+        // single layer this set now declares IS the base layer, and it is present
+        // in the NALs the decoder is handed. Inheriting them would let a source
+        // that says "no base layer here" describe a stream that ships one - and
+        // a VPS declaring its base layer unavailable is exactly the case this
+        // rewrite used to bail on altogether. Both flags are 1 in every real
+        // single-layer encode, so this is byte-identical for every stream that
+        // already rewrote successfully.
+        if (!br.copyBits(0, 4, out)) return VpsRewriteOutcome.Failed("copy-header")
+        out.writeBits(1L, 1) // vps_base_layer_internal_flag = 1
+        out.writeBits(1L, 1) // vps_base_layer_available_flag = 1
         out.writeBits(0L, 6) // vps_max_layers_minus1 = 0
         if (!br.copyBits(12, 32, out)) return VpsRewriteOutcome.Failed("copy-sublayer-flags")
         writeMain10GeneralPtl(out, compatFlags)

@@ -167,14 +167,23 @@ internal object FrameRateProbe {
             return null
         }
         val measured = reading.fps
-        val fps = measured?.let { FrameRateMatch.normalise(it) }
+        if (measured == null) {
+            // The head ARRIVED and carried no rate at all: no declared key, and
+            // no cadence in its timestamps either. Its own line, because "there
+            // was no reading to refuse" and "a reading that describes no
+            // content" are different field stories - and the retry turns on
+            // exactly the difference between this and the bytes never arriving
+            // (re-downloading the same head returns the same nothing, so this
+            // must NOT set off the retry).
+            failures[url] = ProbeFailure.UNUSABLE
+            Log.w(TAG, "probe: head arrived but carries no usable rate (host=${hostOf(url)})")
+            return null
+        }
+        val fps = FrameRateMatch.normalise(measured)
         if (fps == null) {
-            // The head ARRIVED and this probe could read no usable rate out of
-            // it - no declared rate and no cadence in its timestamps, or a
-            // reading normalise refuses. Re-downloading the same head returns
-            // the same nothing, so this must NOT set off the retry: it is the
-            // difference between "the host was slow" and "this stream carries
-            // no rate", and only the first is worth another 4 MB and 12 s.
+            // A numeric reading that describes no content (0, NaN, absurd). The
+            // head arrived, so a second download would return the same number:
+            // no retry here either.
             failures[url] = ProbeFailure.UNUSABLE
             Log.w(TAG, "probe: reading $measured fps unusable (host=${hostOf(url)})")
             return null

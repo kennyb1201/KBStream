@@ -173,6 +173,13 @@ class FrameRateProbeWiringContractTest {
             probe.contains("probe: reading \$measured fps unusable (host=\${hostOf(url)})")
         )
         assertTrue(
+            "and a head that arrived carrying nothing must NOT be logged as a download " +
+                "failure: that is the retry's own input, and the two kinds decide it",
+            probe.contains(
+                "probe: head arrived but carries no usable rate (host=\${hostOf(url)})"
+            )
+        )
+        assertTrue(
             "a head that is not a 206 must report the status it got",
             probe.contains("probe head request: HTTP \${response.code}")
         )

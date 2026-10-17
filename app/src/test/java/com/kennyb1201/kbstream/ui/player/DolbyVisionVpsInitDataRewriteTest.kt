@@ -378,7 +378,8 @@ class DolbyVisionVpsInitDataRewriteTest {
      * them to the layer count. The rewrite used to demand both set ("base layer
      * present"), so a VPS declaring its base layer unavailable was left
      * DV-flagged in the codec config — the one outcome this path exists to
-     * prevent, since the config is parsed before any sample.
+     * prevent, since the config is parsed before any sample. It now rewrites
+     * such a set and says what it is sending: base layer present, one layer.
      */
     @Test
     fun `a VPS whose base-layer flags are clear is rewritten instead of kept`() {
@@ -396,10 +397,17 @@ class DolbyVisionVpsInitDataRewriteTest {
             else -> throw AssertionError("the set was not rewritten: $outcome")
         }
         assertEquals(
-            "the source's base-layer flags ride through verbatim, as every other " +
-                "header bit does — the rewrite owns the layer count, not the flags",
-            0x00,
-            rewritten[0].toInt() and 0xFF
+            "vps_video_parameter_set_id is the source's own",
+            0,
+            (rewritten[0].toInt() ushr 4) and 0x0F
+        )
+        assertEquals(
+            "but the base layer's two flags are FORCED set: the single layer this set now " +
+                "declares is the base layer and it is present in the NALs the decoder is " +
+                "handed, so inheriting a source's 0 here would describe a stream with no " +
+                "base layer while shipping one",
+            0b11,
+            (rewritten[0].toInt() ushr 2) and 0b11
         )
         assertEquals(
             "and the sub-layer count / nesting flag / 0xFFFF reserved field are the source's",
@@ -421,6 +429,22 @@ class DolbyVisionVpsInitDataRewriteTest {
             DolbyVisionCompat.VpsRewriteOutcome.NoDvExtension,
             DolbyVisionCompat.rewriteVpsToHdr10(emitted, 2, emitted.size)
         )
+
+        // The claim the rebuild's comment makes, pinned rather than asserted in
+        // prose: a source that ALREADY says "base layer present" - every real
+        // single-layer encode, and the field file's own VPS - comes out
+        // byte-identical to what this rewrite produced before the flags were
+        // forced, so nothing that rewrote successfully changes bytes.
+        val withBaseLayer = when (val o = DolbyVisionCompat.rewriteVpsToHdr10(dvVps, 2, dvVps.size)) {
+            is DolbyVisionCompat.VpsRewriteOutcome.Rewritten -> o.rbsp
+            else -> throw AssertionError("the fixture did not rewrite: $o")
+        }
+        assertEquals(
+            "the source's own header, unchanged: id 0, both flags set, one layer",
+            0x0C,
+            withBaseLayer[0].toInt() and 0xFF
+        )
+        assertEquals(0x01, withBaseLayer[1].toInt() and 0xFF)
 
         // The field-relevant claim: the config this path ships is the rewrite,
         // never the source DV VPS.
