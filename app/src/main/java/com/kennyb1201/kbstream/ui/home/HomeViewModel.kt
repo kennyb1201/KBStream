@@ -1296,6 +1296,23 @@ Log.d(
         }
     }
 
+    /**
+     * The stream id to play for a stored Continue Watching id, with its root
+     * re-verified against TMDB.
+     *
+     * The row's id was built by whatever build filed it, or synced from another
+     * device, so it can name a catalog id TMDB only knows under the other type
+     * - and playing it asks the add-ons for the other title's streams. See
+     * [TmdbRepository.verifiedEpisodeStreamId] for the lookup; this is only the
+     * screen-facing door to it, kept here so the repository stays this view
+     * model's own dependency.
+     */
+    internal suspend fun verifiedResumeStreamId(
+        streamId: String,
+        showName: String?,
+        type: String
+    ): String = tmdbRepository.verifiedEpisodeStreamId(streamId, showName, type)
+
     fun refreshUpNext() {
 
         viewModelScope.launch {

@@ -153,7 +153,14 @@ internal object FrameRateProbe {
             Log.i(TAG, "probe skipped: URL not probeable (host=${hostOf(url)})")
             return null
         }
-        cache[url]?.let { return it }
+        // A cache hit used to return silently, which is why a field capture
+        // showed a rate offered to the panel with no `probed ...` line before
+        // it and read as if the probe had never run. Host only: the URL may be
+        // a signed debrid link.
+        cache[url]?.let {
+            Log.i(TAG, "probe cache hit: $it fps (host=${hostOf(url)})")
+            return it
+        }
         val reading = withTimeoutOrNull(budgetMs) {
             runCatchingCancellable { downloadAndRead(url, headers, cacheDir, budgetMs) }
                 .onFailure { Log.w(TAG, "frame-rate probe failed", it) }

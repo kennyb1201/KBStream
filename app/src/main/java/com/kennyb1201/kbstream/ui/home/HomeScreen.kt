@@ -171,6 +171,7 @@ import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import com.kennyb1201.kbstream.data.runCatchingCancellable
 
 private val HomePosterWidth = 124.dp
@@ -218,6 +219,16 @@ private const val HOME_FOCUS_RETRY_FRAMES = 12
  */
 private const val CONTINUE_WATCHING_CARD_KEY_PREFIX = "upnext:"
 private const val UPCOMING_CARD_KEY_PREFIX = "upcoming:"
+
+/**
+ * How long a Continue Watching resume waits for its stored stream id's root to
+ * be re-verified before playing the id it already has.
+ *
+ * The same five-second budget the Detail screen's root await uses: a cold,
+ * wrong id gets one TMDB lookup, a cached one answers instantly, and a slow or
+ * unreachable TMDB keeps today's behavior rather than holding the D-pad.
+ */
+private const val CW_ROOT_VERIFY_TIMEOUT_MS = 5_000L
 
 private val HomeHeroHeight = 300.dp
 
@@ -3872,6 +3883,11 @@ fun HomeScreen(
         viewModel.refreshWatchedStatusForCurrentRails()
     }
 
+    // The scope a resume's root re-verification runs in. Separate from
+    // [focusScope] because it is not a focus hand-back: it survives the click
+    // and hands the navigation back when the lookup answers (or gives up).
+    val resumeVerifyScope = rememberCoroutineScope()
+
     fun openUpNext(
         item: UpNextItem,
         openInStreamsScreen: Boolean = false,
@@ -3972,6 +3988,38 @@ fun HomeScreen(
             startFromBeginning = startAtBeginning
         )
 
+        /**
+         * Opens [open] with a stream id whose root has been re-verified.
+         *
+         * A history row hands this screen an id it did not build - written by
+         * an older build, or synced from another device before this device had
+         * the fix - and a row filed against a catalog id TMDB only knows under
+         * the other type names another title's streams. Re-verifying here is
+         * the never-again guarantee that does not depend on the migration pass
+         * having run, and it costs a map lookup once the title is cached, which
+         * Home's own enrichment has already made it.
+         *
+         * Bounded like every other root wait in this app (the Detail screen's
+         * five-second budget): a cold, wrong id gets its one lookup, and
+         * anything slower keeps the stored id - today's behavior, no hang.
+         */
+        fun openWithVerifiedRoot(open: (StreamsTarget) -> Unit) {
+            val targetStreamId = target.streamId
+            val showName = item.showTitle ?: item.title
+            resumeVerifyScope.launch {
+                val verified = withTimeoutOrNull(CW_ROOT_VERIFY_TIMEOUT_MS) {
+                    runCatching {
+                        viewModel.verifiedResumeStreamId(
+                            streamId = targetStreamId,
+                            showName = showName,
+                            type = parentType
+                        )
+                    }.getOrNull()
+                } ?: targetStreamId
+                open(target.copy(streamId = verified))
+            }
+        }
+
         if (openDetailsOnly) {
             selectHero(detail)
             onItemClick(detail)
@@ -3979,20 +4027,24 @@ fun HomeScreen(
 
             // "Play Manually" goes straight to the streams picker and
             // intentionally bypasses Auto-select.
-            onOpenStreams(
-                detail,
-                target,
-                item.poster
-            )
+            openWithVerifiedRoot { verified ->
+                onOpenStreams(
+                    detail,
+                    verified,
+                    item.poster
+                )
+            }
         } else {
 
             selectHero(detail)
 
-            onOpenDetailTarget(
-                detail,
-                target,
-                item.poster
-            )
+            openWithVerifiedRoot { verified ->
+                onOpenDetailTarget(
+                    detail,
+                    verified,
+                    item.poster
+                )
+            }
         }
     }
 

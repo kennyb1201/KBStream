@@ -236,8 +236,19 @@ object HistoryRootMigration {
                 val tmdbId = if (tmdbIds.containsKey(key)) {
                     tmdbIds[key]
                 } else {
-                    runCatchingCancellable { repository.fetchEnrichedMetaCached(route, type)?.id }
-                        .getOrNull()
+                    // The row's own name is what recovers a catalog id TMDB
+                    // only knows under the other type (PAW Patrol's tt3121722
+                    // is the Dino Movie's). Without it this lookup is the same
+                    // unresolvable one that filed the row wrong, which is why
+                    // these rows used to sit in `unmigrated` forever.
+                    runCatchingCancellable {
+                        repository.fetchEnrichedMetaCached(
+                            route,
+                            type,
+                            fallbackName = row.name
+                                .takeIf { it.isNotBlank() && it.trim() != route.trim() }
+                        )?.id
+                    }.getOrNull()
                         ?.also { tmdbIds[key] = it }
                 }
                 // No TMDB record for this id: nothing can say what the verified

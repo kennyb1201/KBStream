@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.data.tmdb
 
 import android.content.Context
+import android.util.Log
 import com.kennyb1201.kbstream.data.BackgroundWork
+import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.data.network.BaseHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import com.kennyb1201.kbstream.BuildConfig
@@ -731,8 +733,17 @@ class TmdbRepository private constructor(context: Context) :
      *  - tmdb:/bare-numeric -> fetch {tv|movie}/{id} directly
      *  - tvdb:             -> TMDB /find with external_source=tvdb_id
      *  - else (tt...)      -> TMDB /find with external_source=imdb_id
+     *
+     * [fallbackName] is only used by the wrong-type recovery in
+     * [findAndFetchDetail]: a catalog id that TMDB resolves under the other type
+     * is re-found by the title's name rather than by guessing from the wrong
+     * record. It is null everywhere the name is not known.
      */
-    suspend fun fetchEnrichedMeta(rawId: String, type: String): TmdbDetail? {
+    suspend fun fetchEnrichedMeta(
+        rawId: String,
+        type: String,
+        fallbackName: String? = null
+    ): TmdbDetail? {
         if (apiKey.isBlank()) return null
 
         val normalizedType = normalizeType(type)
@@ -752,53 +763,39 @@ class TmdbRepository private constructor(context: Context) :
 
         return if (lower.startsWith("tvdb:")) {
             val tvdbId = trimmed.substringAfter(':').substringBefore(':').trim()
-            if (tvdbId.isBlank()) null else findAndFetch(tvdbId, "tvdb_id", normalizedType)
+            if (tvdbId.isBlank()) {
+                null
+            } else {
+                findAndFetch(tvdbId, "tvdb_id", normalizedType, fallbackName)
+            }
         } else {
             val imdbId = trimmed.substringBefore(':')
-            if (imdbId.isBlank()) null else findAndFetch(imdbId, "imdb_id", normalizedType)
+            if (imdbId.isBlank()) {
+                null
+            } else {
+                findAndFetch(imdbId, "imdb_id", normalizedType, fallbackName)
+            }
         }
     }
 
     private suspend fun findAndFetch(
         externalId: String,
         externalSource: String,
-        normalizedType: String
-    ): TmdbDetail? {
-        val found =
-            runCatchingCancellable { api.find(externalId, apiKey, externalSource) }.getOrNull()
-                ?: return null
-        val tmdbId =
-            if (normalizedType == "series") {
-                found.tvResults.firstOrNull()?.id
-            } else {
-                found.movieResults.firstOrNull()?.id
-            } ?: return null
-        return fetchDetailByTmdbId(tmdbId, normalizedType)
-    }
+        normalizedType: String,
+        fallbackName: String? = null
+    ): TmdbDetail? = findAndFetchDetail(
+        api = api,
+        apiKey = apiKey,
+        externalId = externalId,
+        externalSource = externalSource,
+        normalizedType = normalizedType,
+        fallbackName = fallbackName
+    )
 
     private suspend fun fetchDetailByTmdbId(
         tmdbId: Int,
         normalizedType: String
-    ): TmdbDetail? {
-        if (normalizedType == "series") {
-            return runCatchingCancellable {
-                api.getTv(tmdbId, apiKey)
-            }.getOrNull()
-        }
-        if (normalizedType == "movie") {
-            return runCatchingCancellable {
-                api.getMovie(tmdbId, apiKey)
-            }.getOrNull()
-        }
-        // Unknown type (anime, custom collection, ...): try series first,
-        // fall back to movie. Both failures are silently swallowed.
-        return runCatchingCancellable {
-            api.getTv(tmdbId, apiKey)
-        }.getOrNull()
-            ?: runCatchingCancellable {
-                api.getMovie(tmdbId, apiKey)
-            }.getOrNull()
-    }
+    ): TmdbDetail? = fetchTmdbDetail(api, apiKey, tmdbId, normalizedType)
 
     /**
      * The enriched TMDB detail for one raw id: in-memory cache, then the disk
@@ -827,7 +824,14 @@ class TmdbRepository private constructor(context: Context) :
     suspend fun fetchEnrichedMetaCached(
         imdbId: String,
         type: String,
-        full: Boolean = false
+        full: Boolean = false,
+        /**
+         * The title's name, for the one recovery that needs it: a catalog id
+         * that TMDB knows under the OTHER type (see [findAndFetchDetail]).
+         * Null by default, so every existing caller compiles unchanged and the
+         * normal path makes no extra request.
+         */
+        fallbackName: String? = null
     ): TmdbDetail? {
         val key = "${normalizeType(type)}:$imdbId"
         val now = System.currentTimeMillis()
@@ -895,7 +899,9 @@ class TmdbRepository private constructor(context: Context) :
         }
 
         val result = try {
-            runCatchingCancellable { fetchEnrichedMeta(imdbId, type) }.getOrNull()
+            runCatchingCancellable {
+                fetchEnrichedMeta(imdbId, type, fallbackName)
+            }.getOrNull()
         } catch (cancellation: kotlinx.coroutines.CancellationException) {
             enrichedFetchInFlight.remove(key)
             // Unblock anyone sharing this fetch with a miss rather than a
@@ -1004,6 +1010,43 @@ class TmdbRepository private constructor(context: Context) :
         val verified = tmdbId?.takeIf { it > 0 } ?: return routeId
         val resolved = runCatchingCancellable { resolveImdbId(verified, type) }.getOrNull()
         return preferredStreamRootId(routeId, resolved)
+    }
+
+    /**
+     * The stream id to actually play, with its root re-verified against TMDB.
+     *
+     * Continue Watching hands playback an id it did not build: the row's own
+     * `episodeStreamId`, written when the row was filed, or one synced from
+     * another device before this device had the fix. A row filed against a
+     * catalog id that TMDB only knows under the other type carries that wrong
+     * id, and playing it as-is asks the add-ons for the other title's streams -
+     * which is exactly the PAW Patrol / Dino Movie break, one layer downstream
+     * of where [findAndFetchDetail] can repair it.
+     *
+     * So the stored id's root is looked up the same way the Detail screen looks
+     * it up, name included, and the id is rebuilt under the verified root. A
+     * series id keeps its season/episode tail; a movie's bare root is replaced
+     * whole. Anything that cannot be resolved - a blank key, no network, a
+     * title TMDB has nothing for - keeps [streamId] exactly as it was, which is
+     * today's behavior.
+     */
+    internal suspend fun verifiedEpisodeStreamId(
+        streamId: String,
+        showName: String?,
+        type: String
+    ): String {
+        val wanted = normalizeType(type)
+        val episode = if (wanted == "series") EpisodeMatch.requestedFrom(streamId) else null
+        val root = if (episode != null) EpisodeMatch.seriesRootFrom(streamId) else streamId.trim()
+        if (root.isNullOrBlank()) return streamId
+        val detail = fetchEnrichedMetaCached(
+            root,
+            type,
+            fallbackName = showName?.takeIf { it.isNotBlank() && it.trim() != root.trim() }
+        ) ?: return streamId
+        val tmdbId = detail.id.takeIf { it > 0 } ?: return streamId
+        val verified = streamRootIdFor(root, tmdbId, type)
+        return if (episode == null) verified else "$verified:${episode.first}:${episode.second}"
     }
 
     /**
@@ -3539,3 +3582,104 @@ class TmdbRepository private constructor(context: Context) :
         private const val JSON_CACHE_TRIM_EVERY_WRITES = 32
     }
 }
+
+/** Log tag for the lookup below. Ids and outcomes only - never the API key. */
+private const val TAG = "TMDB_REPOSITORY"
+
+/**
+ * The find-then-detail hop, plus the one recovery a wrong catalog id needs.
+ *
+ * Why the recovery exists: a catalog can give a series the IMDb id of a movie -
+ * PAW Patrol carried `tt3121722`, which is the Dino Movie's - and TMDB's
+ * `/find?external_source=imdb_id` then answers with that movie in
+ * `movie_results` and an empty `tv_results`. Taking only the requested type's
+ * bucket therefore returned null on every open, deterministically, and the
+ * catalog id got published as the "resolved" root. The right id (`57532`) is
+ * undiscoverable from `tt3121722` by any amount of retrying or migration: the
+ * only signal that can find it is the title's NAME.
+ *
+ * The recovery fires only on the wrong-type signal - the id exists on TMDB as
+ * the OTHER type - and only with a name to search for. A truly unknown id is
+ * left alone rather than guessed at, and an exact title match is required: a
+ * fuzzy first result would be a new way to open the wrong title, which is the
+ * bug this fixes. Misses are not cached by the caller, so a title TMDB has
+ * under no type keeps today's behavior.
+ *
+ * It takes the api and key as parameters rather than reading them off the
+ * repository so the JVM tests can drive every branch with a fake api; the
+ * repository passes its own.
+ */
+internal suspend fun findAndFetchDetail(
+    api: TmdbApiService,
+    apiKey: String,
+    externalId: String,
+    externalSource: String,
+    normalizedType: String,
+    fallbackName: String? = null
+): TmdbDetail? {
+    val found =
+        runCatchingCancellable { api.find(externalId, apiKey, externalSource) }.getOrNull()
+            ?: return null
+    val wanted = if (normalizedType == "series") found.tvResults else found.movieResults
+    val other = if (normalizedType == "series") found.movieResults else found.tvResults
+    wanted.firstOrNull()?.id?.let { return fetchTmdbDetail(api, apiKey, it, normalizedType) }
+
+    // Wrong-type signal: the id exists on TMDB, but as the OTHER type - the
+    // catalog id is wrong, not absent. (PAW Patrol: series request, tt3121722
+    // sits in movie_results.) Recover by title instead of giving up.
+    val name = fallbackName?.takeIf { it.isNotBlank() } ?: return null
+    if (other.isEmpty()) return null // truly unknown, not wrong-typed: no guessing
+    val results = runCatchingCancellable {
+        if (normalizedType == "series") {
+            api.searchTv(name, apiKey)
+        } else {
+            api.searchMovie(name, apiKey)
+        }
+    }.getOrNull()?.results ?: return null
+    // Exact match only - never fuzzy. A miss keeps today's behavior.
+    val match = results.firstOrNull {
+        normalizeTitle(it.title ?: it.name) == normalizeTitle(name)
+    } ?: return null
+    Log.i(TAG, "wrong-type catalog id $externalId recovered by name as tmdb:${match.id}")
+    return fetchTmdbDetail(api, apiKey, match.id, normalizedType)
+}
+
+/**
+ * The detail for one TMDB id.
+ *
+ * The unknown-type branch (anime, a custom collection, ...) tries series first
+ * and then movie; both failures are silently swallowed because a missing detail
+ * is a normal answer here, not an error.
+ */
+internal suspend fun fetchTmdbDetail(
+    api: TmdbApiService,
+    apiKey: String,
+    tmdbId: Int,
+    normalizedType: String
+): TmdbDetail? {
+    if (normalizedType == "series") {
+        return runCatchingCancellable {
+            api.getTv(tmdbId, apiKey)
+        }.getOrNull()
+    }
+    if (normalizedType == "movie") {
+        return runCatchingCancellable {
+            api.getMovie(tmdbId, apiKey)
+        }.getOrNull()
+    }
+    return runCatchingCancellable {
+        api.getTv(tmdbId, apiKey)
+    }.getOrNull()
+        ?: runCatchingCancellable {
+            api.getMovie(tmdbId, apiKey)
+        }.getOrNull()
+}
+
+/**
+ * The title a name search is matched against: lowercase, trimmed, whitespace
+ * collapsed. Conservative on purpose - "Spider-Man" and "Spider Man" are not
+ * the same title, and an exact-match rule means a miss falls back to today's
+ * behavior rather than to a different show.
+ */
+internal fun normalizeTitle(s: String?): String =
+    s?.lowercase()?.trim()?.replace(Regex("\\s+"), " ") ?: ""

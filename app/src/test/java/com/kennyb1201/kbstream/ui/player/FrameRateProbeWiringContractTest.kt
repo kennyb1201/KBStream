@@ -198,6 +198,23 @@ class FrameRateProbeWiringContractTest {
     }
 
     @Test
+    fun `a cached rate says it came from the cache`() {
+        // Field 2026-10-17: a second playback of the same URL offered the panel a
+        // rate with no `probed ...` line before it, because a cache hit returned
+        // silently, and the capture read as if the probe had never run at all.
+        val probe = squash(source(PROBE))
+        assertTrue(
+            "a cache hit must log the rate it returned, or the field log cannot tell a hit " +
+                "from a probe that never ran",
+            probe.contains("probe cache hit: \$it fps (host=\${hostOf(url)})")
+        )
+        assertTrue(
+            "and it is logged where the cache is read, before any download",
+            probe.indexOf("cache[url]?.let {") in 0 until probe.indexOf("val reading = ")
+        )
+    }
+
+    @Test
     fun `the probe logs the host, never the signed url`() {
         val probe = source(PROBE)
         assertTrue(

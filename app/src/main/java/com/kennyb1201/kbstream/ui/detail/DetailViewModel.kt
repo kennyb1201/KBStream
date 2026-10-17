@@ -998,10 +998,20 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                         // (cast, trailer, keywords, reviews), and the object
                         // published to _tmdbDetail is what every one of those
                         // surfaces draws from.
+                        // fallbackName is the one recovery a wrong catalog id
+                        // has: when TMDB knows this id only under the OTHER
+                        // type (PAW Patrol's tt3121722 is the Dino Movie's),
+                        // the repository re-finds the title by name and
+                        // resolves the right id. initialMeta is the name this
+                        // screen was opened with; the add-on meta has not been
+                        // fetched yet. The != id guard keeps a raw id from
+                        // being searched for as if it were a title.
                         tmdbRepository.fetchEnrichedMetaCached(
                             id,
                             normalizedType,
-                            full = true
+                            full = true,
+                            fallbackName = initialMeta?.name
+                                ?.takeIf { it.isNotBlank() && it.trim() != id.trim() }
                         )
                     }
                 }
