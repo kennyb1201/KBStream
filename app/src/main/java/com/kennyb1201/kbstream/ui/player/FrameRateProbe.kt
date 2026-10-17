@@ -72,6 +72,13 @@ internal object FrameRateProbe {
     private val cache = ConcurrentHashMap<String, Double>()
 
     /**
+     * URL → why its last probe came back null, for the one-shot retry decision
+     * (see [consumeNetworkFailure]). Consumed rather than read by production:
+     * the call sites ask once per URL and are answered false from then on.
+     */
+    private val failures = ConcurrentHashMap<String, ProbeFailure>()
+
+    /**
      * How long the whole probe (warm-up + head + parse) may take. Settable so a
      * test can drive the timeout path without waiting the production budget.
      */
@@ -125,11 +132,18 @@ internal object FrameRateProbe {
      * As [probe], writing the transient head file into [cacheDir] when the
      * caller has one. A null or unusable [cacheDir] falls back to the process
      * temp directory; a probe that cannot write a temp file simply returns null.
+     *
+     * [budgetMs] is the whole-call deadline, defaulting to the process budget so
+     * every existing caller is untouched. The one caller that passes a larger
+     * one is the retry, whose whole point is that a slow host's cold start did
+     * not fit the first budget; the deadline reaches the HTTP requests
+     * themselves ([downloadAndRead]), not just the coroutine around them.
      */
     suspend fun probe(
         url: String,
         headers: Map<String, String>,
-        cacheDir: File?
+        cacheDir: File?,
+        budgetMs: Long = FrameRateProbe.budgetMs
     ): Double? {
         // Every null return names itself. The probe says nothing on at least
         // five different paths, so without these the field log cannot tell
@@ -140,24 +154,58 @@ internal object FrameRateProbe {
             return null
         }
         cache[url]?.let { return it }
-        val measured = withTimeoutOrNull(budgetMs) {
-            runCatchingCancellable { downloadAndRead(url, headers, cacheDir) }
+        val reading = withTimeoutOrNull(budgetMs) {
+            runCatchingCancellable { downloadAndRead(url, headers, cacheDir, budgetMs) }
                 .onFailure { Log.w(TAG, "frame-rate probe failed", it) }
                 .getOrNull()
         }
-        if (measured == null) {
+        if (reading == null) {
+            // The bytes never arrived: timeout, refused, connection died. The
+            // one failure a retry can fix, so it is the one recorded.
+            failures[url] = ProbeFailure.NETWORK
             Log.w(TAG, "probe: no reading (timeout or download failed, host=${hostOf(url)})")
             return null
         }
-        val fps = FrameRateMatch.normalise(measured)
+        val measured = reading.fps
+        val fps = measured?.let { FrameRateMatch.normalise(it) }
         if (fps == null) {
+            // The head ARRIVED and this probe could read no usable rate out of
+            // it - no declared rate and no cadence in its timestamps, or a
+            // reading normalise refuses. Re-downloading the same head returns
+            // the same nothing, so this must NOT set off the retry: it is the
+            // difference between "the host was slow" and "this stream carries
+            // no rate", and only the first is worth another 4 MB and 12 s.
+            failures[url] = ProbeFailure.UNUSABLE
             Log.w(TAG, "probe: reading $measured fps unusable (host=${hostOf(url)})")
             return null
         }
+        failures.remove(url)
         cache[url] = fps
         Log.i(TAG, "probed $fps fps from the stream head")
         return fps
     }
+
+    /**
+     * Whether this URL's last probe failed on the NETWORK - the host was slow or
+     * unreachable rather than the head being unreadable - consuming the record
+     * so the answer can be true at most once per URL per process, which is what
+     * keeps the retry from becoming a loop.
+     *
+     * False when the last probe said [ProbeFailure.UNUSABLE] (the same head
+     * would be downloaded for the same answer), when it succeeded (the record is
+     * cleared by a success), and when the URL was never probed at all - a live
+     * channel's URL, say, or a probe that had not finished yet.
+     */
+    internal fun consumeNetworkFailure(url: String): Boolean =
+        failures.remove(url) == ProbeFailure.NETWORK
+
+    /**
+     * The recorded failure kind for [url] without consuming it, or null when
+     * nothing was recorded. Test seam: production only ever asks
+     * [consumeNetworkFailure], but the rule that an unreadable head must not
+     * arm the retry is a distinction a test has to be able to see.
+     */
+    internal fun failureKind(url: String): ProbeFailure? = failures[url]
 
     /**
      * The host of [url] for the log lines, or "?" when it will not parse.
@@ -168,11 +216,20 @@ internal object FrameRateProbe {
     private fun hostOf(url: String): String =
         runCatching { Request.Builder().url(url).build().url.host }.getOrNull() ?: "?"
 
+    /**
+     * One downloaded head: the rate its own bytes declare, or null when the head
+     * carries none this probe can read. The wrapper is what keeps that apart
+     * from an absent reading altogether, i.e. bytes that never arrived — the
+     * distinction between the retry's two failure kinds.
+     */
+    private data class HeadReading(val fps: Double?)
+
     private suspend fun downloadAndRead(
         url: String,
         headers: Map<String, String>,
-        cacheDir: File?
-    ): Double? = withContext(Dispatchers.IO) {
+        cacheDir: File?,
+        budgetMs: Long
+    ): HeadReading? = withContext(Dispatchers.IO) {
         val dir = cacheDir?.takeIf { it.isDirectory }
             ?: File(System.getProperty("java.io.tmpdir") ?: ".")
         // Warm the origin with a single byte first: some CDNs need the warmed
@@ -198,7 +255,7 @@ internal object FrameRateProbe {
                 Log.w(TAG, "probe head: empty body")
                 return@withContext null
             }
-            fpsReader(temp)
+            HeadReading(fpsReader(temp))
         } finally {
             runCatching { temp.delete() }
         }
@@ -306,6 +363,22 @@ internal object FrameRateProbe {
             .getOrNull()
     }
 }
+
+/**
+ * Why one probe of a URL came back null, recorded so a call site can tell the
+ * one failure a retry can fix from the one it cannot.
+ *
+ * [NETWORK]: the download itself failed — a timeout, a refused request, a
+ * connection that died mid-copy. The host was slow or unreachable, and a host
+ * that was merely slow at a cold start is exactly what a single retry a few
+ * seconds later, with more time, can still answer (field, 2026-10-16: the 6 s
+ * budget lost to a host serving its first bytes ~3 s after the probe gave up).
+ *
+ * [UNUSABLE]: the head arrived and carried no rate this probe could read. A
+ * second download of the same head returns the same nothing, so this kind must
+ * never arm the retry.
+ */
+internal enum class ProbeFailure { NETWORK, UNUSABLE }
 
 /**
  * The frame rate implied by a run of sample presentation timestamps, or null

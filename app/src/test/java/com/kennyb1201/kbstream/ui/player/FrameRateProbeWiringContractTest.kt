@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -40,6 +41,23 @@ class FrameRateProbeWiringContractTest {
     }
 
     private fun squash(text: String): String = text.replace(Regex("\\s+"), " ")
+
+    /** How many times [needle] occurs in [text]. */
+    private fun count(text: String, needle: String): Int =
+        Regex(Regex.escape(needle)).findAll(text).count()
+
+    /**
+     * The squashed source between the first [from] anchor and the next [to].
+     * Both are asserted to exist, so a rename here fails loudly instead of
+     * quietly widening the window to the whole file.
+     */
+    private fun window(text: String, from: String, to: String): String {
+        val start = text.indexOf(from)
+        assertTrue("anchor missing: $from", start >= 0)
+        val end = text.indexOf(to, start + from.length)
+        assertTrue("anchor missing after '${from}': $to", end > start)
+        return text.substring(start, end)
+    }
 
     @Test
     fun `the probe reads the declared rate first and only then the timestamps`() {
@@ -201,6 +219,91 @@ class FrameRateProbeWiringContractTest {
         assertTrue(
             "it belongs to the same tag as the probe's own lines",
             native.contains("\"PLAYER_AFR\"")
+        )
+    }
+
+    @Test
+    fun `both engines retry the probe once, from the signal that bytes are flowing`() {
+        // Field 2026-10-16: the probe's budget lost to a slow host's cold start
+        // and nothing ever re-attempted, so the session stayed at 60 Hz while
+        // the extractor was demonstrably receiving bytes ~3 s later. The retry
+        // hangs off the version of that confirmation each engine already has -
+        // the native player's arriving video track, mpv's own rate report - and
+        // neither may reach for a timer or a resume, because both of those fire
+        // before anything is known about the stream.
+        val native = squash(source(NATIVE))
+        val mpv = squash(source(MPV))
+        val nativeBlock = window(
+            native,
+            "frameRateMatcher?.onContentFrameRate(reportedFrameRate)",
+            "val codec = fmt.codecs.orEmpty()"
+        )
+        val mpvBlock = window(mpv, "onVideoFrameRateChanged = { fps ->", "setupControls()")
+
+        listOf("the native player" to nativeBlock, "the mpv player" to mpvBlock)
+            .forEach { (who, block) ->
+                assertTrue(
+                    "$who must ask the one-shot record whether the first attempt died on the network",
+                    block.contains("FrameRateProbe.consumeNetworkFailure(currentUrl)")
+                )
+                assertTrue(
+                    "$who must not retry when a rate is already known from any source",
+                    block.contains("lastContentFps == null")
+                )
+                assertTrue(
+                    "$who must launch the retry on the activity's coroutine scope",
+                    block.contains("lifecycleScope.launch")
+                )
+                assertTrue(
+                    "$who must not reach for a timer",
+                    !block.contains("postDelayed")
+                )
+                assertTrue(
+                    "$who must not retry from the resume path, which runs before the stream is known",
+                    !block.contains("FrameRateSource.RESUME")
+                )
+                assertTrue(
+                    "$who must give the second attempt more time than the first",
+                    block.contains("budgetMs = 12_000L")
+                )
+                assertTrue(
+                    "$who must label the retried rate, or the diagnostics row calls it a first probe",
+                    block.contains("FrameRateSource.PROBE_RETRY")
+                )
+                assertTrue(
+                    "$who must log the retry on the probe's own tag",
+                    block.contains(
+                        "Log.i(\"PLAYER_AFR\", \"retrying frame-rate probe after network failure\")"
+                    )
+                )
+            }
+
+        // Counted as CALL SITES, not as mentions: both files' comments name the
+        // record on purpose, and only the calls can retry anything.
+        listOf("the native player" to native, "the mpv player" to mpv).forEach { (who, src) ->
+            assertEquals(
+                "$who must ask the one-shot record from exactly one place - a second call " +
+                    "site would be a second retry",
+                1,
+                count(src, "FrameRateProbe.consumeNetworkFailure(")
+            )
+            assertEquals(
+                "and log the retry from exactly one place, or the field log counts attempts " +
+                    "that did not happen",
+                1,
+                count(src, "retrying frame-rate probe after network failure")
+            )
+        }
+        assertTrue(
+            "and the native one really is inside that branch: the branch sets the flag " +
+                "this retry gates on before reaching it",
+            native.indexOf("videoTrackPresent = true") in
+                0 until native.indexOf("FrameRateProbe.consumeNetworkFailure(")
+        )
+        assertTrue(
+            "every existing caller keeps the process budget: that is what makes the " +
+                "first attempt byte-for-byte today's behavior",
+            squash(source(PROBE)).contains("budgetMs: Long = FrameRateProbe.budgetMs")
         )
     }
 

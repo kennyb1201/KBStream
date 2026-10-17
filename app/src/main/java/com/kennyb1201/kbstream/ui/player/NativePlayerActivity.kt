@@ -6184,6 +6184,47 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                             lastContentFps = reportedFrameRate
                         }
                         frameRateMatcher?.onContentFrameRate(reportedFrameRate)
+                        // A video track arriving is the field-proven "bytes are
+                        // flowing" signal (2026-10-16: the Compat format
+                        // emission followed the failed probe by ~3 s, and the
+                        // host was slow rather than dead), so this is where a
+                        // probe that lost its budget to a slow cold start gets
+                        // its one second chance. Additive: the first attempt is
+                        // unchanged, this only runs when it ended in a NETWORK
+                        // failure, no rate is known from any source, and the URL
+                        // has not already spent its retry (one per URL per
+                        // process). A URL whose probe succeeded - or which was
+                        // never probed, like a live channel's - is answered false
+                        // and nothing happens, as before.
+                        if (videoTrackPresent &&
+                            lastContentFps == null &&
+                            frameRateMatcher != null &&
+                            FrameRateProbe.consumeNetworkFailure(currentUrl)
+                        ) {
+                            Log.i("PLAYER_AFR", "retrying frame-rate probe after network failure")
+                            // Captured at trigger time, like the first attempt: a
+                            // source switch while the retry is in flight must
+                            // not make it read the new stream's head.
+                            val retryUrl = currentUrl
+                            val retryHeaders = streamHeaders
+                            lifecycleScope.launch {
+                                FrameRateProbe.probe(
+                                    retryUrl,
+                                    retryHeaders,
+                                    cacheDir,
+                                    budgetMs = 12_000L
+                                )?.let { fps ->
+                                    // Remembered as well as offered, exactly like
+                                    // the first attempt's rate: it is what a
+                                    // resume re-arms from.
+                                    lastContentFps = fps
+                                    frameRateMatcher?.onContentFrameRate(
+                                        fps,
+                                        FrameRateSource.PROBE_RETRY
+                                    )
+                                }
+                            }
+                        }
                         val codec = fmt.codecs.orEmpty()
                         val colorInfo = fmt.colorInfo
                         streamWidth = fmt.width

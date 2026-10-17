@@ -49,14 +49,19 @@ internal data class DisplayModeInfo(val id: Int, val refreshRate: Double)
 /**
  * Which half of the player supplied a content rate: the player's own track
  * report ([PLAYER]), [FrameRateProbe] reading the stream's head before
- * playback ([PROBE]), or the rate this session already knew, re-offered on the
- * way back into a player that never measures the same stream twice ([RESUME]).
- * Only the diagnostics row cares, but it is the whole difference between "the
- * player never knew the rate" and "the probe could not read it" - and between
- * either of those and a panel re-armed from a rate measured earlier, so it is
- * stated rather than inferred.
+ * playback ([PROBE]), that same probe run a second time after its first attempt
+ * lost to a slow host ([PROBE_RETRY]), or the rate this session already knew,
+ * re-offered on the way back into a player that never measures the same stream
+ * twice ([RESUME]). Only the diagnostics row cares, but it is the whole
+ * difference between "the player never knew the rate" and "the probe could not
+ * read it" - and between either of those and a panel re-armed from a rate
+ * measured earlier, so it is stated rather than inferred.
+ *
+ * [PROBE_RETRY] is a separate value from [PROBE] on purpose: the field question
+ * that mattered on 2026-10-16 was whether the second attempt was made at all,
+ * and the log has to answer it without anyone reading the probe's own lines.
  */
-internal enum class FrameRateSource { PLAYER, PROBE, RESUME }
+internal enum class FrameRateSource { PLAYER, PROBE, PROBE_RETRY, RESUME }
 
 /**
  * What to hand `Surface.setFrameRate`.
@@ -399,6 +404,8 @@ internal object FrameRateMatch {
         val content = normalise(contentFps) ?: contentFps
         return when (source) {
             FrameRateSource.PROBE -> "probed ${rate(content)} fps from the stream head"
+            FrameRateSource.PROBE_RETRY ->
+                "re-probed ${rate(content)} fps from the stream head after a slow first attempt"
             FrameRateSource.PLAYER -> "the player reported ${rate(content)} fps"
             FrameRateSource.RESUME ->
                 "re-offered the ${rate(content)} fps measured earlier in this session"

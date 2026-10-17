@@ -171,6 +171,117 @@ class FrameRateProbeTest {
         assertFalse(FrameRateProbe.isProbeable("file:///sdcard/movie.mkv"))
     }
 
+    // ── the retry's input: which failure the probe recorded ───────────────
+    //
+    // Field 2026-10-16: the 6 s budget lost to a slow host's cold start (its
+    // first bytes arrived ~3 s later, and a 9654 ms rebuffer sits in the same
+    // window), and nothing ever re-attempted, so the panel stayed at 60 Hz.
+    // The retry is allowed for that failure and for no other, which is what the
+    // recorded kind is for.
+
+    @Test
+    fun `a download that never completed is a network failure, spendable once`() = runBlocking {
+        FrameRateProbe.budgetMs = 400
+        stallMs = 2_000
+        body = ByteArray(16)
+        val target = url("slow-host.mkv")
+
+        assertNull(
+            "a host slower than the budget is a null reading, exactly as before",
+            FrameRateProbe.probe(target, emptyMap(), headDir)
+        )
+        assertEquals(
+            "the download is what failed, so this is the failure a retry can fix",
+            ProbeFailure.NETWORK,
+            FrameRateProbe.failureKind(target)
+        )
+        assertTrue("and it may arm the retry", FrameRateProbe.consumeNetworkFailure(target))
+        assertFalse(
+            "but only once: a second true here is the loop an unbounded retry would be",
+            FrameRateProbe.consumeNetworkFailure(target)
+        )
+    }
+
+    @Test
+    fun `an unreadable head is unusable, and never arms the retry`() = runBlocking {
+        // The head downloaded fine and declared no rate: a second download of
+        // the same head returns the same nothing, so it must not be paid for.
+        FrameRateProbe.fpsReader = { null }
+        body = ByteArray(16)
+        val target = url("silent.mkv")
+
+        assertNull(FrameRateProbe.probe(target, emptyMap(), headDir))
+        assertEquals(
+            "the reading, not the download, is what failed",
+            ProbeFailure.UNUSABLE,
+            FrameRateProbe.failureKind(target)
+        )
+        assertFalse(
+            "so nothing is armed: re-downloading would return the same null",
+            FrameRateProbe.consumeNetworkFailure(target)
+        )
+    }
+
+    @Test
+    fun `a success, a cache hit and a skipped probe all leave nothing armed`() = runBlocking {
+        FrameRateProbe.fpsReader = { 23.976 }
+        body = ByteArray(16)
+        val target = url("clean.mkv")
+
+        assertNull(
+            "a URL the probe refuses never reached a download",
+            FrameRateProbe.probe("rtmp://host/live", emptyMap(), headDir)
+        )
+        assertNull(
+            "nothing may be recorded for it",
+            FrameRateProbe.failureKind("rtmp://host/live")
+        )
+        assertEquals(23.976, FrameRateProbe.probe(target, emptyMap(), headDir) ?: 0.0, 0.0)
+        assertNull("a success records no failure", FrameRateProbe.failureKind(target))
+        assertEquals(
+            "and a second call is the cache hit, which must not invent one either",
+            23.976,
+            FrameRateProbe.probe(target, emptyMap(), headDir) ?: 0.0,
+            0.0
+        )
+        assertNull(FrameRateProbe.failureKind(target))
+        assertFalse(FrameRateProbe.consumeNetworkFailure(target))
+    }
+
+    @Test
+    fun `the budget a caller passes is the budget the second attempt gets`() = runBlocking {
+        // The retry passes a bigger budget because the first one ran out on a
+        // slow host, so the parameter has to reach the HTTP requests themselves:
+        // a larger coroutine deadline wrapped around the same 6 s socket
+        // timeouts would change nothing at all.
+        FrameRateProbe.fpsReader = { 23.976 }
+        FrameRateProbe.budgetMs = 100
+        stallMs = 400
+        body = ByteArray(16)
+        val target = url("retried.mkv")
+
+        assertNull(
+            "a caller that passes no budget still gets the process budget - today's behavior",
+            FrameRateProbe.probe(target, emptyMap(), headDir)
+        )
+        assertEquals(
+            "and that is the network failure the retry exists for",
+            ProbeFailure.NETWORK,
+            FrameRateProbe.failureKind(target)
+        )
+        assertEquals(
+            "the retry's own budget gets the same host's head",
+            23.976,
+            FrameRateProbe.probe(target, emptyMap(), headDir, budgetMs = 6_000) ?: 0.0,
+            0.0
+        )
+        assertNull(
+            "and its success clears the record, so no later retry can spend it",
+            FrameRateProbe.failureKind(target)
+        )
+        assertFalse(FrameRateProbe.consumeNetworkFailure(target))
+    }
+
     // ── the timestamp fallback: a head that declares no rate ──────────────
     //
     // Field 2026-10-11: the probe ran, downloaded the head, found the video

@@ -430,6 +430,19 @@ class FrameRateMatchTest {
     }
 
     @Test
+    fun `the retry's source line says the rate came from a second attempt`() {
+        // The retry exists because the FIRST attempt lost to a slow host
+        // (2026-10-16), so the row has to say re-probed rather than probed:
+        // otherwise "was the second attempt made at all?" is answerable only
+        // from the player's own log line, and the diagnostics row reads as if
+        // the first attempt had worked.
+        assertEquals(
+            "re-probed 23.976 fps from the stream head after a slow first attempt",
+            FrameRateMatch.describeSource(23.976, FrameRateSource.PROBE_RETRY)
+        )
+    }
+
+    @Test
     fun `a resumed player re-offers the rate it was told, and nothing else`() {
         // Reported: leaving a 24 fps film and coming back left the panel at the
         // 60 Hz release() had restored, because the rate had only ever been

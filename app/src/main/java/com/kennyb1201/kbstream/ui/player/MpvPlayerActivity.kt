@@ -1096,6 +1096,34 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             }
             if (FrameRateMatch.normalise(fps) != null) lastContentFps = fps
             frameRateMatcher?.onContentFrameRate(fps)
+            // mpv usually reports its own rate, so this is the backup leg of the
+            // retry (the native player's trigger is its arriving video track): it
+            // fires only when mpv reported nothing usable at all AND the earlier
+            // probe lost to a slow host. One attempt per URL per process -
+            // consumeNetworkFailure spends it - and nothing at all when the URL
+            // was never probed or its head was readable but empty of a rate.
+            if (FrameRateMatch.normalise(fps) == null &&
+                lastContentFps == null &&
+                FrameRateProbe.consumeNetworkFailure(currentUrl)
+            ) {
+                Log.i("PLAYER_AFR", "retrying frame-rate probe after network failure")
+                // Captured at trigger time, like the first attempt, so a source
+                // switch while the retry is in flight cannot redirect it.
+                val retryUrl = currentUrl
+                val retryHeaders = streamHeaders
+                lifecycleScope.launch {
+                    FrameRateProbe.probe(retryUrl, retryHeaders, cacheDir, budgetMs = 12_000L)
+                        ?.let { retriedFps ->
+                            // Remembered as well as offered: this is what a resume
+                            // re-arms from (see rearmFrameRateMatch).
+                            lastContentFps = retriedFps
+                            frameRateMatcher?.onContentFrameRate(
+                                retriedFps,
+                                FrameRateSource.PROBE_RETRY
+                            )
+                        }
+                }
+            }
         }
 
         setupControls()
