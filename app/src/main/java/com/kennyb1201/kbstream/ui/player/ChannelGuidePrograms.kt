@@ -76,15 +76,21 @@ internal data class GuideQuery(
  * for tests). Duplicate keys within a source collapse to one, so two lineup
  * entries matched to the same guide channel do not spend two bind variables on
  * identical rows.
+ *
+ * [guideIdOf] is the id to query per entry. It defaults to the channel's own
+ * published id; the player passes its resolved-match map through it instead of
+ * copying every entry of the lineup to carry a filled-in `epgChannelId`, which
+ * on a long IPTV group is a full allocation on the guide's open path.
  */
 internal fun planGuideQueries(
     channels: List<LiveChannelZapRegistry.ZapChannel>,
+    guideIdOf: (LiveChannelZapRegistry.ZapChannel) -> String? = { it.epgChannelId },
     batchSize: Int = CHANNEL_GUIDE_QUERY_BATCH
 ): List<GuideQuery> {
     if (batchSize <= 0) return emptyList()
     val bySource = LinkedHashMap<String, MutableList<String>>()
     for (channel in channels) {
-        val guideId = channel.epgChannelId?.trim().orEmpty()
+        val guideId = guideIdOf(channel)?.trim().orEmpty()
         if (guideId.isEmpty()) continue
         // Every configured source, not just the channel's own: programs are
         // stored under whichever guide matched the channel, and a channel

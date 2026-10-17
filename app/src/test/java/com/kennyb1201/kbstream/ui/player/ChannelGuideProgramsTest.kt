@@ -237,6 +237,30 @@ class ChannelGuideProgramsTest {
     }
 
     @Test
+    fun `a resolved guide id is planned through the lookup, not a copied lineup`() {
+        // The player resolves matches the published lineup lacks (see
+        // guideChannelIdFor). It used to hand them over by copying every entry
+        // with a filled-in epgChannelId - a full-lineup allocation on the
+        // guide's open path, which is where the ANR was.
+        val channels = listOf(
+            channel("a", epgUrl = "http://epg/one"),
+            channel("b", epgChannelId = "id.b", epgUrl = "http://epg/one")
+        )
+        val resolved = mapOf("a" to "ID.A")
+
+        val queries = planGuideQueries(
+            channels,
+            guideIdOf = { resolved[it.channelId] ?: it.epgChannelId }
+        )
+
+        assertEquals(
+            listOf(GuideQuery("http://epg/one", listOf("id.a", "id.b"))),
+            queries
+        )
+        assertEquals("the lineup itself must not be rewritten", null, channels[0].epgChannelId)
+    }
+
+    @Test
     fun `guide ids are lowercased and duplicates collapse within a source`() {
         val queries = planGuideQueries(
             listOf(

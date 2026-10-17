@@ -32,6 +32,35 @@ internal data class ChannelGuideRow(
 )
 
 /**
+ * A row list that builds each row when it is asked for, so a lineup of any
+ * length costs the open path nothing.
+ *
+ * The in-player guide used to materialise one [ChannelGuideRow] per channel
+ * before the overlay could paint. On a long IPTV group that is tens of
+ * thousands of allocations on the main thread - long enough on a slow box to
+ * hold input dispatch past the ANR window (Sentry ANDROID-Z caught the opener
+ * there). RecyclerView only ever binds the rows on screen, so only those are
+ * built now; [count] is answered from the lineup's size.
+ *
+ * [build] is called on the main thread, inside `onBindViewHolder`, so it must
+ * stay a lookup: read the channel, format its strings, return.
+ */
+internal class ChannelGuideRowSource(
+    private val count: Int,
+    private val build: (Int) -> ChannelGuideRow
+) : AbstractList<ChannelGuideRow>() {
+
+    override val size: Int get() = count
+
+    override fun get(index: Int): ChannelGuideRow {
+        if (index < 0 || index >= count) {
+            throw IndexOutOfBoundsException("Row $index outside 0 until $count")
+        }
+        return build(index)
+    }
+}
+
+/**
  * The browsable channel lineup behind the in-player guide overlay.
  *
  * A RecyclerView adapter rather than a Compose list because the player is a

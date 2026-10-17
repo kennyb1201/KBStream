@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.player
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -109,8 +110,15 @@ class PlayerGuideMatchFallbackContractTest {
         )
         assertTrue(
             "the resolved match must feed both the query plan and the row lookup",
-            player.contains("channel.copy(epgChannelId = guideChannelIdFor(channel))") &&
+            player.contains("guideIdOf = { channel -> guideChannelIdFor(channel) }") &&
                 player.contains("guideChannelIdFor(channel)")
+        )
+        // Handed over as a lookup rather than copied onto every entry: the copy
+        // was a full-lineup allocation on the guide's open path, which is where
+        // the ANR was (see PlayerGuideOpenAnrContractTest).
+        assertFalse(
+            "the plan must not be fed a copied lineup",
+            player.contains("channel.copy(epgChannelId = guideChannelIdFor(channel))")
         )
     }
 

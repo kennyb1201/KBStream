@@ -79,6 +79,29 @@ object LiveChannelZapRegistry {
     @Volatile
     private var channels: List<ZapChannel> = emptyList()
 
+    /**
+     * ``channelId -> first index`` for [channels], rebuilt whenever the active
+     * group changes.
+     *
+     * Identity lookups used to be a linear scan of the lineup, and the lineup
+     * is a whole IPTV group - tens of thousands of entries is ordinary, and the
+     * in-player guide's open path asks for one on the main thread. On a slow TV
+     * box that scan was long enough to hold input dispatch past the ANR window:
+     * Sentry caught the main thread inside [indexOfChannel] with the guide's
+     * long-press opener above it (ANDROID-Z, onn. 4K Plus). The scan is now paid
+     * once, when the group is published, so a lookup is a map read.
+     */
+    @Volatile
+    private var channelIndex: Map<String, Int> = emptyMap()
+
+    /**
+     * ``streamUrl -> first index``, built alongside [channelIndex] for the same
+     * reason: it is the fallback identity when the launch id is not in the
+     * lineup, so it sits on the same main-thread path.
+     */
+    @Volatile
+    private var streamUrlIndex: Map<String, Int> = emptyMap()
+
     @Volatile
     private var groups: List<ZapGroup> = emptyList()
 
@@ -119,6 +142,8 @@ object LiveChannelZapRegistry {
         this.groups = usable
         if (usable.isEmpty()) {
             channels = emptyList()
+            channelIndex = emptyMap()
+            streamUrlIndex = emptyMap()
             browsingGroupLabel = null
             activeGroupIndex = 0
             return
@@ -134,7 +159,26 @@ object LiveChannelZapRegistry {
     private fun applyActiveGroup() {
         val group = groups.getOrNull(activeGroupIndex) ?: return
         channels = group.channels
+        channelIndex = firstIndexBy(group.channels) { it.channelId }
+        streamUrlIndex = firstIndexBy(group.channels) { it.streamUrl }
         browsingGroupLabel = group.label.trim().takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * First index per key, matching the `indexOfFirst` the callers used to run
+     * per lookup: a lineup that lists the same channel twice still resolves to
+     * the earlier entry, which is the one the player zaps from.
+     */
+    private inline fun <K> firstIndexBy(
+        list: List<ZapChannel>,
+        crossinline key: (ZapChannel) -> K
+    ): Map<K, Int> {
+        val index = HashMap<K, Int>(list.size)
+        for (i in list.indices) {
+            val id = key(list[i])
+            if (id !in index) index[id] = i
+        }
+        return index
     }
 
     /**
@@ -170,8 +214,7 @@ object LiveChannelZapRegistry {
     /** True when there is more than one channel to move between. */
     fun zapEnabled(): Boolean = channels.size > 1
 
-    fun indexOfChannel(channelId: String): Int =
-        channels.indexOfFirst { it.channelId == channelId }
+    fun indexOfChannel(channelId: String): Int = channelIndex[channelId] ?: -1
 
     /** Index of the channel a typed number tunes to, or -1 (see [ChannelNumberEntry]). */
     fun indexOfChannelNumber(entry: String): Int =
@@ -181,8 +224,7 @@ object LiveChannelZapRegistry {
      * First index whose stream URL matches — fallback identity when the
      * player was launched with a parent id the lineup no longer contains.
      */
-    fun indexOfStreamUrl(streamUrl: String): Int =
-        channels.indexOfFirst { it.streamUrl == streamUrl }
+    fun indexOfStreamUrl(streamUrl: String): Int = streamUrlIndex[streamUrl] ?: -1
 
     fun channelAt(index: Int): ZapChannel? =
         channels.getOrNull(index)
@@ -197,8 +239,20 @@ object LiveChannelZapRegistry {
 
     fun size(): Int = channels.size
 
+    /**
+     * The published group's own list, not a copy.
+     *
+     * Readers that walk the whole lineup (the in-player guide plans its EPG
+     * read over it) used to rebuild an equal list first, which on a long
+     * playlist is another full allocation per call. The list is replaced, never
+     * mutated, when the group changes, so holding it is safe.
+     */
+    fun snapshot(): List<ZapChannel> = channels
+
     fun clear() {
         channels = emptyList()
+        channelIndex = emptyMap()
+        streamUrlIndex = emptyMap()
         groups = emptyList()
         activeGroupIndex = 0
         browsingGroupLabel = null

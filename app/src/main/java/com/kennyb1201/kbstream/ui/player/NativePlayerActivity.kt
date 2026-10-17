@@ -9682,10 +9682,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     /**
      * The lineup as a snapshot. The registry exposes it by index because the
      * player otherwise only ever wants "the one playing" and "the one next";
-     * the guide has to show all of it, so it walks the index once per paint.
+     * the guide walks the whole lineup when it plans its EPG read, so it takes
+     * the published list rather than rebuilding an equal one per pass.
      */
     private fun lineupChannels(): List<LiveChannelZapRegistry.ZapChannel> =
-        (0 until LiveChannelZapRegistry.size()).mapNotNull(LiveChannelZapRegistry::channelAt)
+        LiveChannelZapRegistry.snapshot()
 
     /** True where a press could actually open the guide. */
     private fun channelGuideCanOpen(): Boolean =
@@ -9811,7 +9812,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         val list = channelGuideList ?: return
         val now = System.currentTimeMillis()
         val currentId = currentZapChannel()?.channelId
-        val rows = lineupChannels().mapIndexed { index, channel ->
+        // One row object per VISIBLE row, not per channel: the source answers a
+        // position when RecyclerView binds it. Materialising the whole lineup
+        // here was the in-player guide's ANR - opening it on a long IPTV group
+        // built tens of thousands of rows on the main thread before the overlay
+        // could take input (ANDROID-Z), and the EPG pass did it again.
+        val rows: List<ChannelGuideRow> = ChannelGuideRowSource(
+            count = LiveChannelZapRegistry.size()
+        ) { index ->
+            val channel = LiveChannelZapRegistry.channelAt(index)
+                ?: return@ChannelGuideRowSource ChannelGuideRow(
+                    channelNumber = null,
+                    name = "",
+                    nowTitle = null,
+                    nowTime = null,
+                    nowProgressPermille = null,
+                    nextTitle = null,
+                    isCurrent = false,
+                    onClick = {}
+                )
             val entry = guideChannelIdFor(channel)
                 ?.let { programs[epgProgramChannelKey(it)] }
             val nowProgram = entry?.now
@@ -9841,7 +9860,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 // Focus the viewer rests on warms that channel's playlist before
                 // the press lands (see LiveChannelPrefetch).
                 it.onRowFocused = { index ->
-                    liveChannelPrefetch.onChannelFocused(lineupChannels().getOrNull(index))
+                    liveChannelPrefetch.onChannelFocused(LiveChannelZapRegistry.channelAt(index))
                 }
                 it.submit(rows)
             }
@@ -9888,8 +9907,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // and [planGuideQueries] skips those channels outright - which is
             // why the overlay read nothing and stayed blank.
             resolveMissingGuideMatches(channels)
+            // The resolved ids are handed over as a lookup rather than copied
+            // onto every entry: that copy was one more full-lineup allocation
+            // per pass on the guide's open path.
             val queries = planGuideQueries(
-                channels.map { channel -> channel.copy(epgChannelId = guideChannelIdFor(channel)) }
+                channels,
+                guideIdOf = { channel -> guideChannelIdFor(channel) }
             )
             if (queries.isEmpty()) {
                 // Nothing to read for any row (no guide configured, or nothing
@@ -10032,7 +10055,11 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun focusChannelGuideCurrent() {
         val list = channelGuideList ?: return
-        val index = lineupChannels().indexOfFirst { it.channelId == currentZapChannel()?.channelId }
+        // The lineup's own index, not a scan of it: this runs on the open path,
+        // which is where the ANR was.
+        val index = currentZapChannel()?.channelId
+            ?.let(LiveChannelZapRegistry::indexOfChannel)
+            ?: -1
         list.post {
             if (!isGuideShowing) return@post
             if (index >= 0) list.scrollToPosition(index)
