@@ -3,7 +3,6 @@ package com.kennyb1201.kbstream.ui.home
 import com.kennyb1201.kbstream.data.addon.MetaPreview
 import com.kennyb1201.kbstream.data.namedEpisodeNumber
 import com.kennyb1201.kbstream.data.tmdb.TmdbEpisodeAirInfo
-import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import kotlinx.coroutines.flow.map
 
 // The rail and up-next models, and the pure helpers that key, group and
@@ -453,50 +452,6 @@ internal fun upNextCardEpisodePair(
     }
 
     return (rowSeason ?: resolvedSeason) to resolvedEpisode
-}
-
-/**
- * A STORED episode stream id, re-rooted under the root the app resolved for
- * its show.
- *
- * A watch-history row's `episodeStreamId` is not an id the app built: it is
- * whatever the session that filed the row named its request by, and a row
- * written before the root was verified carries the CATALOG's id instead of
- * TMDB's (see `TmdbRepository.streamRootIdFor` for the field case - a series
- * catalog handing out `tt3121722` for a show whose TMDB record says
- * `tt4873036`). The rail hands that id to the player, to the streams picker and
- * on into the player's own next-episode walk, which is the read the detail
- * screen's guard cannot cover: "Play Manually" skips the detail screen
- * entirely. Unre-rooted, every episode of such a show asks for another title's
- * streams.
- *
- * Only the ROOT is swapped. The `season:episode` suffix is kept exactly as the
- * row was filed with, because it names the FILE that was played - it is the
- * file numbering the add-ons answered then, and re-deriving it from the TMDB
- * episode would run the learned numbering over a file the viewer has already
- * watched (that is [com.kennyb1201.kbstream.data.player.fileEpisodeStreamId]'s
- * job on a freshly resolved listing, where the mapping IS the point).
- *
- * An id that names no episode is returned untouched, and so is one whose
- * resolved root is blank or the same as the stored one: `resolvedRoot` is
- * "nothing to verify" there - a title TMDB has no record for, a missing key, an
- * offline device - and the stored id is then the only id there is, which is the
- * same answer `streamRootIdFor` gives its own callers.
- */
-internal fun rerootedEpisodeStreamId(
-    storedStreamId: String,
-    resolvedRoot: String
-): String {
-    val storedRoot =
-        EpisodeMatch.seriesRootFrom(storedStreamId)
-            ?: return storedStreamId
-
-    val verified =
-        resolvedRoot.trim()
-
-    if (verified.isEmpty() || verified == storedRoot) return storedStreamId
-
-    return verified + storedStreamId.removePrefix(storedRoot)
 }
 
 /**

@@ -4,7 +4,7 @@ import android.content.Context
 import com.kennyb1201.kbstream.data.player.fileEpisodeStreamId
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
-import com.kennyb1201.kbstream.ui.home.rerootedEpisodeStreamId
+import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.random.Random
@@ -166,7 +166,7 @@ suspend fun randomAiredEpisode(
     // The id that PLAYS is re-rooted at that same root, keeping its file
     // numbering: a hop off a route opened as "tmdb:<n>" - or with the catalog's
     // own id, which can be another title's - names the show the picker does.
-    // One rule, shared with the resume rows that re-read a stored id (see
-    // HomeUpNext.rerootedEpisodeStreamId).
+    // One rule, shared with the resume rows that re-read a stored id and with
+    // the one-shot row migration (see data.player.rerootedEpisodeStreamId).
     pick.copy(streamId = rerootedEpisodeStreamId(streamId, root))
 }

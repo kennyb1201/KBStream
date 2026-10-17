@@ -166,6 +166,26 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     )
                 }
             }
+            // The stored continue-watching rows of older builds name their
+            // shows by the id the CATALOG handed out rather than TMDB's (see
+            // HistoryRootMigration). Every read re-roots them, so playback is
+            // already correct; this is the one-shot repair of the ROWS, so the
+            // sync layer stops handing those stale ids to other devices. Its
+            // own launch: it resolves each show's verified root, and the steps
+            // after it are disk work that must not queue behind that.
+            startupScope.launch {
+                runCatchingCancellable {
+                    PerfTrace.timedSuspend("startup.historyRootMigration") {
+                        com.kennyb1201.kbstream.data.history.HistoryRootMigration
+                            .runOnce(this@MainApplication)
+                    }
+                }.onFailure { error ->
+                    CrashReporter.recordNonFatal(
+                        error,
+                        mapOf("source" to "app_create_history_root_migration")
+                    )
+                }
+            }
             // Self-update: if an install was handed to the system installer
             // before this process existed, say whether it landed. Runs first
             // so the confirmation outranks the 12h check below (which is a

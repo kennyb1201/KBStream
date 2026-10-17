@@ -111,6 +111,28 @@ interface WatchHistoryDao {
     }
 
     /**
+     * The one-shot root migration's apply step: every id that leaves and every
+     * canonical row that replaces it, as ONE transaction.
+     *
+     * A renamed row is a delete plus an insert - Room cannot change a primary
+     * key in place - and the two must not be observable apart: a reader finding
+     * neither id sees the title vanish from Continue Watching, and one finding
+     * both sees it twice with a progress bar on each. The deletes run first, so
+     * a target id that another row's stale id vacates is free before its row is
+     * written (and is not deleted back out from under it). [upsertAllRaw] is
+     * the raw form on purpose: the migration writes the row it computed, not a
+     * merge of it with the row it is replacing.
+     */
+    @Transaction
+    suspend fun applyRootMigration(
+        deletedIds: List<String>,
+        writes: List<WatchHistoryEntity>
+    ) {
+        if (deletedIds.isNotEmpty()) deleteByIds(deletedIds)
+        if (writes.isNotEmpty()) upsertAllRaw(writes)
+    }
+
+    /**
      * Bulk form of [upsertRaw] in ONE transaction, for writers that have no
      * existing rows to merge with.
      *
@@ -321,6 +343,18 @@ interface WatchHistoryDao {
         """
     )
     suspend fun getAll(): List<WatchHistoryEntity>
+
+    /**
+     * Every stored row, filters and all: what the one-shot root migration has
+     * to see.
+     *
+     * Deliberately not [getAll], which is the launcher and viewing-stats read
+     * and skips rows with no saved position. A stale root is exactly as wrong
+     * on a row that never moved off 0, and the point of the migration is that
+     * no row keeps an id the rest of the app no longer names.
+     */
+    @Query("SELECT * FROM watch_history")
+    suspend fun getAllRows(): List<WatchHistoryEntity>
 
     /**
      * The rows the TV launcher's Continue watching rail can publish: in-progress

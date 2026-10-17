@@ -22,6 +22,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryRepository
 import com.kennyb1201.kbstream.data.iptv.EpgWriteGate
 import com.kennyb1201.kbstream.data.mdblist.MdbListClient
 import com.kennyb1201.kbstream.data.mdblist.MdbListPlaybackItem
+import com.kennyb1201.kbstream.data.player.rerootedEpisodeStreamId
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklContinueWatchingItem
 import com.kennyb1201.kbstream.data.tmdb.ResolvedEpisode

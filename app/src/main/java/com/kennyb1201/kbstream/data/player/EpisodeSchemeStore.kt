@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.data.player
 
 import android.content.Context
+import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 
 /**
  * Remembers the [EpisodeScheme] detected for a show, so the NEXT session is
@@ -107,6 +108,53 @@ internal fun fileEpisodeStreamId(
  * number rather than a stable id: the store key is derived from the pair, so
  * the builders cannot each pick a different one for the same show.
  */
+/**
+ * A STORED episode stream id, re-rooted under the root the app resolved for its
+ * show.
+ *
+ * A stored id is not an id the app built: it is whatever the session that filed
+ * it named its request by, and a row written before the root was verified
+ * carries the CATALOG's id instead of TMDB's (see
+ * [com.kennyb1201.kbstream.data.tmdb.preferredStreamRootId] for the field case -
+ * a series catalog handing out `tt3121722` for a show whose TMDB record says
+ * `tt4873036`). Two surfaces read such an id back: the Continue Watching rail
+ * hands it to the player, the streams picker and on into the player's own
+ * next-episode walk - the read the detail screen's guard cannot cover, because
+ * "Play Manually" skips the detail screen entirely - and the one-shot history
+ * root migration rewrites the rows themselves (see
+ * [com.kennyb1201.kbstream.data.history.HistoryRootMigration]). Unre-rooted,
+ * every episode of such a show asks for another title's streams.
+ *
+ * Only the ROOT is swapped. The `season:episode` suffix is kept exactly as the
+ * row was filed with, because it names the FILE that was played - it is the
+ * file numbering the add-ons answered then, and re-deriving it from the TMDB
+ * episode would run the learned numbering over a file the viewer has already
+ * watched (that is [fileEpisodeStreamId]'s job on a freshly resolved listing,
+ * where the mapping IS the point).
+ *
+ * An id that names no episode is returned untouched, and so is one whose
+ * resolved root is blank or the same as the stored one: `resolvedRoot` is
+ * "nothing to verify" there - a title TMDB has no record for, a missing key, an
+ * offline device - and the stored id is then the only id there is, which is the
+ * same answer [com.kennyb1201.kbstream.data.tmdb.TmdbRepository.streamRootIdFor]
+ * gives its own callers.
+ */
+internal fun rerootedEpisodeStreamId(
+    storedStreamId: String,
+    resolvedRoot: String
+): String {
+    val storedRoot =
+        EpisodeMatch.seriesRootFrom(storedStreamId)
+            ?: return storedStreamId
+
+    val verified =
+        resolvedRoot.trim()
+
+    if (verified.isEmpty() || verified == storedRoot) return storedStreamId
+
+    return verified + storedStreamId.removePrefix(storedRoot)
+}
+
 internal fun fileEpisodeStreamId(
     context: Context,
     rootId: String,
