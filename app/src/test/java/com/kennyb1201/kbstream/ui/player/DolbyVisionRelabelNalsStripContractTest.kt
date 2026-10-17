@@ -512,6 +512,16 @@ class DolbyVisionRelabelNalsStripContractTest {
             2,
             count(source, "vpsRewrite=\${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)}")
         )
+        assertEquals(
+            "and both sites report the 2026-10-16 stall's own field: whether the config SPS " +
+                "the decoder is configured with was rewritten, beside the VPS verdict",
+            2,
+            count(source, "spsRewrite=\${spsRewriteOutcome(skipVpsRewrite, relabel.spsOutcome)}")
+        )
+        assertTrue(
+            "which is why the relabel target has to carry the rewrite's SPS verdict at all",
+            source.contains("val spsOutcome: DolbyVisionCompat.SpsRewriteOutcome? = null")
+        )
     }
 
     // ── the 2026-10-14 no-relabel test, removed ─────────────────────────

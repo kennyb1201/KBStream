@@ -786,8 +786,9 @@ private class VideoCompatTrackOutput(
                             "stripped, RPU dropped, " +
                             "relabel=${relabelOutcome(relabel.relabelSkipped)} " +
                             "vpsRewrite=${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)} " +
+                            "spsRewrite=${spsRewriteOutcome(skipVpsRewrite, relabel.spsOutcome)} " +
                             "vpsRewritten=${relabel.vpsRewritten} " +
-                            "(config VPS only, SPS/PPS untouched) " +
+                            "(config VPS+SPS rewritten, PPS untouched) " +
                             "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
@@ -798,10 +799,16 @@ private class VideoCompatTrackOutput(
                     // Level 6 values already in it (see [deferHdr10StaticFormat]).
                     lastFormat = presented
                     // The relabel is bit-exact and the removal is in-place: the
-                    // only parameter set touched is the codec config's VPS,
-                    // rewritten by relabelTargetFor above — or left byte-exact
-                    // while the libdovi gate skips that rewrite — and the only
-                    // sample-side change is the strip (see Mode.STRIP_NALS_ONLY).
+                    // only parameter sets touched are the codec config's VPS and
+                    // SPS, both rewritten by relabelTargetFor above — or both
+                    // left byte-exact while the libdovi gate skips that rewrite —
+                    // and the only sample-side change is the strip (see
+                    // Mode.STRIP_NALS_ONLY). The config's SPS is rewritten here
+                    // because the decoder parses the config before any sample:
+                    // a DV-flagged SPS puts MTK-class decoders into DV mode at
+                    // configure time and they then wait for the RPUs this drops
+                    // (the 2026-10-16 zero-output stall, where every other
+                    // DV-flagged byte had already been rewritten).
                     // The mode goes first: [deferHdr10StaticFormat] reads it to
                     // decide whether this format may be withheld for the first
                     // sample's metadata.
@@ -839,10 +846,13 @@ private class VideoCompatTrackOutput(
                 // Auto branch above for why it went), so the two sites now make
                 // the same decision.
                 //
-                // Same single-layer VPS the in-band path re-emits: the VPS is
-                // rewritten, the SPS/PPS stay byte-identical, so the
-                // SPS-derived codec string advertised above is still what the
-                // decoder is configured with ([rewriteVpsInInitData] covers the
+                // Same single-layer parameter sets the in-band path re-emits:
+                // the VPS AND the SPS are rewritten (the config is parsed before
+                // any sample, so a DV-flagged SPS arms the same stall the VPS
+                // does — see the Auto branch above), the PPS stays byte-identical,
+                // and the codec string advertised above was derived from the
+                // ORIGINAL SPS before the rewrite
+                // ([DolbyVisionCompat.rewriteRelabelInitData] covers the
                 // length-delimited, hvcC and Annex-B codec configs).
                 val skipVpsRewrite = false
                 // The same removed no-relabel test and the same 2026-10-14
@@ -872,8 +882,9 @@ private class VideoCompatTrackOutput(
                             "stripped, RPU dropped, " +
                             "relabel=${relabelOutcome(relabel.relabelSkipped)} " +
                             "vpsRewrite=${vpsRewriteOutcome(skipVpsRewrite, relabel.vpsRewritten)} " +
+                            "spsRewrite=${spsRewriteOutcome(skipVpsRewrite, relabel.spsOutcome)} " +
                             "vpsRewritten=${relabel.vpsRewritten} " +
-                            "(config VPS only, SPS/PPS untouched) " +
+                            "(config VPS+SPS rewritten, PPS untouched) " +
                             "(the mutating strip is field-dead here)" +
                             " codecSrc=$codecSrc hdrStaticInfo=$hdrStatic"
                     )
@@ -1687,13 +1698,21 @@ internal enum class RelabelAttempt { FULL, MINIMAL }
 /** A relabeled format plus the attempt that built it, for the success log. */
 internal class RelabelOutcome(val format: Format, val attempt: RelabelAttempt)
 
-/** What the relabel is handed: the source format (or its VPS-rewritten form)
+/** What the relabel is handed: the source format (or its rewritten form)
  * plus whether that rewrite happened, for the success log — and whether the
  * relabel itself is being skipped, which is the 2026-10-14 test (see
  * [relabelTargetFor]). */
 internal class RelabelTarget(
     val format: Format,
     val vpsRewritten: Boolean,
+    /**
+     * The config rewrite's verdict on the SPS, for the field log — null when
+     * the config carried no SPS to rewrite. The SPS is rewritten on this path
+     * too (a DV-flagged config SPS puts the decoder into DV mode before the
+     * first sample arrives; see [DolbyVisionCompat.rewriteRelabelInitData]),
+     * and this is what says whether it landed.
+     */
+    val spsOutcome: DolbyVisionCompat.SpsRewriteOutcome? = null,
     /**
      * True when the whole relabel is skipped: [format] is the source format
      * exactly as it arrived, declared codec string included, and the caller
@@ -1719,6 +1738,31 @@ internal fun vpsRewriteOutcome(skippedForLibdovi: Boolean, rewritten: Boolean): 
 }
 
 /**
+ * The relabel log's verdict on the codec config's SPS, beside [vpsRewriteOutcome].
+ *
+ * The field question this answers is the 2026-10-16 one: the config was handed
+ * a rewritten VPS while its SPS still described Dolby Vision, so a capture has
+ * to say whether the SPS rewrite ran (`applied`), was not needed because the
+ * SPS already declared clean Main10 (`not-needed`), threw the original bytes
+ * back (`failed(<reason>)`), or was never attempted because the whole config
+ * rewrite was skipped (`skipped(libdovi)`) or carried no SPS (`absent`).
+ * "not-needed" and "failed" are kept apart for the same reason [vpsRewriteOutcome]
+ * keeps them apart: only one of the two is a bug in this parser.
+ */
+internal fun spsRewriteOutcome(
+    skippedForLibdovi: Boolean,
+    outcome: DolbyVisionCompat.SpsRewriteOutcome?
+): String {
+    if (skippedForLibdovi) return "skipped(libdovi)"
+    return when (outcome) {
+        null -> "absent"
+        is DolbyVisionCompat.SpsRewriteOutcome.Rewritten -> "applied"
+        is DolbyVisionCompat.SpsRewriteOutcome.NoDvExtension -> "not-needed"
+        is DolbyVisionCompat.SpsRewriteOutcome.Failed -> "failed(" + outcome.reason + ")"
+    }
+}
+
+/**
  * The relabel log's verdict on the codec-string relabel, for the field log.
  *
  * The 2026-10-14 field run read this field to tell which path ran: the declared
@@ -1741,9 +1785,12 @@ internal fun relabelOutcome(skippedForLibdovi: Boolean): String =
  * info) and leaves the codec config bit-exact, so a DV-flagged VPS rides on to
  * the decoder that way - and a decoder which configured from it then waits for
  * the RPUs the relabel drops, which is the zero-output stall this exists to
- * close. [DolbyVisionCompat.rewriteVpsInInitData] rewrites the VPS alone: the
- * SPS/PPS stay byte-identical (the advertised codec string is derived from
- * that SPS) and so does every sample.
+ * close. [DolbyVisionCompat.rewriteRelabelInitData] rewrites the codec config's
+ * VPS AND its SPS (the config is parsed before any sample, so a DV-flagged SPS
+ * there arms the same stall); the PPS and every sample stay byte-identical, and
+ * the advertised codec string is derived from the ORIGINAL SPS before this runs
+ * - see [relabelTargetFor]'s callers - because the rewritten SPS declares Main
+ * tier while the container's may declare High.
  *
  * Every step is contained: a format that cannot be rebuilt is handed to the
  * relabel unchanged with `vpsRewritten=false`, exactly as before this existed,
@@ -1808,8 +1855,8 @@ internal fun relabelOutcome(skippedForLibdovi: Boolean): String =
  */
 internal fun relabelTargetFor(
     format: Format,
-    rewriteVps: (List<ByteArray>) -> List<ByteArray> = {
-        DolbyVisionCompat.rewriteVpsInInitData(it)
+    rewriteConfig: (List<ByteArray>) -> DolbyVisionCompat.InitDataRewrite = {
+        DolbyVisionCompat.rewriteRelabelInitData(it)
     },
     skipVpsRewrite: Boolean = false,
     skipRelabel: Boolean = false
@@ -1823,13 +1870,13 @@ internal fun relabelTargetFor(
         // are stripped. The relabel still re-advertises the track as hvc1.
         return RelabelTarget(format, false)
     }
-    val rewritten = runCatching { rewriteVps(format.initializationData) }.getOrNull()
+    val rewritten = runCatching { rewriteConfig(format.initializationData) }.getOrNull()
         ?: return RelabelTarget(format, false)
-    if (rewritten === format.initializationData) return RelabelTarget(format, false)
+    if (rewritten.initData === format.initializationData) return RelabelTarget(format, false)
     val patched = runCatching {
-        format.buildUpon().setInitializationData(rewritten).build()
+        format.buildUpon().setInitializationData(rewritten.initData).build()
     }.getOrNull() ?: return RelabelTarget(format, false)
-    return RelabelTarget(patched, true)
+    return RelabelTarget(patched, rewritten.vpsRewritten, rewritten.spsOutcome)
 }
 
 /**

@@ -6,29 +6,39 @@ import java.io.ByteArrayOutputStream
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * The relabel path's VPS rewrite in codec-private data: [DolbyVisionCompat.rewriteVpsInInitData]
- * and the [relabelTargetFor] step that hands its result to the relabel.
+ * The relabel path's VPS+SPS rewrite in codec-private data:
+ * [DolbyVisionCompat.rewriteRelabelInitData] and the [relabelTargetFor] step
+ * that hands its result to the relabel.
  *
- * Field problem: the 6.36 relabel (correct `hvc1.2.4.H150.B0`, RPU dropped,
- * HDR10+ SEI stripped) still stalled with zero decoder output. The codec
- * config still declared the Dolby Vision VPS ("VPS/SPS untouched"), so the
+ * Field problem, first half (6.36): the relabel (correct `hvc1.2.4.H150.B0`, RPU
+ * dropped, HDR10+ SEI stripped) still stalled with zero decoder output. The
+ * codec config still declared the Dolby Vision VPS ("VPS/SPS untouched"), so the
  * decoder configured from a DV-flagged parameter set and then waited for the
  * RPUs the relabel removes. KBStream's VPS rewrite existed, but it only reached
  * the MP4 path's framing, and the container here is the one that stalled — so
  * the rewrite now dispatches on the framing it is actually given
- * (length-delimited, hvcC, Annex-B) and rewrites the VPS alone.
+ * (length-delimited, hvcC, Annex-B).
  *
- * The two invariants worth pinning behaviorally are that the SPS/PPS stay
- * byte-identical (the advertised codec string is read from that SPS, and the
- * field result has to be attributable to the VPS) and that every unparseable
- * buffer is returned exactly as it arrived, because this runs inside format
- * negotiation where a guess corrupts the track instead of failing loudly.
+ * Second half (2026-10-16, NORViNE Matchbox 2160p `dvhe.08.06`, Strip All): with
+ * the label, the config VPS and the in-sample sets all rewritten, the decoder
+ * STILL produced zero output for 20s+, and the one DV-flagged byte left was the
+ * config's SPS. The config is parsed before any sample, so a DV-flagged SPS in
+ * it arms the same stall — and the rewrite now takes the SPS with it, re-emitting
+ * it as its original 2-byte NAL header followed by the rewritten RBSP under a
+ * fresh length (the shape 9b084af7 established; the bare RBSP under a fresh
+ * length is the corrupt-config bug that commit fixed).
+ *
+ * The invariants pinned behaviorally: the PPS and every unparseable buffer stay
+ * byte-identical (a guess here corrupts the track instead of failing loudly,
+ * and this runs inside format negotiation), the failure arms keep the original
+ * SPS, and the advertised codec string is derived from the ORIGINAL SPS before
+ * this runs — it is never re-derived from the rewritten one.
  */
 class DolbyVisionVpsInitDataRewriteTest {
 
@@ -54,6 +64,19 @@ class DolbyVisionVpsInitDataRewriteTest {
             ((buf[at + 1].toInt() and 0xFF) shl 16) or
             ((buf[at + 2].toInt() and 0xFF) shl 8) or
             (buf[at + 3].toInt() and 0xFF)
+
+    /** Annex-B framing: a 4-byte start code before every NAL. */
+    private fun annexB(vararg nals: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream()
+        nals.forEach { unit ->
+            out.write(0)
+            out.write(0)
+            out.write(0)
+            out.write(1)
+            out.write(unit, 0, unit.size)
+        }
+        return out.toByteArray()
+    }
 
     /**
      * A Dolby Vision VPS RBSP, bit by bit (ITU-T H.265 7.3.2.1): vps_id 0, both
@@ -83,6 +106,119 @@ class DolbyVisionVpsInitDataRewriteTest {
     )
     private val pps = nal(34, byteArrayOf(0x0D, 0x0E, 0x0F))
 
+    /**
+     * The field file's own SPS shape: a FULL parseable single-layer P8 SPS —
+     * clean Main10 general PTL on [tier] (1 = High, which is where the field's
+     * `hvc1.2.4.H150.B0` comes from), compatibility flag[2] (Main10) and
+     * constraint byte 0xB0 exactly as the 2026-10-16 capture read them,
+     * 3840x1608, 10-bit, and the `sps_extension_present_flag` + all-zero
+     * extension header Dolby Vision uses on single-layer encodes. That extension
+     * is the DV signalling [DolbyVisionCompat.rewriteSpsToHdr10] removes, so this
+     * is the config SPS the 2026-10-16 stall left behind DV-flagged.
+     *
+     * The layout is the H.265 one, which puts `general_profile_space` at RBSP bit
+     * 8 (sps_video_parameter_set_id 4, sps_max_sub_layers_minus1 3,
+     * sps_temporal_id_nesting_flag 1, then profile_tier_level — no reserved
+     * field). The app's own [DolbyVisionCompat.hevcCodecFromInitData] reads it at
+     * that offset and derives the field capture's string, which is what the
+     * assertions below hold it to.
+     */
+    private fun fullP8Sps(tier: Int, dvExtension: Boolean): ByteArray {
+        val bits = Bits()
+            .u(0, 4).u(0, 3).u(1, 1) // sps_video_parameter_set_id, max_sub_layers_minus1, nesting
+            .u(0, 2).u(tier, 1).u(2, 5) // profile_space, tier, profile_idc 2 (Main10)
+            .u(0x20000000, 32) // compatibility flag[2] (Main10) — read back as hex 4
+            .u(0xB, 4).u(0, 44) // constraint indicator flags, first byte 0xB0
+            .u(150, 8) // general_level_idc (Level 5.0)
+            .ue(0) // sps_seq_parameter_set_id
+            .ue(1) // chroma_format_idc 4:2:0
+            .ue(3840).ue(1608) // resolution
+            .u(0, 1) // conformance_window_flag
+            .ue(2).ue(2) // 10-bit luma / chroma
+            .ue(4) // log2_max_pic_order_cnt_lsb_minus4
+            .u(0, 1) // sub_layer_ordering_info_present_flag
+            .ue(4).ue(2).ue(0) // buffering, reorder, latency
+            .ue(0).ue(3).ue(1).ue(3).ue(2).ue(2) // block sizes
+            .u(0, 1) // scaling_list_enabled_flag
+            .u(1, 1).u(1, 1) // amp, sao
+            .u(0, 1) // pcm_enabled_flag
+            .ue(0) // num_short_term_ref_pic_sets
+            .u(0, 1) // long_term_ref_pics_present_flag
+            .u(1, 1).u(1, 1) // temporal mvp, strong intra smoothing
+            .u(0, 1) // vui_parameters_present_flag
+        if (dvExtension) {
+            bits.u(1, 1) // sps_extension_present_flag
+                .u(0, 1).u(0, 1).u(0, 1).u(0, 1).u(0, 4) // the DV extension itself
+                .u(0xDEAD, 16) // its payload, dropped with the extension
+        } else {
+            bits.u(0, 1)
+        }
+        return nal(33, bits.u(1, 1).bytes())
+    }
+
+    /**
+     * The DV-flagged SPS the 2026-10-16 field file carried: a High-tier
+     * Main10 set whose extension signals Dolby Vision, so
+     * [DolbyVisionCompat.hevcCodecFromInitData] derives the capture's own
+     * `hvc1.2.4.H150.B0` from it.
+     */
+    private val dvSps: ByteArray = fullP8Sps(tier = 1, dvExtension = true)
+
+    /** MSB-first bit writer, so the SPS above can be built field by field. */
+    private class Bits {
+        private val out = ByteArrayOutputStream()
+        private var acc = 0
+        private var n = 0
+
+        fun u(value: Int, bits: Int): Bits {
+            for (i in bits - 1 downTo 0) {
+                acc = (acc shl 1) or ((value ushr i) and 1)
+                n++
+                if (n == 8) {
+                    out.write(acc)
+                    acc = 0
+                    n = 0
+                }
+            }
+            return this
+        }
+
+        /** Unsigned Exp-Golomb, ue(v). */
+        fun ue(value: Int): Bits {
+            val v = value + 1
+            var leading = 0
+            while ((1 shl (leading + 1)) <= v) leading++
+            u(0, leading)
+            u(v, leading + 1)
+            return this
+        }
+
+        fun bytes(): ByteArray {
+            if (n > 0) {
+                out.write(acc shl (8 - n))
+                acc = 0
+                n = 0
+            }
+            return out.toByteArray()
+        }
+    }
+
+    /** The rewrite's own bytes for a parameter set, so the expectation is production's. */
+    private fun rewrittenNal(unit: ByteArray, vps: Boolean): ByteArray {
+        val rbsp = if (vps) {
+            when (val res = DolbyVisionCompat.rewriteVpsToHdr10(unit, 2, unit.size)) {
+                is DolbyVisionCompat.VpsRewriteOutcome.Rewritten -> res.rbsp
+                else -> throw AssertionError("the VPS fixture did not rewrite: $res")
+            }
+        } else {
+            when (val res = DolbyVisionCompat.rewriteSpsToHdr10(unit, 2, unit.size)) {
+                is DolbyVisionCompat.SpsRewriteOutcome.Rewritten -> res.rbsp
+                else -> throw AssertionError("the SPS fixture did not rewrite: $res")
+            }
+        }
+        return unit.copyOf(2) + rbsp
+    }
+
     /** An hvcC (HEVCDecoderConfigurationRecord) holding [nals] as one array each. */
     private fun hvcCRecord(vararg nals: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
@@ -106,37 +242,52 @@ class DolbyVisionVpsInitDataRewriteTest {
     // ── behavioral: the framing rewrite ───────────────────────────────────
 
     @Test
-    fun `the length-delimited VPS is rewritten and re-emitted with its new length`() {
+    fun `the length-delimited parameter sets are rewritten and re-emitted with new lengths`() {
         // MKV's shape: the parameter sets reach the player length-delimited, so
-        // an Annex-B-only rewrite leaves the DV VPS in place and the decoder
-        // waits for metadata that was stripped.
-        val init = lengthDelimited(dvVps, sps, pps)
-        val rewritten = DolbyVisionCompat.rewriteVpsInInitData(listOf(init))
+        // an Annex-B-only rewrite leaves the DV VPS (and, since 2026-10-16, the
+        // DV SPS) in place and the decoder waits for metadata that was stripped.
+        val init = lengthDelimited(dvVps, dvSps, pps)
+        val result = DolbyVisionCompat.rewriteRelabelInitData(listOf(init))
 
-        val out = rewritten.single()
-        assertFalse("the config must have changed", out.contentEquals(init))
-        val tail = lengthDelimited(sps, pps)
-        val vpsLen = readLengthPrefix(out, 0)
+        val out = result.initData.single()
+        assertTrue("the config must have changed", out !== init)
+        assertFalse("and not be the same bytes", out.contentEquals(init))
+        assertTrue("the VPS was rewritten and the tally says so", result.vpsRewritten)
         assertEquals(
-            "the VPS is the first NAL and its prefix must cover exactly what follows it",
-            out.size - 4 - tail.size,
-            vpsLen
+            "and the SPS too - the 2026-10-16 stall's one DV-flagged byte",
+            "applied",
+            spsRewriteOutcome(skippedForLibdovi = false, result.spsOutcome)
         )
-        assertTrue(
-            "the rewritten NAL is longer than the original (emulation prevention is " +
-                "re-applied to the rewritten RBSP), so a stale length would desync the decoder",
-            vpsLen > dvVps.size
+        // Both sets are re-emitted as their original 2-byte NAL header plus the
+        // rewritten RBSP, and each length prefix covers exactly that.
+        val newVps = rewrittenNal(dvVps, vps = true)
+        val newSps = rewrittenNal(dvSps, vps = false)
+        val expected = lengthDelimited(newVps, newSps, pps)
+        assertArrayEquals(expected, out)
+        val vpsLen = readLengthPrefix(out, 0)
+        assertEquals("the VPS length prefix counts header + rewritten RBSP", newVps.size, vpsLen)
+        assertEquals("the NAL header is carried through", 0x40, out[4].toInt() and 0xFF)
+        val spsAt = 4 + vpsLen
+        assertEquals(
+            "the SPS length prefix counts header + rewritten RBSP too; a bare RBSP under a " +
+                "fresh length is the corrupt-config bug 9b084af7 fixed",
+            newSps.size,
+            readLengthPrefix(out, spsAt)
+        )
+        assertEquals(
+            "and its NAL header is carried through as well",
+            0x42,
+            out[spsAt + 4].toInt() and 0xFF
+        )
+        assertEquals(
+            "its second byte too - a payload byte here is the bug",
+            0x01,
+            out[spsAt + 5].toInt() and 0xFF
         )
         assertArrayEquals(
-            "the SPS and the PPS must ride through byte-identical: the advertised codec " +
-                "string is read from that SPS",
-            tail,
-            out.copyOfRange(4 + vpsLen, out.size)
-        )
-        assertEquals(
-            "the NAL header is carried through",
-            0x40,
-            out[4].toInt() and 0xFF
+            "the PPS is the one set left bit-exact",
+            pps,
+            out.copyOfRange(out.size - pps.size, out.size)
         )
         val rbsp = out.copyOfRange(6, 6 + (vpsLen - 2))
         assertEquals(
@@ -145,12 +296,19 @@ class DolbyVisionVpsInitDataRewriteTest {
             0x02,
             rbsp[4].toInt() and 0x3F
         )
+        val second = DolbyVisionCompat.rewriteRelabelInitData(result.initData)
         assertSame(
             "a second pass must find nothing left to rewrite, which is the clean " +
                 "single-layer marker",
-            rewritten,
-            DolbyVisionCompat.rewriteVpsInInitData(rewritten)
+            result.initData,
+            second.initData
         )
+        assertEquals(
+            "and it reports the clean SPS as needing nothing",
+            "not-needed",
+            spsRewriteOutcome(skippedForLibdovi = false, second.spsOutcome)
+        )
+        assertFalse(second.vpsRewritten)
     }
 
     /**
@@ -215,12 +373,21 @@ class DolbyVisionVpsInitDataRewriteTest {
     }
 
     @Test
-    fun `a config with no VPS comes back as the very same list`() {
+    fun `a config with nothing rewritable comes back as the very same list`() {
+        // The small fixture's SPS is a DV-flagged PTL the parser cannot walk end
+        // to end, and this buffer carries no VPS: both sets keep their bytes, so
+        // nothing is allocated and nothing is re-emitted.
         val init = listOf(lengthDelimited(sps, pps), ByteArray(0))
+        val result = DolbyVisionCompat.rewriteRelabelInitData(init)
         assertSame(
             "nothing rewritten means nothing allocated and nothing re-emitted",
             init,
-            DolbyVisionCompat.rewriteVpsInInitData(init)
+            result.initData
+        )
+        assertFalse(result.vpsRewritten)
+        assertTrue(
+            "and the SPS verdict is the parse failure, not a silent keep",
+            result.spsOutcome is DolbyVisionCompat.SpsRewriteOutcome.Failed
         )
     }
 
@@ -231,13 +398,16 @@ class DolbyVisionVpsInitDataRewriteTest {
         // only safe answer.
         val truncated = lengthDelimited(dvVps).copyOf(20)
         val init = listOf(truncated)
-        assertSame(init, DolbyVisionCompat.rewriteVpsInInitData(init))
+        assertSame(init, DolbyVisionCompat.rewriteRelabelInitData(init).initData)
     }
 
     @Test
-    fun `an hvcC record has its VPS array rewritten and everything else copied`() {
-        val record = hvcCRecord(dvVps, sps)
-        val out = DolbyVisionCompat.rewriteVpsInInitData(listOf(record)).single()
+    fun `an hvcC record has both parameter-set arrays rewritten and everything else copied`() {
+        val record = hvcCRecord(dvVps, dvSps)
+        val result = DolbyVisionCompat.rewriteRelabelInitData(listOf(record))
+        val out = result.initData.single()
+        val newVps = rewrittenNal(dvVps, vps = true)
+        val newSps = rewrittenNal(dvSps, vps = false)
 
         assertArrayEquals(
             "the record header (including its general profile_tier_level) is copied verbatim",
@@ -251,38 +421,229 @@ class DolbyVisionVpsInitDataRewriteTest {
             1,
             ((out[24].toInt() and 0xFF) shl 8) or (out[25].toInt() and 0xFF)
         )
+        assertEquals("the NAL header is carried through", 0x40, out[28].toInt() and 0xFF)
         assertEquals(
-            "the VPS the length describes must be exactly what is left before the SPS array",
-            2 + (out.size - 30 - (sps.size + 5)),
+            "and the length counts it with the rewritten RBSP, header included",
+            newVps.size,
             vpsLen
         )
-        assertEquals("the NAL header is carried through", 0x40, out[28].toInt() and 0xFF)
         assertArrayEquals(
-            "the SPS array must be copied byte for byte",
-            byteArrayOf(33, 0, 1, (sps.size shr 8).toByte(), sps.size.toByte()) + sps,
-            out.copyOfRange(out.size - (sps.size + 5), out.size)
+            "so the VPS record NAL is the rewritten one, header and all",
+            newVps,
+            out.copyOfRange(28, 28 + newVps.size)
         )
+        val spsArrayAt = 28 + newVps.size
+        assertEquals(
+            "the SPS array follows, still labelled SPS",
+            33,
+            out[spsArrayAt].toInt() and 0x3F
+        )
+        assertEquals(
+            "still holding one NAL",
+            1,
+            ((out[spsArrayAt + 1].toInt() and 0xFF) shl 8) or (out[spsArrayAt + 2].toInt() and 0xFF)
+        )
+        assertEquals(
+            "and its length counts the header with the rewritten SPS RBSP",
+            newSps.size,
+            ((out[spsArrayAt + 3].toInt() and 0xFF) shl 8) or (out[spsArrayAt + 4].toInt() and 0xFF)
+        )
+        assertArrayEquals(
+            "the SPS record NAL is the rewritten one: this array used to ride through " +
+                "untouched, which is the 2026-10-16 stall",
+            newSps,
+            out.copyOfRange(spsArrayAt + 5, out.size)
+        )
+        assertTrue("and the tally reports both sets", result.vpsRewritten)
+        assertEquals("applied", spsRewriteOutcome(skippedForLibdovi = false, result.spsOutcome))
         assertFalse(
-            "and the VPS payload itself must not be the source bytes",
+            "the VPS payload itself must not be the source bytes",
             out.copyOfRange(30, 30 + (vpsLen - 2)).contentEquals(dvVpsRbsp)
         )
     }
 
     @Test
-    fun `the SPS-derived codec string survives the config rewrite`() {
-        // The relabel advertises the string it reads from this very SPS, so a
-        // config rewrite that moved an SPS bit would advertise a profile the
-        // stream no longer is.
-        val record = hvcCRecord(dvVps, sps)
-        val before = DolbyVisionCompat.hevcCodecFromInitData(listOf(record))
-        assertEquals("the field case's own string", "hvc1.2.4.H150.B0", before)
+    fun `the advertised codec string is read from the SPS before the rewrite`() {
+        // The relabel advertises the string it reads from this very SPS, and the
+        // field capture is what those bytes must keep saying (`hvc1.2.4.H150.B0`
+        // — High tier Level 5.0, the 2026-10-16 run's own string). The config SPS
+        // is rewritten underneath it, so the string has to be taken BEFORE the
+        // rewrite: it is not re-derived from the rewritten set.
+        val init = listOf(annexB(dvVps, dvSps, pps))
+        val advertised = DolbyVisionCompat.hevcCodecFromInitData(init)
+        assertEquals("the field case's own string", "hvc1.2.4.H150.B0", advertised)
 
-        val rewritten = DolbyVisionCompat.rewriteVpsInInitData(listOf(record))
-        assertNotNull(rewritten)
+        val result = DolbyVisionCompat.rewriteRelabelInitData(init)
+        assertTrue("the VPS is rewritten", result.vpsRewritten)
+        assertEquals("and the SPS with it", "applied", spsRewriteOutcome(false, result.spsOutcome))
+        val rewrittenString = DolbyVisionCompat.hevcCodecFromInitData(result.initData)
+        assertNotEquals(
+            "the config the decoder is configured with is no longer the source's",
+            advertised,
+            rewrittenString
+        )
+        // Known open issue, and deliberately not pinned further: the rewritten
+        // SPS does NOT read back as Main10 through this parser (it comes back
+        // `hvc1.0.<compat>.L150.B0` — profile_idc 0), because
+        // [DolbyVisionCompat.rewriteSpsToHdr10] skips a two-bit `reserved` field
+        // the H.265 SPS syntax does not have (general_profile_space starts at
+        // RBSP bit 8; the two reserved bits belong to the VPS). The relabel's
+        // advertised string is taken from the source SPS, so nothing here
+        // advertises that reading — but the displacement is why this assertion
+        // exists: if `rewriteSpsToHdr10`'s offset is fixed, this is the test that
+        // says so, and it should then read Main10 Main-tier at the same level.
+        assertFalse(
+            "the rewritten SPS is not readable as the Main10 it is meant to be: " +
+                "$rewrittenString",
+            rewrittenString != null && rewrittenString.startsWith("hvc1.2.")
+        )
+    }
+
+    @Test
+    fun `an SPS the parser cannot walk keeps the original bytes and says why`() {
+        // The `Failed` arm on the relabel's own path: the 13-byte fixture is a
+        // DV-flagged PTL with no walkable body, so the rewrite bails and the set
+        // reaches the decoder exactly as it arrived rather than half-rewritten.
+        val record = hvcCRecord(dvVps, sps)
+        val advertised = DolbyVisionCompat.hevcCodecFromInitData(listOf(record))
+        assertEquals("the field PTL's own string", "hvc1.2.4.H150.B0", advertised)
+
+        val result = DolbyVisionCompat.rewriteRelabelInitData(listOf(record))
+
+        assertTrue("the VPS is still rewritten", result.vpsRewritten)
+        assertTrue(
+            "and the field log can say the VPS was rewritten while the SPS failed",
+            spsRewriteOutcome(false, result.spsOutcome).startsWith("failed(")
+        )
         assertEquals(
-            "rewriting the VPS may not change what the SPS says the track is",
-            before,
-            DolbyVisionCompat.hevcCodecFromInitData(rewritten)
+            "while the source bytes it advertises from are untouched",
+            advertised,
+            DolbyVisionCompat.hevcCodecFromInitData(listOf(record))
+        )
+        assertTrue(
+            "and the SPS array in that record is byte-identical to the source's",
+            result.initData.single()
+                .copyOfRange(
+                    result.initData.single().size - (sps.size + 5),
+                    result.initData.single().size
+                )
+                .contentEquals(byteArrayOf(33, 0, 1, (sps.size shr 8).toByte(), sps.size.toByte()) + sps)
+        )
+    }
+
+    // ── behavioral: the config SPS (the 2026-10-16 field stall) ───────────
+
+    @Test
+    fun `the Annex-B config framing rewrites the SPS beside the VPS`() {
+        // The third framing Media3 can hand over, and the one a TS/Annex-B
+        // CodecPrivate arrives in. Both sets are re-emitted as start code +
+        // original 2-byte header + rewritten RBSP; the PPS rides through.
+        val init = annexB(dvVps, dvSps, pps)
+        val result = DolbyVisionCompat.rewriteRelabelInitData(listOf(init))
+
+        val out = result.initData.single()
+        assertArrayEquals(
+            "VPS and SPS both rewritten, PPS byte-exact",
+            annexB(rewrittenNal(dvVps, vps = true), rewrittenNal(dvSps, vps = false), pps),
+            out
+        )
+        assertTrue(result.vpsRewritten)
+        assertEquals("applied", spsRewriteOutcome(skippedForLibdovi = false, result.spsOutcome))
+    }
+
+    @Test
+    fun `a config the rewrite already patched is left alone on the next pass`() {
+        // The `NoDvExtension` arm, reached the way it is reached in the field: a
+        // retry ladder can hand the same config back, and a set that already
+        // carries no DV extension must come back byte-exact rather than be
+        // rewritten again. It is also what makes the rewrite safe to run more
+        // than once - the second pass finds nothing to do and allocates nothing.
+        val first = DolbyVisionCompat.rewriteRelabelInitData(
+            listOf(lengthDelimited(dvVps, dvSps, pps))
+        )
+        assertTrue("the first pass is the applied one", first.vpsRewritten)
+        assertEquals("applied", spsRewriteOutcome(false, first.spsOutcome))
+
+        val second = DolbyVisionCompat.rewriteRelabelInitData(first.initData)
+
+        assertSame(
+            "a second pass changes nothing and re-emits nothing",
+            first.initData,
+            second.initData
+        )
+        assertEquals(
+            "and the log says the SPS needed nothing, which is its not-needed arm",
+            "not-needed",
+            spsRewriteOutcome(skippedForLibdovi = false, second.spsOutcome)
+        )
+        assertFalse(second.vpsRewritten)
+    }
+
+    @Test
+    fun `an SPS the rewrite cannot parse keeps its original bytes`() {
+        // The `Failed` arm. The fixture's SPS is a DV-flagged PTL with no
+        // walkable body, so the parser bails: the set must reach the decoder
+        // exactly as it arrived rather than half-rewritten, and the log has to
+        // be able to say the rewrite failed and why.
+        val init = lengthDelimited(dvVps, sps, pps)
+        val result = DolbyVisionCompat.rewriteRelabelInitData(listOf(init))
+
+        val out = result.initData.single()
+        assertArrayEquals(
+            "the VPS alone is rewritten; the SPS keeps every byte",
+            lengthDelimited(rewrittenNal(dvVps, vps = true), sps, pps),
+            out
+        )
+        val outcome = result.spsOutcome
+        assertTrue("the verdict is a failure, not silence: $outcome", outcome is DolbyVisionCompat.SpsRewriteOutcome.Failed)
+        assertTrue(
+            "and it carries the parser's reason for the field log",
+            spsRewriteOutcome(skippedForLibdovi = false, outcome)
+                .startsWith("failed(") && spsRewriteOutcome(skippedForLibdovi = false, outcome) != "failed()"
+        )
+    }
+
+    @Test
+    fun `the log's SPS verdict separates every arm`() {
+        // One field, five readings: which one a capture shows decides what the
+        // next step is, so none of them may collapse into another.
+        assertEquals(
+            "skipped(libdovi)",
+            spsRewriteOutcome(skippedForLibdovi = true, outcome = null)
+        )
+        assertEquals(
+            "the skip outranks whatever the rewrite would have said",
+            "skipped(libdovi)",
+            spsRewriteOutcome(
+                skippedForLibdovi = true,
+                outcome = DolbyVisionCompat.SpsRewriteOutcome.Rewritten(dvSps)
+            )
+        )
+        assertEquals(
+            "applied",
+            spsRewriteOutcome(
+                skippedForLibdovi = false,
+                outcome = DolbyVisionCompat.SpsRewriteOutcome.Rewritten(dvSps)
+            )
+        )
+        assertEquals(
+            "not-needed",
+            spsRewriteOutcome(
+                skippedForLibdovi = false,
+                outcome = DolbyVisionCompat.SpsRewriteOutcome.NoDvExtension
+            )
+        )
+        assertEquals(
+            "failed(short-rbsp)",
+            spsRewriteOutcome(
+                skippedForLibdovi = false,
+                outcome = DolbyVisionCompat.SpsRewriteOutcome.Failed("short-rbsp")
+            )
+        )
+        assertEquals(
+            "a config that carried no SPS at all is its own answer",
+            "absent",
+            spsRewriteOutcome(skippedForLibdovi = false, outcome = null)
         )
     }
 
@@ -317,6 +678,33 @@ class DolbyVisionVpsInitDataRewriteTest {
     }
 
     @Test
+    fun `the relabel target reports the config SPS rewrite beside the VPS one`() {
+        // The field log reads both verdicts off RelabelTarget, so the SPS one has
+        // to survive the trip out of the rewrite: `spsRewrite=` on the relabel
+        // line is the 2026-10-16 capture's own field, and this is what feeds it.
+        val format = dvFormat(listOf(lengthDelimited(dvVps, dvSps, pps)))
+
+        val target = relabelTargetFor(format)
+
+        assertTrue(target.vpsRewritten)
+        assertEquals(
+            "the config SPS the decoder is configured with was rewritten too",
+            "applied",
+            spsRewriteOutcome(skippedForLibdovi = false, target.spsOutcome)
+        )
+        assertFalse(
+            "and the format handed over carries those rewritten bytes, not the source ones",
+            target.format.initializationData.single()
+                .contentEquals(format.initializationData.single())
+        )
+        assertEquals(
+            "the advertised string is still the source format's own declaration",
+            "dvhe.08.06",
+            target.format.codecs
+        )
+    }
+
+    @Test
     fun `a config that needed no rewrite is handed over as the same format`() {
         val format = dvFormat(listOf(lengthDelimited(sps, pps)))
 
@@ -337,7 +725,7 @@ class DolbyVisionVpsInitDataRewriteTest {
         // to be addressed by name.
         val target = relabelTargetFor(
             format,
-            rewriteVps = { throw IllegalStateException("boom") }
+            rewriteConfig = { throw IllegalStateException("boom") }
         )
 
         assertFalse(target.vpsRewritten)
@@ -391,7 +779,7 @@ class DolbyVisionVpsInitDataRewriteTest {
 
         val target = relabelTargetFor(
             format,
-            rewriteVps = { consulted = true; it },
+            rewriteConfig = { consulted = true; DolbyVisionCompat.rewriteRelabelInitData(it) },
             skipVpsRewrite = true
         )
 
@@ -465,7 +853,7 @@ class DolbyVisionVpsInitDataRewriteTest {
 
         val target = relabelTargetFor(
             format,
-            rewriteVps = { consulted = true; it },
+            rewriteConfig = { consulted = true; DolbyVisionCompat.rewriteRelabelInitData(it) },
             skipRelabel = true
         )
 
@@ -483,7 +871,7 @@ class DolbyVisionVpsInitDataRewriteTest {
 
         val target = relabelTargetFor(
             format,
-            rewriteVps = { error("the no-relabel arm may not rewrite anything") },
+            rewriteConfig = { error("the no-relabel arm may not rewrite anything") },
             skipVpsRewrite = false,
             skipRelabel = true
         )

@@ -1955,34 +1955,90 @@ internal object DolbyVisionCompat {
     }
 
     /**
-     * Rewrites the VPS, and only the VPS, inside codec-private
-     * (initialization data) buffers, returning new buffers (or the same list
-     * when nothing changed).
+     * What one codec-config rewrite found and handed back.
      *
-     * [rewriteInitDataVps] is the mutating strip's version of this: it takes
-     * the SPS with it. The relabel path must not, because the SPS is what its
-     * advertised codec string is derived from (see hevcCodecFromInitData) and
-     * because the experiment it runs has to be attributable to the VPS alone.
+     * [initData] is what the decoder has to be configured with: the caller's
+     * own list when nothing changed, so an identity check on it still means
+     * "untouched". [vpsRewritten] and [spsOutcome] are the field log's
+     * evidence - which of the two parameter sets this rewrite actually patched.
+     * [spsOutcome] is null when the config carried no SPS at all to rewrite (an
+     * hvcC record without an SPS array, a buffer carrying only VPS + PPS).
+     */
+    internal class InitDataRewrite(
+        val initData: List<ByteArray>,
+        val vpsRewritten: Boolean,
+        val spsOutcome: SpsRewriteOutcome?
+    )
+
+    /**
+     * The sink a codec-config rewrite reports its parameter-set verdicts
+     * through. One per call, so the report describes this config and nothing
+     * earlier: "applied" outranks the rest, because the question the field log
+     * asks is whether the set the decoder is configured with was rewritten, and
+     * one rewritten VPS or SPS is a yes. A parse failure is kept only when
+     * nothing was rewritten, which is the case where the original bytes are
+     * still what the decoder gets.
+     */
+    private class InitDataRewriteTally {
+        var vpsRewritten = false
+        var spsOutcome: SpsRewriteOutcome? = null
+
+        fun recordSps(outcome: SpsRewriteOutcome) {
+            if (spsOutcome == null || outcome is SpsRewriteOutcome.Rewritten) spsOutcome = outcome
+        }
+    }
+
+    /**
+     * Rewrites the DV-flagged parameter sets - VPS AND SPS - in codec-private
+     * (initialization data) buffers to single-layer HDR10, answering with the
+     * buffers the decoder must be configured with (the caller's own list when
+     * nothing changed) plus what was rewritten.
      *
-     * A Dolby Vision VPS left in the codec config is a stall in its own right:
-     * the decoder configures from a DV-flagged VPS, then receives samples whose
-     * RPU NALs were all dropped, and waits for Dolby Vision metadata that never
-     * arrives. That rewrite used to be reachable only for the MP4/fMP4 hvcC
-     * record; Matroska's codec private data carries the parameter sets
+     * The SPS belongs here, and that is the point of this entry point: the
+     * decoder parses the codec config BEFORE any sample, so a DV-flagged SPS in
+     * it can put an MTK-class decoder into Dolby Vision mode at configure time,
+     * and with the RPU NALs stripped it then waits for metadata that never
+     * arrives - configure OK, zero output. That is the 2026-10-16 field stall
+     * (NORViNE Matchbox 2160p, declared `dvhe.08.06`, Strip All): the label, the
+     * config VPS (b13a39ac) and the in-sample sets (76970a08) had all been
+     * rewritten already, and the config SPS was the one DV-flagged byte left.
+     * It also repairs the disagreement 76970a08 left behind, where the config
+     * SPS still said Dolby Vision while the in-band SPS had been rewritten to
+     * HDR10.
+     *
+     * The advertised codec string is NOT read off this rewritten SPS: callers
+     * derive it from the ORIGINAL one before this runs, exactly as before this
+     * rewrite took the SPS. [rewriteSpsToHdr10] rebuilds the set around a
+     * Main-tier Main10 profile_tier_level and drops the DV extension, and a
+     * Dolby Vision container's SPS routinely declares High tier (the field
+     * file's `hvc1.2.4.H150.B0`) - besides which the set it writes does not read
+     * back as Main10 through [hevcCodecFromInitData] at all today (the open
+     * offset issue pinned in DolbyVisionVpsInitDataRewriteTest) - so a string
+     * derived afterwards would advertise a profile the set does not carry.
+     *
+     * [rewriteInitDataVps] is the mutating strip's counterpart; it rewrites the
+     * same two sets and additionally patches the hvcC record's declared
+     * profile. A Dolby Vision parameter set left in the codec config is a stall
+     * in its own right: the decoder configures from it, then receives samples
+     * whose RPU NALs were all dropped, and waits for Dolby Vision metadata that
+     * never arrives. That rewrite used to be reachable only for the MP4/fMP4
+     * hvcC record; Matroska's codec private data carries the parameter sets
      * length-delimited instead, which is the framing
-     * [rewriteVpsInLengthDelimited] handles. All three framings Media3 can
+     * [rewriteInitDataInLengthDelimited] handles. All three framings Media3 can
      * deliver are covered — length-delimited, hvcC, Annex-B — because which one
      * a given MKV hands over is the container's choice, not ours, and the
      * rewrite has to reach whichever it is. Nothing here logs the outcome: the
-     * caller reports whether the config actually changed.
+     * caller reports whether the config actually changed, and what the SPS
+     * verdict was.
      */
-    fun rewriteVpsInInitData(initData: List<ByteArray>): List<ByteArray> {
+    fun rewriteRelabelInitData(initData: List<ByteArray>): InitDataRewrite {
+        val tally = InitDataRewriteTally()
         var any = false
         val out = ArrayList<ByteArray>(initData.size)
         for (buf in initData) {
-            val rewritten = rewriteVpsInLengthDelimited(buf)
-                ?: rewriteVpsInHvcCRecord(buf)
-                ?: rewriteVpsInAnnexBBuffer(buf, rewriteSps = false)
+            val rewritten = rewriteInitDataInLengthDelimited(buf, tally)
+                ?: rewriteInitDataInHvcCRecord(buf, tally)
+                ?: rewriteVpsInAnnexBBuffer(buf, tally)
             if (rewritten != null) {
                 out.add(rewritten)
                 any = true
@@ -1990,18 +2046,22 @@ internal object DolbyVisionCompat {
                 out.add(buf)
             }
         }
-        return if (any) out else initData
+        return InitDataRewrite(if (any) out else initData, tally.vpsRewritten, tally.spsOutcome)
     }
 
     /**
      * Length-delimited framing: one 4-byte big-endian length prefix per NAL,
      * which is how an MKV's parameter sets reach the player. Rewrites that
-     * buffer's VPS NALs, re-emitting each one with its updated length prefix.
+     * buffer's VPS and SPS NALs, re-emitting each one as its original 2-byte
+     * NAL header followed by the rewritten RBSP under a fresh length prefix.
      * Returns a new buffer, or null when the buffer does not parse end to end,
-     * holds no VPS, or its VPS was already clean - in all three cases the
-     * caller must keep the original bytes.
+     * holds neither parameter set, or neither needed the rewrite - in all of
+     * those cases the caller must keep the original bytes.
      */
-    private fun rewriteVpsInLengthDelimited(buf: ByteArray): ByteArray? {
+    private fun rewriteInitDataInLengthDelimited(
+        buf: ByteArray,
+        tally: InitDataRewriteTally
+    ): ByteArray? {
         val fieldLen = 4
         if (buf.size <= fieldLen || !parsesAsLengthDelimited(buf, fieldLen)) return null
         val out = ByteArrayOutputStream(buf.size)
@@ -2010,7 +2070,7 @@ internal object DolbyVisionCompat {
         while (read + fieldLen <= buf.size) {
             val nal = readLength(buf, read, fieldLen)
             val payload = read + fieldLen
-            val rewritten = rewriteVpsNal(buf, payload, payload + nal)
+            val rewritten = rewriteParameterSetNal(buf, payload, payload + nal, tally)
             if (rewritten != null) {
                 writeLengthTo(out, rewritten.size + 2, fieldLen)
                 out.write(buf, payload, 2)
@@ -2027,12 +2087,18 @@ internal object DolbyVisionCompat {
     /**
      * The same rewrite inside an hvcC (HEVCDecoderConfigurationRecord) buffer -
      * the form Media3's MP4/fMP4 and Matroska paths hand over for containers
-     * that carry a configuration record. Only the VPS arrays are touched: the
-     * record header's general profile_tier_level and the SPS/PPS arrays are
-     * copied verbatim. Returns a new record, or null when the buffer is not
-     * one, is malformed, or nothing changed.
+     * that carry a configuration record. The VPS and SPS arrays are rewritten,
+     * each NAL re-emitted with its own 2-byte header (see
+     * [rewriteParameterSetNal]); the record header's general
+     * profile_tier_level and the PPS arrays are copied verbatim.
+     * [rewriteHvcCRecord] is the mutating strip's form of this, which also
+     * patches that declared profile. Returns a new record, or null when the
+     * buffer is not one, is malformed, or nothing changed.
      */
-    private fun rewriteVpsInHvcCRecord(buf: ByteArray): ByteArray? {
+    private fun rewriteInitDataInHvcCRecord(
+        buf: ByteArray,
+        tally: InitDataRewriteTally
+    ): ByteArray? {
         if (!isHvcCRecord(buf)) return null
         val numArrays = buf[22].toInt() and 0xFF
         if (numArrays == 0) return null
@@ -2043,7 +2109,6 @@ internal object DolbyVisionCompat {
         var changed = false
         while (arrays < numArrays && pos + 3 <= buf.size) {
             val arrayHeader = buf[pos].toInt() and 0xFF
-            val nalType = arrayHeader and 0x3F
             pos++
             val numNalus = readLength(buf, pos, 2)
             pos += 2
@@ -2056,7 +2121,7 @@ internal object DolbyVisionCompat {
                 val nalLen = readLength(buf, pos, 2)
                 pos += 2
                 if (pos + nalLen > buf.size || nalLen < 2) return null
-                val rewritten = if (nalType == NAL_VPS) rewriteVpsNal(buf, pos, pos + nalLen) else null
+                val rewritten = rewriteParameterSetNal(buf, pos, pos + nalLen, tally)
                 val newLen = if (rewritten != null) rewritten.size + 2 else nalLen
                 out.write((newLen ushr 8) and 0xFF)
                 out.write(newLen and 0xFF)
@@ -2093,6 +2158,42 @@ internal object DolbyVisionCompat {
     }
 
     /**
+     * Dispatches one NAL of a codec config to the VPS or the SPS rewrite and
+     * records what it found in [tally]. The answer is the rewritten RBSP - the
+     * 2-byte NAL header stays the caller's, and the emitted NAL keeps its
+     * original header (see [rewriteVpsNal] and 9b084af7) - or null when this
+     * NAL is neither parameter set, is not DV-flagged, or its rewrite failed.
+     * In every one of those cases the original bytes are the answer, and the
+     * tally keeps the verdict for the caller's log.
+     */
+    private fun rewriteParameterSetNal(
+        buf: ByteArray,
+        from: Int,
+        to: Int,
+        tally: InitDataRewriteTally
+    ): ByteArray? {
+        if (to - from < 2) return null
+        return when (((buf[from].toInt() and 0xFF) ushr 1) and 0x3F) {
+            NAL_VPS -> rewriteVpsNal(buf, from, to)?.also { tally.vpsRewritten = true }
+            NAL_SPS -> when (val res = rewriteSpsToHdr10(buf, from + 2, to)) {
+                is SpsRewriteOutcome.Rewritten -> {
+                    tally.recordSps(res)
+                    res.rbsp
+                }
+                is SpsRewriteOutcome.Failed -> {
+                    tally.recordSps(res)
+                    null
+                }
+                SpsRewriteOutcome.NoDvExtension -> {
+                    tally.recordSps(res)
+                    null
+                }
+            }
+            else -> null
+        }
+    }
+
+    /**
      * The rewritten RBSP of the NAL spanning [from, to) when that NAL is a VPS
      * that actually needed the rewrite, or null. The 2-byte NAL header is left
      * to the caller: [rewriteVpsToHdr10] works on the payload after it.
@@ -2115,10 +2216,13 @@ internal object DolbyVisionCompat {
     /** Dispatches one codec-private buffer to the hvcC or Annex-B rewrite path. */
     private fun rewriteCodecConfig(buf: ByteArray): ByteArray? {
         if (buf.size < 5) return null
+        // The mutating strip's caller keeps its verdicts on StripStats, not on
+        // an InitDataRewrite, so this path reports into a throwaway tally.
+        val tally = InitDataRewriteTally()
         return if (isHvcCRecord(buf)) {
             rewriteHvcCRecord(buf)
         } else {
-            rewriteVpsInAnnexBBuffer(buf)
+            rewriteVpsInAnnexBBuffer(buf, tally)
         }
     }
 
@@ -2177,7 +2281,7 @@ internal object DolbyVisionCompat {
                 // header - leaves the decoder reading payload bytes as the NAL
                 // header and finding no parameter sets in the record at all,
                 // which is exactly the corrupt codec config the sibling
-                // [rewriteVpsInHvcCRecord] already avoids by preserving it.
+                // [rewriteInitDataInHvcCRecord] already avoids by preserving it.
                 val outLen = if (rewritten != null) rewritten.size + 2 else nalLen
                 out.write((outLen ushr 8) and 0xFF)
                 out.write(outLen and 0xFF)
@@ -2204,22 +2308,35 @@ internal object DolbyVisionCompat {
     }
 
     /**
-     * Returns a copy of an Annex-B buffer with VPS NALs rewritten, or null if
-     * unchanged. [rewriteSps] additionally rewrites the SPS — the mutating
-     * strip's shape. The relabel path passes false: the codec string it
-     * advertises is derived from that SPS, so it has to stay bit-exact.
+     * Returns a copy of an Annex-B parameter-set buffer with its VPS and SPS
+     * NALs rewritten to clean single-layer HDR10, or null if unchanged. Both
+     * sets are rewritten on every call: a DV-flagged VPS AND a DV-flagged SPS
+     * each hold a decoder in Dolby Vision mode after the RPU strip (the config
+     * is parsed before any sample), so neither may be left behind, and the
+     * codec string a caller advertises is derived from the ORIGINAL SPS before
+     * this runs - see [rewriteRelabelInitData] and the mutating strip's
+     * [rewriteInitDataVps]. The tally takes each set's verdict for the caller's
+     * field log; the mutation strip's own path reads its stats instead.
      */
-    private fun rewriteVpsInAnnexBBuffer(buf: ByteArray, rewriteSps: Boolean = true): ByteArray? {
+    private fun rewriteVpsInAnnexBBuffer(buf: ByteArray, tally: InitDataRewriteTally): ByteArray? {
         if (buf.size < 5) return null
-        val out = ByteArray(buf.size)
-        var write = 0
+        // Growable, and not a copy of the input's own length: a rewritten set is
+        // re-emitted with emulation prevention re-applied and can come back
+        // LONGER than the NAL it replaces (the VPS fixture grows by two bytes,
+        // and removing the SPS's DV extension can still leave that set longer
+        // once its zero runs are escaped). The fixed-length array this used to
+        // be wrote past its end on exactly that, which threw out of format() —
+        // and because every caller contains this rewrite, the silent result was
+        // the ORIGINAL DV-flagged sets reaching the decoder, i.e. the stall this
+        // rewrite exists to close. Same shape as the sibling framings, which
+        // already stream into a growable buffer.
+        val out = ByteArrayOutputStream(buf.size + 32)
         var read = 0
         var changed = false
         while (read < buf.size) {
             val code = indexOfStartCode(buf, read, buf.size)
             if (code < 0) {
-                System.arraycopy(buf, read, out, write, buf.size - read)
-                write += buf.size - read
+                out.write(buf, read, buf.size - read)
                 break
             }
             val codeLen =
@@ -2237,11 +2354,11 @@ internal object DolbyVisionCompat {
                                 "PLAYER_DV",
                                 "Codec config VPS rewritten to single-layer HDR10 (Main10)"
                             )
-                            System.arraycopy(buf, code, out, write, codeLen)
-                            System.arraycopy(buf, header, out, write + codeLen, 2)
-                            System.arraycopy(res.rbsp, 0, out, write + codeLen + 2, res.rbsp.size)
-                            write += codeLen + 2 + res.rbsp.size
+                            out.write(buf, code, codeLen)
+                            out.write(buf, header, 2)
+                            out.write(res.rbsp, 0, res.rbsp.size)
                             changed = true
+                            tally.vpsRewritten = true
                             nalWritten = true
                         }
                         is VpsRewriteOutcome.Failed -> Log.i(
@@ -2250,35 +2367,35 @@ internal object DolbyVisionCompat {
                         )
                         VpsRewriteOutcome.NoDvExtension -> Unit
                     }
-                    NAL_SPS -> if (rewriteSps) when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
+                    NAL_SPS -> when (val res = rewriteSpsToHdr10(buf, header + 2, nalEnd)) {
                         is SpsRewriteOutcome.Rewritten -> {
                             Log.i(
                                 "PLAYER_DV",
                                 "Codec config SPS Dolby Vision extension removed (single-layer HDR10)"
                             )
-                            System.arraycopy(buf, code, out, write, codeLen)
-                            System.arraycopy(buf, header, out, write + codeLen, 2)
-                            System.arraycopy(res.rbsp, 0, out, write + codeLen + 2, res.rbsp.size)
-                            write += codeLen + 2 + res.rbsp.size
+                            out.write(buf, code, codeLen)
+                            out.write(buf, header, 2)
+                            out.write(res.rbsp, 0, res.rbsp.size)
                             changed = true
+                            tally.recordSps(res)
                             nalWritten = true
                         }
-                        is SpsRewriteOutcome.Failed -> Log.i(
-                            "PLAYER_DV",
-                            "SPS rewrite failed (${res.reason}) — keeping original SPS in codec config"
-                        )
-                        SpsRewriteOutcome.NoDvExtension -> Unit
+                        is SpsRewriteOutcome.Failed -> {
+                            tally.recordSps(res)
+                            Log.i(
+                                "PLAYER_DV",
+                                "SPS rewrite failed (${res.reason}) — keeping original SPS in codec config"
+                            )
+                        }
+                        SpsRewriteOutcome.NoDvExtension -> tally.recordSps(res)
                     }
                     else -> Unit
                 }
             }
-            if (!nalWritten) {
-                System.arraycopy(buf, read, out, write, nalEnd - read)
-                write += nalEnd - read
-            }
+            if (!nalWritten) out.write(buf, read, nalEnd - read)
             read = nalEnd
         }
-        return if (changed) out.copyOf(write) else null
+        return if (changed) out.toByteArray() else null
     }
 
     /**
@@ -2553,7 +2670,7 @@ internal object DolbyVisionCompat {
                 val nalEnd = header + nal
                 val rewritten = rewriteVpsNal(buf, header, nalEnd)
                 if (rewritten != null) {
-                    // The same shape [rewriteVpsInLengthDelimited] writes: the
+                    // The same shape [rewriteInitDataInLengthDelimited] writes: the
                     // declared length counts the 2-byte NAL header as well as
                     // the rewritten RBSP, and the header itself is copied
                     // through — a length that omitted it would shift every NAL
