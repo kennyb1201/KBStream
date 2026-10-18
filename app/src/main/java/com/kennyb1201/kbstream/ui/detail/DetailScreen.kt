@@ -1,7 +1,9 @@
 package com.kennyb1201.kbstream.ui.detail
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.animateFloatAsState
@@ -945,6 +947,10 @@ fun DetailScreen(
     val watchedEpisodeKeys by viewModel.watchedEpisodeKeys.collectAsStateWithLifecycle()
     val simklWatchedEpisodes by viewModel.simklWatchedEpisodes.collectAsStateWithLifecycle()
     val simklSeriesWatched by viewModel.simklSeriesWatched.collectAsStateWithLifecycle()
+    // The Simkl page for this title: the watched ticks this screen draws come
+    // from the account's Simkl record, and Simkl's API rules ask for a link back
+    // to that exact item wherever their data shows. See the season menu below.
+    val simklPageUrl by viewModel.simklPageUrl.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
     val vmTargetEpisode by viewModel.targetEpisode.collectAsStateWithLifecycle()
     val vmLoadedSeason by viewModel.loadedSeason.collectAsStateWithLifecycle()
@@ -5603,6 +5609,7 @@ fun DetailScreen(
                             target.episodeNumbers.all {
                                 it in seasonWatchedSet
                             }
+                    val menuContext = LocalContext.current
 
                     PosterContextMenu(
                         title = displayName.ifBlank {
@@ -5653,6 +5660,29 @@ fun DetailScreen(
                                     )
                                 }
                                 lastSeasonFocusRequester?.requestFocus()
+                            }
+                        ) + listOfNotNull(
+                            // Simkl's attribution rule, at the one place on this
+                            // screen where their data is what the menu is about:
+                            // the season it is marking is watched ACCORDING TO
+                            // SIMKL when those ticks came from the account. Null
+                            // (no Simkl record, no account, or a movie) means
+                            // there is no item to link to.
+                            simklPageUrl?.let { url ->
+                                PosterContextAction(
+                                    label = "View on Simkl",
+                                    description = "Open this title's page on simkl.com"
+                                ) {
+                                    dismissSeasonMenu()
+                                    try {
+                                        menuContext.startActivity(
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                        )
+                                    } catch (_: ActivityNotFoundException) {
+                                        // No browser on this box: the row is a
+                                        // link out, so there is nothing to show.
+                                    }
+                                }
                             }
                         ),
                         onDismiss = {

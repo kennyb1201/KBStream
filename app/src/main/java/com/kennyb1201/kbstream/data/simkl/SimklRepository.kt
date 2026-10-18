@@ -292,7 +292,8 @@ class SimklRepository(
                             posterUrl = normalizePosterUrl(movie.poster),
                             imdbId = movie.ids?.imdb?.takeIf { it.isNotBlank() },
                             tmdbId = movie.ids?.tmdb?.takeIf { it > 0 },
-                            simklId = movie.ids?.simkl
+                            simklId = movie.ids?.simkl,
+                            simklSlug = movie.ids?.slug?.takeIf { it.isNotBlank() }
                         )
                     }
                 }
@@ -312,7 +313,8 @@ class SimklRepository(
                             posterUrl = normalizePosterUrl(show.poster),
                             imdbId = show.ids?.imdb?.takeIf { it.isNotBlank() },
                             tmdbId = show.ids?.tmdb?.takeIf { it > 0 },
-                            simklId = show.ids?.simkl
+                            simklId = show.ids?.simkl,
+                            simklSlug = show.ids?.slug?.takeIf { it.isNotBlank() }
                         )
                     }
                 }
@@ -1425,6 +1427,52 @@ class SimklRepository(
             .getOrNull()
     }
 
+    /**
+     * The account's record for one show, matched by IMDb id first and TMDB id
+     * second.
+     *
+     * One matcher for both readers that need it: the watched-episode lookup and
+     * the attribution lookup have to agree on WHICH show a detail page means, or
+     * the "View on Simkl" link would point at a different title from the one the
+     * watched ticks came from.
+     */
+    private fun SimklAllShowsResponse.matchShow(
+        imdbId: String,
+        tmdbId: Int?
+    ): SimklWatchingShowDetailedItem? =
+        shows.firstOrNull { item ->
+            item.show
+                ?.ids
+                ?.imdb == imdbId ||
+                (
+                    tmdbId != null &&
+                        item.show
+                            ?.ids
+                            ?.tmdb == tmdbId
+                    )
+        }
+
+    /**
+     * Simkl's own identity for one show - its id and its slug - read from the
+     * SAME cached all-items body [getWatchedEpisodesForShowByImdb] uses, so the
+     * detail screen can offer that title's Simkl page without a second request.
+     *
+     * It exists for attribution rather than for data: Simkl's API rules require
+     * every surface their data appears on to link back to that specific item's
+     * page, and the id is what makes such a link land on the right title (see
+     * [simklItemUrl]). Null means Simkl has no record for this show, so there is
+     * nothing to link to.
+     */
+    suspend fun getShowIdsByImdb(
+        imdbId: String,
+        tmdbId: Int? = null,
+        accessToken: String = requireAccessToken()
+    ): SimklPlaybackIds? {
+        if (imdbId.isBlank()) return null
+        val body = getAllShowItemsCached(accessToken = accessToken) ?: return null
+        return body.matchShow(imdbId, tmdbId)?.show?.ids
+    }
+
     suspend fun getWatchedEpisodesForShowByImdb(
         imdbId: String,
         tmdbId: Int? =
@@ -1448,17 +1496,10 @@ class SimklRepository(
                 ?: return emptySet()
 
         val match =
-            body.shows.firstOrNull { item ->
-                item.show
-                    ?.ids
-                    ?.imdb == imdbId ||
-                    (
-                        tmdbId != null &&
-                        item.show
-                            ?.ids
-                            ?.tmdb == tmdbId
-                        )
-            }
+            body.matchShow(
+                imdbId,
+                tmdbId
+            )
                 ?: return emptySet()
 
         return match.seasons

@@ -28,6 +28,12 @@ data class LibraryItem(
     val imdbId: String? = null,
     val tmdbId: Int? = null,
     val simklId: Int? = null,
+    /**
+     * Simkl's own slug for the title, when the read carried one. Only used to
+     * make the per-item attribution link read (see [simklItemUrl]); the id is
+     * what identifies the page.
+     */
+    val simklSlug: String? = null,
     val listId: Int? = null,
     val listName: String? = null
 ) {

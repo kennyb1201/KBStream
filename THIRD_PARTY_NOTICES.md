@@ -50,6 +50,33 @@ apart from attribution, impose no distribution obligations:
 - KSP — Apache-2.0
 - desugar_jdk_libs (`com.android.tools:desugar_jdk_libs_nio`) — Apache-2.0
 
+## Trademarks and data sources
+
+Two brand marks ship in the app's UI, both drawn unmodified and both used only
+to identify the service they belong to:
+
+- **TMDB** - `app/src/main/res/drawable/ic_tmdb_attribution.xml`, the official
+  "blue short" wordmark with its own gradient, taken from the asset TMDB's API
+  FAQ links to for an approved logo
+  (`https://files.readme.io/29c6fee-blue_short.svg`; its path data is copied
+  verbatim, with only the SVG's compressed arc flags separated so Android's path
+  parser reads them as the SVG grammar means them). Settings > About draws it
+  beside the notice that FAQ requires: "This product uses the TMDB API but is
+  not endorsed or certified by TMDB." TMDB's terms forbid changing the mark's
+  colour, aspect ratio or geometry and require it to be less prominent than the
+  mark that describes the app itself.
+- **Simkl** - `app/src/main/res/drawable-xhdpi/ic_simkl_mark.png`, the coloured
+  PNG the Simkl API rules publish for badges
+  (`https://us.simkl.in/img_favicon/v2/favicon-192x192.png`). About draws it
+  beside the one-time "Movie, TV and anime data from Simkl" line those rules
+  name, and - because they require attribution to be a link to the SPECIFIC
+  item, not a homepage - the Library's Simkl rows and the detail screen's season
+  menu send each title to its own page,
+  `https://simkl.com/{movies|tv}/<simkl id>[/<slug>]`.
+
+TMDB's mark is a trademark of TMDB, and Simkl's of Simkl; neither is covered by
+this project's GPL-3.0-or-later licence.
+
 ## How to regenerate this inventory
 
 The authoritative list is the `dependencies` block of `app/build.gradle.kts`,

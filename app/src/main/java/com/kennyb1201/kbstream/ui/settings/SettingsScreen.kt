@@ -6,6 +6,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.os.Build
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
@@ -83,9 +84,11 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.Icon
 import androidx.tv.material3.MaterialTheme
@@ -97,6 +100,9 @@ import com.kennyb1201.kbstream.data.player.ExternalPlayer
 import com.kennyb1201.kbstream.data.player.PlayerEngine
 import com.kennyb1201.kbstream.data.settings.AppPreferences
 import com.kennyb1201.kbstream.data.badges.StreamBadgeEngine
+import com.kennyb1201.kbstream.data.simkl.SIMKL_DATA_CREDIT
+import com.kennyb1201.kbstream.data.tmdb.TMDB_ATTRIBUTION_NOTICE
+import com.kennyb1201.kbstream.R
 import com.kennyb1201.kbstream.ui.components.KBButton
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBDialogPanel
@@ -3402,6 +3408,55 @@ private fun AboutSection(modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 4.dp)
         )
+        // The attribution this pane owes its data sources, and the place both
+        // of them require it to be.
+        //
+        // TMDB's API FAQ is explicit that "the attribution must be within your
+        // application's 'About' or 'Credits' type section", and requires the
+        // logo alongside the notice sentence; Simkl's API rules name a
+        // one-time "data from Simkl" line as an accepted placement. Both are
+        // read-only, like every other line in this pane.
+        Spacer(modifier = Modifier.height(10.dp))
+        Surface(
+            shape = KBShapeCard,
+            colors = SurfaceDefaults.colors(
+                containerColor = KBSurface,
+                contentColor = KBTextHi
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(KBSurfaceRaised, KBShapeSmall)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = "CREDITS",
+                    color = KBAccent,
+                    style = MaterialTheme.typography.labelSmall
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                AttributionRow(
+                    // The drawable's own declared size, to the dp: TMDB's terms
+                    // forbid changing the mark's aspect ratio, so nothing here
+                    // scales it at all. See the mark's own comment.
+                    mark = R.drawable.ic_tmdb_attribution,
+                    markWidth = 154.dp,
+                    markHeight = 20.dp,
+                    text = TMDB_ATTRIBUTION_NOTICE
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                AttributionRow(
+                    // Square, and both dimensions given so the bitmap is drawn
+                    // at its own proportions rather than stretched to the box.
+                    mark = R.drawable.ic_simkl_mark,
+                    markWidth = 20.dp,
+                    markHeight = 20.dp,
+                    text = SIMKL_DATA_CREDIT
+                )
+            }
+        }
         // The credit the pane ends on. Centred because it is the one line here
         // that is about the app's author rather than the install, and read-only
         // like every other line in this pane - nothing in About is a D-pad stop.
@@ -3414,6 +3469,41 @@ private fun AboutSection(modifier: Modifier = Modifier) {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 4.dp)
+        )
+    }
+}
+
+/**
+ * One attribution line: a brand mark and the credit that belongs with it.
+ *
+ * The mark is drawn at a FIXED box rather than at its intrinsic size because
+ * the two marks have nothing in common - the TMDB wordmark is 7.7:1, the Simkl
+ * mark is square - and an `Image` given only one of the two dimensions stretches
+ * the other. Both stay small deliberately: TMDB's terms require its logo to be
+ * less prominent than the mark that describes the app itself.
+ */
+@Composable
+private fun AttributionRow(
+    mark: Int,
+    markWidth: Dp,
+    markHeight: Dp,
+    text: String
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Image(
+            painter = painterResource(mark),
+            contentDescription = null,
+            modifier = Modifier.size(width = markWidth, height = markHeight)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = text,
+            color = KBTextHi,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f)
         )
     }
 }

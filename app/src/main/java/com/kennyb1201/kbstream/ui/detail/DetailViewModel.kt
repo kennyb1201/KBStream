@@ -18,6 +18,7 @@ import com.kennyb1201.kbstream.data.history.WatchHistoryDatabase
 import com.kennyb1201.kbstream.data.history.WatchHistoryEntity
 import com.kennyb1201.kbstream.data.reporting.PerfTrace
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
+import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.data.sync.KidsMode
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
 import com.kennyb1201.kbstream.data.sync.SupabaseSync
@@ -281,6 +282,18 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
     private val _simklSeriesWatched = MutableStateFlow(false)
     val simklSeriesWatched: StateFlow<Boolean> = _simklSeriesWatched.asStateFlow()
+
+    /**
+     * This title's page on Simkl, when Simkl has a record for it.
+     *
+     * Simkl's API rules make attribution a PER-ITEM link, and this screen is
+     * where their data is most visible: the watched ticks on the season chips
+     * and episode cards are the account's Simkl record. The id arrives with the
+     * same cached all-items read the watched set comes from, so this costs one
+     * state, not one request.
+     */
+    private val _simklPageUrl = MutableStateFlow<String?>(null)
+    val simklPageUrl: StateFlow<String?> = _simklPageUrl.asStateFlow()
 
     private val _watchedEpisodeKeys = MutableStateFlow<Set<String>>(emptySet())
     val watchedEpisodeKeys: StateFlow<Set<String>> = _watchedEpisodeKeys.asStateFlow()
@@ -877,6 +890,7 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
         _awards.value = null
         _allReviews.value = emptyList()
         _simklSeriesWatched.value = false
+        _simklPageUrl.value = null
         _resolvedPosterIds.value = emptyMap()
         _targetEpisode.value = null
         _loadedSeason.value = null
@@ -1151,6 +1165,28 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
 
                 _simklWatchedEpisodes.value = simklCompleted
                 _simklSeriesWatched.value = simklCompleted.isNotEmpty()
+
+                // The attribution link for this screen, from the same cached
+                // body: Simkl's rules want the Simkl page for the exact title
+                // their data is showing on, and a series this account has no
+                // Simkl record for has nothing to point at.
+                val simklIds = if (
+                    normalizedType == "series" &&
+                    simklRepository.isConfigured() &&
+                    simklRepository.hasToken()
+                ) {
+                    val tmdbShowId = tmdbDetailResult.getOrNull()?.id
+                    runCatchingCancellable {
+                        simklRepository.getShowIdsByImdb(imdbId = id, tmdbId = tmdbShowId)
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                _simklPageUrl.value = simklItemUrl(
+                    mediaType = "series",
+                    simklId = simklIds?.simkl,
+                    slug = simklIds?.slug
+                )
 
                 // MDBList watched episodes for this show, merged alongside
                 // the Simkl set so episode badges reflect both trackers. The

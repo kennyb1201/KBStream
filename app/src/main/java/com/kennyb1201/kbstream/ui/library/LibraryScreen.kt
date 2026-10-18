@@ -1,5 +1,8 @@
 package com.kennyb1201.kbstream.ui.library
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -58,6 +61,7 @@ import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
 import com.kennyb1201.kbstream.ui.components.heroSourceElement
 import com.kennyb1201.kbstream.data.library.HiddenTitles
+import com.kennyb1201.kbstream.data.simkl.simklItemUrl
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_DELAY_MS
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_FOCUS_STEPS
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
@@ -507,6 +511,7 @@ private fun LibraryItemMenu(
     onOpenDetails: (String) -> Unit,
     onRemove: () -> Unit
 ) {
+    val context = LocalContext.current
     val subtitle = listOfNotNull(
         item.year?.toString(),
         item.source.label
@@ -570,14 +575,38 @@ private fun LibraryItemMenu(
                 )
 
                 LibrarySource.SIMKL_WATCHLIST,
-                LibrarySource.SIMKL_LIST -> add(
-                    PosterContextAction(
-                        label = "Managed on Simkl",
-                        description = "Remove it from your watchlist on simkl.com"
-                    ) {
-                        onDismiss()
+                LibrarySource.SIMKL_LIST -> {
+                    // Simkl's API rules: wherever Simkl data appears, name Simkl
+                    // and link back to the page for THAT item - a bare link to
+                    // simkl.com is explicitly not attribution. The id came in
+                    // with the watchlist read itself, so this costs no request.
+                    simklItemUrl(item.mediaType, item.simklId, item.simklSlug)?.let { url ->
+                        add(
+                            PosterContextAction(
+                                label = "View on Simkl",
+                                description = "Open this title's page on simkl.com"
+                            ) {
+                                try {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                    )
+                                } catch (_: ActivityNotFoundException) {
+                                    // No browser on this box: the row is a link
+                                    // out, so there is nothing else to do.
+                                }
+                                onDismiss()
+                            }
+                        )
                     }
-                )
+                    add(
+                        PosterContextAction(
+                            label = "Managed on Simkl",
+                            description = "Remove it from your watchlist on simkl.com"
+                        ) {
+                            onDismiss()
+                        }
+                    )
+                }
             }
         },
         onDismiss = onDismiss
