@@ -67,6 +67,61 @@ internal fun browseChipNeedsReveal(index: Int, showing: Iterable<Int>): Boolean 
     index >= 0 && index !in showing
 
 /**
+ * What the browse chip grid has to scroll to show one of its rows.
+ *
+ * The grid reveals its own chips because the framework's automatic request
+ * could not be trusted here: nested in the screen's LazyColumn, the request a
+ * focused chip made for itself travelled outward through BOTH scrollables, and
+ * on the first row that ever needed a reveal (row 3 of the grid) it resolved
+ * to a scroll to the very top - the focused chip ended up off-screen. The
+ * chips now consume that request and hand the grid this decision instead, so
+ * the arithmetic is stated once, in one testable place, instead of being
+ * whatever the nested responder chain computed.
+ */
+internal sealed interface ChipReveal {
+
+    /** The row is already inside the viewport: scrolling would only jitter. */
+    data object None : ChipReveal
+
+    /** The row is above the viewport: align it to the top edge. */
+    data class Top(val index: Int) : ChipReveal
+
+    /**
+     * The row is below the viewport: align it to the bottom edge, the nearest
+     * of the two, so the rows above it stay where the viewer left them.
+     *
+     * [scrollOffset] is what `animateScrollToItem` takes, and it is NEGATIVE
+     * for the ordinary case of a row shorter than the viewport: the item is
+     * placed `viewport - item` pixels above the top edge, which puts its
+     * bottom flush with the viewport's bottom.
+     */
+    data class Bottom(val index: Int, val scrollOffset: Int) : ChipReveal
+}
+
+/**
+ * The reveal decision for a row, from numbers alone.
+ *
+ * [itemTop] / [itemSize] are the row's position and height as the grid
+ * measured them (a two-line curated chip is taller than a one-line one, which
+ * is why the height is passed in rather than assumed), and
+ * [viewportStart] / [viewportEnd] are the grid's own visible bounds. A
+ * degenerate layout - no index, no height, an inverted viewport - is None: the
+ * grid must never scroll on a measurement it cannot trust.
+ */
+internal fun chipRevealTarget(
+    index: Int,
+    itemTop: Int,
+    itemSize: Int,
+    viewportStart: Int,
+    viewportEnd: Int
+): ChipReveal {
+    if (index < 0 || itemSize <= 0 || viewportEnd <= viewportStart) return ChipReveal.None
+    if (itemTop >= viewportStart && itemTop + itemSize <= viewportEnd) return ChipReveal.None
+    if (itemTop < viewportStart) return ChipReveal.Top(index)
+    return ChipReveal.Bottom(index, itemSize - (viewportEnd - viewportStart))
+}
+
+/**
  * The index that takes a removed item's place: the next one, or the one before
  * it when the removed item was the last.
  *

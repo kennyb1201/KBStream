@@ -85,6 +85,87 @@ class BrowseChipMenuFocusContractTest {
     }
 
     @Test
+    fun `the grid neutralizes the automatic reveal and performs its own`() {
+        // Reported: D-pad UP into the grid's third row reset the scroll to the
+        // top while focus stayed on the now-off-screen chip. Foundation's
+        // FocusableNode asks for a bring-into-view on every focus change, and
+        // that request walks outward from the chip through the grid and on to
+        // the screen's own LazyColumn, so the reveal was computed by the nested
+        // chain instead of by this grid.
+        //
+        // The chip cannot swallow that request (BringIntoViewRequester is a
+        // sealed interface here, and a responder re-enters the walk upward), so
+        // the grid answers it with a spec that never scrolls - the one lever
+        // ContentInViewNode reads its distances from - and reveals the row
+        // itself.
+        val callSite = browser.substringBefore("private fun SubmenuChipGrid(")
+        assertTrue(
+            "the spec is provided around the grid's CALL SITE, which is what " +
+                "scopes it to this grid: everything else on the screen - the " +
+                "category tabs, the filter field - keeps the framework's reveal",
+            callSite.contains("ChipRevealScope {") && callSite.contains("SubmenuChipGrid(")
+        )
+        assertEquals(
+            "and exactly once, in the wrapper: a second provider would mean " +
+                "the spec is applied somewhere it was not meant to be",
+            1,
+            Regex("LocalBringIntoViewSpec provides").findAll(browser).count()
+        )
+        assertTrue(
+            "the spec answers every axis with zero scroll, which is what makes " +
+                "the framework's automatic reveal a no-op inside the grid",
+            // Whitespace-normalized, so the wrapped parameter list reads as one line.
+            browser.contains(
+                "override fun calculateScrollDistance( offset: Float, size: Float, " +
+                    "containerSize: Float ): Float = 0f"
+            )
+        )
+        assertTrue(
+            "the reveal the grid performs instead is a nearest-edge " +
+                "animateScrollToItem driven by the chip's own focus event",
+            grid.contains("if (state.isFocused) {") &&
+                grid.contains("revealScope.launch { revealFocusedChipRow(gridState, entryIndex) }") &&
+                grid.contains("state.animateScrollToItem(target.index)") &&
+                grid.contains("state.animateScrollToItem(target.index, target.scrollOffset)")
+        )
+        assertTrue(
+            "the row's height is the one the grid measured, so a two-line " +
+                "curated chip reveals as fully as a one-line one",
+            grid.contains("itemSize = info.size.height") &&
+                grid.contains("itemTop = info.offset.y")
+        )
+        assertTrue(
+            "the decision itself is the pure rule, not arithmetic inline in " +
+                "the composable",
+            grid.contains("val target = chipRevealTarget(")
+        )
+    }
+
+    @Test
+    fun `the armed-chip reveal stays direct`() {
+        // The return path (back-out of a studio screen, menu close) runs while
+        // the browse section is on screen, so it keeps its direct scrollToItem:
+        // it is not a bringIntoView request and must not be routed through the
+        // nearest-edge reveal, which would leave a returning chip flush with
+        // the rail's bottom edge instead of at the top where it opens.
+        val armed = grid
+            .substringAfter("LaunchedEffect(armedIndex) {")
+            .substringBefore("LazyVerticalGrid(")
+        assertTrue(
+            "the armed chip is still scrolled to directly",
+            armed.contains("runCatching { gridState.scrollToItem(index) }")
+        )
+        assertTrue(
+            "and still only when the rail is not already showing it",
+            armed.contains("if (browseChipNeedsReveal(index, showing)) {")
+        )
+        assertFalse(
+            "the armed path must not go through the nearest-edge reveal",
+            armed.contains("revealFocusedChipRow(")
+        )
+    }
+
+    @Test
     fun `a chip's cell key is its identity, never its position`() {
         assertTrue(
             "the entry's own identity keys the cell, so a list that is " +

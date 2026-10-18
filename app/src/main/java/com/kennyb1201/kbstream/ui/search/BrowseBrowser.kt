@@ -1,6 +1,7 @@
 package com.kennyb1201.kbstream.ui.search
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -15,10 +16,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.gestures.BringIntoViewSpec
+import androidx.compose.foundation.gestures.LocalBringIntoViewSpec
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
-import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.CalendarMonth
@@ -32,10 +35,12 @@ import androidx.compose.material.icons.filled.Tag
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +63,7 @@ import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
 import com.kennyb1201.kbstream.ui.components.KBTextField
 import com.kennyb1201.kbstream.ui.components.KB_STATUS_ICON_EMPTY
+import kotlinx.coroutines.launch
 import com.kennyb1201.kbstream.ui.components.rememberLongPressModifier
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBFocusChip
@@ -412,18 +418,24 @@ internal fun SearchBrowseBrowser(
             }
 
             else -> {
-                SubmenuChipGrid(
-                    entries = visibleEntries,
-                    categoryKey = category.key,
-                    chipFocusRequesters = chipFocusRequesters,
-                    onEntryClicked = viewModel::onBrowseEntryClicked,
-                    onEntryLongClick = onChipLongPress,
-                    armedChipName = armedChipName,
-                    onReturnChipConsumed = {
-                        viewModel.browseReturnChip = null
-                        onReturnChipNameConsumed()
-                    }
-                )
+                // The grid owns its focus reveals; the screen's own LazyColumn
+                // never participates (see [NO_CHIP_REVEAL_SPEC]). Scoped to
+                // the grid alone, so every reveal on the screen outside it is
+                // unaffected.
+                ChipRevealScope {
+                    SubmenuChipGrid(
+                        entries = visibleEntries,
+                        categoryKey = category.key,
+                        chipFocusRequesters = chipFocusRequesters,
+                        onEntryClicked = viewModel::onBrowseEntryClicked,
+                        onEntryLongClick = onChipLongPress,
+                        armedChipName = armedChipName,
+                        onReturnChipConsumed = {
+                            viewModel.browseReturnChip = null
+                            onReturnChipNameConsumed()
+                        }
+                    )
+                }
             }
         }
     }
@@ -710,6 +722,8 @@ private fun SubmenuChipGrid(
     // strip's first chip again.
     var returnChipConsumed by remember(armedChipName) { mutableStateOf(false) }
 
+    val revealScope = rememberCoroutineScope()
+
     // Keyed on the category: the grid shares one composition slot per submenu,
     // so an unkeyed state carried the previous category's scroll position into
     // the next one - opening mid-list instead of at the top (see LS-P2-4).
@@ -797,6 +811,14 @@ private fun SubmenuChipGrid(
                     { handler(categoryKey, entry, chipFocusRequester) }
                 },
                 chipFocusRequester = chipFocusRequester,
+                // With the automatic reveal neutralized by the spec above,
+                // this observer is the reveal: a nearest-edge scroll that
+                // moves only this grid.
+                modifier = Modifier.onFocusChanged { state ->
+                    if (state.isFocused) {
+                        revealScope.launch { revealFocusedChipRow(gridState, entryIndex) }
+                    }
+                },
                 grabInitialFocus = armedIndex == entryIndex,
                 onInitialFocusConsumed = {
                     returnChipConsumed = true
@@ -805,6 +827,104 @@ private fun SubmenuChipGrid(
                 labelMaxLines = 2,
                 showChevron = true
             )
+        }
+    }
+}
+
+/**
+ * The bring-into-view spec that keeps the framework from scrolling this grid.
+ *
+ * Foundation's FocusableNode asks for a bring-into-view on every focus change
+ * (`ModifierNode.bringIntoView()`, which walks outward to the nearest responder
+ * - verified in the compose-foundation 1.12.1 artifact:
+ * FocusableNode.onFocusStateChange calls
+ * BringIntoViewModifierNodeKt.bringIntoView). Without anything of its own, a
+ * chip's request travels through the grid and on up to the screen's
+ * LazyColumn, and that nested request is what reset this grid to the top when
+ * focus reached the first row that ever needed revealing (row 3) - the focused
+ * chip ended up off-screen.
+ *
+ * The chip cannot swallow the request itself: `BringIntoViewRequester` is a
+ * SEALED interface in this version, so a no-op implementation does not even
+ * compile, and a responder is no help either - BringIntoViewResponderNode
+ * re-enters the walk from its own node, so the request continues upward through
+ * the grid's responder to the column's. The lever that DOES reach the grid's
+ * responder is the spec it derives every scroll distance from:
+ * ContentInViewNode reads LocalBringIntoViewSpec and calls
+ * calculateScrollDistance for each axis. Answering 0 therefore turns the
+ * framework's automatic reveal inside the grid into a no-op, which is what
+ * leaves the grid's own reveal (see [revealFocusedChipRow]) as the only scroll
+ * it performs.
+ *
+ * Two things it deliberately does NOT touch:
+ *
+ *  - everything outside the grid, because the local is provided around this
+ *    grid alone - the category tabs and the filter field keep the framework's
+ *    reveal;
+ *  - the direct scrolls, because the spec is consulted only by the
+ *    bring-into-view path (its animation spec is read by ContentInViewNode's
+ *    own animation), while the armed-chip `scrollToItem` and the reveal's
+ *    `animateScrollToItem` never consult it.
+ */
+private val NO_CHIP_REVEAL_SPEC: BringIntoViewSpec = object : BringIntoViewSpec {
+    override fun calculateScrollDistance(
+        offset: Float,
+        size: Float,
+        containerSize: Float
+    ): Float = 0f
+}
+
+/**
+ * [NO_CHIP_REVEAL_SPEC], provided around the submenu grid and nothing else.
+ *
+ * The opt-in lives here rather than on the whole browser: it is
+ * [LocalBringIntoViewSpec] that is experimental, and this wrapper is the only
+ * place it is touched.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ChipRevealScope(content: @Composable () -> Unit) {
+    CompositionLocalProvider(
+        LocalBringIntoViewSpec provides NO_CHIP_REVEAL_SPEC,
+        content = content
+    )
+}
+
+/**
+ * Reveals one chip's row inside the submenu grid - and nowhere else.
+ *
+ * This is the reveal the automatic request used to (mis)perform, now that
+ * [NO_CHIP_REVEAL_SPEC] has made that request a no-op inside the grid. The
+ * decision itself is pure ([chipRevealTarget], so it is pinned by unit tests);
+ * this half only reads the grid's live layout and animates:
+ *
+ *  - the row's own measured height comes from `visibleItemsInfo`, never a
+ *    constant, because a two-line curated chip is taller than a one-line one;
+ *  - `scrollOffset` is negative for the bottom case (the item lands short of
+ *    the viewport's top edge by its own height minus the viewport's), which is
+ *    how `animateScrollToItem` aligns an item to the BOTTOM edge - the
+ *    nearest-edge reveal the framework used to get right for rows 4+.
+ *
+ * A row that is not composed cannot be measured, and a cell that is not
+ * composed cannot be focused either, so that case simply does nothing rather
+ * than guessing a scroll from a constant.
+ */
+private suspend fun revealFocusedChipRow(state: LazyGridState, index: Int) {
+    val info = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+        ?: return
+    when (
+        val target = chipRevealTarget(
+            index = index,
+            itemTop = info.offset.y,
+            itemSize = info.size.height,
+            viewportStart = state.layoutInfo.viewportStartOffset,
+            viewportEnd = state.layoutInfo.viewportEndOffset
+        )
+    ) {
+        ChipReveal.None -> Unit
+        is ChipReveal.Top -> runCatching { state.animateScrollToItem(target.index) }
+        is ChipReveal.Bottom -> runCatching {
+            state.animateScrollToItem(target.index, target.scrollOffset)
         }
     }
 }

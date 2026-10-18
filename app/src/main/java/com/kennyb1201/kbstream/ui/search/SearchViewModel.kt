@@ -1869,9 +1869,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
             // The cache is keyed by name and holds the union of both modes'
             // lists, so a mode flip just re-slices it onto the active chips,
             // through the same accessor the resolver publishes with.
+            //
+            // Re-ordered into the catalog's CURRENT order first. The cache
+            // stores whatever order the name lists had when it was written
+            // (see browseUnionOrderFor) and the strips read the cached order
+            // as-is, so a catalog RE-ORDER - the seasonal keyword chips moving
+            // from the tail to the front - stayed invisible for the whole
+            // 7-day TTL on an install whose cache was still fresh. Sorting on
+            // the way out makes the lists the single source of the strip
+            // order, for every profile, without a resolve pass.
             val (keywords, collections) = cached
-            val (keywordsForMode, collectionsForMode) =
-                ResolvedBrowseCatalog(keywords, collections).forMode(isKidsMode)
+            val (keywordsForMode, collectionsForMode) = ResolvedBrowseCatalog(
+                browseEntriesInCatalogOrder("keywords", keywords),
+                browseEntriesInCatalogOrder("collections", collections)
+            ).forMode(isKidsMode)
 
             // "Fresh" means recent AND substantially complete (>= 90% of the
             // name lists resolved): a cache written while TMDB was

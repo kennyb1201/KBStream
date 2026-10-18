@@ -157,6 +157,59 @@ class BrowseCatalogMissingResolveTest {
     }
 
     @Test
+    fun `re-reading the cache puts the strip in the catalog's current order`() {
+        // A cache written before the seasonal chips moved to the head of both
+        // keyword lists still holds them at the tail, and the cache-load path
+        // renders that order as-is - so without this the re-order would only
+        // show up after the 7-day TTL. The holiday chips, the ids and the
+        // entries a catalog edit dropped are all pinned here.
+        val seasonal = listOf(
+            "halloween",
+            "christmas",
+            "thanksgiving",
+            "easter",
+            "valentine's day",
+            "new year's eve",
+            "st. patrick's day",
+            "fourth of july",
+            "hanukkah",
+            "day of the dead",
+            "horror"
+        )
+        val stale = chips("zombie", "vampire", "dropped tag", *seasonal.toTypedArray())
+        val ordered = browseEntriesInCatalogOrder("keywords", stale)
+
+        assertEquals(
+            "the cached strip must lead with the catalog's own head",
+            seasonal,
+            ordered.take(seasonal.size).map { it.name }
+        )
+        assertEquals(
+            "a cached id is what the chip already opens; re-ordering must not " +
+                "swap or drop one",
+            stale.associate { it.name to it.id },
+            ordered.associate { it.name to it.id }
+        )
+        assertEquals(
+            "nothing may be lost (or added) on the way",
+            stale.size,
+            ordered.size
+        )
+        assertEquals(
+            "a name the lists no longer carry goes last, not into the head",
+            "dropped tag",
+            ordered.last().name
+        )
+    }
+
+    @Test
+    fun `a category with no name list is handed back untouched`() {
+        val entries = chips("b", "a")
+        assertEquals(entries, browseEntriesInCatalogOrder("services", entries))
+        assertEquals(entries, browseEntriesInCatalogOrder("genres", entries))
+    }
+
+    @Test
     fun `no name appears twice in a union order`() {
         listOf("keywords", "collections").forEach { key ->
             val order = browseUnionOrderFor(key)
@@ -178,6 +231,21 @@ class BrowseCatalogMissingResolveTest {
             "computing the names without scheduling the resolve is the bug",
             load.contains("viewModelScope.launch {") &&
                 load.contains("resolveMissingCatalogEntries(missingKeywords, missingCollections)")
+        )
+    }
+
+    @Test
+    fun `the cache load re-orders the cached strip into the catalog's order`() {
+        val load = loadBlock()
+        assertTrue(
+            "the cache is read in the order it was written in, so a catalog " +
+                "re-order has to be applied on the way out or it waits for the TTL",
+            load.contains("browseEntriesInCatalogOrder(\"keywords\", keywords)") &&
+                load.contains("browseEntriesInCatalogOrder(\"collections\", collections)")
+        )
+        assertTrue(
+            "both lists are sliced for the active mode after the re-order",
+            load.contains(".forMode(isKidsMode)")
         )
     }
 

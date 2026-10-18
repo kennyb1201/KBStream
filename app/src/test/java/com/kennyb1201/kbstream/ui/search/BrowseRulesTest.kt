@@ -120,6 +120,92 @@ class BrowseRulesTest {
         )
     }
 
+    // ── the grid-owned chip reveal ────────────────────────────────────
+
+    /** The grid's viewport in these cases: 0..900 (a 360dp rail at 2.5x). */
+    private val viewport = 0 to 900
+
+    private fun reveal(index: Int, itemTop: Int, itemSize: Int) = chipRevealTarget(
+        index = index,
+        itemTop = itemTop,
+        itemSize = itemSize,
+        viewportStart = viewport.first,
+        viewportEnd = viewport.second
+    )
+
+    @Test
+    fun `a row already inside the grid viewport is revealed by no scroll`() {
+        // Scrolling a row that is fully visible is exactly the jitter the
+        // consumed automatic request used to cause.
+        assertEquals(ChipReveal.None, reveal(index = 3, itemTop = 300, itemSize = 120))
+        assertEquals(
+            "flush with both edges is still visible",
+            ChipReveal.None,
+            reveal(index = 3, itemTop = 0, itemSize = 120)
+        )
+        assertEquals(
+            "flush with the bottom edge too",
+            ChipReveal.None,
+            reveal(index = 3, itemTop = 780, itemSize = 120)
+        )
+    }
+
+    @Test
+    fun `a row above the grid viewport aligns to the top edge`() {
+        assertEquals(
+            "the row starts above the viewport by 40px",
+            ChipReveal.Top(6),
+            reveal(index = 6, itemTop = -40, itemSize = 120)
+        )
+    }
+
+    @Test
+    fun `a row below the grid viewport aligns to the bottom edge`() {
+        // The offset is the row's own height minus the viewport's, which is
+        // the NEGATIVE number animateScrollToItem needs to put the row's
+        // bottom flush with the viewport's bottom: 120 - 900 = -780.
+        assertEquals(
+            ChipReveal.Bottom(index = 9, scrollOffset = -780),
+            reveal(index = 9, itemTop = 950, itemSize = 120)
+        )
+    }
+
+    @Test
+    fun `the offset comes from the row the grid measured, not a constant`() {
+        // A two-line curated chip is taller than a one-line one. A hardcoded
+        // row height would leave the taller row's last line clipped, which is
+        // the whole reason the reveal is computed from the measurement.
+        assertEquals(
+            ChipReveal.Bottom(index = 4, scrollOffset = -720),
+            reveal(index = 4, itemTop = 910, itemSize = 180)
+        )
+        assertNotEquals(
+            reveal(index = 4, itemTop = 910, itemSize = 180),
+            reveal(index = 4, itemTop = 910, itemSize = 120)
+        )
+    }
+
+    @Test
+    fun `a partial row is revealed even when it is mostly on screen`() {
+        // Nearest-edge, not "mostly visible": a row 5px past the bottom edge
+        // is revealed from the BOTTOM (so it lands flush with the viewport's
+        // bottom, keeping the rows above it put), and one 5px above the top is
+        // revealed from the top.
+        assertEquals(ChipReveal.Bottom(3, -780), reveal(index = 3, itemTop = 784, itemSize = 120))
+        assertEquals(ChipReveal.Top(3), reveal(index = 3, itemTop = -5, itemSize = 120))
+    }
+
+    @Test
+    fun `a measurement the grid cannot trust never scrolls`() {
+        assertEquals("a failed index lookup", ChipReveal.None, reveal(-1, 300, 120))
+        assertEquals("an unmeasured row", ChipReveal.None, reveal(2, 300, 0))
+        assertEquals(
+            "an inverted viewport",
+            ChipReveal.None,
+            chipRevealTarget(index = 2, itemTop = 300, itemSize = 120, viewportStart = 900, viewportEnd = 0)
+        )
+    }
+
     @Test
     fun `every browse category has a noun and a blurb`() {
         val keys = BROWSE_CATEGORIES.map { it.key }

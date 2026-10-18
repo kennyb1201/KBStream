@@ -265,10 +265,14 @@ class SearchBrowseCatalogKidsTest {
     // ── the 2026-10 seasonal wave ────────────────────────────────────────
 
     @Test
-    fun `the seasonal keywords are the tail of both keyword lists`() {
-        // The wave is APPENDED on purpose: the curated popular-first order at
-        // the top of each list is what a profile sees first, and the holiday
-        // chips are meant to ride behind it, so the tail order is pinned.
+    fun `the seasonal keywords open both keyword lists`() {
+        // The wave sits at the HEAD on purpose: a holiday tag is picked by
+        // date rather than by taste, so it has to be reachable without
+        // scrolling. The head order is pinned for EVERY profile — regular and
+        // guest render BROWSE_KEYWORD_NAMES itself, a kids profile renders
+        // KIDS_KEYWORD_NAMES, and the kids strip is also sliced out of the
+        // union ([browseUnionOrderFor] leads with the standard list), so all
+        // three have to lead with the same block.
         val adultSeasonal = listOf(
             "halloween",
             "christmas",
@@ -283,9 +287,15 @@ class SearchBrowseCatalogKidsTest {
             "horror"
         )
         assertEquals(
-            "the seasonal block must end BROWSE_KEYWORD_NAMES",
+            "the seasonal block must open BROWSE_KEYWORD_NAMES",
             adultSeasonal,
-            BROWSE_KEYWORD_NAMES.takeLast(adultSeasonal.size)
+            BROWSE_KEYWORD_NAMES.take(adultSeasonal.size)
+        )
+        assertEquals(
+            "the union order the kids strip is sliced from must open with " +
+                "the same block",
+            adultSeasonal,
+            browseUnionOrderFor("keywords").take(adultSeasonal.size)
         )
 
         // Kids get the season minus its adult side, and minus the holiday
@@ -304,9 +314,9 @@ class SearchBrowseCatalogKidsTest {
             "costume"
         )
         assertEquals(
-            "the seasonal block must end KIDS_KEYWORD_NAMES",
+            "the seasonal block must open KIDS_KEYWORD_NAMES",
             kidSeasonal,
-            KIDS_KEYWORD_NAMES.takeLast(kidSeasonal.size)
+            KIDS_KEYWORD_NAMES.take(kidSeasonal.size)
         )
     }
 

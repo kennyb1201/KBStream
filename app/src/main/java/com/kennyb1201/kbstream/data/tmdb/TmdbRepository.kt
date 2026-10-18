@@ -1939,7 +1939,10 @@ class TmdbRepository private constructor(context: Context) :
             withWatchProviders = if (base.kind == "provider") base.id.toString() else null,
             watchRegion = if (base.kind == "provider") "US" else null,
             withCompanies = when {
-                base.kind == "company" -> base.id.toString()
+                // The chip's primary id widens to the brand's full union, or
+                // picking a genre on the DC page would re-narrow to 9993 and
+                // hide every live-action film the unfiltered rails now show.
+                base.kind == "company" -> resolveCompanyUnion(base.id)
                 networkMovieCompanyId != null -> networkMovieCompanyId.toString()
                 else -> null
             },

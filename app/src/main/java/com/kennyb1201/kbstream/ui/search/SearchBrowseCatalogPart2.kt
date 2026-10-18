@@ -893,6 +893,21 @@ val KIDS_COLLECTION_NAMES = listOf(
  * resolves, while an adult profile simply never renders it.
  */
 val KIDS_KEYWORD_NAMES = listOf(
+    // ── Seasonal FIRST, as on the standard list (see BROWSE_KEYWORD_NAMES):
+    // a kids profile reaches a holiday tag without scrolling. The kid-safe
+    // holidays only, no horror / slasher adjacency: that side of the season
+    // stays on the adult list. "easter", "easter bunny", "santa claus" and
+    // "pumpkin" already sit below, and the spec's "dia de los muertos" is
+    // TMDB's "day of the dead".
+    "halloween",
+    "christmas",
+    "thanksgiving",
+    "valentine's day",
+    "new year's eve",
+    "st. patrick's day",
+    "hanukkah",
+    "day of the dead",
+    "costume",
     "dinosaur",
     "dragon",
     "wizard",
@@ -1151,21 +1166,6 @@ val KIDS_KEYWORD_NAMES = listOf(
     "cloud",
     "time machine",
     "big brother",
-    // ── Seasonal — the kid-safe holidays only, appended at the end for the
-    // same reason as the standard list (see BROWSE_KEYWORD_NAMES). No
-    // horror / slasher adjacency here; that side of the season stays on the
-    // adult list. "easter", "easter bunny", "santa claus" and "pumpkin"
-    // are already above, and the spec's "dia de los muertos" is TMDB's
-    // "day of the dead".
-    "halloween",
-    "christmas",
-    "thanksgiving",
-    "valentine's day",
-    "new year's eve",
-    "st. patrick's day",
-    "hanukkah",
-    "day of the dead",
-    "costume",
 )
 
 /** Decades are neutral; reuse the standard list. */
@@ -1295,6 +1295,22 @@ internal fun mergeBrowseEntries(
     val index = nameOrder.withIndex().associate { (order, name) -> name to order }
     return byName.values.sortedBy { index[it.name] ?: Int.MAX_VALUE }
 }
+
+/**
+ * [entries] re-ordered into the catalog's own order for [categoryKey] (see
+ * [browseUnionOrderFor]), with names the lists no longer know left at the end.
+ *
+ * The disk cache stores whatever order the name lists had when it was written,
+ * and the cache-load path reads that order straight onto the strip, so without
+ * this a catalog RE-ORDER stayed invisible for the whole 7-day cache TTL: the
+ * seasonal keyword chips moving from the tail to the front of both lists kept
+ * rendering at the tail on any install whose cache was still fresh. The lists
+ * are the source of the strip order; this makes re-reading the cache obey them.
+ */
+internal fun browseEntriesInCatalogOrder(
+    categoryKey: String,
+    entries: List<BrowseEntry>
+): List<BrowseEntry> = mergeBrowseEntries(emptyList(), entries, browseUnionOrderFor(categoryKey))
 
 /**
  * The order one category's disk cache is stored in: the standard name list

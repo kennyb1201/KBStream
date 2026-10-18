@@ -138,7 +138,10 @@ interface TmdbApiService {
 
     @GET("discover/movie")
     suspend fun discoverMovieByCompany(
-        @Query("with_companies") companyId: Int,
+        // A string, not an Int: TMDB's with_companies takes pipe-joined ids
+        // with OR semantics, which is how a rebranded brand's split catalog is
+        // fetched in one request (see [resolveCompanyUnion] in CompanyUnions.kt).
+        @Query("with_companies") companyIds: String,
         @Query("api_key") apiKey: String,
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,
@@ -149,7 +152,8 @@ interface TmdbApiService {
 
     @GET("discover/tv")
     suspend fun discoverTvByCompany(
-        @Query("with_companies") companyId: Int,
+        // See discoverMovieByCompany: pipe-joined ids, OR semantics.
+        @Query("with_companies") companyIds: String,
         @Query("api_key") apiKey: String,
         @Query("sort_by") sortBy: String,
         @Query("vote_count.gte") voteCountGte: Int? = null,

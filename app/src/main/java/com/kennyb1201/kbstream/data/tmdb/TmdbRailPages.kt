@@ -357,6 +357,17 @@ internal object TmdbRailPages {
         return results
     }
 
+    /**
+     * One rail of a studio's screen.
+     *
+     * [companyId] is the chip's PRIMARY id, and every rail here widens it to
+     * the brand's full company union ([resolveCompanyUnion]) before querying:
+     * a studio TMDB split at a rebrand (DC, 20th Century Fox, MGM) otherwise
+     * stops its rails at the rebrand. The resolved string is computed once per
+     * rail and also keys the cache, so a unioned page can never collide with a
+     * single-id page fetched for the same rail. Header, logo and detail keep
+     * the primary id — only the rails widen.
+     */
     suspend fun companyPage(
         repo: TmdbRepository,
         companyId: Int,
@@ -369,13 +380,14 @@ internal object TmdbRailPages {
         // Settings' English-only switch (on by default) gates every rail on
         // this file's screens — see TmdbRepository.browseLanguage.
         val lang = repo.browseLanguage()
+        val companyIds = resolveCompanyUnion(companyId)
 
         return repo.finishDeepRailPage(
             page = page,
-            cacheKey = "company|$companyId|$title|$lang",
+            cacheKey = "company|$companyIds|$title|$lang",
             deepen = deepen
         ) { p ->
-            companyPageItems(repo, companyId, title, p, lang)
+            companyPageItems(repo, companyIds, title, p, lang)
         }
     }
 
@@ -385,7 +397,7 @@ internal object TmdbRailPages {
      */
     private suspend fun companyPageItems(
         repo: TmdbRepository,
-        companyId: Int,
+        companyIds: String,
         title: String,
         page: Int,
         lang: String?
@@ -393,7 +405,7 @@ internal object TmdbRailPages {
         val results = when (title) {
             "MOVIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
-                    companyId = companyId,
+                    companyIds = companyIds,
                     apiKey = repo.apiKey,
                     sortBy = "primary_release_date.desc",
                     voteCountGte = repo.minRecentVoteCount,
@@ -405,7 +417,7 @@ internal object TmdbRailPages {
 
             "MOVIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
-                    companyId = companyId,
+                    companyIds = companyIds,
                     apiKey = repo.apiKey,
                     sortBy = "popularity.desc",
                     voteCountGte = repo.minVoteCount,
@@ -417,7 +429,7 @@ internal object TmdbRailPages {
 
             "MOVIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverMovieByCompany(
-                    companyId = companyId,
+                    companyIds = companyIds,
                     apiKey = repo.apiKey,
                     sortBy = "vote_count.desc",
                     voteCountGte = repo.minTopRatedVoteCount,
@@ -429,7 +441,7 @@ internal object TmdbRailPages {
 
             "SERIES · RECENT" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
-                    companyId = companyId,
+                    companyIds = companyIds,
                     apiKey = repo.apiKey,
                     sortBy = "first_air_date.desc",
                     voteCountGte = repo.minRecentVoteCount,
@@ -441,7 +453,7 @@ internal object TmdbRailPages {
 
             "SERIES · POPULAR" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
-                    companyId = companyId,
+                    companyIds = companyIds,
                     apiKey = repo.apiKey,
                     sortBy = "popularity.desc",
                     voteCountGte = repo.minVoteCount,
@@ -453,7 +465,7 @@ internal object TmdbRailPages {
 
             "SERIES · TOP RATED" -> runCatchingCancellable {
                 repo.api.discoverTvByCompany(
-                    companyId = companyId,
+                    companyIds = companyIds,
                     apiKey = repo.apiKey,
                     sortBy = "vote_count.desc",
                     voteCountGte = repo.minTopRatedVoteCount,

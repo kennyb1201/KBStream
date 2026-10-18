@@ -132,6 +132,30 @@ val BROWSE_GENRES = listOf(
 // ---------------------------------------------------------------------------
 
 val BROWSE_KEYWORD_NAMES = listOf(
+    // ── Seasonal FIRST. These chips used to ride at the end of the strip;
+    // they now open it, so every profile reaches a holiday tag without
+    // scrolling: regular and guest profiles both render this list, a kids
+    // profile renders the kids list below, and the union order the kids strip
+    // is sliced from (see browseUnionOrderFor) also leads with this one.
+    // Every name verified against TMDB's own keyword pages (2026-10) — the
+    // resolver accepts an exact name hit only, so a near-miss is not a wrong
+    // rail, it is a chip that opens nothing. "slasher", "haunted house" and "monster" already sit
+    // below, so none of them is repeated here, and the spec's "dia de los
+    // muertos" is spelled TMDB's way ("day of the dead"): TMDB has no
+    // keyword by the Spanish-language spelling, so it would have shipped
+    // dead.
+    "halloween",
+    "christmas",
+    "thanksgiving",
+    "easter",
+    "valentine's day",
+    "new year's eve",
+    "st. patrick's day",
+    "fourth of july",
+    "hanukkah",
+    "day of the dead",
+    "horror", // pairs with halloween for the adult side
+    // ── The curated popular-first order this strip used to open with.
     "zombie",
     "found footage",
     "time travel",
@@ -557,26 +581,6 @@ val BROWSE_KEYWORD_NAMES = listOf(
     "las vegas",
     "hip-hop",
     "football (soccer)",
-    // ── Seasonal. Appended AFTER the curated popular-first order above, so
-    // the holiday chips ride at the end of the Keywords strip instead of
-    // displacing it. Every name verified against TMDB's own keyword pages
-    // (2026-10) — the resolver accepts an exact name hit only, so a
-    // near-miss is not a wrong rail, it is a chip that opens nothing.
-    // "slasher", "haunted house" and "monster" already sit above, so none
-    // of them is repeated here, and the spec's "dia de los muertos" is
-    // spelled TMDB's way ("day of the dead"): TMDB has no keyword by the
-    // Spanish-language spelling, so it would have shipped dead.
-    "halloween",
-    "christmas",
-    "thanksgiving",
-    "easter",
-    "valentine's day",
-    "new year's eve",
-    "st. patrick's day",
-    "fourth of july",
-    "hanukkah",
-    "day of the dead",
-    "horror", // pairs with halloween for the adult side
 )
 
 // ---------------------------------------------------------------------------
@@ -755,7 +759,12 @@ internal val POPULAR_NETWORKS_ORDER = listOf(
 private val POPULAR_STUDIOS_ORDER = listOf(
     "Warner Bros. Pictures", "Walt Disney Pictures", "Universal Pictures",
     "Paramount Pictures", "Columbia Pictures", "20th Century Fox",
-    "Metro-Goldwyn-Mayer", "Marvel Studios", "Lucasfilm", "Pixar",
+    "Metro-Goldwyn-Mayer", "Marvel Studios",
+    // DC deliberately sits in this curated block, not the alphabetical tail:
+    // it is a top franchise house like the majors above it. The chip and its
+    // primary id (9993) are unchanged - only where it is drawn moved.
+    "DC",
+    "Lucasfilm", "Pixar",
     "DreamWorks Animation", "Illumination", "Studio Ghibli",
     "A24", "NEON", "StudioCanal", "Pathé", "Gaumont", "Lionsgate"
 )
