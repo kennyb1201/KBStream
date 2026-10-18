@@ -28,6 +28,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -38,6 +40,7 @@ import androidx.paging.compose.collectAsLazyPagingItems
 import androidx.paging.compose.itemKey
 import androidx.paging.filter
 import com.kennyb1201.kbstream.data.addon.MetaPreview
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.GlobalPosterCard
 import com.kennyb1201.kbstream.ui.components.KBPageTitle
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
@@ -58,6 +61,7 @@ import com.kennyb1201.kbstream.ui.components.hideTarget
 import com.kennyb1201.kbstream.ui.components.PosterContextAction
 import com.kennyb1201.kbstream.ui.components.rememberHiddenTitleKeys
 import com.kennyb1201.kbstream.ui.components.PosterContextMenu
+import com.kennyb1201.kbstream.ui.search.successorIndexAfter
 import com.kennyb1201.kbstream.ui.theme.KBAccent
 import com.kennyb1201.kbstream.ui.theme.KBScreenEdge
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
@@ -111,6 +115,50 @@ fun CatalogGridScreen(
         viewModel.partialWatchedKeys.collectAsStateWithLifecycle()
 
     var menuTarget by remember { mutableStateOf<MetaPreview?>(null) }
+
+    // One focus requester per tile, keyed the way the grid keys its cells, so
+    // the menu can name a tile by key after the composition that drew it has
+    // already been asked for another frame. Registered as the tiles compose
+    // (see the cells below); the map is not pruned, because the entry for a
+    // tile that just left is exactly what a removal has to read.
+    val cardFocusRequesters = remember { mutableMapOf<String, FocusRequester>() }
+
+    // Which tile was long-pressed, and which one takes its place if the title
+    // leaves the grid (Hide): the successor is named while the pressed tile is
+    // still composed, the same rule the Library grid and the search rail use.
+    var menuCardKey by remember { mutableStateOf<String?>(null) }
+    var menuSuccessorKey by remember { mutableStateOf<String?>(null) }
+    var restoreFocusSignal by remember { mutableStateOf(0) }
+
+    // Closing the menu owes the D-pad a landing on the tile that was pressed.
+    //
+    // This grid's menu was the one title menu in the app that never handed
+    // focus back: it set its target to null and stopped, so the focused menu
+    // row was disposed with the overlay and nothing asked for the card behind
+    // it. From the sofa that is the reported "after adding to My List the D-pad
+    // jumps to some other poster": the next press starts a focus search from a
+    // dead node, and the framework lands on whatever it finds first - a random
+    // tile - instead of the one the viewer was on. Every other poster menu
+    // restores; this one now does too, through the app's one verified-landing
+    // rule (see [landFocusOn]).
+    fun closeMenu(restoreKey: String?) {
+        menuTarget = null
+        menuCardKey = restoreKey
+        restoreFocusSignal++
+    }
+
+    LaunchedEffect(restoreFocusSignal) {
+        if (restoreFocusSignal == 0) return@LaunchedEffect
+        val key = menuCardKey
+        menuCardKey = null
+        // A null key means the pressed tile is the one leaving the grid (Hide)
+        // and its successor has already been handed the focus by
+        // `onBeforeHide`, which had to happen while the dying tile was still
+        // attached. Asking a requester with no node would fight that hand-off.
+        if (key != null) {
+            landFocusOn(cardFocusRequesters[key])
+        }
+    }
 
     // Fresh screen instance (or restored route): (re)open the catalog from
     // its identity. No-op when the grid is already showing this catalog —
@@ -301,6 +349,15 @@ fun CatalogGridScreen(
                         // like every other poster surface in the app.
                         var focused by remember { mutableStateOf(false) }
 
+                        // This tile's own node, published for the menu's
+                        // hand-back by the same key the pager keys the cell
+                        // with - the card survives a reorder, so the viewer
+                        // lands back on the poster they pressed rather than on
+                        // whatever took its index.
+                        val cardKey = "${meta.type}:${meta.id}"
+                        val cardRequester = remember(cardKey) { FocusRequester() }
+                        cardFocusRequesters[cardKey] = cardRequester
+
                         Column(
                             modifier = Modifier
                                 .width(tileWidth)
@@ -320,6 +377,16 @@ fun CatalogGridScreen(
                                     onItemClick(meta)
                                 },
                                 onLongClick = {
+                                    menuCardKey = cardKey
+                                    // The tile that takes this one's place if
+                                    // Hide is the row pressed, resolved from the
+                                    // pager BEFORE the title is filtered out.
+                                    menuSuccessorKey = successorIndexAfter(
+                                        lazyItems.itemCount,
+                                        index
+                                    )?.let { at ->
+                                        lazyItems.peek(at)?.let { "${it.type}:${it.id}" }
+                                    }
                                     menuTarget = meta
                                 },
                                 posterWidth = posterSize.width,
@@ -335,6 +402,9 @@ fun CatalogGridScreen(
                                 // sized from above).
                                 landscape = landscape,
                                 modifier = Modifier
+                                    // The tile's own landing target for its
+                                    // menu's hand-back (see closeMenu).
+                                    .focusRequester(cardRequester)
                                     // Opts this tile into the poster ->
                                     // Detail hero flight (shared key is
                                     // type:id, same as the rail posters).
@@ -416,6 +486,9 @@ fun CatalogGridScreen(
     menuTarget?.let { target ->
         val isWatched =
             viewModel.watchedKey(target.id, target.type) in watchedKeys
+        // The key this menu's own tile registered under, for the rows that
+        // dismiss in place (a watched toggle, Back, the scrim).
+        val targetKey = "${target.type}:${target.id}"
 
         // Same split the rail menu uses: a grid item's id is "tmdb:123" on a
         // TMDB-sourced catalog and "tt12345" on an add-on one.
@@ -438,6 +511,18 @@ fun CatalogGridScreen(
                 listOf(target.id),
                 year = target.yearOrNull
             ),
+            // Hide takes this tile out of the grid, so the tile that takes its
+            // place is named and focused FIRST, while this one is still
+            // composed and the menu is still in the tree - the same hand-off
+            // the Library grid and the search rail do. The dismiss that
+            // follows must then not ask for the dying tile, which is why the
+            // key is cleared here.
+            onBeforeHide = {
+                menuSuccessorKey?.let { key ->
+                    cardFocusRequesters[key]?.requestFocus()
+                }
+                menuCardKey = null
+            },
             actions = listOf(
                 PosterContextAction(
                     label = "Go to Details",
@@ -458,16 +543,16 @@ fun CatalogGridScreen(
                         "Show this title as watched"
                     }
                 ) {
-                    menuTarget = null
                     if (isWatched) {
                         viewModel.markUnwatched(target)
                     } else {
                         viewModel.markAsWatched(target)
                     }
+                    closeMenu(targetKey)
                 }
             ),
             onDismiss = {
-                menuTarget = null
+                closeMenu(menuCardKey)
             }
         )
     }

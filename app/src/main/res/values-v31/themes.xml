@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      Android 12+ draws its OWN starting window: the platform's SplashScreen
+      API ignores windowBackground for that frame and paints the background
+      colour plus the animated icon from the two attributes below. Left at the
+      defaults, a viewer on one of these boxes got the launcher icon on the
+      theme's default background instead of the brass mark on the void - the
+      exact frame this theme exists to brand.
+
+      Same artwork and same colour as the pre-12 layer-list, so both starting
+      windows are the same brand, and Compose (LaunchSplash) takes over from
+      there with the wordmark.
+
+      A style is ONE resource: this definition REPLACES the values/themes.xml
+      one on API 31+ rather than merging item by item. That is why
+      windowBackground is repeated - drop it and 31+ devices lose the themed
+      background of their resident window, which is what the app falls back to
+      between activities.
+
+      The SIZE is the platform's, not ours: the system scales the icon inside
+      its own fixed splash circle (see the 288dp / 192dp icon spec), so the mark
+      here is not necessarily the 160dp that @dimen/splash_logo_size gives the
+      layer-list and Compose. No attribute can make the OS splash honour a dp of
+      ours; what it can share is the artwork and the colour, and this theme does.
+
+      The icon is deliberately the foreground-only vector: the mark has no
+      plate, so no windowSplashScreenIconBackgroundColor is set - the void IS
+      its background.
+    -->
+    <style name="Theme.KBStream.Splash" parent="Theme.KBStream">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+        <item name="android:windowSplashScreenBackground">@color/kb_void</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+</resources>

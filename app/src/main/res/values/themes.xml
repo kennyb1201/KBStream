@@ -9,4 +9,23 @@
     <style name="Theme.KBStream" parent="android:Theme.Material.NoActionBar">
         <item name="android:colorBackground">#0A0E14</item>
     </style>
+
+    <!--
+      The launch theme: the branded frame the system paints between the
+      launcher and this app's first composed pixel.
+
+      Only ever that frame. MainActivity swaps back to Theme.KBStream before
+      super.onCreate, so nothing after the starting window inherits the
+      drawable background - the Compose splash (LaunchSplash) owns every beat
+      from there on, including the handoff.
+
+      Static and void-toned on purpose: AMOLED is a runtime, profile-scoped
+      toggle that a drawable cannot follow, and this window is drawn before the
+      profile has even been read. AMOLED users see one void beat instead of
+      pure black, which is the same tone this window painted before there was a
+      splash at all.
+    -->
+    <style name="Theme.KBStream.Splash" parent="Theme.KBStream">
+        <item name="android:windowBackground">@drawable/splash_background</item>
+    </style>
 </resources>

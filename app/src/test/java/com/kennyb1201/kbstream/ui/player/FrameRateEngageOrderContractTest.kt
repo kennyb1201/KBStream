@@ -40,22 +40,28 @@ class FrameRateEngageOrderContractTest {
 
     @Test
     fun `apply requests the mode id before it touches the surface`() {
-        val choose = modeFirst.indexOf("FrameRateMatch.chooseMode(contentFps, modes, modeId)")
-        val request = modeFirst.indexOf("requestMode(chosen, contentFps, modeId)")
-        val surface = modeFirst.indexOf("askSurfaceIfPossible(contentFps, modeId)")
-        assertTrue("the mode-first block must search the panel's modes", choose >= 0)
+        val best = modeFirst.indexOf("FrameRateMatch.bestMode(contentFps, modes)")
+        val request = modeFirst.indexOf("best.id != modeId -> requestMode(best, contentFps, modeId)")
+        val nothingBetter = modeFirst.indexOf("best == null -> askSurfaceIfPossible(contentFps, modeId)")
+        assertTrue("the mode-first block must search the panel's modes", best >= 0)
         assertTrue(
             "the mode request is what starts the engage on a panel with a better mode",
-            request > choose
+            request > best
         )
         assertTrue(
-            "and the surface hint may only be reached after it - or instead of it",
-            surface > request
+            "and the surface hint is only for a panel with nothing better to switch to, or for " +
+                "one that is already in its best mode and was never asked (2026-10-18)",
+            nothingBetter > best
         )
         assertFalse(
-            "the mode-first block must not call the mode search a second time as a fallback: " +
+            "the mode-first block must not call a mode search a second time as a fallback: " +
                 "there is nothing after the surface hint",
             modeFirst.contains("forceMode(")
+        )
+        assertFalse(
+            "and not the exclusion-free search's pre-fix twin either: it cannot tell 'nothing " +
+                "better' from 'already there', which is what fired the hint at the live surface",
+            modeFirst.contains("chooseMode(")
         )
     }
 
@@ -109,10 +115,12 @@ class FrameRateEngageOrderContractTest {
     @Test
     fun `a panel with no better mode still gets the surface hint`() {
         assertTrue(
-            "a single-60 Hz TV is the regression case: chooseMode finds nothing, and the " +
-                "surface hint must still be made",
-            modeFirst.contains("askSurfaceIfPossible(contentFps, modeId)") &&
-                modeFirst.contains("if (chosen != null)")
+            "a single-60 Hz TV is the regression case: bestMode finds nothing better to switch " +
+                "to, and the surface hint must still be made",
+            modeFirst.contains("best == null -> askSurfaceIfPossible(contentFps, modeId)") &&
+                modeFirst.contains("else -> {") &&
+                modeFirst.substringAfter("else -> {")
+                    .contains("askSurfaceIfPossible(contentFps, modeId)")
         )
         assertTrue(
             "the mode search stays a pure rule the JVM tests drive",

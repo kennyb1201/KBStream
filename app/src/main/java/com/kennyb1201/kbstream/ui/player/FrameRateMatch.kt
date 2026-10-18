@@ -210,14 +210,29 @@ internal object FrameRateMatch {
         contentFps: Double,
         modes: List<DisplayModeInfo>,
         currentModeId: Int
-    ): DisplayModeInfo? {
+    ): DisplayModeInfo? = bestMode(contentFps, modes)?.takeIf { it.id != currentModeId }
+
+    /**
+     * The same ladder as [chooseMode] without the "already there" exclusion: the
+     * best mode for this content whether or not the panel is in it now.
+     *
+     * It exists because the two reasons [chooseMode] can answer null are not the
+     * same thing, and the caller has to tell them apart: the panel may have no
+     * better mode at all (the single-rate case, where the surface hint is the
+     * whole request), or it may ALREADY be in the best mode (where a mode
+     * request is a no-op and the surface hint is not — see [FrameRateMatcher]).
+     *
+     * [chooseMode] is defined in terms of this, so the exclusion-free answer
+     * being the same mode [chooseMode] refuses cannot drift from it.
+     */
+    fun bestMode(contentFps: Double, modes: List<DisplayModeInfo>): DisplayModeInfo? {
         val content = normalise(contentFps) ?: return null
         val usable = modes.filter { it.refreshRate.isFinite() && it.refreshRate > 0.0 }
 
-        exactMultipleMode(content, usable)?.let { return it.takeIf { m -> m.id != currentModeId } }
-        ratioMode(content, usable, ratio = 2.0)?.let { return it.takeIf { m -> m.id != currentModeId } }
-        ratioMode(content, usable, ratio = 2.5)?.let { return it.takeIf { m -> m.id != currentModeId } }
-        return cadenceMode(content, usable)?.takeIf { it.id != currentModeId }
+        exactMultipleMode(content, usable)?.let { return it }
+        ratioMode(content, usable, ratio = 2.0)?.let { return it }
+        ratioMode(content, usable, ratio = 2.5)?.let { return it }
+        return cadenceMode(content, usable)
     }
 
     /**
@@ -428,6 +443,18 @@ internal object FrameRateMatch {
     }
 
     /**
+     * Nothing was asked, because the panel is already in the best mode for this
+     * content. Deliberately not [describeOutcome], which says "the request was
+     * not taken" — there was no request, and a field capture must not read a
+     * no-op as a refusal.
+     */
+    fun describeAlreadyInBestMode(contentFps: Double, mode: DisplayModeInfo): String {
+        val content = normalise(contentFps) ?: contentFps
+        return "left the panel in mode ${mode.id} at ${rate(mode.refreshRate)} Hz — it is " +
+            "already the best mode for ${rate(content)} fps; no request made"
+    }
+
+    /**
      * What the panel did about a request, measured a moment after it was made.
      * The platform is allowed to say no, and this is what says whether it did.
      */
@@ -508,6 +535,17 @@ internal class FrameRateMatcher(
     /** The mode this session asked for by id, or [UNSET] when it has asked for none. */
     private var appliedModeId = UNSET
 
+    /**
+     * Whether leaving still owes the panel a restore.
+     *
+     * True once this session asked for a mode, and also when it found the panel
+     * already in the best mode and took that state over without asking: after an
+     * engine switch the successor is the session that is left holding the panel,
+     * and it has to be the one that puts it back — the engine that engaged it has
+     * stopped (not finished) and its own window is long gone by then.
+     */
+    private var restoreOnRelease = false
+
     /** Whether a rate has been put on the player's surface. */
     private var surfaceRateApplied = false
 
@@ -531,13 +569,38 @@ internal class FrameRateMatcher(
             .onFailure { Log.w(TAG, "frame-rate match failed", it) }
     }
 
+    /**
+     * Whether this session has already taken the panel's rate as its own — a
+     * mode it asked for by id, a state it took over, or a rate on the surface.
+     * What a resume re-arms against: once the answer is yes, re-offering the same
+     * rate is a no-op (see [apply]), and a setting switched off while the player
+     * was away has something to undo ([release]).
+     */
+    val hasEngaged: Boolean
+        get() = restoreOnRelease || surfaceRateApplied
+
+    /**
+     * Drops a confirm still waiting to look at the panel, and nothing else: the
+     * request it was posted for, the mode this session asked for and the rate
+     * already on the surface all stay.
+     *
+     * For a stop that is not an exit — a pause, the screen going off, the engine
+     * switch — where a confirm posted at open would otherwise fire its backstop
+     * at a panel the player is not drawing to, and the panel itself must stay at
+     * the film rate for the resume.
+     */
+    fun cancelPending() {
+        handler.removeCallbacksAndMessages(null)
+    }
+
     /** Puts the panel back. Called from the player's teardown. */
     fun release() {
         released = true
-        handler.removeCallbacksAndMessages(null)
+        cancelPending()
         runCatching { clearSurfaceRate() }
             .onFailure { Log.w(TAG, "could not clear the surface frame rate", it) }
-        if (appliedModeId == UNSET) return
+        if (!restoreOnRelease) return
+        restoreOnRelease = false
         appliedModeId = UNSET
         runCatching {
             val attributes = activity.window.attributes
@@ -568,14 +631,46 @@ internal class FrameRateMatcher(
             // the panel on the Onn 4K Plus, where Surface.setFrameRate was
             // logged and ignored. Asking this way also means that call is never
             // made at all on a box where the mode request works.
-            val chosen = FrameRateMatch.chooseMode(contentFps, modes, modeId)
-            if (chosen != null) {
-                requestMode(chosen, contentFps, modeId)
-                return
+            //
+            // The search is the exclusion-free one, because the two reasons the
+            // old search answered null are not the same thing:
+            //
+            //  - the panel has no better mode at all (a single-rate panel,
+            //    typically). The surface hint is its whole request, as it always
+            //    was.
+            //  - the panel is ALREADY in the best mode, and this session is what
+            //    put it there. A mode request would be a no-op, but falling
+            //    through to the surface hint is not: re-applying a rate to the
+            //    live surface breaks presentation on the Onn 4K Plus — choppy
+            //    playback plus "no present fence" from the resume re-arm
+            //    (field, 2026-10-18). Ask for nothing, and say so on the
+            //    diagnostics row.
+            //
+            // A panel already in the best mode that this session did NOT put
+            // there keeps the surface hint: nothing has been asked yet, and on a
+            // single-rate panel that hint is the only request there is.
+            val best = FrameRateMatch.bestMode(contentFps, modes)
+            when {
+                best == null -> askSurfaceIfPossible(contentFps, modeId)
+                best.id != modeId -> requestMode(best, contentFps, modeId)
+                hasEngaged -> {
+                    FrameRateDiagnostics.setOutcome(
+                        FrameRateMatch.describeAlreadyInBestMode(contentFps, best)
+                    )
+                    Log.i(
+                        TAG,
+                        "already in the best mode for ${rate(contentFps)} fps; no request made"
+                    )
+                }
+                else -> {
+                    // Already in the best mode, and not because of this session:
+                    // the surface hint is the only request left (a single-rate
+                    // panel has no mode to switch to), and the panel's current
+                    // state is now this session's to put back on the way out.
+                    restoreOnRelease = true
+                    askSurfaceIfPossible(contentFps, modeId)
+                }
             }
-            // No better mode exists - a single-rate panel, typically - so the
-            // surface hint is the whole request, as it already was for those.
-            askSurfaceIfPossible(contentFps, modeId)
             return
         }
         // Pre-fix ladder, for the field bisect: the surface hint first, and the
@@ -640,6 +735,7 @@ internal class FrameRateMatcher(
         attributes.preferredDisplayModeId = chosen.id
         activity.window.attributes = attributes
         appliedModeId = chosen.id
+        restoreOnRelease = true
         FrameRateDiagnostics.addRequest(
             FrameRateMatch.describeModeSwitch(contentFps, chosen, currentModeId)
         )

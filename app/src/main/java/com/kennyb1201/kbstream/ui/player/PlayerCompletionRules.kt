@@ -22,6 +22,35 @@ internal fun isCreditsTail(positionMs: Long, durationMs: Long): Boolean =
     durationMs > 0L && positionMs >= (durationMs * CREDITS_TAIL_RATIO).toLong()
 
 /**
+ * Decides whether a source ERROR arrived so late in the file that the episode
+ * is finished despite it.
+ *
+ * Field report (Onn 4K Plus, 0.6.110): an episode paused at 77.43%, resumed,
+ * played on to 99.28% - and then the Matroska tail threw `No valid varint
+ * length mask found`. The error path went to its recovery ladder, which
+ * rebuilt the player; the rebuild re-ran the launch resume-restore, read the
+ * resume point written back at the PAUSE (77.43%, because resume points are
+ * written on pause/exit, not continuously) and restarted playback there. The
+ * completion was never filed, so the episode was never marked watched and sat
+ * in Continue Watching with nine minutes "left" on it.
+ *
+ * The error-time playhead is the fact the fix turns on, and it is why this
+ * takes a position rather than reading the stored resume point: at the moment
+ * the error is raised the player is still alive and still knows it was at
+ * 99.28%. Same threshold [shouldRecordCompletion]'s position arm uses, passed
+ * in by each engine as its own `COMPLETION_THRESHOLD_RATIO` so this path can
+ * never answer to a different number than the save that follows it.
+ *
+ * A zero/unknown duration never qualifies: without a length there is no tail,
+ * and such an error keeps the recovery path it has always had.
+ */
+internal fun errorAtCompletionThreshold(
+    positionMs: Long,
+    durationMs: Long,
+    thresholdRatio: Float
+): Boolean = durationMs > 0L && positionMs >= (durationMs * thresholdRatio).toLong()
+
+/**
  * Decides whether a player session should be written to watch history as a
  * COMPLETED episode rather than a resumable position.
  *

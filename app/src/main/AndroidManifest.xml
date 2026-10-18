@@ -176,12 +176,19 @@
             android:name="io.sentry.auto-init"
             android:value="false" />
 
+        <!-- android:theme is the launch splash: the system paints its window
+             background (the centred brass mark on the void) until this app
+             composes its first frame, which is where the branded splash takes
+             over. MainActivity.onCreate swaps to Theme.KBStream before
+             super.onCreate, so the splash theme is only ever that pre-Compose
+             frame - see Theme.KBStream.Splash. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:resizeableActivity="false"
             android:screenOrientation="landscape"
+            android:theme="@style/Theme.KBStream.Splash"
             android:windowSoftInputMode="stateHidden|adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

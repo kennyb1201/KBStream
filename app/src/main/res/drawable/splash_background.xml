@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The pre-Compose launch frame: the void, with the brass play-button mark dead
+  centre. This is what the system's starting window draws between the launcher
+  and this app's first composed pixel, so it replaces a flat, unbranded window.
+
+  Deliberately drawables only - no wordmark. A layer-list cannot draw text, and
+  a rasterised one could not follow the theme; the "KBStream" lockup is the
+  Compose half (LaunchSplash), which picks up the same centred mark from
+  @dimen/splash_logo_size and adds the name under it.
+
+  The colour is @color/kb_void, the same 0A0E14 the ordinary theme background
+  uses, rather than a literal: a launch that painted a slightly different dark
+  would read as a flash. AMOLED users get this one void-toned beat before the
+  activity's AMOLED-aware window colour takes over - accepted, because a static
+  drawable cannot follow a runtime toggle (see Theme.KBStream.Splash).
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/kb_void" />
+    <item
+        android:drawable="@drawable/ic_launcher_foreground"
+        android:gravity="center"
+        android:width="@dimen/splash_logo_size"
+        android:height="@dimen/splash_logo_size" />
+</layer-list>

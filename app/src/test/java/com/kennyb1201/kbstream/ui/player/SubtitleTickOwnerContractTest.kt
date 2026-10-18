@@ -86,28 +86,31 @@ class SubtitleTickOwnerContractTest {
         // The premise of the rule above: a clear is a teardown step, so the
         // caller must drop the handler it just cleared instead of keeping one
         // that has no tick and no cues.
+        //
+        // Scoped to the SUBTITLE handler's own calls. "cancelPending()" is a
+        // name two classes share now - FrameRateMatcher drops a queued confirm
+        // with it (2026-10-18), from the player's onStop - and a scan of the bare
+        // name read that as a subtitle teardown that, by this rule, would have
+        // to be followed by nulling the subtitle handler. It is not a subtitle
+        // call at all, so the receiver is what says which invariant applies.
         val src = source()
-        val call = "cancelPending()"
-        var seen = 0
-        var at = src.indexOf(call)
-        while (at >= 0) {
-            val declaration = src.substring((at - 4).coerceAtLeast(0), at) == "fun "
-            if (!declaration) {
-                seen++
-                val after = src.substring(at, (at + 400).coerceAtMost(src.length))
-                assertTrue(
-                    "the handler cleared at offset $at must be replaced or nulled " +
-                        "right after the clear",
-                    after.contains("subtitleCueHandler = null") ||
-                        after.contains("subtitleCueHandler = SubtitleCueHandler()")
-                )
-            }
-            at = src.indexOf(call, at + 1)
+        val calls = Regex("(subtitleCueHandler\\?\\.|cueHandler\\.)cancelPending\\(\\)")
+            .findAll(src)
+            .toList()
+        calls.forEach { call ->
+            val at = call.range.first
+            val after = src.substring(at, (at + 400).coerceAtMost(src.length))
+            assertTrue(
+                "the handler cleared at offset $at must be replaced or nulled " +
+                    "right after the clear",
+                after.contains("subtitleCueHandler = null") ||
+                    after.contains("subtitleCueHandler = SubtitleCueHandler()")
+            )
         }
         assertEquals(
             "the clear has four callers: a rebuild, a live zap, onStop and onDestroy",
             4,
-            seen
+            calls.size
         )
     }
 

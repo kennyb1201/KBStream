@@ -1021,11 +1021,20 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             // link is bad, so no add-on is demoted and no source is skipped.
             // The card offers RETRY (this source, from where it stopped) and
             // the same TRY NEXT SOURCE / SWITCH PLAYER the open failure does.
-            showError(
-                message,
-                "The stream stopped responding. Retry this source, or try the " +
-                    "next one - a dropped segment is usually over by now."
-            )
+            //
+            // One exception, and it is decided before the card: a death in the
+            // last 5% is the episode's end, not a source to recover from, and
+            // it files the completion instead (see
+            // [fileErrorTailCompletion]). This is the only error entry a file
+            // that actually PLAYED can arrive through - onPlaybackError is the
+            // never-opened path, where the playhead is still zero.
+            if (!fileErrorTailCompletion()) {
+                showError(
+                    message,
+                    "The stream stopped responding. Retry this source, or try the " +
+                        "next one - a dropped segment is usually over by now."
+                )
+            }
         }
         view.onPlaybackError = { message ->
             // A cached link that never opened is dead: forget it now, so the
@@ -4354,10 +4363,76 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             bufferingView?.visibility = View.GONE
             saveProgress(reason = "ended", forceCompleted = true)
             scrobble("stop", progressOverride = 100.0)
+        }
+        routeAfterCompletedEnd()
+    }
 
+    /**
+     * Files the completion when a source error lands in the tail of a file the
+     * viewer has effectively finished.
+     *
+     * The mirror of the main player's path (see
+     * [NativePlayerActivity.fileErrorTailCompletion], which carries the field
+     * report): an error inside the last 5% is the episode's end, so the
+     * completion is filed through the ordinary [saveProgress] - completed row,
+     * `completionFiled`, the tracker push, and [PlaybackHistoryWriter]'s
+     * delete-and-tombstone of the superseded resume rows - and the error card
+     * is not raised at all.
+     *
+     * This engine's retry resumes at the LIVE playhead rather than at the
+     * stored resume point, so it never resurrects stale history the way the
+     * main player's rebuild did - but retrying at 99.28% just re-hits the same
+     * corrupt tail, so filing the completion is still the honest outcome.
+     *
+     * The playhead and length are read SYNCHRONOUSLY, in the error handler
+     * (mpv's own last reported position and duration), and the guards are
+     * [saveProgress]'s own. (There is no live-TV guard: this engine has no
+     * live path.) Returns true when the completion was filed.
+     */
+    private fun fileErrorTailCompletion(): Boolean {
+        if (parentId.isBlank() || historyId.isBlank()) return false
+        val view = surface ?: return false
+        val pos = runCatching { view.positionMs() }.getOrDefault(0L).coerceAtLeast(0L)
+        val dur = runCatching { view.durationMs() }.getOrDefault(0L)
+        // The same ratio the save below judges with, not a threshold of its own.
+        if (!errorAtCompletionThreshold(pos, dur, COMPLETION_THRESHOLD_RATIO)) return false
+        Log.w(
+            TAG,
+            "playback error at the tail ($pos of ${dur}ms) \u2014 filing the completion " +
+                "instead of retrying"
+        )
+        com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.note(
+            com.kennyb1201.kbstream.data.reporting.PlaybackEngineTrace.describe(
+                cause = "MPV stream error inside the completion threshold",
+                detail = "at $pos of ${dur}ms \u2014 completion filed, no retry"
+            )
+        )
+        // The card belongs to a failure that is about to be recovered from;
+        // this one is the episode's end, so it comes down before the end state
+        // goes up.
+        errorContainer?.visibility = View.GONE
+        saveProgress(reason = "error-tail-completion", forceCompleted = true)
+        routeAfterCompletedEnd()
+        return true
+    }
+
+    /**
+     * The end-of-episode state, reached after the completion has been written:
+     * the sleep timer's own ending, the up-next countdown let go, the panel
+     * raised.
+     *
+     * Shared by the natural end ([onPlaybackEnded]) and a source error that
+     * landed in the tail ([fileErrorTailCompletion]) so the two cannot drift.
+     * A panel that is already up (the credits trigger fired before the error)
+     * simply stays: [showEndPanels] raises it once per session.
+     */
+    private fun routeAfterCompletedEnd() {
+        runOnUiThread {
+            bufferingView?.visibility = View.GONE
             // A sleep timer armed to stop at the end of this episode is honored
             // here, where the episode really is over: no card, no auto-advance,
-            // just out. The completion write above is what the history keeps.
+            // just out. The completion write already made is what the history
+            // keeps.
             if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
                 exitForSleepTimer(savePartialProgress = false)
                 return@runOnUiThread
@@ -5337,9 +5412,11 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     override fun onStart() {
         super.onStart()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) requestAudioFocus()
-        // Coming back to a session whose panel mode was restored on the way out
-        // (see onStop): mpv reported its rate when the file loaded, which has
-        // already happened, so it is re-offered here rather than waited for.
+        // Coming back to a session whose panel was left at the film rate (see
+        // onStop): mpv reported its rate when the file loaded, which has already
+        // happened, so it is re-offered here rather than waited for. The engage
+        // now recognises a panel it is already in the best mode of (or a rate it
+        // already put on the surface) and asks for nothing.
         surface?.videoFrameRate()?.let { fps ->
             if (FrameRateMatch.normalise(fps) != null) lastContentFps = fps
             frameRateMatcher?.onContentFrameRate(fps)
@@ -5370,13 +5447,21 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
      * Three things have to hold, and each is a real reason to do nothing: a rate
      * was actually measured ([FrameRateMatch.resumeRate] refuses a stored
      * `NO_VALUE` exactly as it did on arrival), the setting is still on (it can
-     * be switched off while the player is away, and the matcher outlives a
-     * release on the way out), and the matcher exists at all. Re-offering a rate
-     * the panel is already in is a no-op by
-     * [FrameRateMatcher.onContentFrameRate]'s own contract.
+     * be switched off while the player is away — and with a transient stop no
+     * longer restoring the panel, that is the case that puts the panel back here
+     * before returning), and the matcher exists at all. Re-offering a rate the
+     * panel is already in is a no-op by
+     * [FrameRateMatcher.onContentFrameRate]'s own contract, including the surface
+     * hint the mode-first ladder used to fall through to.
      */
     private fun rearmFrameRateMatch() {
-        if (!AppPreferences.getMatchFrameRate(this)) return
+        if (!AppPreferences.getMatchFrameRate(this)) {
+            // Switched off while we were away: the panel is still at the film
+            // rate because a transient stop leaves it alone, so put it back.
+            // release() is a no-op when this session never engaged.
+            if (frameRateMatcher?.hasEngaged == true) frameRateMatcher?.release()
+            return
+        }
         val fps = FrameRateMatch.resumeRate(lastContentFps) ?: return
         // Same tag the probe and the matcher log under, so a field capture of
         // "AFR did not re-arm" reads as one sequence.
@@ -5398,10 +5483,19 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             EpgWriteGate.setPlayerActive(false)
         }
         // Paused and off screen, so the panel goes back to the mode the rest of
-        // the TV interface expects and onStart asks for it again on the way
-        // back. Deliberately not in onPause: Picture-in-Picture keeps the video
-        // running, and the matched rate is still the right one there.
-        frameRateMatcher?.release()
+        // the TV interface expects — but only when this session is ending. A
+        // stop is not always an exit: a pause that turns the screen off, a brief
+        // trip away, or the native → MPV switch (which stops this activity
+        // without finishing it) all come back to the same playback. Restoring on
+        // those made the return re-switch the panel (a full 60 → 24 Hz switch
+        // racing the resume), where the open-time switch happens before decode
+        // and is smooth; leaving it alone lets the engage find the best mode
+        // already current, which is a true no-op. A confirm still waiting is
+        // dropped on the transient path: a backstop posted at open must not fire
+        // while the player is away. Deliberately not in onPause: Picture-in-
+        // Picture keeps the video running, and the matched rate is still the
+        // right one there.
+        if (isFinishing) frameRateMatcher?.release() else frameRateMatcher?.cancelPending()
         chrome?.cancelAutoHide()
         if (playerSwitchStarted) {
             // Another engine has been launched and this Activity stays in the

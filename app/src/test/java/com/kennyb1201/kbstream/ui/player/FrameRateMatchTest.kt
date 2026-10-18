@@ -480,4 +480,77 @@ class FrameRateMatchTest {
             FrameRateMatch.describeSource(23.976, FrameRateSource.RESUME)
         )
     }
+
+    // ── Already in the best mode ────────────────────────────────────────
+    //
+    // Reported 2026-10-18: pausing a film and resuming made it choppy, with
+    // "no present fence" at frame cadence, while the open had been smooth. The
+    // resume re-arm was the only AFR action on that path, and the mode-first
+    // ladder's answer for "the panel is already in the best mode" was to fall
+    // through to Surface.setFrameRate on the LIVE surface - which this firmware
+    // mishandles mid-session. Telling "already there" from "nothing better
+    // exists" is what these two functions now do.
+
+    @Test
+    fun `the best mode is the one already showing when nothing is better`() {
+        // A single-60 Hz panel with film: 60 Hz is the 2.5x pulldown, so it IS
+        // the best mode - which the old search refused as "no switch needed" and
+        // the caller then read as "nothing better exists".
+        val modes = listOf(mode(1, 60.0))
+
+        assertEquals(
+            "the panel is in the best mode there is",
+            1,
+            FrameRateMatch.bestMode(23.976, modes)?.id
+        )
+        assertNull(
+            "and there is no switch to ask for",
+            FrameRateMatch.chooseMode(23.976, modes, currentModeId = 1)
+        )
+    }
+
+    @Test
+    fun `a genuinely better mode is the answer from both searches`() {
+        val modes = listOf(mode(1, 60.0), mode(2, 24.0))
+
+        assertEquals(2, FrameRateMatch.bestMode(23.976, modes)?.id)
+        assertEquals(2, FrameRateMatch.chooseMode(23.976, modes, currentModeId = 1)?.id)
+        assertNull(
+            "once the switch has happened the choice search has nothing left to ask for",
+            FrameRateMatch.chooseMode(23.976, modes, currentModeId = 2)
+        )
+        assertEquals(
+            "while the exclusion-free one still names the mode it is in: that is the " +
+                "whole point of having it",
+            2,
+            FrameRateMatch.bestMode(23.976, modes)?.id
+        )
+    }
+
+    @Test
+    fun `the best search survives the same junk the choice search does`() {
+        val modes = listOf(mode(1, 60.0), mode(2, 24.0))
+
+        assertNull(FrameRateMatch.bestMode(0.0, modes))
+        assertNull(FrameRateMatch.bestMode(Double.NaN, modes))
+        assertNull("a rate that describes no content", FrameRateMatch.bestMode(4.0, modes))
+        assertNull("a panel that reports no modes", FrameRateMatch.bestMode(23.976, emptyList()))
+        assertNull(
+            "and modes with no usable rate are not candidates",
+            FrameRateMatch.bestMode(23.976, listOf(mode(1, Double.NaN), mode(2, 0.0)))
+        )
+    }
+
+    @Test
+    fun `a no-op is reported as one, not as a refused request`() {
+        // The diagnostics row is the field's only view of this decision, and
+        // "the request was not taken" would describe a request that was never
+        // made - sending the next report after the panel instead of after the
+        // ladder.
+        assertEquals(
+            "left the panel in mode 1 at 60.000 Hz — it is already the best mode for " +
+                "23.976 fps; no request made",
+            FrameRateMatch.describeAlreadyInBestMode(23.976, mode(1, 60.0))
+        )
+    }
 }

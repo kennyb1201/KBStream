@@ -243,12 +243,35 @@ internal fun dvLabelFromCodec(codec: String?): String? {
  * Normalize raw codec string into a friendly label:
  * "hev1.1.6.L150" → "H.265", "avc1.640028" → "H.264",
  * "vp09.00" → "VP9", "av01" → "AV1".
+ *
+ * The two Dolby Vision annotations are separate arms of the same idea - what
+ * the file WAS versus what is actually being shown - and the caller says which
+ * one its session is on:
+ *
+ *  - [dvOriginalCodec] is the declared codec of a track the relabel arm
+ *    REWROTE to plain HEVC, so the track no longer says Dolby Vision at all.
+ *  - [rpuStrippedKeepDv] is the keep-DV strip arm, which leaves the track's
+ *    codec untouched and drops only the RPU/EL: the string still says
+ *    "dvhe.08.06", but the decoder is emitting the HDR10 base layer.
  */
 internal fun normalizeCodec(
     codec: String?,
     dvOriginalCodec: String? = null,
-    convertedTo81: Boolean = false
+    convertedTo81: Boolean = false,
+    rpuStrippedKeepDv: Boolean = false
 ): String {
+    // Declared Dolby Vision KEPT declared while its RPU/EL is stripped
+    // (STRIP_RPU_KEEP_DV): the track still reads e.g. dvhe.08.06, but with the
+    // RPU gone the decoder falls back to the HDR10 base layer. Without this
+    // line the badge says plain "DV P8" while HDR10 is what is on screen.
+    //
+    // First, and deliberately: the two arms are mutually exclusive per
+    // selectHdr10BaseHandling, so a session can never double-annotate through
+    // the relabel branch below (that arm rewrites the track, which this one
+    // does not).
+    if (rpuStrippedKeepDv) {
+        dvLabelFromCodec(codec)?.let { return "$it → HDR10" }
+    }
     // Declared Dolby Vision that the DV → HDR10 strip rewrote to plain HEVC:
     // surface the original profile so the badge still shows what the file was.
     dvLabelFromCodec(dvOriginalCodec)?.let {

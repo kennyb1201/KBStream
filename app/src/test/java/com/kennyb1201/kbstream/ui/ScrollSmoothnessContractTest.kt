@@ -114,9 +114,19 @@ class ScrollSmoothnessContractTest {
             "LandscapeCard's backdrop request must be remembered",
             landscape.contains("model = remember(effectiveUrl) {")
         )
+        // The card's corner clearlogo is drawn through BrandMarkImage (a black
+        // wordmark on the dark corner is unreadable - see
+        // LandscapeCardLogoContrastContractTest), so the request lives there.
+        // The property this test exists for is unchanged: it is still built
+        // once per URL, not on every composition.
         assertTrue(
-            "LandscapeCard's logo request must be remembered",
-            landscape.contains("model = remember(logoUrl) {")
+            "LandscapeCard's corner clearlogo must be a BrandMarkImage, which " +
+                "owns the remembered request",
+            landscape.contains("BrandMarkImage(")
+        )
+        assertTrue(
+            "and that request must be remembered, keyed on the URL",
+            read(BRAND_MARK).contains("val request = remember(url) {")
         )
     }
 
@@ -149,5 +159,6 @@ class ScrollSmoothnessContractTest {
         const val SKELETON = "com/kennyb1201/kbstream/ui/components/KBSkeleton.kt"
         const val POSTER = "com/kennyb1201/kbstream/ui/components/PosterCard.kt"
         const val LANDSCAPE = "com/kennyb1201/kbstream/ui/components/LandscapeCard.kt"
+        const val BRAND_MARK = "com/kennyb1201/kbstream/ui/components/BrandMarkImage.kt"
     }
 }

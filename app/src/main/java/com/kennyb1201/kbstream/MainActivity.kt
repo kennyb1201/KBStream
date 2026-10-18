@@ -70,6 +70,9 @@ import com.kennyb1201.kbstream.ui.components.LocalKBFeedback
 import com.kennyb1201.kbstream.ui.components.rememberKBFeedbackState
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBTextField
+import com.kennyb1201.kbstream.ui.LAUNCH_SPLASH_TIMEOUT_MS
+import com.kennyb1201.kbstream.ui.LaunchSplashTarget
+import com.kennyb1201.kbstream.ui.components.LaunchSplash
 import com.kennyb1201.kbstream.ui.components.ManualSourceSelection
 import com.kennyb1201.kbstream.ui.detail.DetailScreen
 import com.kennyb1201.kbstream.ui.detail.StreamsTarget
@@ -77,7 +80,9 @@ import com.kennyb1201.kbstream.ui.home.CatalogGridScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfileEditScreen
 import com.kennyb1201.kbstream.ui.profiles.ProfilePickerScreen
 import com.kennyb1201.kbstream.ui.home.HomeScreen
+import com.kennyb1201.kbstream.ui.home.HomeViewModel
 import com.kennyb1201.kbstream.ui.home.upNextPlayerNameOrUnknown
+import com.kennyb1201.kbstream.ui.launchSplashVisible
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.PendingChannelTune
 import com.kennyb1201.kbstream.data.notifications.NotificationCenter
@@ -670,6 +675,16 @@ private suspend fun recoveredEpisodeAlreadyWatched(
     override fun onCreate(
         savedInstanceState: Bundle?
     ) {
+        // The manifest's theme is the launch splash (@style/Theme.KBStream.Splash),
+        // which is what the system paints between the launcher and this app's
+        // first composed pixel: the void with the brass mark centred on it.
+        // It is ONLY that frame - the window the activity actually runs in is
+        // the ordinary theme, and everything from the first composition is the
+        // Compose splash (LaunchSplash), which paints the same mark at the same
+        // size on the same background. Swapped back here, before the
+        // superclass builds the window, so the splash theme is never inherited
+        // by a dialog, a popup or a screen.
+        setTheme(R.style.Theme_KBStream)
         super.onCreate(savedInstanceState)
         // Application.onCreate → this activity's create: the part of the
         // launch the user actually waits on before the first frame. A
@@ -990,6 +1005,110 @@ fun AppRoot(
     // restarts and process death (and restoring a saved screen can't skip it).
     var onboardingComplete by rememberSaveable {
         mutableStateOf(OnboardingPrefs.isComplete(context))
+    }
+
+    // ----------------------------------------------------------------- launch
+    // splash (see LaunchSplash / launchSplashVisible)
+    //
+    // The branded frame that covers the two beats that used to show raw
+    // loading: the void window before the first composition (the launch theme
+    // paints that one) and the placeholder rails while Home's catalogs load.
+    //
+    // Armed for the launch and LATCHED off the moment the content it stands in
+    // front of is ready - never dismissed on a timer, because "quick" means it
+    // does not hold the viewer. A profile pick re-arms it, since choosing an
+    // identity is an entry into Home.
+    var splashArmed by rememberSaveable { mutableStateOf(true) }
+    // Deliberately NOT saveable: `splashArmed` is the latch, and it is restored
+    // across a re-create, so a restored target could never show anything. It is
+    // re-derived from the launch gate below and set outright by a profile pick.
+    var splashTarget by remember {
+        mutableStateOf(
+            if (profilesExist) {
+                LaunchSplashTarget.PROFILE_PICKER
+            } else {
+                LaunchSplashTarget.HOME
+            }
+        )
+    }
+
+    // Bumped by every re-arm, so the failsafe below starts over with the
+    // splash instead of inheriting the launch's remaining budget.
+    var splashArmKey by rememberSaveable { mutableStateOf(0) }
+
+    // The failsafe's deadline. Elapsed time is the one input that changes with
+    // no state to observe - a load that never lands is exactly the case that
+    // never recomposes - so one timer marks the deadline and the rule is handed
+    // that value rather than a ticker recomposing the shell every frame.
+    var splashDeadlinePassed by remember(splashArmKey) { mutableStateOf(false) }
+    LaunchedEffect(splashArmKey) {
+        delay(LAUNCH_SPLASH_TIMEOUT_MS)
+        splashDeadlinePassed = true
+    }
+    val splashElapsedMs =
+        if (splashDeadlinePassed) LAUNCH_SPLASH_TIMEOUT_MS else 0L
+
+    // Collected, not read once from `profiles.value`: the store is populated
+    // synchronously in onCreate, so this beat is the handoff alone in practice,
+    // but a late emission must still dismiss the splash rather than sit it out
+    // until the failsafe. Only while the picker is the beat it is covering.
+    val profilesEmitted =
+        if (splashArmed && splashTarget == LaunchSplashTarget.PROFILE_PICKER) {
+            com.kennyb1201.kbstream.data.sync.ProfileManager.profiles
+                .collectAsStateWithLifecycle().value.isNotEmpty()
+        } else {
+            true
+        }
+
+    // Home's readiness, read from the SAME instance HomeScreen composes: both
+    // resolve `viewModel()` against this activity's ViewModelStore, and
+    // HomeScreen's own parameter defaults to the same call (nothing
+    // nav-scoped or factory-bound is involved). Resolved only while the splash
+    // is waiting on Home - constructing it during the picker beat would kick
+    // off a rail load before a profile has been chosen.
+    val splashHomeViewModel =
+        if (
+            splashArmed &&
+            splashTarget == LaunchSplashTarget.HOME &&
+            onboardingComplete &&
+            screen is Screen.Home
+        ) {
+            viewModel<HomeViewModel>()
+        } else {
+            null
+        }
+    val splashHomeLoading: Boolean
+    val splashRailsPresent: Boolean
+    if (splashHomeViewModel != null) {
+        splashHomeLoading =
+            splashHomeViewModel.isLoading.collectAsStateWithLifecycle().value
+        splashRailsPresent =
+            splashHomeViewModel.rails.collectAsStateWithLifecycle().value.isNotEmpty()
+    } else {
+        // Not waiting on Home: neither signal is what the splash needs, and a
+        // ViewModel that does not exist cannot be loading anything.
+        splashHomeLoading = false
+        splashRailsPresent = false
+    }
+
+    val splashVisible = splashArmed && launchSplashVisible(
+        target = splashTarget,
+        profilesEmitted = profilesEmitted,
+        homeLoading = splashHomeLoading,
+        railsPresent = splashRailsPresent,
+        elapsedMs = splashElapsedMs
+    )
+
+    // Latched, not derived: once it has handed over, coming back to Home from
+    // the player, a setting or a deep link must not replay it. Only a profile
+    // pick re-arms it, which is why the flag is separate from the rule.
+    //
+    // Keyed on the arm as well as the verdict: a re-arm whose Home is ready
+    // instantly leaves `splashVisible` false throughout, so a key of just the
+    // verdict would never run again - and the splash would still be armed when
+    // some later rail refresh emptied Home.
+    LaunchedEffect(splashVisible, splashArmKey) {
+        if (!splashVisible) splashArmed = false
     }
 
     // Deliberately NOT constructing TmdbRepository here. This composable used to
@@ -1557,7 +1676,18 @@ fun AppRoot(
                     // cold-launch entry picker. HomeViewModel's
                     // observeProfileSwitches reloads all rails for the new
                     // profile.
-                    screen = current.returnTo ?: Screen.Home
+                    val destination = current.returnTo ?: Screen.Home
+                    screen = destination
+                    // Entering Home is the same loading beat as a cold
+                    // launch's - every rail is being reloaded for the new
+                    // identity - so put the splash back until the rails land
+                    // rather than showing a profile the viewer just chose the
+                    // skeleton stack.
+                    if (destination is Screen.Home) {
+                        splashTarget = LaunchSplashTarget.HOME
+                        splashArmed = true
+                        splashArmKey += 1
+                    }
                 },
                 onManage = {
                     screen = Screen.ProfileEdit(
@@ -2967,6 +3097,15 @@ fun AppRoot(
     }
     }
     } // closes AnimatedContent( targetState = screen ) { current -> ... }
+
+    // Emitted LAST - after the screen-transition container, so it is the
+    // topmost child of the shell's Box and a screen can never be seen
+    // composing underneath it. Purely visual: no focus, no D-pad keys and no
+    // Back interception (see LaunchSplash), so the screen below keeps the
+    // input and every press survives the handover.
+    if (splashVisible) {
+        LaunchSplash()
+    }
     } // closes HeroTransitionHost
 }
 

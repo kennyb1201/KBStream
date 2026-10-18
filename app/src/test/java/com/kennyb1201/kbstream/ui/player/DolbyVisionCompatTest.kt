@@ -141,6 +141,64 @@ class DolbyVisionCompatTest {
         assertEquals("H.265", normalizeCodec("hvc1.2.4.L153.B0"))
     }
 
+    /**
+     * The keep-DV strip arm (STRIP_RPU_KEEP_DV) leaves the track's codec string
+     * alone - it still reads dvhe.08.06 - while removing the RPU/EL the DV
+     * decoder used to drive the picture, so what is actually on screen is the
+     * HDR10 base layer. Left to the plain label the badge said "DV P8" over an
+     * HDR10 picture; the field report that produced this was a declared-P8
+     * title on a non-DV TV in Strip All.
+     */
+    @Test
+    fun `the keep-DV strip annotates the HDR10 fallback it leaves behind`() {
+        assertEquals(
+            "DV P8 → HDR10",
+            normalizeCodec("dvhe.08.06", rpuStrippedKeepDv = true)
+        )
+        // The same codec without the flag is the passthrough / relabel arm and
+        // keeps the plain profile label.
+        assertEquals("DV P8", normalizeCodec("dvhe.08.06"))
+        // The relabel arms are untouched, both directions.
+        assertEquals("DV P7 → HDR10", normalizeCodec("hvc1.2.4.L153.B0", "dvhe.07.06"))
+        assertEquals(
+            "DV P7 → 8.1",
+            normalizeCodec("hvc1.2.4.L153.B0", "dvhe.07.06", convertedTo81 = true)
+        )
+    }
+
+    /**
+     * The flag is a SESSION fact, so a non-DV track in a Strip All session is
+     * handed it too. It must change nothing: only a track that still declares
+     * Dolby Vision is annotated.
+     */
+    @Test
+    fun `a non-DV codec stays a plain label with the keep-DV flag on`() {
+        assertEquals(
+            "H.265",
+            normalizeCodec("hvc1.2.4.L153.B0", rpuStrippedKeepDv = true)
+        )
+        assertEquals("—", normalizeCodec(null, rpuStrippedKeepDv = true))
+        assertEquals("AV1", normalizeCodec("av01.0.08M.08", rpuStrippedKeepDv = true))
+    }
+
+    /**
+     * The two arms are mutually exclusive per [selectHdr10BaseHandling], so
+     * this cannot occur in the player - but the precedence is pinned so a
+     * later caller that supplies both gets the arm that describes the CURRENT
+     * track rather than a stale rewrite of some earlier one.
+     */
+    @Test
+    fun `the keep-DV arm answers first when both annotations are supplied`() {
+        assertEquals(
+            "DV P8 → HDR10",
+            normalizeCodec(
+                "dvhe.08.06",
+                dvOriginalCodec = "dvhe.07.06",
+                rpuStrippedKeepDv = true
+            )
+        )
+    }
+
     // Learned device capability: a box whose DV decoder hard-fails.
 
     @Test

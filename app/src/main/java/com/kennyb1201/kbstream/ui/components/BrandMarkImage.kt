@@ -41,12 +41,18 @@ import coil3.request.allowHardware
  * job, and it is built on this. The caller that has only one URL to draw -
  * a Browse tile, whose art is already a resolved pick - gets the same
  * treatment without having to own a list.
+ *
+ * [onDrawn] fires when the artwork has actually painted, whatever the verdict.
+ * A caller that shows placeholder text until its image arrives (a landscape
+ * card's corner title, under the clearlogo) needs that moment; the verdict only
+ * decides whether what painted is the mark or the caller's stand-in.
  */
 @Composable
 internal fun BrandMarkImage(
     url: String,
     contentDescription: String?,
     modifier: Modifier = Modifier,
+    onDrawn: () -> Unit = {},
     onUnusable: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -70,6 +76,7 @@ internal fun BrandMarkImage(
             null
         },
         onSuccess = { state ->
+            onDrawn()
             val sampled = sampleBrandMark(state.result.image)
             if (sampled == BrandMark.UNUSABLE) onUnusable() else treatment = sampled
         },

@@ -101,7 +101,14 @@ class FrameRateResumeContractTest {
                 "$who must ask the SETTING, not the matcher's existence: it can be switched off " +
                     "while the player is away, and release() leaves the matcher alive",
                 src.contains("private fun rearmFrameRateMatch() { " +
-                    "if (!AppPreferences.getMatchFrameRate(this)) return")
+                    "if (!AppPreferences.getMatchFrameRate(this)) {")
+            )
+            assertTrue(
+                "$who must put the panel back when the setting was switched off while away: " +
+                    "a transient stop no longer restores it, so this is the only call that does",
+                src.contains(
+                    "if (frameRateMatcher?.hasEngaged == true) frameRateMatcher?.release()"
+                )
             )
             assertTrue(
                 "$who must re-offer what was measured and nothing else",
@@ -141,6 +148,12 @@ class FrameRateResumeContractTest {
                 "$who still releases the panel on the way out - the re-arm is an addition, not a " +
                     "replacement for putting the TV interface's own rate back",
                 src.contains("frameRateMatcher?.release()")
+            )
+            assertTrue(
+                "$who still releases from onDestroy, the net for a player destroyed without a " +
+                    "stop of its own",
+                src.contains("override fun onDestroy() {") &&
+                    src.substringAfter("override fun onDestroy() {").contains("frameRateMatcher?.release()")
             )
             assertTrue(
                 "$who still only builds the matcher when the setting is on and does not have one " +

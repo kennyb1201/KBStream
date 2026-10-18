@@ -329,6 +329,73 @@ class PlayerCompletionRulesTest {
         )
     }
 
+    // --- errorAtCompletionThreshold: a source error at the tail is the end ---
+
+    /** The ratio both engines hand in - their own COMPLETION_THRESHOLD_RATIO. */
+    private val threshold = 0.95f
+
+    /**
+     * The field case: an episode resumed from a 77.43% pause point, played on
+     * to 99.28%, and then the Matroska tail threw. The error-time playhead is
+     * what has to decide this - the stored resume point would say 77.43% and
+     * send the session back into the recovery ladder (and back to 77.43%).
+     */
+    @Test
+    fun `an error in the tail of the runtime is the end`() {
+        val runtime = 1_500_000L
+        assertTrue(
+            errorAtCompletionThreshold((runtime * 0.9928).toLong(), runtime, threshold)
+        )
+        // The stale resume point, for contrast: the same episode an hour after
+        // a pause is NOT at the threshold, and must keep its recovery path.
+        assertFalse(
+            errorAtCompletionThreshold((runtime * 0.7743).toLong(), runtime, threshold)
+        )
+    }
+
+    @Test
+    fun `the error threshold is the save's own ninety-five percent`() {
+        assertTrue(errorAtCompletionThreshold(positionMs = (duration * 0.95).toLong(), durationMs = duration, thresholdRatio = threshold))
+        assertTrue(errorAtCompletionThreshold(positionMs = duration, durationMs = duration, thresholdRatio = threshold))
+        // One millisecond under it is a mid-episode error, and keeps the card.
+        assertFalse(
+            errorAtCompletionThreshold(
+                positionMs = (duration * 0.95).toLong() - 1L,
+                durationMs = duration,
+                thresholdRatio = threshold
+            )
+        )
+        assertFalse(
+            errorAtCompletionThreshold(
+                positionMs = duration / 2,
+                durationMs = duration,
+                thresholdRatio = threshold
+            )
+        )
+    }
+
+    @Test
+    fun `an error with no known duration keeps the normal recovery`() {
+        // No length, no tail: the threshold cannot be applied to an unknown
+        // runtime, and guessing it from the position would complete an episode
+        // on a stream that never reported how long it was.
+        assertFalse(errorAtCompletionThreshold(positionMs = 0L, durationMs = 0L, thresholdRatio = threshold))
+        assertFalse(
+            errorAtCompletionThreshold(
+                positionMs = 1_500_000L,
+                durationMs = 0L,
+                thresholdRatio = threshold
+            )
+        )
+    }
+
+    @Test
+    fun `an error at the very start is never the end`() {
+        // The replay-from-the-top case: a source that errors at 0ms must not
+        // file a completion, however short the file is.
+        assertFalse(errorAtCompletionThreshold(positionMs = 0L, durationMs = 1_000L, thresholdRatio = threshold))
+    }
+
     // --- isCreditsTail: the "leaving row even when not completed" window the
     // players use to ask Home for one more Continue Watching re-merge ---
 

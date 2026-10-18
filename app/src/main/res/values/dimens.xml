@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The launch splash's mark, in exactly ONE place because two frames have to
+      agree on it: @drawable/splash_background draws it before this process has
+      composed anything, and LaunchSplash draws it again as soon as Compose
+      takes over. A size that differed between them is a logo that jumps at the
+      handoff - the one thing the two halves exist to prevent.
+
+      160dp is the launcher vector's own 108dp tile scaled up. The mark inside
+      that tile is 62 of its 108 units, so the brass button reads at ~92dp:
+      about a fifth of a 540dp-tall TV, with the tile's built-in padding left
+      as the breathing room around it.
+    -->
+    <dimen name="splash_logo_size">160dp</dimen>
+</resources>

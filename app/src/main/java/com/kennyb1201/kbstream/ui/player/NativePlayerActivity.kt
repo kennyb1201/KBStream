@@ -442,18 +442,25 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      *    unmatchable rather than being guessed at (see [FrameRateMatch.resumeRate],
      *    which refuses a stored `NO_VALUE` the same way it refused it on arrival).
      *  - the setting is still on. It can be switched off while the player is
-     *    away, and a release() on the way out leaves the matcher alive to be
-     *    re-armed - so this is the check that honors the choice, not the
-     *    matcher's existence.
+     *    away — with a transient stop no longer restoring the panel, the panel is
+     *    still at the film rate on the way back — so the off case puts it back
+     *    here before returning.
      *  - the matcher exists, which is the same "the setting was on when this
      *    session started" every other call site tests.
      *
      * Re-offering a rate the panel is already in is a no-op by
      * [FrameRateMatcher.onContentFrameRate]'s own contract, so a resume that did
-     * not need a switch cannot cause one.
+     * not need a switch cannot cause one — and the mode search now says so
+     * before the surface hint can be fired at the live surface.
      */
     private fun rearmFrameRateMatch() {
-        if (!AppPreferences.getMatchFrameRate(this)) return
+        if (!AppPreferences.getMatchFrameRate(this)) {
+            // Switched off while we were away. A transient stop leaves the panel
+            // at the film rate now, so this is the call that puts it back; the
+            // matcher's own release is a no-op if it never engaged.
+            if (frameRateMatcher?.hasEngaged == true) frameRateMatcher?.release()
+            return
+        }
         val fps = FrameRateMatch.resumeRate(lastContentFps) ?: return
         // Same tag the probe and the matcher log under, so a field capture of
         // "AFR did not re-arm" reads as one sequence.
@@ -1381,6 +1388,24 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     // True while either per-profile 8.1 conversion (P5/P7) is active so the
     // codec badge can report "DV P7 → 8.1" instead of "→ HDR10".
     private var dvTo81Session = false
+
+    // This session's resolved HDR10-base handling, stored where the extractors
+    // factory is built from the SAME inputs it is built with (see
+    // selectHdr10BaseHandling) - one source of truth, no second opinion that
+    // could drift from the arm actually running.
+    //
+    // STRIP is the no-information default: nothing reads this before that site
+    // runs, so an untouched field can only mean "no special handling", never
+    // an arm the player did not pick.
+    private var dvSessionHandling: Hdr10BaseHandling = Hdr10BaseHandling.STRIP
+
+    // True while the CURRENT video track is playing through the keep-DV strip
+    // arm (STRIP_RPU_KEEP_DV): the track stays declared Dolby Vision while its
+    // RPU/EL is dropped, so the decoder falls back to the HDR10 base layer.
+    // Read by the codec badge to annotate that fallback; the arm is
+    // session-level, but only a declared-DV track takes it, which is why the
+    // predicate re-checks the track's own codec.
+    private var dvRpuStripKeepDvActive = false
     // One surface bounce is allowed per player attempt: flipping the
     // SurfaceView's visibility destroys/recreates its native surface and
     // Media3 re-queues output, which recovers the silent "decoder outputs
@@ -5449,6 +5474,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     displaySupportsDv = displaySupportsDv
                 )
             }
+        // Which arm this session is on, resolved from the exact inputs the
+        // factory above was just built with. Stored rather than re-derived at
+        // the track callback: a second derivation from state read later is a
+        // second answer waiting to disagree with the one that is actually
+        // stripping the stream.
+        dvSessionHandling = selectHdr10BaseHandling(
+            nativeDvSupported = nativeDvSupported,
+            nonDvDisplayOnDvDevice = dvDisplayMismatch,
+            convertAllProfiles = convertAllProfiles,
+            displaySupportsDv = displaySupportsDv
+        )
         val mediaSourceFactory = DefaultMediaSourceFactory(cachedFactory, extractorsFactory)
         // DefaultMediaSourceFactory selects HLS/DASH by URI or MIME type and
         // otherwise falls back to progressive extraction. Build that fallback
@@ -6273,6 +6309,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                         val declaredDvCodec =
                             fmt.label?.takeIf { dvLabelFromCodec(it) != null }
                         streamDeclaredDvCodec = declaredDvCodec
+                        // The keep-DV strip arm leaves the codec string alone,
+                        // so nothing above tells the badge that this declared
+                        // Dolby Vision track is actually being decoded as
+                        // HDR10. Record it here, where the track's own DV
+                        // identity is known: the arm is session-level, but a
+                        // non-DV track in a Strip All session must not be
+                        // annotated as one.
+                        dvRpuStripKeepDvActive =
+                            dvSessionHandling == Hdr10BaseHandling.STRIP_RPU_KEEP_DV &&
+                                dvLabelFromCodec(codec) != null
                         // P5 detection keys off the DECLARED codec, not the
                         // rewritten codecs string: the extractor already turned
                         // dvhe.05.06 into hvc1.2.4 by the time the track arrives,
@@ -6343,6 +6389,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            // An error that arrives in the last 5% of the file is the episode's
+            // END, not a recovery to run: file the completion and go to the
+            // end-of-episode state. It has to be decided HERE, before the
+            // ladder below, because the ladder's rebuild is what resurrected
+            // the stale resume point in the field report (see
+            // [fileErrorTailCompletion]). Below the threshold not one byte of
+            // the recovery changes.
+            if (fileErrorTailCompletion()) return
             // A cached link that fails to OPEN is a dead link: forget it now, so
             // the next replay resolves fresh instead of looping back into this
             // same error card. Only a failure ABOUT THE LINK counts (PB-P2-2):
@@ -7845,7 +7899,12 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             } else {
                 appendLine("Resolution: —")
             }
-            val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec, dvTo81Session)
+            val codecLabel = normalizeCodec(
+                streamCodec,
+                streamDeclaredDvCodec,
+                dvTo81Session,
+                dvRpuStripKeepDvActive
+            )
             appendLine("Codec: ${if (codecLabel != "—") codecLabel else streamMimeType ?: "—"}")
             // Declared rate when the container states one, otherwise the rate
             // measured from the bytes actually fetched - see bitrateLabel.
@@ -8681,7 +8740,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                 settingsBitrate.text = "Bitrate: ${streamBitrate / 1_000} kbps"
                 settingsBitrate.visibility = View.VISIBLE
             }
-            val codecLabel = normalizeCodec(streamCodec, streamDeclaredDvCodec, dvTo81Session)
+            // The settings sheet's Codec row is the same row built from the
+            // same state as the info panel's, so it gets the same annotation -
+            // otherwise the two diagnostic surfaces would disagree about what
+            // is on screen.
+            val codecLabel = normalizeCodec(
+                streamCodec,
+                streamDeclaredDvCodec,
+                dvTo81Session,
+                dvRpuStripKeepDvActive
+            )
             if (codecLabel != "—") {
                 settingsCodec.text = "Codec: $codecLabel"
                 settingsCodec.visibility = View.VISIBLE
@@ -10312,9 +10380,80 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // activity) right after the credits left the episode with no watch
         // marker and the resume bar exactly where the viewer had been.
         saveProgress(reason = "ended", forceCompleted = true)
+        routeAfterCompletedEnd()
+    }
+
+    /**
+     * Files the completion when a source error lands in the tail of a file the
+     * viewer has effectively finished.
+     *
+     * The field report (Onn 4K Plus, 0.6.110): pause at 77.43%, resume, watch
+     * on to 99.28%, and the Matroska tail throws `No valid varint length mask
+     * found`. The episode was never marked watched, and the recovery rebuild
+     * restarted playback from the 77.43% resume point (resume rows are written
+     * on pause/exit, not continuously) - so the show came back to "9 min left"
+     * forever. The `byw shown filed=false` assertion the Oct 13 completion fix
+     * planted is what caught it: that fix covers the natural end, and a source
+     * error at the tail bypassed completion filing entirely.
+     *
+     * Nothing new is written here. The completion goes through the ordinary
+     * [saveProgress] (completed row, `completionFiled`, the tracker push, and
+     * [PlaybackHistoryWriter]'s delete-and-tombstone of the superseded resume
+     * rows - which is what leaves a later rebuild nothing stale to resurrect),
+     * and the recovery ladder is never entered: no [scheduleRetry], no rebuild,
+     * no source switch, no MPV handoff, no error card.
+     *
+     * The playhead and length are read SYNCHRONOUSLY, in the error handler,
+     * while the player is still alive - the error-time position (99.28%), never
+     * the stored resume point. The guards are [saveProgress]'s own: a live
+     * channel never completes, and a session with no title/episode identity has
+     * nothing to file a completion against.
+     *
+     * Returns true when the completion was filed, so `onPlayerError` returns
+     * without touching the ladder.
+     */
+    private fun fileErrorTailCompletion(): Boolean {
+        if (isLiveChannel || parentId.isBlank() || historyId.isBlank()) return false
+        val player = exoPlayer ?: return false
+        val pos = runCatching { player.currentPosition }.getOrDefault(0L).coerceAtLeast(0L)
+        val rawDur = runCatching { player.duration }.getOrDefault(C.TIME_UNSET)
+        val dur = if (rawDur == C.TIME_UNSET || rawDur <= 0L) null else rawDur
+        // The same ratio the save below judges with, not a threshold of its
+        // own: an error the save would have called "finished" is finished here.
+        if (!errorAtCompletionThreshold(pos, dur ?: 0L, COMPLETION_THRESHOLD_RATIO)) return false
+        Log.w(
+            "PLAYER_RETRY",
+            "playback error at the tail ($pos of ${dur}ms) \u2014 filing the completion " +
+                "instead of rebuilding"
+        )
+        PlaybackEngineTrace.note(
+            PlaybackEngineTrace.describe(
+                cause = "source error inside the completion threshold",
+                detail = "at $pos of ${dur}ms \u2014 completion filed, no rebuild"
+            )
+        )
+        saveProgress(reason = "error-tail-completion", forceCompleted = true)
+        routeAfterCompletedEnd()
+        return true
+    }
+
+    /**
+     * The end-of-episode state, reached after the completion has been written:
+     * the sleep timer's own ending, the up-next countdown let go, the panel
+     * raised.
+     *
+     * Shared by the natural end ([onPlaybackEnded]) and a source error that
+     * landed in the tail ([fileErrorTailCompletion]) so the two cannot drift -
+     * both arrive here with the completion already filed. A panel that is
+     * already up (the credits trigger fired before the error, which is what the
+     * field log shows) simply stays: [showEndPanels] raises it once per
+     * session.
+     */
+    private fun routeAfterCompletedEnd() {
         // A sleep timer armed to stop at the end of this episode is honored
         // here, where the episode really is over: no card, no auto-advance,
-        // just out. The completion write above is what the history keeps.
+        // just out. The completion write already made is what the history
+        // keeps.
         if (sleepTimerBlocksAutoAdvance(SleepTimer.state.value)) {
             exitForSleepTimer(savePartialProgress = false)
             return
@@ -12261,11 +12400,20 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     override fun onStop() {
         super.onStop()
         EpgWriteGate.setPlayerActive(false)
-        // Playback is over for this screen, so the panel goes back to the mode
-        // the rest of the TV interface expects. Deliberately not in onPause:
-        // Picture-in-Picture leaves the video running, and the matched rate is
-        // still the right one there.
-        frameRateMatcher?.release()
+        // Playback is over for this SCREEN, so the panel goes back to the mode
+        // the rest of the TV interface expects - but only when this session is
+        // actually ending. A stop is not always an exit: a pause that turns the
+        // screen off, a brief trip away, or an engine switch (which stops this
+        // activity without finishing it) all come back to the same playback.
+        // Restoring there made the resume re-request the film rate — a full
+        // 60 → 24 switch racing the player rebuild, where the open-time switch
+        // happens before decode and is smooth (field, 2026-10-18). Leaving the
+        // panel alone lets the re-arm find the best mode already engaged, which
+        // is a true no-op. Deliberately not in onPause: Picture-in-Picture leaves
+        // the video running, and the matched rate is still the right one there.
+        // A confirm still waiting is dropped either way: a backstop posted at
+        // open has no business firing while the player is not drawing.
+        if (isFinishing) frameRateMatcher?.release() else frameRateMatcher?.cancelPending()
         // Release session & player early so the next NativePlayerActivity
         // doesn't collide with a stale MediaSession ID.
         handler.removeCallbacksAndMessages(null)
@@ -12491,6 +12639,10 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         // callback re-establishes it.
         currentCodecs = null
         streamDeclaredDvCodec = null
+        // The keep-DV annotation is per track too: a P8 title's fallback label
+        // surviving into the next source is the same stale-identity class of
+        // bug the two lines above exist for.
+        dvRpuStripKeepDvActive = false
         // A manual source switch is a fresh, actively-playing load — drop
         // the actor-return pause semantics so the new source starts
         // playing like any other switch.

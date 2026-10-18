@@ -7193,6 +7193,19 @@ private suspend fun calculateEpisodesRemaining(
                         }
                         .toList()
 
+                // CATALOG ORDER, by the rail key each load will publish under
+                // (see catalogOrderByKey). This is the order the viewer set in
+                // the add-ons screen, and it is the order Home has to draw its
+                // rails in - but the fan-out below fetches concurrently, so
+                // the order the rails RESOLVE in is a property of the network.
+                // Both the progressive insert and the final publish read this
+                // map, so the rail list is the catalog order throughout and
+                // never settles into fetch-completion order. Without it every
+                // rebuild (a manual add-on refresh rebuilds the whole list)
+                // reshuffled the catalogs on Home, which is the "catalog order
+                // on Home is switched up after Refresh all" report.
+                val catalogOrder = catalogOrderByKey(pendingCatalogs)
+
                 // Progressive publication: each catalog rail lands in the
                 // UI the moment it resolves, in catalog order — the screen
                 // no longer waits for the slowest addon before painting.
@@ -7332,36 +7345,55 @@ private suspend fun calculateEpisodesRemaining(
                                                 buildStartedAtMs
                                         )
                                     }
-                                    // Append just this rail right after the
-                                    // last catalog rail currently shown, so
-                                    // rails appear progressively in catalog
-                                    // order without republishing the whole
-                                    // batch (the earlier shared-list append
-                                    // made rails jump/duplicate visually).
+                                    // Stream just this rail into its CATALOG
+                                    // slot, so rails appear progressively in
+                                    // catalog order without republishing the
+                                    // whole batch (the earlier shared-list
+                                    // append made rails jump/duplicate
+                                    // visually).
+                                    //
+                                    // Its slot is the position of the first
+                                    // rail already on screen that belongs
+                                    // LATER in the catalog order. Appending it
+                                    // after the last rail that had resolved
+                                    // (what this did) put the rows on screen
+                                    // in resolution order, and the rows then
+                                    // had to be re-ordered under the viewer
+                                    // when the build finished.
+                                    //
+                                    // A rail the order does not name - a
+                                    // pinned/app-built row from the previous
+                                    // build, or a row for a catalog that is no
+                                    // longer loaded - never triggers the
+                                    // insert, so the new rail lands after it.
+                                    // That keeps the app-built rows at the head
+                                    // of Home, exactly as the final publish
+                                    // draws them.
                                     _rails.update { current ->
                                         val without =
                                             current.filterNot { existing ->
                                                 railKeyOf(existing) == railKeyOf(rail)
                                             }
-                                        if (
-                                            without.isEmpty()
-                                        ) {
-                                            listOf(rail)
+                                        val mine =
+                                            catalogOrder[railKeyOf(rail)]
+                                        val insertAt = if (mine == null) {
+                                            -1
                                         } else {
-                                            val lastCatalogIdx =
-                                                without.indexOfLast { existing ->
-                                                    railKeyOf(existing) in
-                                                        collected.map { railKeyOf(it) }
-                                                }
-                                            if (
-                                                lastCatalogIdx < 0
-                                            ) {
-                                                without + rail
-                                            } else {
-                                                without.subList(0, lastCatalogIdx + 1) +
-                                                    listOf(rail) +
-                                                    without.subList(lastCatalogIdx + 1, without.size)
+                                            without.indexOfFirst { existing ->
+                                                val theirs =
+                                                    catalogOrder[railKeyOf(existing)]
+                                                theirs != null && theirs > mine
                                             }
+                                        }
+                                        if (insertAt < 0) {
+                                            without + rail
+                                        } else {
+                                            without.subList(0, insertAt) +
+                                                listOf(rail) +
+                                                without.subList(
+                                                    insertAt,
+                                                    without.size
+                                                )
                                         }
                                     }
                                 }
@@ -7401,8 +7433,15 @@ private suspend fun calculateEpisodesRemaining(
                     android.os.SystemClock.elapsedRealtime() - buildStartedAtMs
                 )
 
+                // The persistent order: the pinned/app-built rows Home leads
+                // with, then the catalog rails in CATALOG order. `collected`
+                // holds them in fetch-completion order, which is a property of
+                // the network rather than of the viewer's arrangement - and
+                // this list is what Home lays the unarranged rails out by
+                // (see KBHomeSlots.buildMergedEntries: the rail list IS the
+                // default order).
                 val finalRails =
-                    pinned + collected
+                    pinned + orderCatalogRails(collected, catalogOrder)
 
                 // Stale-profile guard: the profile changed while this build
                 // was in flight, so these rows belong to the profile the user
@@ -7724,12 +7763,13 @@ private suspend fun calculateEpisodesRemaining(
      *
      * Exists so a rail's identity is knowable before the rail is built, which is
      * what [previousLandscapeArt] needs to hand a rebuilding rail the artwork of
-     * the one it is replacing.
+     * the one it is replacing - and what the catalog-order map is keyed by
+     * before any rail exists at all (see [catalogOrderByKey]). One spelling, in
+     * [catalogRailKey], so a rail's published order can never be computed
+     * against a different identity than the rail itself carries.
      */
-    private fun railKeyOf(addonName: String, catalogId: String?, type: String): String {
-
-        return addonName + "::" + catalogId + "::" + type
-    }
+    private fun railKeyOf(addonName: String, catalogId: String?, type: String): String =
+        catalogRailKey(addonName, catalogId, type)
 
 
     /**

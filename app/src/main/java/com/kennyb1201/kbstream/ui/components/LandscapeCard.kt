@@ -57,6 +57,15 @@ import com.kennyb1201.kbstream.ui.theme.OswaldFamily
  * artwork, which carries no number (see `LandscapeArtRequest.tmdbOnly`), so the
  * number is drawn here — top-left, the one corner the logo, the title and the
  * watched badge do not already own.
+ *
+ * The corner clearlogo is drawn through [BrandMarkImage], not as a plain image.
+ * A clearlogo is a wordmark on transparency, and many are drawn in BLACK ink for
+ * a light background: dropped onto this card's near-black corner they rendered
+ * as a smudge nobody could read (field report, 2026-10-18). [BrandMarkImage]
+ * samples the mark once and whitens a dark, colorless one, leaving colored and
+ * already-light marks exactly as the artist drew them, and reports a mark it
+ * cannot draw at all (a blank plate, artwork that never arrives) so the card
+ * falls back to the corner title instead of an empty slot.
  */
 @Composable
 fun LandscapeCard(
@@ -93,10 +102,12 @@ fun LandscapeCard(
         AppPreferences.getPosterPartialWatchBadge(context)
     }
     val showEyeBadge = isPartiallyWatched && eyeBadgeEnabled
-    // Logo URL present but unloadable (dead TMDB path, CDN 404): fall back
-    // to the plain title text instead of a silent blank corner.
+    // Logo URL present but unloadable (dead TMDB path, CDN 404), or a mark that
+    // cannot be drawn on this surface at all (see BrandMarkImage): fall back to
+    // the plain title text instead of a silent blank corner.
     var logoFailed by remember(logoUrl) { mutableStateOf(false) }
-    val showLogo = !logoUrl.isNullOrBlank() && !logoFailed
+    val logo = logoUrl?.takeIf { it.isNotBlank() }
+    val showLogo = logo != null && !logoFailed
     // ...and a logo URL that exists but has not LOADED is not art on screen
     // either. The corner used to go blank for as long as the fetch took, which
     // on a rail of cards is the same blank corner the 404 above was fixed for -
@@ -220,20 +231,17 @@ fun LandscapeCard(
                 )
             }
 
-            if (showLogo) {
-                AsyncImage(
-                    model = remember(logoUrl) {
-                        ImageRequest.Builder(context)
-                            .data(logoUrl)
-                            .crossfade(false)
-                            .build()
-                    },
+            if (showLogo && logo != null) {
+                // Artwork, like the clearlogo it draws, but this one is drawn for
+                // THIS surface: a black wordmark is whitened rather than left
+                // unreadable on the card's dark corner (see BrandMarkImage).
+                BrandMarkImage(
+                    url = logo,
                     // The corner clearlogo is artwork, not text; give it the
                     // title it stands in for so it is not an unlabeled image.
                     contentDescription = fallbackTitle?.takeIf { it.isNotBlank() },
-                    contentScale = ContentScale.Fit,
-                    onError = { logoFailed = true },
-                    onSuccess = { logoPainted = true },
+                    onDrawn = { logoPainted = true },
+                    onUnusable = { logoFailed = true },
                     modifier = Modifier
                         .align(Alignment.BottomStart)
                         .padding(start = 8.dp, bottom = 6.dp)
