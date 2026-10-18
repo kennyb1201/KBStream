@@ -21,7 +21,16 @@ internal enum class IntroDbMarkerType(val buttonLabel: String) {
 
 internal data class IntroDbStamp(
     val startMs: Long,
-    val endMs: Long,
+    /**
+     * Where the segment stops, or null when the source only says where it
+     * starts. v4's credits and outro rows are commonly
+     * `{"start_ms": 8300000, "end_ms": null}` - a submitter marked where the
+     * credits begin and nobody marked where they stop - and the only end such a
+     * row can have is the end of the file. Resolving that against a duration is
+     * the player's job, since the player is the only part of the app that knows
+     * one: see [AutoSkipRules.segmentEndMs].
+     */
+    val endMs: Long?,
     val type: IntroDbMarkerType,
     /**
      * Crowd-sourced confidence when the source reports one. Null means "not
@@ -34,6 +43,30 @@ internal data class IntroDbStamp(
 internal val introDbHttpClient = BaseHttpClient.derived {
     callTimeout(5, TimeUnit.SECONDS)
 }
+
+/**
+ * TheIntroDB's read surface, pinned to v4.
+ *
+ * v1 is gone and v2/v3 are frozen - they still answer `GET /media`, but from a
+ * copy that gets no fixes and no new fields, and they are being removed. v4 is
+ * the only surface under development, so a client built on v2/v3 is on borrowed
+ * time.
+ *
+ * The bump is nearly transparent: v4 serves the same `GET /media` query and the
+ * same segment arrays. The one identity change is that the body is keyed by
+ * `tvdb_id` and no longer carries `tmdb_id` - and this reader never read
+ * `tmdb_id`, so the version in this URL was the whole migration. `tmdb_id` and
+ * `imdb_id` are still valid REQUEST ids on v4 (resolved server-side, in
+ * `tvdb_id` -> `tmdb_id` -> `imdb_id` order), which is why the id shapes
+ * [fetchIntroDbStamps] already builds keep working.
+ *
+ * `mapping` is deliberately not sent. It converts season/episode numbers that
+ * come from a media server's display order; the numbers here come from TMDB /
+ * add-on metadata, so `default` (the stored TVDB order) is what they already
+ * mean. Sending an order TVDB does not carry for a series is a 400 that would
+ * take the whole lookup down, so a guess would be strictly worse than silence.
+ */
+internal const val INTRO_DB_MEDIA_URL = "https://api.theintrodb.org/v4/media"
 
 /**
  * Millisecond field. Accepts a JSON number (the API's normal shape), a numeric
@@ -88,14 +121,28 @@ private fun JSONObject.readConfidence(): Double? = when (val raw = opt("confiden
     else -> null
 }
 
+/**
+ * Reads one segment row.
+ *
+ * `end_ms` may be absent. A credits or outro row without one is
+ * `{"start_ms": 8300000, "end_ms": null}`: the credits start there and run to
+ * the end of the file, which is what a null [IntroDbStamp.endMs] records. The
+ * same row on any other segment type is not something this app can act on -
+ * an intro with no end is a skip with no target - so it is dropped, exactly as
+ * a row with no start already was.
+ */
 internal fun JSONObject.readIntroDbStamp(type: IntroDbMarkerType): IntroDbStamp? {
     val startMs = readMillisField(this, "start_ms")
         ?: readSecondsField(this, "start_sec")
         ?: return null
+    if (startMs < 0L) return null
     val endMs = readMillisField(this, "end_ms")
         ?: readSecondsField(this, "end_sec")
-        ?: return null
-    if (startMs < 0L || endMs <= startMs) return null
+    if (endMs == null) {
+        val openEnded = type == IntroDbMarkerType.Credits || type == IntroDbMarkerType.Outro
+        return if (openEnded) IntroDbStamp(startMs, null, type, readConfidence()) else null
+    }
+    if (endMs <= startMs) return null
     return IntroDbStamp(startMs, endMs, type, readConfidence())
 }
 
@@ -167,15 +214,33 @@ internal suspend fun fetchIntroDbStamps(
     }
     val episodeQuery = if (hasEpisode) "&season=$season&episode=$episode" else ""
 
-    val media = fetchIntroDbJson("https://api.theintrodb.org/v2/media?$idQuery$episodeQuery")
+    val media = fetchIntroDbJson("$INTRO_DB_MEDIA_URL?$idQuery$episodeQuery")
         ?: return@withContext emptyList()
 
+    readIntroDbMedia(media)
+}
+
+/**
+ * Reads one `/media` body into stamps.
+ *
+ * v4 answers the grouped timestamps as top-level arrays per segment type
+ * (`intro`, `recap`, `credits`, `outro`, `post_credits`, `preview`), exactly as
+ * v3 did - the arrays are the documented shape, and a key with no submissions
+ * for this media is simply absent. The body's media keys (`tvdb_id`, `type`,
+ * `season`, `episode`) are metadata; nothing here needs them, because the
+ * caller already knows which episode it asked about.
+ *
+ * A body that carries no segment arrays reads as no stamps at all, which is
+ * what the two alternative v4 bodies (`list_versions`, and the episode-count
+ * fallback) are: they must not produce markers.
+ */
+internal fun readIntroDbMedia(media: JSONObject): List<IntroDbStamp> {
     fun readArray(key: String, type: IntroDbMarkerType): List<IntroDbStamp> {
         val arr = media.optJSONArray(key) ?: return emptyList()
         return (0 until arr.length()).mapNotNull { arr.optJSONObject(it)?.readIntroDbStamp(type) }
     }
 
-    readArray("intro", IntroDbMarkerType.Intro) +
+    return readArray("intro", IntroDbMarkerType.Intro) +
         readArray("recap", IntroDbMarkerType.Recap) +
         readArray("credits", IntroDbMarkerType.Credits) +
         readArray("outro", IntroDbMarkerType.Outro) +

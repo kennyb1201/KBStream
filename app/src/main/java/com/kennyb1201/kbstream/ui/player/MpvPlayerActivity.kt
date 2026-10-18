@@ -3338,7 +3338,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             .filter {
                 (it.type == IntroDbMarkerType.Credits ||
                     it.type == IntroDbMarkerType.Outro) &&
-                    AutoSkipRules.isSkippableSegment(it)
+                    AutoSkipRules.isSkippableSegment(it, durationMs)
             }
             .minByOrNull { it.startMs }
             ?.startMs
@@ -3977,8 +3977,8 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             bywUi?.isVisible != true
         val matching = if (offers) {
             introDbStamps.firstOrNull { stamp ->
-                positionMs >= stamp.startMs && positionMs < stamp.endMs &&
-                    AutoSkipRules.isSkippableSegment(stamp)
+                AutoSkipRules.isInside(stamp, positionMs) &&
+                    AutoSkipRules.isSkippableSegment(stamp, durationMs)
             }
         } else {
             null
@@ -4007,10 +4007,10 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
             AppPreferences.getAutoSkipIntro(this),
             AppPreferences.getAutoSkipCredits(this)
         )
-        if (!AutoSkipRules.shouldAutoSkip(stamp, settings)) return false
+        if (!AutoSkipRules.shouldAutoSkip(stamp, settings, durationMs)) return false
         if (!autoSkippedSegments.add(AutoSkipRules.key(stamp))) return false
         seekPastSegment(stamp, durationMs)
-        Log.i(TAG, "auto-skipped ${stamp.type.name} ${stamp.startMs}..${stamp.endMs}")
+        Log.i(TAG, "auto-skipped ${stamp.type.name} ${stamp.startMs}..${stamp.endMs ?: "eof"}")
         // Take the prompt down with it: the segment is behind the playhead now,
         // and the button would otherwise linger over the scene after it.
         hideSkipPrompt()

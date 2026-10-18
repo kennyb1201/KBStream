@@ -3790,19 +3790,17 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      * has finished, which means it wins and the button never flashes.
      */
     private fun onIntroStampOffered(stamp: IntroDbStamp) {
+        val durationMs = exoPlayer?.duration ?: 0L
         val settings = AutoSkipRules.Settings(autoSkipIntros, autoSkipCredits)
-        if (!AutoSkipRules.shouldAutoSkip(stamp, settings)) return
+        if (!AutoSkipRules.shouldAutoSkip(stamp, settings, durationMs)) return
         runCatching {
             if (autoSkippedSegments.add(AutoSkipRules.key(stamp))) {
-                val target = AutoSkipRules.targetMs(
-                    stamp,
-                    introDbStamps,
-                    exoPlayer?.duration ?: 0L
-                )
+                val target = AutoSkipRules.targetMs(stamp, introDbStamps, durationMs)
                 exoPlayer?.seekTo(target)
                 Log.i(
                     "INTRO_DB",
-                    "auto-skipped ${stamp.type.name} ${stamp.startMs}..${stamp.endMs} -> $target"
+                    "auto-skipped ${stamp.type.name} ${stamp.startMs}.." +
+                        "${stamp.endMs ?: "eof"} -> $target"
                 )
             }
         }.onFailure { Log.w("INTRO_DB", "auto-skip failed", it) }
@@ -10268,7 +10266,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             .filter {
                 (it.type == IntroDbMarkerType.Credits ||
                     it.type == IntroDbMarkerType.Outro) &&
-                    AutoSkipRules.isSkippableSegment(it)
+                    AutoSkipRules.isSkippableSegment(it, dur)
             }
             .minByOrNull { it.startMs }
             ?.startMs
@@ -11375,10 +11373,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
             // that start at 0 (recaps especially) would otherwise match
             // during the loading splash, when currentPosition is still 0 --
             // the prompt must never appear before the first frame renders.
+            // An open-ended segment is measured against the runtime, and the
+            // runtime is unknown for the first ticks of a session - so the
+            // lookup simply waits for it instead of guessing an end.
+            val durationMs = player.duration.takeIf { it > 0L && it != C.TIME_UNSET } ?: 0L
             val matching = if (player.isPlaying && player.playbackState == Player.STATE_READY) {
                 introDbStamps.firstOrNull { stamp ->
-                    posMs >= stamp.startMs && posMs < stamp.endMs &&
-                        stamp.endMs > stamp.startMs && stamp.endMs - stamp.startMs <= 10 * 60 * 1000L
+                    AutoSkipRules.isInside(stamp, posMs) &&
+                        AutoSkipRules.isSkippableSegment(stamp, durationMs)
                 }
             } else null
             if (matching != activeIntroStamp) {
@@ -12776,10 +12778,13 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     override fun onChromeSkipIntro() {
         val stamp = activeIntroStamp ?: return
         val durationMs = exoPlayer?.duration ?: 0L
+        // An open-ended segment ends where the file does, so its target IS the
+        // runtime; with the runtime unknown there is no target to name.
+        val endMs = AutoSkipRules.segmentEndMs(stamp, durationMs) ?: return
         val targetMs = if (durationMs > 0L && durationMs != C.TIME_UNSET) {
-            stamp.endMs.coerceAtMost(durationMs)
+            endMs.coerceAtMost(durationMs)
         } else {
-            stamp.endMs
+            endMs
         }
         exoPlayer?.seekTo(targetMs)
         activeIntroStamp = null

@@ -582,7 +582,12 @@ class ExternalPlayerActivity : ComponentActivity() {
             }.orEmpty()
             if (isFinishing || isDestroyed) return@launch
 
-            val skipped = AutoSkipRules.handoffSkipTarget(stamps, startPositionMs, skipSettings)
+            val skipped = AutoSkipRules.handoffSkipTarget(
+                stamps,
+                startPositionMs,
+                skipSettings,
+                durationMs
+            )
             val seekTo = skipped?.let { AutoSkipRules.targetMs(it, stamps, durationMs) }
             if (skipped != null && seekTo != null) {
                 // The measurement has to start from the skip, or the intro would
