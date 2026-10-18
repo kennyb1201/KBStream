@@ -1224,6 +1224,13 @@ private fun LeagueBody(
     val upcoming = SportsGameOrder.favoritesFirst(upcomingGames, favoriteKeys)
     val final = SportsGameOrder.favoritesFirst(finalGames, favoriteKeys)
 
+    // The league's identity for the two scroll rules below. `section` is a new
+    // instance on every 30-second poll, so it can never be a key; and both
+    // pseudo-sections the hub draws through this body carry a stable path of
+    // their own (SportsLeagues.FAVORITES, SportsSearchRules.RESULTS_LEAGUE), so
+    // neither can look like "the same league" as a real one.
+    val leaguePath = section.league.path
+
     // Scroll to the live games when they first arrive. The section is drawn
     // before the ESPN poll returns, so its top is UPCOMING; when the live
     // games land a moment later they insert ABOVE what the viewer is looking
@@ -1250,9 +1257,19 @@ private fun LeagueBody(
     // for. Starting false ("nothing has said the list is at the top") also
     // keeps a restored scroll position safe: a body composed with live games
     // already in hand is never scrolled.
-    var atTopBeforeLive by remember { mutableStateOf(false) }
+    //
+    // Keyed on the league, though, and the sampler below is keyed with it: the
+    // verdict belongs to one league's list. Unkeyed, the sample survived a tab
+    // switch - the guard is at the same call site for every league drawn by the
+    // `else` branch - and a new league that already had live games never ran the
+    // sampler at all, so the guard kept the last league's "the viewer scrolled"
+    // verdict forever. The sampler HAS to restart with the guard rather than
+    // only the guard being replaced: a running collector writes through the
+    // state instance it captured, so leaving it on `listState` alone would have
+    // it updating a state the new composition no longer reads.
+    var atTopBeforeLive by remember(leaguePath) { mutableStateOf(false) }
     if (live.isEmpty()) {
-        LaunchedEffect(listState) {
+        LaunchedEffect(listState, leaguePath) {
             snapshotFlow {
                 listState.firstVisibleItemIndex == 0 &&
                     listState.firstVisibleItemScrollOffset == 0
@@ -1262,6 +1279,64 @@ private fun LeagueBody(
     LaunchedEffect(live.isNotEmpty()) {
         if (live.isNotEmpty() && atTopBeforeLive) {
             listState.scrollToItem(0)
+        }
+    }
+
+    // ── Entering a league starts at its top ─────────────────────────
+    //
+    // One list state is shared by every tab (it is owned by the hub above), so
+    // the index the viewer left one league at is carried into the next one
+    // wholesale - and it is an index into a different list. A league entered
+    // here therefore starts at its own top: the LIVE NOW block and the games
+    // the tab was opened for, rather than some offset into its upcoming games.
+    //
+    // The null initial is load-bearing. A FRESH hub composition - Back from the
+    // player disposes this screen - begins with lastLeaguePath null, so the
+    // restore from hubScrollIndex/hubScrollOffset is never clobbered; only an
+    // in-place switch, the same composition node asking about a different path,
+    // scrolls.
+    //
+    // Keyed on the path and not on `section`, which is a new instance on every
+    // 30-second poll and would yank the scroll mid-browse.
+    //
+    // Unconditional, not only when live games are present: the inherited index
+    // came from another league's list, so it is never meaningful in this one.
+    //
+    // The arrival sampler above is deliberately untouched: it governs a game
+    // going live while the viewer is already IN this league, where yanking the
+    // scroll out from under a browsing viewer is still wrong. It now always
+    // samples a list this effect has put at the top, so its answer is trivially
+    // correct for the arrival it exists for.
+    var lastLeaguePath by remember { mutableStateOf<String?>(null) }
+    // Where the D-pad was, and where it has to land after a switch. A switch
+    // replaces every item key in the grid (they are the games' own ids), so the
+    // focused card's node is disposed and its focus goes with it - and a focus
+    // left pointing at a card the list has just scrolled away from is the TV
+    // way this goes wrong. [firstCardFocus] is attached to whichever card leads
+    // the new league, so the cue lands on a card the viewer can see.
+    val firstCardFocus = remember { FocusRequester() }
+    var gridHasFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(leaguePath, listState) {
+        val switched = lastLeaguePath != null && lastLeaguePath != leaguePath
+        lastLeaguePath = leaguePath
+        if (!switched) return@LaunchedEffect
+        // Read BEFORE the scroll and not after: a tab press comes from the tab
+        // row, so that flag is false there and the cards are left alone - and
+        // reading it here keeps the answer from depending on how much the
+        // scroll itself suspended for.
+        val repairFocus = gridHasFocus
+        listState.scrollToItem(0)
+        if (!repairFocus) return@LaunchedEffect
+        // The first card is a freshly composed item, so it is not attached
+        // until it has been laid out: retry across frames and treat the RETURN
+        // VALUE as the test (an unattached requester answers false rather than
+        // throwing - see the hub entry focus above).
+        var landed = false
+        var attempts = 0
+        while (!landed && attempts < HUB_ENTRY_FOCUS_ATTEMPTS) {
+            awaitFrame()
+            landed = runCatching { firstCardFocus.requestFocus() }.getOrDefault(false)
+            attempts++
         }
     }
 
@@ -1275,10 +1350,20 @@ private fun LeagueBody(
     // animation clocks, each recomposing its own card on its own frame.
     val livePulse = rememberLivePulse(pulseEnabled = pulseEnabled)
 
+    // Which group draws the league's first card, so the one requester can be
+    // attached where a switch would actually need it. The grid's own order is
+    // the order these are tested in.
+    val liveLeads = live.isNotEmpty()
+    val tournamentsLead = !liveLeads && section.tournaments.isNotEmpty()
+    val upcomingLeads = !liveLeads && !tournamentsLead && upcoming.isNotEmpty()
+    val finalLeads = !liveLeads && !tournamentsLead && !upcomingLeads && final.isNotEmpty()
+
     HubGrid(
         listState = listState,
         columns = gameColumns,
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier
+            .fillMaxSize()
+            .onFocusChanged { gridHasFocus = it.hasFocus }
     ) {
         if (live.isNotEmpty()) {
             item(key = "header-live", span = { GridItemSpan(maxLineSpan) }) {
@@ -1296,7 +1381,8 @@ private fun LeagueBody(
                 lineupMissing = lineupMissing,
                 matchingDone = matchingDone,
                 onOpenDetail = onOpenDetail,
-                onEditFavorites = onEditFavorites
+                onEditFavorites = onEditFavorites,
+                focusRequester = firstCardFocus
             )
         }
 
@@ -1324,6 +1410,11 @@ private fun LeagueBody(
                     matchingDone = matchingDone,
                     onPlayChannels = onPlayChannels,
                     onOpenDetail = onOpenTournamentDetail,
+                    modifier = if (tournamentsLead && event.id == section.tournaments.first().id) {
+                        Modifier.focusRequester(firstCardFocus)
+                    } else {
+                        Modifier
+                    },
                 )
             }
         }
@@ -1340,7 +1431,8 @@ private fun LeagueBody(
                 lineupMissing = lineupMissing,
                 matchingDone = matchingDone,
                 onOpenDetail = onOpenDetail,
-                onEditFavorites = onEditFavorites
+                onEditFavorites = onEditFavorites,
+                focusRequester = firstCardFocus.takeIf { upcomingLeads }
             )
         }
 
@@ -1356,7 +1448,8 @@ private fun LeagueBody(
                 lineupMissing = lineupMissing,
                 matchingDone = matchingDone,
                 onOpenDetail = onOpenDetail,
-                onEditFavorites = onEditFavorites
+                onEditFavorites = onEditFavorites,
+                focusRequester = firstCardFocus.takeIf { finalLeads }
             )
         }
     }
@@ -1378,6 +1471,11 @@ private fun LeagueBody(
  * Upcoming and final cards take a cell each, so a short last row still holds
  * cards the same width as a full one - a grid cell never stretches to fill the
  * leftover space the way a weighted row did.
+ *
+ * [focusRequester] is handed to the FIRST card only, and only by the group that
+ * leads the league (see [LeagueBody]): it is where the D-pad lands after a
+ * league switch, so it belongs on the card at the top of the grid rather than
+ * on one of the group's own.
  */
 private fun LazyGridScope.gameItems(
     games: List<SportsGame>,
@@ -1389,7 +1487,9 @@ private fun LazyGridScope.gameItems(
     matchingDone: Boolean,
     onOpenDetail: (SportsGame) -> Unit,
     onEditFavorites: (SportsGame) -> Unit,
+    focusRequester: FocusRequester? = null,
 ) {
+    val firstId = games.firstOrNull()?.id
     items(
         items = games,
         key = { it.id },
@@ -1408,7 +1508,11 @@ private fun LazyGridScope.gameItems(
             matchingDone = matchingDone,
             onOpenDetail = onOpenDetail,
             onEditFavorites = { onEditFavorites(game) },
-            modifier = Modifier.fillMaxWidth()
+            modifier = if (focusRequester != null && game.id == firstId) {
+                Modifier.fillMaxWidth().focusRequester(focusRequester)
+            } else {
+                Modifier.fillMaxWidth()
+            }
         )
     }
 }
@@ -2191,6 +2295,7 @@ private fun TournamentCard(
     matchingDone: Boolean,
     onPlayChannels: (gameId: String?, tournamentId: String?, List<IptvChannel>) -> Unit,
     onOpenDetail: (TournamentEvent) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val channel = channels.firstOrNull()
     val playable = channel != null
@@ -2267,7 +2372,7 @@ private fun TournamentCard(
             onClick = { onPlayChannels(null, null, channels) },
             focusedScale = KBFocusRow,
             shape = KBShapeCard,
-            modifier = Modifier.fillMaxWidth()
+            modifier = modifier.fillMaxWidth()
         ) {
             body()
         }
@@ -2283,7 +2388,7 @@ private fun TournamentCard(
             onClick = { onOpenDetail(event) },
             focusedScale = KBFocusRow,
             shape = KBShapeCard,
-            modifier = Modifier.fillMaxWidth()
+            modifier = modifier.fillMaxWidth()
         ) {
             body()
         }

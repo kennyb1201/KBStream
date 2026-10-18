@@ -286,7 +286,12 @@ class SportsHubLayoutContractTest {
         // did.
         assertTrue(
             "the games grid and the standings columns both land through a wrapper that installs it",
-            flat.contains("HubGrid( listState = listState, columns = gameColumns, modifier = Modifier.fillMaxSize() )") &&
+            // The grid's modifier also carries its focus observer now (the
+            // league-entry rule lands the D-pad on the first card after a
+            // switch), so the call is matched at the modifier rather than on
+            // its exact tail - what this pins is that the games body goes
+            // through the wrapper at all.
+            flat.contains("HubGrid( listState = listState, columns = gameColumns, modifier = ") &&
                 // The column wrapper, whose modifier is now the column's own
                 // focus observer PLUS the caller's: the two-column body has to
                 // know which column the viewer is in, because the screen's
