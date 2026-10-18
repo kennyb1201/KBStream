@@ -24,19 +24,28 @@ data class DetailReturnTarget(
 )
 
 /**
- * One-slot handoff from a detail page's rail to itself, across the drill-down
- * it opens. The page records the card on the way out and reads the record back
- * the next time that same title composes.
+ * Handoff from a detail page's rail to itself, across the drill-down it opens.
+ * The page records the card on the way out and reads the record back the next
+ * time that same title composes.
  *
  * Held outside the composition because that is exactly what does not survive
  * the trip: leaving the detail screen disposes it. Read once, by the page it
  * was raised for and no other, and aged out on top of that in case the Back it
  * was waiting for never comes.
+ *
+ * ONE SLOT PER TITLE, not one slot in total, for the reason
+ * [com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus] documents: a single slot
+ * let a chained drill-down (Detail X -> Actor Y -> a second detail page) record
+ * over the record X was still waiting for, so backing out twice reopened X at
+ * the top instead of on the card that was pressed. Keying by `detailKey`
+ * protects the WRITE as well as the read.
  */
 object DetailReturnFocus {
 
-    private var pending: DetailReturnTarget? = null
-    private var recordedAtMs: Long = 0L
+    private class Recorded(val target: DetailReturnTarget, val recordedAtMs: Long)
+
+    /** detailKey -> that title's record. Insertion-ordered, for the size cap. */
+    private val pending = LinkedHashMap<String, Recorded>()
 
     /**
      * Long enough for a filmography to be browsed before coming back, short
@@ -45,30 +54,40 @@ object DetailReturnFocus {
      */
     private const val VALID_FOR_MS = 30 * 60 * 1000L
 
-    /** Records the card a drill-down is being opened from. */
+    /**
+     * How many titles may be waiting at once. A drill-down chain is a handful;
+     * this only stops a pathological session accumulating records nobody will
+     * read.
+     */
+    private const val MAX_PENDING = 8
+
+    /** Records the card a drill-down is being opened from, for that title. */
+    @Synchronized
     fun record(target: DetailReturnTarget) {
-        pending = target
-        recordedAtMs = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
+        prune(now)
+        pending.remove(target.detailKey)
+        pending[target.detailKey] = Recorded(target, now)
+        while (pending.size > MAX_PENDING) {
+            pending.remove(pending.keys.first())
+        }
     }
 
     /**
-     * Reads the record, if it is for [detailKey], and clears it once.
+     * Reads the record for [detailKey], if there is one, and clears it once.
      *
-     * A record for another title is left exactly where it is: a drill-down can
-     * compose a second detail page on the way - a "More Like This" poster opens
-     * one - and that page must not swallow the record the first one is still
-     * waiting for. [DetailReturnTarget.detailKey] is what keeps the two apart.
+     * Records for other titles stay where they are: a drill-down can compose a
+     * second detail page on the way - a "More Like This" poster opens one - and
+     * that page must not swallow the record the first one is still waiting for.
      */
+    @Synchronized
     fun consume(detailKey: String): DetailReturnTarget? {
-        val recorded = pending ?: return null
-        if (
-            recorded.detailKey != detailKey ||
-            System.currentTimeMillis() - recordedAtMs > VALID_FOR_MS
-        ) {
-            return null
-        }
-        pending = null
-        recordedAtMs = 0L
-        return recorded
+        prune(System.currentTimeMillis())
+        return pending.remove(detailKey)?.target
+    }
+
+    /** Drops every aged-out record: stale for the page that raised it too. */
+    private fun prune(now: Long) {
+        pending.entries.removeAll { now - it.value.recordedAtMs > VALID_FOR_MS }
     }
 }

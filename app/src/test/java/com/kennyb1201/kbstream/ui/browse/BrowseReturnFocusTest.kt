@@ -113,6 +113,21 @@ class BrowseReturnFocusTest {
     }
 
     @Test
+    fun `a chained drill-down keeps the first page's record`() {
+        // Tag A -> Detail X -> Studio B -> Detail Y. The studio's press must not
+        // record over the tag's: backing out of Y lands on B's card, then
+        // backing out of X still has to land on A's card.
+        val tagCard = target(screenKey = GENRE_KEY, itemId = "movie:1", position = 7)
+        val studioCard = target(screenKey = STUDIO_KEY, itemId = "movie:2", position = 4)
+        BrowseReturnFocus.record(tagCard)
+        BrowseReturnFocus.record(studioCard)
+
+        assertEquals(studioCard, BrowseReturnFocus.consume(STUDIO_KEY))
+        assertEquals(tagCard, BrowseReturnFocus.consume(GENRE_KEY))
+        assertNull(BrowseReturnFocus.consume(STUDIO_KEY))
+    }
+
+    @Test
     fun `the newest press is the one that comes back`() {
         BrowseReturnFocus.record(target(position = 3))
         BrowseReturnFocus.record(target(itemId = "movie:99", position = 41))
@@ -162,10 +177,12 @@ class BrowseReturnFocusTest {
     private companion object {
         const val GENRE_KEY = "tag:genre:99:movie"
         const val COLLECTION_KEY = "collection:456"
+        const val STUDIO_KEY = "studio:network:213:service:-1"
 
         val KEYS = listOf(
             GENRE_KEY,
             COLLECTION_KEY,
+            STUDIO_KEY,
             "tag:genre:18:movie",
             "tag:keyword:18:movie",
             "tag:genre:18:tv",

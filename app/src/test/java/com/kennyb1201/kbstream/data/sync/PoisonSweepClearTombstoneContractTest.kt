@@ -30,7 +30,7 @@ class PoisonSweepClearTombstoneContractTest {
         val body = functionBody(SWEEP, "private suspend fun clearInProgressInternal(")
         assertTrue(
             "the reset must publish its clear through the outbox",
-            body.contains("SupabaseSync.publishInProgressClear(")
+            body.contains("SupabaseSync.publishClearedRows(")
         )
         assertFalse(
             "a hard cloud DELETE is invisible to a sibling that still holds the row",
@@ -45,7 +45,7 @@ class PoisonSweepClearTombstoneContractTest {
 
     @Test
     fun `the queued writes for those keys go with the tombstones, drops first`() {
-        val body = functionBody(SYNC, "internal fun publishInProgressClear(")
+        val body = functionBody(SYNC, "internal fun publishClearedRows(")
         assertTrue(
             "the history rows must be published",
             body.contains("outbox.replaceKeys(") && body.contains("TABLE_HISTORY,")
@@ -87,7 +87,7 @@ class PoisonSweepClearTombstoneContractTest {
 
     @Test
     fun `the published row keeps the profile scope it was read from`() {
-        val body = functionBody(SYNC, "internal fun publishInProgressClear(")
+        val body = functionBody(SYNC, "internal fun publishClearedRows(")
         // The watched rows arrive with their STORED (already scoped) key and go
         // straight into the outbox; the history ids are bare and are scoped
         // once, by the same rule every other writer uses.
@@ -102,6 +102,38 @@ class PoisonSweepClearTombstoneContractTest {
             "the payload key is the unscoped id, or the sibling reads a key " +
                 "nothing on its side names",
             body.contains("remote.str(\"key\") ?: unscopedKey(storedKey)")
+        )
+    }
+
+    /**
+     * The cross-profile CLOUD pass is the other half of the same story, and it
+     * was the half still issuing real deletes: a sibling that held the row
+     * never learned it was gone and re-uploaded it with its next full push,
+     * and the sweep is one-shot so it never ran again to repair that.
+     */
+    @Test
+    fun `the cloud pass retracts rows instead of deleting them`() {
+        val body = functionBody(SWEEP, "private suspend fun runInternal(")
+        assertFalse(
+            "a real cloud DELETE leaves a sibling's copy and its next push in place",
+            body.contains("deleteCloudKeys(")
+        )
+        assertFalse(
+            "no raw postgrest delete in this pass either",
+            body.contains(".delete {")
+        )
+        assertTrue(
+            "every removed row must travel as the newer write the sync layer understands",
+            body.contains("retractCloudRows(")
+        )
+        assertTrue(
+            "history rows and watched markers both go through it",
+            body.contains("retractCloudRows(TABLE_HISTORY") &&
+                body.contains("retractCloudRows(TABLE_WATCHED")
+        )
+        assertTrue(
+            "the duplicated override blobs need their own empty-set publish",
+            body.contains("SupabaseSync.publishOverrideClears(")
         )
     }
 

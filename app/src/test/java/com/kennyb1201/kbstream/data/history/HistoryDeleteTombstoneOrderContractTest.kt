@@ -95,16 +95,24 @@ class HistoryDeleteTombstoneOrderContractTest {
         val body = src.substring(start, end)
 
         val publish = body.indexOf(".deleteHistoryRows(distinctRemovedIds)")
-        val movieDelete = body.indexOf("historyDao.deleteByIds(distinctRemovedIds)")
-        val seriesDeletes = body.indexOf("historyDao.deleteResumeRowsForParents(parents)")
+        val localDelete = body.indexOf("historyDao.deleteByIds(distinctRemovedIds)")
         assertTrue("the unmark must publish its deletes", publish >= 0)
-        assertTrue("the movie row must be deleted", movieDelete >= 0)
-        assertTrue("the series rows must be deleted", seriesDeletes >= 0)
+        assertTrue("the captured rows must be deleted", localDelete >= 0)
         assertTrue(
             "the tombstone is the durable half of the pair, so it goes FIRST - a local " +
                 "delete that then fails is repaired by the next pull's tombstone, while " +
                 "the other order has nothing to repair it with",
-            publish < movieDelete && publish < seriesDeletes
+            publish < localDelete
+        )
+        // Both paths (movie and series) delete by the ids they captured and
+        // tombstoned. A parent-scoped delete is broader than the capture: a
+        // position tick or completion landing on the same show between the read
+        // and the delete went from the database with no tombstone, so the next
+        // pull put it back.
+        assertFalse(
+            "the delete must name the tombstoned ids, never a parent scope",
+            body.contains("historyDao.deleteResumeRowsForParents(") ||
+                body.contains("historyDao.deleteCompletedForParents(")
         )
     }
 

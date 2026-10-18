@@ -8,6 +8,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,7 +35,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -60,6 +67,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.bestLogoPath
 import com.kennyb1201.kbstream.data.tmdb.tmdbImageOriginal
 import com.kennyb1201.kbstream.ui.actor.ActorScreen
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.addons.AddonsScreen
 import com.kennyb1201.kbstream.ui.collection.CollectionScreen
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
@@ -174,7 +182,18 @@ sealed class Screen {
 
     object Search : Screen()
 
-    object Simkl : Screen()
+    /**
+     * The Simkl connect page. Reached from Settings' tracker row AND from
+     * onboarding's setup card, which are two different "back" destinations —
+     * so it carries its own, exactly like [Addons].
+     *
+     * The header button used to be hardwired to Settings while the hardware
+     * Back key went Home (the `else` arm of the back stack). On the onboarding
+     * path that meant a button labelled "BACK TO HOME" dropping the user into
+     * Settings, skipping the guide they were in the middle of. The two exits
+     * now agree, and both follow where the page was opened from.
+     */
+    data class Simkl(val returnTo: Screen = Home) : Screen()
 
     object Guide : Screen()
 
@@ -1079,16 +1098,40 @@ fun AppRoot(
         }
     val splashHomeLoading: Boolean
     val splashRailsPresent: Boolean
+    val splashRailsStale: Boolean
     if (splashHomeViewModel != null) {
         splashHomeLoading =
             splashHomeViewModel.isLoading.collectAsStateWithLifecycle().value
         splashRailsPresent =
             splashHomeViewModel.rails.collectAsStateWithLifecycle().value.isNotEmpty()
+        // Which profile the on-screen rails were BUILT for, against the one
+        // that is active now. A pick re-arms this splash while the old
+        // profile's rails are still composed (HomeViewModel clears them from
+        // its own collector, a beat later), so for that first frame nothing is
+        // loading and rails are present - the shape the rule reads as "ready".
+        // Those rows are not content the viewer asked to see; they belong to
+        // the identity just left, so they keep the splash up until the new
+        // profile's rails land.
+        //
+        // Ordering: `railsProfileId` only moves when a build PUBLISHES (see
+        // HomeViewModel.loadRailsInternal), so it holds the old id for the
+        // whole switch, and `ProfileManager.setActive` runs before the pick
+        // handler navigates - there is no frame between the two where this is
+        // false while Home is also settled. Null means no profile yet (legacy
+        // scope) and is deliberately never stale.
+        val railsProfileId =
+            splashHomeViewModel.railsProfileId.collectAsStateWithLifecycle().value
+        val activeProfileId =
+            com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile
+                .collectAsStateWithLifecycle().value?.id
+        splashRailsStale = railsProfileId != null && railsProfileId != activeProfileId
     } else {
-        // Not waiting on Home: neither signal is what the splash needs, and a
-        // ViewModel that does not exist cannot be loading anything.
+        // Not waiting on Home: none of these signals are what the splash
+        // needs, and a ViewModel that does not exist cannot be loading
+        // anything.
         splashHomeLoading = false
         splashRailsPresent = false
+        splashRailsStale = false
     }
 
     val splashVisible = splashArmed && launchSplashVisible(
@@ -1096,7 +1139,8 @@ fun AppRoot(
         profilesEmitted = profilesEmitted,
         homeLoading = splashHomeLoading,
         railsPresent = splashRailsPresent,
-        elapsedMs = splashElapsedMs
+        elapsedMs = splashElapsedMs,
+        railsStale = splashRailsStale
     )
 
     // Latched, not derived: once it has handed over, coming back to Home from
@@ -1590,7 +1634,7 @@ fun AppRoot(
     // until "Start Browsing" is tapped.
     if (!onboardingComplete && screen is Screen.Home) {
         OnboardingScreen(                onOpenAddons = { screen = Screen.Addons(returnTo = Screen.Home) },
-            onOpenSimkl = { screen = Screen.Simkl },
+            onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Home) },
             onOpenGuide = { screen = Screen.Guide },
             onFinish = {
                 OnboardingPrefs.setComplete(context, true)
@@ -1849,7 +1893,7 @@ fun AppRoot(
                         screen = Screen.Addons(returnTo = Screen.Settings)
                     }
                 },
-                onOpenSimkl = { screen = Screen.Simkl },
+                onOpenSimkl = { screen = Screen.Simkl(returnTo = Screen.Settings) },
                 onOpenProfiles = {
                     // Real picker so the profile can be SWITCHED here — the
                     // old wiring jumped straight into the editor, which can
@@ -2001,8 +2045,11 @@ fun AppRoot(
         is Screen.Simkl -> {
 
             SimklConnectScreen(
-                onBackToHome = {
-                    screen = Screen.Settings
+                // Same rule as the Add-ons page: the remote's Back already
+                // lands on [Screen.Simkl.returnTo], and the header button now
+                // lands there too instead of always jumping to Settings.
+                onBack = {
+                    screen = stableBackDestination(current.returnTo)
                 }
             )
         }
@@ -3135,10 +3182,59 @@ private fun KidsTimeLockOverlay() {
         }
     }
 
+    // The lock has to TAKE the input, not just paint over it. It used to be a
+    // plain `Box` with a background and nothing else, so when the lock engaged
+    // the previously focused control UNDERNEATH kept focus: D-pad presses went
+    // on driving the covered screen (blind navigation, opening screens and
+    // settings) and taps passed straight through. The only focusable node the
+    // overlay had was the parent-PIN field, which nothing ever requested — so a
+    // parent picking up the remote had to D-pad-hunt from a hidden node to
+    // reach it. Playback itself is still ended by `KidsTimeGuard.enforceLock`
+    // in the player Activities; this is the shell's half.
+    val hasPinField = profile != null &&
+        com.kennyb1201.kbstream.data.sync.ProfileManager.hasPin(profile)
+    val lockRoot = remember { FocusRequester() }
+    val pinField = remember { FocusRequester() }
+    // Whether the OVERLAY ITSELF holds focus (the no-PIN case), which is what
+    // decides if the key handler below swallows the press. It must not swallow
+    // while the PIN field has focus, or the digits would never reach it.
+    var lockRootFocused by remember { mutableStateOf(false) }
+    LaunchedEffect(lockState.locked, hasPinField) {
+        // Verified retry: `requestFocus()` returns false for a node that has not
+        // been laid out yet, and this effect can run before the overlay's first
+        // layout pass.
+        landFocusOn(if (hasPinField) pinField else lockRoot)
+    }
+
+    // Back must not walk out from under the veil either (the screen underneath
+    // would pop to Home). The only ways out are the PIN or the lock expiring.
+    BackHandler(enabled = true) { }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(KBVoid.copy(alpha = 0.97f))
+            // Focus lands here when the profile has no PIN (nothing else in the
+            // overlay can take it), and the key handler swallows whatever the
+            // focused child did not consume, so nothing behind the veil can be
+            // driven. The tap handler does the same for touch, which used to
+            // pass through the non-consuming Box.
+            .focusRequester(lockRoot)
+            .focusable()
+            .onFocusChanged { state ->
+                lockRootFocused = state.isFocused
+                // With a PIN on screen the field is the only place input can
+                // go; the root must not become a dead end a D-pad press can
+                // fall into (it would then swallow the digits).
+                if (state.isFocused && hasPinField) {
+                    runCatching { pinField.requestFocus() }
+                }
+            }
+            .onKeyEvent { lockRootFocused }
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null
+            ) { }
     ) {
         Column(
             modifier = Modifier.align(Alignment.Center),
@@ -3183,9 +3279,11 @@ private fun KidsTimeLockOverlay() {
                         pinError = false
                     },
                     placeholder = "••••",
+                    focusRequester = pinField,
                     keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword,
                     visualTransformation =
-                        androidx.compose.ui.text.input.PasswordVisualTransformation()
+                        androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                    keepFocusOnDone = true
                 )
                 if (pinError) {
                     Text(

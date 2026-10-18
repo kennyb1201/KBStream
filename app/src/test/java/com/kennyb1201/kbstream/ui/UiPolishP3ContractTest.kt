@@ -256,7 +256,11 @@ class UiPolishP3ContractTest {
             "every action is a KBButton now",
             !simkl.contains("KBCard(") &&
                 simkl.contains("KBButton(label = \"REFRESH\"") &&
-                simkl.contains("KBButton(label = \"BACK TO HOME\"")
+                // "BACK", not "BACK TO HOME": the page carries its own
+                // returnTo now (Settings' tracker row vs onboarding's card),
+                // and both the button and the hardware Back follow it - a
+                // label naming Home was a lie on the Settings path.
+                simkl.contains("KBButton(label = \"BACK\"")
         )
         assertTrue(
             "and DISCONNECT carries the danger affordance it was missing",

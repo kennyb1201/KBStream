@@ -339,7 +339,34 @@ internal object P5ColorShader {
     }
 
     /**
-     * Uploads one plane. 8-bit → GL_LUMINANCE texture `stride` wide;
+     * Whether the CURRENT EGL context is a GLES 3 one, as reported by the GL
+     * thread when the surface was created (see [setGles3Context]).
+     *
+     * Deliberately not [hasGles3]: that answers whether the GLES30 API surface
+     * exists on the device, and on any modern box it does - but the upload path
+     * has to match the context the textures were allocated in, not the API the
+     * APK could call.
+     */
+    @Volatile
+    private var gles3Context = false
+
+    /** Records the context version of the surface that just became current. */
+    fun setGles3Context(isGles3: Boolean) {
+        gles3Context = isGles3
+    }
+
+    /**
+     * Uploads one plane.
+     *
+     * 8-bit → a single-channel byte texture `stride` wide: GL_R8/GL_RED on a
+     * GLES 3 context, GL_LUMINANCE on a GLES 2 one. The 8-bit branch used to
+     * ask for GL_LUMINANCE unconditionally, and GL_LUMINANCE is NOT a valid
+     * SIZED internal format in ES 3.0 - the upload failed with INVALID_ENUM,
+     * the texture stayed incomplete, and the whole 8-bit P5 path rendered
+     * black/garbage on every GLES3-capable box (which is what the view creates
+     * whenever [hasGles3]). The fragment shader samples `.r`, so R8 is the same
+     * value there. GL_LUMINANCE stays for a genuine GLES 2 context.
+     *
      * 10-bit → GLES30 GL_R16 texture `stride / 2` samples wide (the plane
      * holds little-endian 16-bit words with the 10-bit value in the high
      * bits, so the normalized 16-bit read equals the PQ sample directly).
@@ -348,14 +375,18 @@ internal object P5ColorShader {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0 + index)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texIds[index])
         plane.position(0)
-        if (tenBit) {
-            GLES30.glTexImage2D(
+        when {
+            tenBit -> GLES30.glTexImage2D(
                 GLES20.GL_TEXTURE_2D, 0, GL_R16,
                 stride / 2, height, 0,
                 GLES30.GL_RED, GLES30.GL_UNSIGNED_SHORT, plane
             )
-        } else {
-            GLES20.glTexImage2D(
+            gles3Context -> GLES30.glTexImage2D(
+                GLES20.GL_TEXTURE_2D, 0, GLES30.GL_R8,
+                stride, height, 0,
+                GLES30.GL_RED, GLES20.GL_UNSIGNED_BYTE, plane
+            )
+            else -> GLES20.glTexImage2D(
                 GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE,
                 stride, height, 0,
                 GLES20.GL_LUMINANCE, GLES20.GL_UNSIGNED_BYTE, plane

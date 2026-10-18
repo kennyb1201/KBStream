@@ -242,6 +242,91 @@ class LaunchSplashWiringContractTest {
         )
     }
 
+    /**
+     * The reported profile-switch bug, at the seam a JVM test cannot press.
+     *
+     * Arming happens in the picker's `onSelect`, at a moment when the OLD
+     * profile's rails are still composed and nothing is loading. Without a stale
+     * signal in the rule, that first composition reads as "ready", the latch
+     * disarms, and the viewer gets the skeleton stack one frame later. These
+     * assertions fail on exactly that un-fixed shape.
+     */
+    @Test
+    fun `a profile switch is covered until the new profile's rails land`() {
+        val activity = flat(source("com/kennyb1201/kbstream/MainActivity.kt"))
+        assertTrue(
+            "the splash has to read which profile Home's rails were built for, or " +
+                "the previous profile's rows still count as content",
+            activity.contains(
+                "splashHomeViewModel.railsProfileId.collectAsStateWithLifecycle()"
+            )
+        )
+        assertTrue(
+            "and compare that with the profile that is active now",
+            activity.contains("com.kennyb1201.kbstream.data.sync.ProfileManager.activeProfile") &&
+                activity.contains("activeProfileId")
+        )
+        assertTrue(
+            "null means no profile yet (legacy scope), which is never stale - only " +
+                "rails built for a DIFFERENT profile are",
+            activity.contains("railsProfileId != null && railsProfileId != activeProfileId")
+        )
+        assertTrue(
+            "the verdict reaches the shared, tested rule rather than an inline copy",
+            activity.contains("railsStale = splashRailsStale")
+        )
+        assertTrue(
+            "and the pick handler still re-arms on the way into Home, which is the " +
+                "beat those rails exist to cover",
+            activity.contains("if (destination is Screen.Home)") &&
+                activity.contains("splashTarget = LaunchSplashTarget.HOME") &&
+                activity.contains("splashArmKey += 1")
+        )
+    }
+
+    /**
+     * The loading indicator the amendment added, pinned the same way: small and
+     * brass and still under reduced motion, and NOT the big centred spinner the
+     * player uses for a mid-playback rebuffer.
+     */
+    @Test
+    fun `the Compose splash draws a small loading ring under the wordmark`() {
+        val splash = flat(source("com/kennyb1201/kbstream/ui/components/LaunchSplash.kt"))
+        assertTrue(
+            "the splash needs its own loading signal - the logo's alpha pulse reads " +
+                "as branding",
+            splash.contains("CircularProgressIndicator(")
+        )
+        assertTrue(
+            "small on purpose: the big centred spinner means \"the video is " +
+                "buffering\", so the splash must not borrow that signal",
+            splash.contains("private val SpinnerSize = 18.dp") &&
+                splash.contains("Modifier.size(SpinnerSize)")
+        )
+        assertTrue(
+            "brass, so it reads as part of the wordmark block rather than a second " +
+                "colour on the splash",
+            splash.contains("color = KBAccent")
+        )
+        assertTrue(
+            "reduced motion holds the ring still, like the pulse",
+            splash.contains("if (rememberReducedMotion())") &&
+                splash.contains("progress = { StillProgress }")
+        )
+        assertTrue(
+            "it is emitted under the wordmark, inside the Compose half - the " +
+                "window background stays logo-only, so nothing shifts at the handoff",
+            splash.indexOf("Spacer(Modifier.height(SpinnerGap))") >
+                splash.indexOf("text = \"KBStream\"")
+        )
+        assertTrue(
+            "and the mark's centring offset counts the ring, or adding it would move " +
+                "the mark away from where the window drew it",
+            splash.contains("offset(y = TrailingBlock / 2)") &&
+                splash.contains("SpinnerGap + SpinnerSize")
+        )
+    }
+
     @Test
     fun `the splash is drawn above the screen transition container`() {
         val activity = source("com/kennyb1201/kbstream/MainActivity.kt")

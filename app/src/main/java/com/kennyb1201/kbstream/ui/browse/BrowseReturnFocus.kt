@@ -41,14 +41,22 @@ data class BrowseReturnTarget(
 )
 
 /**
- * One-slot handoff from a browse page to itself, across the Detail page it
- * opens. The page records the card on the way out and reads the record back the
- * next time that same page composes.
+ * Handoff from a browse page to itself, across the Detail page it opens. The
+ * page records the card on the way out and reads the record back the next time
+ * that same page composes.
  *
  * Held outside the composition because that is exactly what does not survive
  * the trip: leaving the browse screen disposes it. Read once, by the page it was
  * raised for and no other, and aged out on top of that in case the Back it was
  * waiting for never comes.
+ *
+ * ONE SLOT PER PAGE, not one slot in total. A single slot made a chained
+ * drill-down lose the first page's record: Tag A -> Detail X -> Studio B ->
+ * Detail Y recorded the studio's card over the tag's, so backing all the way out
+ * reopened Tag A at the top instead of on the card that was pressed. The
+ * `screenKey` only protected READING another page's record, never WRITING over
+ * it. Keyed records make each page's record independent, and the garbage is
+ * bounded by age ([VALID_FOR_MS]) and by [MAX_PENDING].
  *
  * The same shape as the detail page's own DetailReturnFocus, which does this for
  * its drill-downs; the two are deliberately separate records, because a browse
@@ -56,8 +64,10 @@ data class BrowseReturnTarget(
  */
 object BrowseReturnFocus {
 
-    private var pending: BrowseReturnTarget? = null
-    private var recordedAtMs: Long = 0L
+    private class Recorded(val target: BrowseReturnTarget, val recordedAtMs: Long)
+
+    /** screenKey -> that page's record. Insertion-ordered, for the size cap. */
+    private val pending = LinkedHashMap<String, Recorded>()
 
     /**
      * Long enough for a Detail page to be browsed before coming back, short
@@ -66,34 +76,44 @@ object BrowseReturnFocus {
      */
     private const val VALID_FOR_MS = 30 * 60 * 1000L
 
-    /** Records the card a Detail page is being opened from. */
+    /**
+     * How many pages may be waiting at once. A drill-down chain is a handful;
+     * this only stops a pathological session accumulating records nobody will
+     * read.
+     */
+    private const val MAX_PENDING = 8
+
+    /** Records the card a Detail page is being opened from, for that page. */
+    @Synchronized
     fun record(target: BrowseReturnTarget) {
-        pending = target
-        recordedAtMs = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
+        prune(now)
+        // Re-insert so this page's record is the newest for the size cap.
+        pending.remove(target.screenKey)
+        pending[target.screenKey] = Recorded(target, now)
+        while (pending.size > MAX_PENDING) {
+            pending.remove(pending.keys.first())
+        }
     }
 
     /**
-     * Reads the record, if it is for [screenKey], and clears it once.
+     * Reads the record for [screenKey], if there is one, and clears it once.
      *
-     * A record for another page is left exactly where it is: a title opened
-     * from one browse page can open another (a "More Like This" poster, a
-     * studio link), and that page must not swallow the record this one is still
-     * waiting for. [BrowseReturnTarget.screenKey] is what keeps the two apart -
-     * which is also what makes opening a DIFFERENT genre start at the top.
+     * Records for other pages stay where they are: a title opened from one
+     * browse page can open another (a "More Like This" poster, a studio link),
+     * and that page must not swallow the record the first one is still waiting
+     * for. [BrowseReturnTarget.screenKey] is what keeps them apart - which is
+     * also what makes opening a DIFFERENT genre start at the top.
      */
+    @Synchronized
     fun consume(screenKey: String): BrowseReturnTarget? {
-        val recorded = pending ?: return null
-        // An aged-out record is dropped whichever page asks next - it is stale
-        // for the page that raised it too.
-        if (System.currentTimeMillis() - recordedAtMs > VALID_FOR_MS) {
-            pending = null
-            recordedAtMs = 0L
-            return null
-        }
-        if (recorded.screenKey != screenKey) return null
-        pending = null
-        recordedAtMs = 0L
-        return recorded
+        prune(System.currentTimeMillis())
+        return pending.remove(screenKey)?.target
+    }
+
+    /** Drops every aged-out record: stale for the page that raised it too. */
+    private fun prune(now: Long) {
+        pending.entries.removeAll { now - it.value.recordedAtMs > VALID_FOR_MS }
     }
 }
 

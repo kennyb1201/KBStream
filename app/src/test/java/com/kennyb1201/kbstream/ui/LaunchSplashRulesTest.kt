@@ -14,11 +14,17 @@ import org.junit.Test
  * that have not landed — plus the one case that is deliberately NOT a beat: a
  * load that never finishes, where holding the logo would trap the viewer with no
  * way forward.
+ *
+ * The stale-rail rows are the profile-switch half. A pick re-arms the splash
+ * while the PREVIOUS profile's rails are still on screen and nothing is loading
+ * yet, so "not loading + rails present" is exactly the shape the rule used to
+ * read as ready — and the latch disarmed on that first frame, before the switch
+ * propagated. Rails built for another profile are not content.
  */
 class LaunchSplashRulesTest {
 
     /**
-     * One row of the table: the five inputs, and whether the splash is still
+     * One row of the table: the six inputs, and whether the splash is still
      * covering the screen.
      */
     private data class Row(
@@ -29,6 +35,7 @@ class LaunchSplashRulesTest {
         val elapsedMs: Long,
         val expected: Boolean,
         val why: String,
+        val railsStale: Boolean = false,
     )
 
     private val table = listOf(
@@ -108,6 +115,75 @@ class LaunchSplashRulesTest {
             why = "settled with rails: nothing left to cover"
         ),
 
+        // --- Profile switch: rails that belong to the profile being left ------
+        Row(
+            target = LaunchSplashTarget.HOME,
+            profilesEmitted = true,
+            homeLoading = false,
+            railsPresent = true,
+            elapsedMs = 0,
+            expected = true,
+            why = "the reported bug: a pick has re-armed the splash and the OLD " +
+                "profile's rails are still composed, so nothing is loading yet - " +
+                "but those rows are not this viewer's content",
+            railsStale = true
+        ),
+        Row(
+            target = LaunchSplashTarget.HOME,
+            profilesEmitted = true,
+            homeLoading = false,
+            railsPresent = false,
+            elapsedMs = 0,
+            expected = true,
+            why = "the switch's clear landed before the new build started: still " +
+                "stale, still covered",
+            railsStale = true
+        ),
+        Row(
+            target = LaunchSplashTarget.HOME,
+            profilesEmitted = true,
+            homeLoading = true,
+            railsPresent = true,
+            elapsedMs = 0,
+            expected = true,
+            why = "mid-switch with the old rails still painted and the new load " +
+                "running: covered by both halves of the condition",
+            railsStale = true
+        ),
+        Row(
+            target = LaunchSplashTarget.HOME,
+            profilesEmitted = true,
+            homeLoading = true,
+            railsPresent = false,
+            elapsedMs = 0,
+            expected = true,
+            why = "the same profile's rails landing: loading with nothing on " +
+                "screen, exactly as on a cold launch",
+            railsStale = false
+        ),
+        Row(
+            target = LaunchSplashTarget.HOME,
+            profilesEmitted = true,
+            homeLoading = false,
+            railsPresent = true,
+            elapsedMs = 0,
+            expected = false,
+            why = "the new profile's rails have landed, so the ids match again " +
+                "and there is nothing left to cover",
+            railsStale = false
+        ),
+        Row(
+            target = LaunchSplashTarget.PROFILE_PICKER,
+            profilesEmitted = true,
+            homeLoading = false,
+            railsPresent = true,
+            elapsedMs = 0,
+            expected = false,
+            why = "stale rails are a Home input only: Who's Watching is dismissed " +
+                "by its own list and must not be held by Home state",
+            railsStale = true
+        ),
+
         // --- The failsafe ---------------------------------------------------
         Row(
             target = LaunchSplashTarget.HOME,
@@ -145,6 +221,28 @@ class LaunchSplashRulesTest {
             expected = false,
             why = "the failsafe outranks EVERY target, including the profile list"
         ),
+        Row(
+            target = LaunchSplashTarget.HOME,
+            profilesEmitted = true,
+            homeLoading = false,
+            railsPresent = true,
+            elapsedMs = LAUNCH_SPLASH_TIMEOUT_MS - 1,
+            expected = true,
+            why = "a switch that is genuinely slow keeps the splash right up to " +
+                "the deadline, however stale its rails are",
+            railsStale = true
+        ),
+        Row(
+            target = LaunchSplashTarget.HOME,
+            profilesEmitted = true,
+            homeLoading = false,
+            railsPresent = true,
+            elapsedMs = LAUNCH_SPLASH_TIMEOUT_MS,
+            expected = false,
+            why = "and stale rails do NOT outrank the failsafe: an airplane-mode " +
+                "switch hands the viewer the retry UI at the deadline",
+            railsStale = true
+        ),
     )
 
     @Test
@@ -154,14 +252,15 @@ class LaunchSplashRulesTest {
                 "row $index (${row.why}): target=${row.target} " +
                     "profilesEmitted=${row.profilesEmitted} " +
                     "homeLoading=${row.homeLoading} railsPresent=${row.railsPresent} " +
-                    "elapsedMs=${row.elapsedMs}",
+                    "railsStale=${row.railsStale} elapsedMs=${row.elapsedMs}",
                 row.expected,
                 launchSplashVisible(
                     target = row.target,
                     profilesEmitted = row.profilesEmitted,
                     homeLoading = row.homeLoading,
                     railsPresent = row.railsPresent,
-                    elapsedMs = row.elapsedMs
+                    elapsedMs = row.elapsedMs,
+                    railsStale = row.railsStale
                 )
             )
         }
@@ -195,6 +294,37 @@ class LaunchSplashRulesTest {
                 )
             )
         }
+    }
+
+    /**
+     * The profile-switch bug stated on its own, so a regression fails here with
+     * the report's own shape rather than only as a table row: the first frame
+     * after a pick has the OLD profile's rails on screen and nothing loading.
+     */
+    @Test
+    fun `rails from the previous profile keep the splash up`() {
+        assertTrue(
+            "a pick must not hand the viewer the profile they just left",
+            launchSplashVisible(
+                target = LaunchSplashTarget.HOME,
+                profilesEmitted = true,
+                homeLoading = false,
+                railsPresent = true,
+                elapsedMs = 0,
+                railsStale = true
+            )
+        )
+        assertFalse(
+            "and once the new profile's rails are up it hands over immediately",
+            launchSplashVisible(
+                target = LaunchSplashTarget.HOME,
+                profilesEmitted = true,
+                homeLoading = false,
+                railsPresent = true,
+                elapsedMs = 0,
+                railsStale = false
+            )
+        )
     }
 
     /**

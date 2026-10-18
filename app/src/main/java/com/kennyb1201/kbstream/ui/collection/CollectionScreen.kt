@@ -159,7 +159,12 @@ fun CollectionScreen(
         collectionBrowseScreenKey(collectionId)
     }
     val rowState = rememberLazyListState()
-    var returnTarget by remember {
+    // PER COLLECTION, like the actor page's record (see ActorScreen): this
+    // composable is one page for every collection, so a page opened FROM
+    // another one reuses it and an unkeyed record would be the previous
+    // collection's card, tried and budgeted against a rail that is not here.
+    // Unreachable while no collection links to another; cheap hardening.
+    var returnTarget by remember(collectionId) {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
     val returnFocusRequester = remember { FocusRequester() }

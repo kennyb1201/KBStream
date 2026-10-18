@@ -1165,6 +1165,21 @@ Log.d(
                     // otherwise land on top of the cleared state.
                     upcomingBuildEpoch += 1
 
+                    // Drop the RETURN state too: it belongs to the profile being
+                    // left. Home is activity-scoped, so this ViewModel survives
+                    // the ProfilePicker round-trip, and without this the switch
+                    // comes back as a RETURN (not a fresh entry) scrolled to the
+                    // previous profile's offset with focus on the card they last
+                    // pressed. Card keys are profile-independent TMDB ids, so the
+                    // remembered key is very often present on the new profile's
+                    // rails and the restore effect lands on it. Resetting
+                    // [homeEntered] also re-arms the fresh-entry Continue
+                    // Watching head landing, which is gated on it.
+                    homeEntered = false
+                    lastFocusedRailItemKey = null
+                    railScrollIndex = 0
+                    railScrollOffset = 0
+
                     // A previous profile's error message must not sit under
                     // the new profile's rails while its build is in flight.
                     _error.value = null

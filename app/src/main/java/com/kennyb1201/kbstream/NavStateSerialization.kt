@@ -105,6 +105,14 @@ internal fun encodeScreen(
                 put("returnTo", encodeScreen(screen.returnTo, depth + 1))
             }
         }
+        // Simkl carries a returnTo like Add-ons (Settings vs onboarding's
+        // Home): a restore that forgot it dropped the header button's
+        // destination back to the default.
+        is Screen.Simkl -> {
+            if (depth < MAX_RETURN_DEPTH) {
+                put("returnTo", encodeScreen(screen.returnTo, depth + 1))
+            }
+        }
         is Screen.Detail -> {
             put("type", screen.type)
             put("id", screen.id)
@@ -239,7 +247,9 @@ internal fun decodeScreen(
                 returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
             )
             "search" -> Screen.Search
-            "simkl" -> Screen.Simkl
+            "simkl" -> Screen.Simkl(
+                returnTo = decodeScreen(json.optJSONObject("returnTo"), depth + 1)
+            )
             "guide" -> Screen.Guide
             // The hub always restores as the plain hub. The detail ids a
             // Screen.Sports may carry are a one-shot "reopen the sheet this game

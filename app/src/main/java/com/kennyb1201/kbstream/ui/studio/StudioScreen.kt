@@ -141,7 +141,11 @@ fun StudioScreen(
         studioBrowseScreenKey(id, isNetwork, providerId)
     }
     val browseListState = rememberLazyListState()
-    var returnTarget by remember {
+    // PER PAGE (network / company / service), like the actor page's record
+    // (see ActorScreen): one composable serves every studio, so an unkeyed
+    // record/budget is inherited when a page is opened FROM another one.
+    // Unreachable while these pages do not link to each other; cheap hardening.
+    var returnTarget by remember(id, isNetwork, providerId) {
         mutableStateOf<BrowseReturnTarget?>(null)
     }
     // How many LANDING tries this page has spent on the return's card - the
@@ -149,11 +153,11 @@ fun StudioScreen(
     // rail to arrive at all spends none of it, which is the difference between
     // a rail that builds slowly and a return that never lands (see
     // [browseReturnDecision]).
-    var returnAttempts by remember { mutableStateOf(0) }
+    var returnAttempts by remember(id, isNetwork, providerId) { mutableStateOf(0) }
     // When the held record was first waited for, so a rail whose load failed
     // hands the D-pad back to the first card instead of holding it for ever
     // (see [BROWSE_RETURN_WAIT_MS]).
-    var returnWaitStartMs by remember { mutableStateOf(0L) }
+    var returnWaitStartMs by remember(id, isNetwork, providerId) { mutableStateOf(0L) }
     val returnFocusRequester = remember { FocusRequester() }
 
     // Long-press context menu for rail posters.
@@ -267,7 +271,7 @@ fun StudioScreen(
     // first card (see [BrowseReturnFocus]). The record is HELD here until it is
     // honoured: the rail that holds the card can land after the first one does,
     // and a record read and then dropped would lose the place it was raised for.
-    var focusPlaced by remember { mutableStateOf(false) }
+    var focusPlaced by remember(id, isNetwork, providerId) { mutableStateOf(false) }
     LaunchedEffect(sections, isLoading) {
         if (isLoading) {
             focusPlaced = false

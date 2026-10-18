@@ -44,6 +44,14 @@ internal const val LAUNCH_SPLASH_TIMEOUT_MS = 8_000L
  *    (`!isLoading || rails non-empty`), so the two can never trade a skeleton
  *    flash back and forth.
  *
+ *    [railsStale] covers the other half of that beat: a profile pick re-arms
+ *    the splash while the PREVIOUS profile's rails are still on screen, so for
+ *    that first frame nothing is loading and rails are present - the rule used
+ *    to answer "ready" and the latch disarmed before the switch had
+ *    propagated. Rails that were built for another profile are never
+ *    "something to look at": the viewer just chose a different identity, and
+ *    what is on screen belongs to the one they left.
+ *
  * [elapsedMs] is measured from the moment the splash was armed. It is only
  * consulted for the failsafe, and it outranks every other input: a stuck load
  * must never trap the user.
@@ -54,12 +62,13 @@ internal fun launchSplashVisible(
     homeLoading: Boolean,
     railsPresent: Boolean,
     elapsedMs: Long,
+    railsStale: Boolean = false,
 ): Boolean {
     // Checked first, so no target can forget its own escape hatch.
     if (elapsedMs >= LAUNCH_SPLASH_TIMEOUT_MS) return false
 
     return when (target) {
         LaunchSplashTarget.PROFILE_PICKER -> !profilesEmitted
-        LaunchSplashTarget.HOME -> homeLoading && !railsPresent
+        LaunchSplashTarget.HOME -> (homeLoading && !railsPresent) || railsStale
     }
 }

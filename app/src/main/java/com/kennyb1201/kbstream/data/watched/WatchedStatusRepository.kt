@@ -2409,12 +2409,18 @@ class WatchedStatusRepository(
                 com.kennyb1201.kbstream.data.sync.SupabaseSync
                     .deleteHistoryRows(distinctRemovedIds)
 
-                if (normalizedType == "movie") {
-                    historyDao.deleteByIds(distinctRemovedIds)
-                } else {
-                    historyDao.deleteResumeRowsForParents(parents)
-                    historyDao.deleteCompletedForParents(parents)
-                }
+                // Delete EXACTLY the rows whose tombstones were just filed -
+                // for a movie its one row, for a series every resume and
+                // completed row of the title. This used to delete
+                // parent-scoped on the series path, which was broader than the
+                // capture: a position tick or a completion that landed on the
+                // same show between the read and the delete went from the
+                // database without a tombstone, so the next pull re-inserted
+                // it and the watched state came back. Deleting by id keeps the
+                // "published first, deleted after" order this pair relies on
+                // (see [com.kennyb1201.kbstream.data.history.HistoryDeleteTombstoneOrderContractTest])
+                // while making the two halves name the same rows.
+                historyDao.deleteByIds(distinctRemovedIds)
 
                 Log.i(
                     "WATCHED_REPO",

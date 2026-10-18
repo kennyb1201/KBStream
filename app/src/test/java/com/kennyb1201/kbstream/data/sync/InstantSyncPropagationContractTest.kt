@@ -282,23 +282,31 @@ class InstantSyncPropagationContractTest {
     // ── Foreground liveness ──────────────────────────────────────────────────
 
     @Test
-    fun `the app re-joins realtime on foreground and pulls the prefs table`() {
+    fun `the app re-joins realtime on foreground and catches up what it missed`() {
         val sync = readSource(SYNC)
         val body = functionBody(sync, "fun onAppForeground(context: Context) {")
 
         assertTrue("only a signed-in session has anything to keep live", body.contains("if (!isSignedIn()) return"))
         assertTrue(
             "a dead realtime must be re-joined, not left to the health watcher",
-            body.contains("if (!realtimeLive) startRealtime(force = true)")
+            body.contains("if (missedWindow) startRealtime(force = true)")
         )
         assertTrue(
-            "and the prefs table is the safety net for what a dead channel missed",
+            "and the prefs table is the healthy-foreground safety net",
             body.contains("pullPrefs(context)")
         )
         assertTrue(
-            "the safety pull must be the prefs table ONLY - a full pull on every " +
-                "foreground would re-query every table for nothing",
-            !body.contains("pullAll(")
+            "a re-join only streams FUTURE changes, so a foreground that had to " +
+                "rebuild its channels must pull every table once: whatever a " +
+                "sibling wrote while they were dead was never delivered, and the " +
+                "health watcher's compensating pull never fires for a channel " +
+                "this re-join left looking healthy",
+            body.contains("if (missedWindow) pullAllNow(context) else pullPrefs(context)")
+        )
+        assertTrue(
+            "the full pull is the REPAIR path, not a per-foreground cost",
+            body.indexOf("missedWindow = !realtimeLive") <
+                body.indexOf("pullAllNow(context)")
         )
     }
 
@@ -338,6 +346,27 @@ class InstantSyncPropagationContractTest {
                 "re-join: a rejected table must not be retried forever just " +
                 "because the app came back",
             body.contains("if (!force) realtimeRebuildAttempts.clear()")
+        )
+    }
+
+    @Test
+    fun `the health watcher parks itself while the app is backgrounded`() {
+        val sync = readSource(SYNC)
+        val watcher = functionBody(sync, "private fun watchRealtimeHealth() {")
+        assertTrue(
+            "a hidden app has no UI to keep live, and the foreground hook " +
+                "repairs the channels on return - ticking here only rebuilds " +
+                "websockets behind a process nobody can see",
+            watcher.contains("if (!appForegrounded) {") &&
+                watcher.contains("delay(REALTIME_BACKGROUND_WAIT_MS)") &&
+                watcher.contains("continue")
+        )
+        val registration = functionBody(sync, "private fun registerForegroundCallbacks(context: Context) {")
+        assertTrue(
+            "and the flag it reads comes from the same started-Activity count, " +
+                "set on both transitions",
+            registration.contains("appForegrounded = true") &&
+                registration.contains("appForegrounded = false")
         )
     }
 

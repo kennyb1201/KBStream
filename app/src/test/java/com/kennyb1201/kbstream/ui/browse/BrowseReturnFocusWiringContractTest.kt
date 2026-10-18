@@ -327,17 +327,22 @@ class BrowseReturnFocusWiringContractTest {
                 !mechanism.contains("object DetailReturnFocus")
         )
         assertTrue(
-            "one record, read once, and aged out if the Back it was waiting for " +
-                "never comes",
-            mechanism.contains("private var pending: BrowseReturnTarget? = null") &&
+            "one record PER PAGE, read once, and aged out if the Back it was " +
+                "waiting for never comes. A single slot let a chained drill-down " +
+                "(Tag A -> Detail X -> Studio B -> Detail Y) record the studio's " +
+                "card OVER the tag's, so backing out twice reopened Tag A at " +
+                "the top: the screenKey guarded the read, never the write",
+            mechanism.contains("private val pending = LinkedHashMap<String, Recorded>()") &&
                 mechanism.contains("VALID_FOR_MS = 30 * 60 * 1000L") &&
-                mechanism.contains("pending = null") &&
+                mechanism.contains("return pending.remove(screenKey)?.target") &&
                 mechanism.contains("fun record(target: BrowseReturnTarget)")
         )
         assertTrue(
             "a record for another page is left where it is: a browse page can " +
-                "open another one on the way, and that page must not swallow it",
-            mechanism.contains("if (recorded.screenKey != screenKey) return null")
+                "open another one on the way, and that page must not swallow it - " +
+                "so consume removes ONE key and never the map",
+            mechanism.contains("pending.remove(screenKey)") &&
+                !mechanism.contains("pending.clear()")
         )
     }
 

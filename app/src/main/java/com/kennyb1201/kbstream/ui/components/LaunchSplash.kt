@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -53,6 +54,12 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
  *
  * The colour comes from [KBVoid], not a literal, so an AMOLED viewer gets the
  * pure-black background the rest of the app is painting under it.
+ *
+ * Everything below the mark - the wordmark and the small loading ring under it
+ * - belongs to this Compose half only, so it arrives in one frame with the
+ * handoff. The window background stays logo-only: a trailing block the window
+ * also drew would have to be redrawn here, and the mark would jump by whatever
+ * the two measurements disagreed on.
  */
 @Composable
 fun LaunchSplash() {
@@ -71,8 +78,9 @@ fun LaunchSplash() {
                 // the screen, which puts the mark's centre half of the
                 // trailing block too high; pushing the column back down by
                 // exactly that much leaves the mark itself dead centre, where
-                // the window background drew it.
-                .offset(y = (WordmarkGap + WordmarkHeight) / 2),
+                // the window background drew it. That is why the trailing
+                // block is one measured value: the ring is part of it.
+                .offset(y = TrailingBlock / 2),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Image(
@@ -101,6 +109,8 @@ fun LaunchSplash() {
                 color = KBAccent,
                 textAlign = TextAlign.Center
             )
+            Spacer(Modifier.height(SpinnerGap))
+            SplashProgress()
         }
     }
 }
@@ -110,6 +120,64 @@ private val WordmarkGap = 4.dp
 
 /** The wordmark's slot; taller than the 28sp line so a large font setting still fits. */
 private val WordmarkHeight = 44.dp
+
+/** Gap between the wordmark's slot and the loading ring. */
+private val SpinnerGap = 14.dp
+
+/**
+ * The ring's diameter, a complement to the 28sp wordmark rather than a
+ * centrepiece: 18dp is the same "small" the app's own status card uses, which
+ * keeps it clearly a detail of the splash and not the focus of the screen.
+ */
+private val SpinnerSize = 18.dp
+
+/** Thin, so at that diameter the ring reads as a hairline rather than a blob. */
+private val SpinnerStroke = 2.dp
+
+/**
+ * Everything this half draws below the mark, which is what the column's offset
+ * has to push down by half to leave the mark centred.
+ */
+private val TrailingBlock = WordmarkGap + WordmarkHeight + SpinnerGap + SpinnerSize
+
+/** Where the still ring stops, as a fraction of the circle. */
+private const val StillProgress = 0.28f
+
+/**
+ * The splash's loading tick: a small brass ring centred under the wordmark.
+ *
+ * Deliberately NOT the big centred spinner this app uses elsewhere. In KBStream
+ * that one means "the video is buffering" - the mid-playback rebuffer
+ * treatment - and reusing it here would say the launch is doing the same thing
+ * the player does. This is the splash's own small signal, and it is also how a
+ * viewer can tell the splash appeared at all: the logo's alpha pulse reads as
+ * branding, not as work in progress.
+ *
+ * Reduced motion holds the ring still, exactly as it holds the pulse still. An
+ * indeterminate indicator's motion lives inside the component, so the still
+ * form is the determinate one at a fixed fraction - the same ring, drawn once.
+ */
+@Composable
+private fun SplashProgress() {
+    val ring = Modifier.size(SpinnerSize)
+    val track = KBAccent.copy(alpha = 0.22f)
+    if (rememberReducedMotion()) {
+        CircularProgressIndicator(
+            progress = { StillProgress },
+            modifier = ring,
+            color = KBAccent,
+            trackColor = track,
+            strokeWidth = SpinnerStroke
+        )
+    } else {
+        CircularProgressIndicator(
+            modifier = ring,
+            color = KBAccent,
+            trackColor = track,
+            strokeWidth = SpinnerStroke
+        )
+    }
+}
 
 /**
  * The splash's breathing mark, as a State rather than a plain Float.

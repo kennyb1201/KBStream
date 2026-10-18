@@ -649,18 +649,7 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     @Query("DELETE FROM watch_history WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 
-    @Query(
-        """
-        DELETE FROM watch_history
-        WHERE parentId = :parentId
-          AND season = :season
-          AND isCompleted = 1
-        """
-    )
-    suspend fun deleteCompletedForParentSeason(parentId: String, season: Int)
-
-    /** Flavor-tolerant form of [deleteCompletedForParentSeason]: unmarking a
-     *  season must clear rows written under either id flavor. */
+    /** Unmarking a season must clear rows written under either id flavor. */
     @Query(
         """
         DELETE FROM watch_history
@@ -671,22 +660,7 @@ suspend fun getContinueWatchingParentsSnapshot(): List<WatchHistoryEntity>
     )
     suspend fun deleteCompletedForParentsSeason(parentIds: List<String>, season: Int)
 
-    @Query(
-        """
-        DELETE FROM watch_history
-        WHERE parentId = :parentId
-          AND season = :season
-          AND episode = :episode
-          AND isCompleted = 1
-        """
-    )
-    suspend fun deleteCompletedForParentSeasonEpisode(
-        parentId: String,
-        season: Int,
-        episode: Int
-    )
-
-    /** Flavor-tolerant form of [deleteCompletedForParentSeasonEpisode]. */
+    /** Unmarking one episode must clear rows written under either id flavor. */
     @Query(
         """
         DELETE FROM watch_history

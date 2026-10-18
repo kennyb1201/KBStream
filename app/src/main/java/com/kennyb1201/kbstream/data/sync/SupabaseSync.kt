@@ -36,6 +36,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import com.kennyb1201.kbstream.BuildConfig
 import com.kennyb1201.kbstream.data.addon.AddonManager
 import com.kennyb1201.kbstream.data.reporting.CrashReporter
@@ -1103,9 +1105,11 @@ object SupabaseSync {
      * Publishes a cleared set of rows as WRITES instead of cloud deletes.
      *
      * Extracted from [clearWatchStateForActiveProfile] for the one-time
-     * in-progress reset (see [PoisonSweep.clearInProgressForActiveProfile]),
-     * which used to hard-DELETE its cloud rows. A real delete is invisible to a
-     * sibling that still holds its copy - a pull only iterates rows that still
+     * in-progress reset (see [PoisonSweep.clearInProgressForActiveProfile]) and
+     * now shared with the poison sweep's own cloud pass
+     * ([PoisonSweep.run]), which used to hard-DELETE its cloud rows. A real
+     * delete is invisible to a sibling that still holds its copy - a pull only
+     * iterates rows that still
      * EXIST - so the other TV went on drawing the resume bar and the eye badge
      * the viewer had just cleared on this one, and its next push put the row
      * back here. Each row is therefore replaced by a history tombstone or a
@@ -1119,7 +1123,7 @@ object SupabaseSync {
      * first: a queued upload of a row this call is deleting would otherwise
      * flush afterwards and put it back.
      */
-    internal fun publishInProgressClear(
+    internal fun publishClearedRows(
         historyIds: List<String>,
         watched: List<Pair<String, JsonObject>>,
         profileId: String?
@@ -1180,6 +1184,49 @@ object SupabaseSync {
             )
         ) {
             Log.w(TAG, "in-progress clear: ${markers.size} clear(s) queued, not yet durable")
+        }
+        scheduleFlush()
+    }
+
+    /**
+     * Publishes a watched-override blob as a DELIBERATE EMPTY SET.
+     *
+     * The watched-override table has no tombstone field, so the "a delete is a
+     * newer write" rule [publishClearedRows] applies to history rows and
+     * watched markers takes its other legal shape here: an empty override set
+     * that says it MEANS to be empty ([WatchedOverridesRules.CLEARED_FIELD]),
+     * stamped now. The apply side reads that as an unmark of every key the
+     * sibling holds, so the duplicated set the poison sweep identified cannot
+     * be put back by that sibling's older stamp.
+     *
+     * Used by the sweep's cloud pass, which used to hard-DELETE these blobs -
+     * invisible to a sibling that still holds one, so its next full push
+     * re-uploaded exactly the cross-profile set the sweep had just removed.
+     *
+     * [storedKeys] are the stored (already profile-scoped) `pref_key`s, and the
+     * queued writes for those keys are dropped in the same awaited write that
+     * queues the clear.
+     */
+    internal fun publishOverrideClears(storedKeys: List<String>) {
+        if (!isSignedIn()) return
+        val keys = storedKeys
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+        if (keys.isEmpty()) return
+        val now = System.currentTimeMillis()
+        val payload = buildJsonObject {
+            put("updatedAt", now)
+            put(WatchedOverridesRules.CLEARED_FIELD, true)
+            putJsonArray("overrides") { }
+            putJsonObject(WatchedOverridesRules.TIMESTAMPS_FIELD) { }
+            putJsonObject(WatchedOverridesRules.REMOVED_FIELD) { }
+        }
+        val items = keys.map { stored ->
+            OutboxItem(TABLE_PREFS, "pref_key", stored, payload)
+        }
+        if (!outbox.replaceKeys(TABLE_PREFS, "pref_key", keys, items)) {
+            Log.w(TAG, "override clear: ${keys.size} blob(s) queued, not yet durable")
         }
         scheduleFlush()
     }
@@ -2549,6 +2596,16 @@ object SupabaseSync {
         realtimeHealthJob?.cancel()
         realtimeHealthJob = scope.launch {
             while (isSignedIn()) {
+                // A hidden app has no UI to keep live, and the foreground hook
+                // ([onAppForeground]) re-joins and catches up on return. Ticking
+                // here while backgrounded only rebuilds dead channels and
+                // re-opens websockets behind a process the viewer cannot see -
+                // background wakeups and battery for a watcher whose only
+                // consumer is the foreground UI.
+                if (!appForegrounded) {
+                    delay(REALTIME_BACKGROUND_WAIT_MS)
+                    continue
+                }
                 delay(REALTIME_HEALTH_CHECK_MS)
                 val c = client ?: break
                 val subs = realtimeSubscriptions.toList()
@@ -2924,6 +2981,14 @@ object SupabaseSync {
      */
     private var foregroundCallbacksRegistered = false
 
+    /**
+     * True while the PROCESS is foregrounded (the started-Activity count is
+     * above zero). Written by the Application's lifecycle callbacks on the main
+     * thread and read by the health watcher on [scope], hence @Volatile.
+     */
+    @Volatile
+    private var appForegrounded = false
+
     private fun registerForegroundCallbacks(context: Context) {
         if (foregroundCallbacksRegistered) return
         val application =
@@ -2939,12 +3004,20 @@ object SupabaseSync {
                         KidsTimeGuard.foregroundTransition(previous, startedActivities) ==
                         KidsTimeGuard.ForegroundTransition.FOREGROUNDED
                     ) {
+                        appForegrounded = true
                         onAppForeground(activity.applicationContext)
                     }
                 }
 
                 override fun onActivityStopped(activity: android.app.Activity) {
-                    startedActivities = (startedActivities - 1).coerceAtLeast(0)
+                    val previous = startedActivities
+                    startedActivities = (previous - 1).coerceAtLeast(0)
+                    if (
+                        KidsTimeGuard.foregroundTransition(previous, startedActivities) ==
+                        KidsTimeGuard.ForegroundTransition.BACKGROUNDED
+                    ) {
+                        appForegrounded = false
+                    }
                 }
 
                 override fun onActivityCreated(
@@ -2976,21 +3049,35 @@ object SupabaseSync {
      *
      *  1. the channels are re-joined when none of them is live ([startRealtime]
      *     with `force`), and
-     *  2. the PREFS table is pulled once — the cheap table, and the one that
-     *     carries the display settings a viewer has just changed on the other TV
-     *     — as the safety net for whatever a dead channel missed.
+     *  2. one pull follows it — a FULL catch-up pull when the channels had all
+     *     died, the PREFS table alone when they were healthy.
+     *
+     * The full pull is the part that closes the missed window. A re-join only
+     * streams FUTURE changes: rows a sibling wrote while all four channels were
+     * dead were never delivered here, and the health watcher's compensating pull
+     * does not cover this case — it repairs a channel it finds dead at a tick,
+     * and this re-join is exactly what leaves them looking healthy. That made
+     * cross-device resume/watched changes made during the away window silently
+     * never land until a restart or a manual Sync. It costs one full pull per
+     * foreground-with-dead-channels, which is a repair path, not a per-foreground
+     * one: a healthy foreground still pays only for the cheap prefs table (the
+     * display settings a viewer has just changed on the other TV).
      *
      * Foreground-gated only: deliberately no new periodic timer, and the health
      * watcher's own backoff budget is untouched.
      */
     fun onAppForeground(context: Context) {
         if (!isSignedIn()) return
-        if (!realtimeLive) startRealtime(force = true)
+        // Read BEFORE the re-join: `realtimeLive` is what decides whether the
+        // forced call below rebuilds anything, and it flips asynchronously.
+        val missedWindow = !realtimeLive
+        if (missedWindow) startRealtime(force = true)
         scope.launch {
-            runCatchingCancellable { pullPrefs(context) }
-                .onFailure {
-                    Log.w(TAG, "foreground prefs pull failed: ${Redaction.text(it.message)}")
-                }
+            runCatchingCancellable {
+                if (missedWindow) pullAllNow(context) else pullPrefs(context)
+            }.onFailure {
+                Log.w(TAG, "foreground pull failed: ${Redaction.text(it.message)}")
+            }
         }
     }
 
@@ -3260,6 +3347,12 @@ object SupabaseSync {
     // joined and resubscribes the dead ones. 15s: a dropped channel is
     // repaired well inside the "user noticed nothing synced" window.
     private const val REALTIME_HEALTH_CHECK_MS = 15_000L
+
+    // How long the watcher parks itself while the app is backgrounded. Nothing
+    // in the background consumes the channels, and the foreground hook repairs
+    // them on return, so this is only the granularity at which the loop notices
+    // it may resume - not a repair interval.
+    private const val REALTIME_BACKGROUND_WAIT_MS = 60_000L
 
     /// Rebuild attempts per table before realtime is treated as unavailable
     /// for it (see [realtimeRebuildAttempts]).

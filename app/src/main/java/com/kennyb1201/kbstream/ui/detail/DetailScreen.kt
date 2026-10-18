@@ -125,6 +125,7 @@ import com.kennyb1201.kbstream.data.youtube.PlayableSource
 import com.kennyb1201.kbstream.data.youtube.TrailerPlayerLauncher
 import com.kennyb1201.kbstream.domain.streamengine.EpisodeMatch
 import com.kennyb1201.kbstream.ui.browse.BROWSE_RETURN_WAIT_MS
+import com.kennyb1201.kbstream.ui.browse.landFocusOn
 import com.kennyb1201.kbstream.ui.components.AutoPlayLoadSplash
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBImdbTint
@@ -2845,10 +2846,19 @@ fun DetailScreen(
                 }
             }
 
-            LaunchedEffect(Unit) {
-                runCatching {
-                    playButtonFocusRequester.requestFocus()
-                }
+            // The page's default focus. Two things this used to get wrong:
+            //
+            //  - `runCatching` around `requestFocus()` reports success for every
+            //    call ever made, because an unattached node answers FALSE rather
+            //    than throwing. [landFocusOn] reads that answer and retries across
+            //    frames, which is the app's one rule for landing a focus.
+            //  - It also ran on a DRILL-DOWN RETURN, where the return effect
+            //    below takes the focus to the rail card a moment later: the play
+            //    button visibly grabbed it first and was then yanked away. A page
+            //    with a pending return record for this title belongs to the rail.
+            LaunchedEffect(returnTarget) {
+                if (returnTarget != null) return@LaunchedEffect
+                landFocusOn(playButtonFocusRequester)
             }
 
             // A rail on this page opened a drill-down: an actor page, a

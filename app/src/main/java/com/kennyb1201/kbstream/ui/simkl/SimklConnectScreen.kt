@@ -41,7 +41,10 @@ import com.kennyb1201.kbstream.ui.theme.KBVoid
 @Composable
 fun SimklConnectScreen(
     modifier: Modifier = Modifier,
-    onBackToHome: () -> Unit,
+    // Just "back": the page carries its own return destination now (Settings'
+    // tracker row and onboarding's setup card open it from different places),
+    // so a label naming one of them was wrong on the other.
+    onBack: () -> Unit,
     vm: SimklViewModel = viewModel()
 ) {
     val uiState by vm.uiState.collectAsStateWithLifecycle()
@@ -125,7 +128,7 @@ fun SimklConnectScreen(
                         // other panel.
                         KBButton(label = "REFRESH", onClick = vm::refreshSimklNow)
 
-                        KBButton(label = "BACK TO HOME", onClick = onBackToHome)
+                        KBButton(label = "BACK", onClick = onBack)
 
                         // The destructive one carries the danger tint: it was
                         // drawn in the same bright label as REFRESH, so the row
@@ -189,7 +192,7 @@ fun SimklConnectScreen(
                             onClick = vm::generateCode
                         )
 
-                        KBButton(label = "BACK TO HOME", onClick = onBackToHome)
+                        KBButton(label = "BACK", onClick = onBack)
                     }
                 }
             }

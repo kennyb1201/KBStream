@@ -63,9 +63,14 @@ class UnmarkClearsPlaybackContractTest {
             // The bulk form is the same rule: the movie's one row is deleted by
             // the ids the unmark just read (see
             // [com.kennyb1201.kbstream.data.history.HistoryDeleteTombstoneOrderContractTest]).
+            //
+            // BOTH paths delete by the captured ids: a parent-scoped delete on
+            // the series path was broader than the capture, so a position tick
+            // / completion landing on the same show in between went without a
+            // tombstone and the next pull put it back.
             body.contains("historyDao.deleteByIds(distinctRemovedIds)") &&
-                body.contains("historyDao.deleteResumeRowsForParents(") &&
-                body.contains("historyDao.deleteCompletedForParents(")
+                !body.contains("historyDao.deleteResumeRowsForParents(") &&
+                !body.contains("historyDao.deleteCompletedForParents(")
         )
         assertTrue(
             "the deleted rows must be removed from the cloud as well, or the " +

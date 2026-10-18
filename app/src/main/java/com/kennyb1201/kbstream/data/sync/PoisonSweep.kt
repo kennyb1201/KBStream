@@ -119,7 +119,6 @@ internal object PoisonSweep {
     // depend on that object's private constants).
     private const val TABLE_HISTORY = "sync_watch_history"
     private const val TABLE_WATCHED = "sync_watched_status"
-    private const val TABLE_PREFS = "sync_prefs"
 
     private val sweepMutex = Mutex()
 
@@ -252,7 +251,7 @@ internal object PoisonSweep {
                     ?.let { rows -> PoisonDetector.partialMarkersForScope(rows, pid) }
                     .orEmpty()
             cloudRows += resumeRows.size + partialKeys.size
-            SupabaseSync.publishInProgressClear(
+            SupabaseSync.publishClearedRows(
                 historyIds = resumeRows.map { it.id },
                 watched = watchedRows.orEmpty()
                     .filter { row -> row.storedKey in partialKeys }
@@ -504,8 +503,8 @@ internal object PoisonSweep {
                     PoisonDetector.crossScopeDuplicates(rows, orderedPids, localPids)
                 }
                 if (poison.isEmpty()) continue
-                deleted += deleteCloudKeys(c, table, poison)
-                Log.i(TAG, "poison sweep: $table — deleting ${poison.size} duplicated row(s)")
+                deleted += retractCloudRows(table, poison, rows)
+                Log.i(TAG, "poison sweep: $table — retracting ${poison.size} duplicated row(s)")
                 if (table == TABLE_HISTORY) {
                     // Delete the LOCAL copies too, or the next push re-creates
                     // them from this device (they are what the card renders).
@@ -527,8 +526,11 @@ internal object PoisonSweep {
                 val blobKeys = overridePids.map {
                     SyncKeys.scoped(PrefsPayloadBuilder.KEY_WATCHED_OVERRIDES, it)
                 }
-                deleted += deleteCloudKeys(c, TABLE_PREFS, blobKeys)
-                Log.i(TAG, "poison sweep: deleting ${blobKeys.size} duplicated override blob(s)")
+                // An empty override set that says it MEANS to be empty, not a
+                // cloud delete: see [SupabaseSync.publishOverrideClears].
+                SupabaseSync.publishOverrideClears(blobKeys)
+                deleted += blobKeys.size
+                Log.i(TAG, "poison sweep: retracting ${blobKeys.size} duplicated override blob(s)")
             }
 
             // (4) history rows the part-1 LOCAL scan identified. Their cloud
@@ -540,7 +542,7 @@ internal object PoisonSweep {
             val localHistoryKeys =
                 flags.getStringSet(PENDING_HISTORY_CLEARS, emptySet()).orEmpty().toList()
             if (localHistoryKeys.isNotEmpty()) {
-                deleted += deleteCloudKeys(c, TABLE_HISTORY, localHistoryKeys)
+                deleted += retractCloudRows(TABLE_HISTORY, localHistoryKeys, cloudHistoryRows.orEmpty())
                 // ...and make sure the local copy is gone as well: part 1
                 // deleted it, but a pull that ran between the two parts can
                 // have re-downloaded the row from the cloud before this pass
@@ -580,10 +582,10 @@ internal object PoisonSweep {
                         for ((pid, ids) in copies.groupBy({ it.first }, { it.second })) {
                             deleteLocalHistoryRows(context, pid, ids)
                         }
-                        deleted += deleteCloudKeys(
-                            c,
+                        deleted += retractCloudRows(
                             TABLE_HISTORY,
-                            copies.map { (pid, id) -> SyncKeys.scoped(id, pid) }
+                            copies.map { (pid, id) -> SyncKeys.scoped(id, pid) },
+                            historyRowsForLocalScan
                         )
                         localCopiesRemoved += copies.size
                         Log.i(
@@ -608,10 +610,10 @@ internal object PoisonSweep {
                         for ((pid, ids) in witnessed.groupBy({ it.first }, { it.second })) {
                             deleteLocalHistoryRows(context, pid, ids)
                         }
-                        deleted += deleteCloudKeys(
-                            c,
+                        deleted += retractCloudRows(
                             TABLE_HISTORY,
-                            witnessed.map { (pid, id) -> SyncKeys.scoped(id, pid) }
+                            witnessed.map { (pid, id) -> SyncKeys.scoped(id, pid) },
+                            historyRowsForLocalScan
                         )
                         localCopiesRemoved += witnessed.size
                         Log.i(
@@ -662,7 +664,7 @@ internal object PoisonSweep {
                     )
                     markersChecked = true
                     if (keys.isNotEmpty()) {
-                        deleted += deleteCloudKeys(c, TABLE_WATCHED, keys)
+                        deleted += retractCloudRows(TABLE_WATCHED, keys, watchedRows)
                         markersRemoved = keys.size
                         // Drop the local cache rows too: they carry the very
                         // partial flag the badge reads, and without this they
@@ -757,31 +759,65 @@ internal object PoisonSweep {
             Log.w(TAG, "poison sweep: reading $table failed: ${it.message}")
         }.getOrNull()
 
-    /** Deletes [storedKeys] from [table] in chunks; returns how many went. */
-    private suspend fun deleteCloudKeys(
-        c: SupabaseClient,
+    /**
+     * Retracts [storedKeys] from [table] as WRITES, not as cloud DELETES.
+     *
+     * This pass used to issue a real `delete { isIn(...) }` per chunk, which is
+     * the one shape the sync layer cannot make stick: a pull only iterates rows
+     * that still EXIST, so a sibling holding a copy never learns the row is
+     * gone, and its next full push ([SupabaseSync.pushHistory] /
+     * [SupabaseSync.pushWatched] publish every local row) re-uploads exactly the
+     * poison this sweep had just removed. The sweep is one-shot (`FLAG_CLOUD`),
+     * so it never ran again to repair that — the phantom badge/row simply came
+     * back.
+     *
+     * Both tables therefore go through [SupabaseSync.publishClearedRows], the
+     * same "a delete is a newer write" path the in-progress reset uses: history
+     * rows as tombstones, watched rows as negative markers with a fresh stamp.
+     * That call also drops the pending outbox writes for the same keys first, so
+     * a queued upload cannot flush afterwards and put the row back.
+     *
+     * [cloudRows] is the table read this pass already has in hand; it supplies
+     * the payload a cleared marker has to carry. Returns how many keys were
+     * handed to the publisher (0 for a table this helper does not own).
+     */
+    private fun retractCloudRows(
         table: String,
-        storedKeys: List<String>
+        storedKeys: Collection<String>,
+        cloudRows: List<PoisonDetector.Row>
     ): Int {
         if (storedKeys.isEmpty()) return 0
-        val keyColumn = when (table) {
-            TABLE_HISTORY -> "item_id"
-            TABLE_PREFS -> "pref_key"
-            else -> "item_key"
-        }
-        var deleted = 0
-        for (chunk in storedKeys.chunked(50)) {
-            runCatching {
-                c.from(table).delete {
-                    filter { isIn(keyColumn, chunk) }
+        val keys = storedKeys.distinct()
+        when (table) {
+            TABLE_HISTORY -> keys
+                // History tombstones are scoped by the publisher, and the
+                // tombstone itself names the BARE id, so an already-scoped key
+                // has to be split back into (profile, id) here.
+                .groupBy { SyncKeys.scopeOf(it) ?: "" }
+                .filterKeys { it.isNotEmpty() }
+                .forEach { (pid, scoped) ->
+                    SupabaseSync.publishClearedRows(
+                        historyIds = scoped.map { SyncKeys.unscoped(it) },
+                        watched = emptyList(),
+                        profileId = pid
+                    )
                 }
-                deleted += chunk.size
-            }.onFailure {
-                Log.w(TAG, "poison sweep: deleting from $table failed (${it.message})")
-                return deleted
+            TABLE_WATCHED -> {
+                // The marker rows keep the stored (already scoped) key; the
+                // payload is the cloud copy's own, which is what a negative
+                // marker has to be built from.
+                val byKey = cloudRows.associateBy { it.storedKey }
+                SupabaseSync.publishClearedRows(
+                    historyIds = emptyList(),
+                    watched = keys.mapNotNull { key ->
+                        byKey[key]?.let { row -> key to row.payload }
+                    },
+                    profileId = null
+                )
             }
+            else -> return 0
         }
-        return deleted
+        return keys.size
     }
 
     /**

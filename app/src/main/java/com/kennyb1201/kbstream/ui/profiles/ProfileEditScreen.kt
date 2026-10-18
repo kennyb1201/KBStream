@@ -62,6 +62,52 @@ import com.kennyb1201.kbstream.ui.theme.KBTextHi
 import com.kennyb1201.kbstream.ui.theme.KBTextLo
 import com.kennyb1201.kbstream.ui.theme.KBVoid
 
+// ── Bedtime chip domain ─────────────────────────────────────────────────
+//
+// The row and the stored value used to disagree about their units: the chips
+// were PM hours 1..11 while the stored value is minutes-after-midnight, so a
+// saved 9 PM (1260) loaded back as the chip value 21, which matches no chip.
+// Re-saving from that state produced 9:00 AM, and KidsTimeGuard locks from the
+// cutoff until 4 AM - so the profile went from locking 9 PM-4 AM to locking
+// 9 AM-4 AM. Every conversion now goes through the two functions below, in one
+// domain: the chip.
+internal const val BEDTIME_CHIP_OFF = 0
+internal const val BEDTIME_CHIP_MIDNIGHT = 12
+internal const val BEDTIME_CHIP_DEFAULT = 9
+
+/** Stored minutes-after-midnight -> the chip the row shows as selected. */
+internal fun bedtimeChipFor(minutes: Int): Int {
+    // 0 is the "no bedtime" value, so it is also the Off chip.
+    if (minutes <= 0) return BEDTIME_CHIP_OFF
+    val hour = (minutes / 60) % 24
+    return when (hour) {
+        0 -> BEDTIME_CHIP_MIDNIGHT
+        // A noon cutoff is not a bedtime this row can express (it would lock
+        // noon-4 AM, most of the day), and it only reaches here from an older
+        // bad save. Show Off so the parent picks a real one rather than keep a
+        // lock they cannot see.
+        12 -> BEDTIME_CHIP_OFF
+        // 1..11 AM are the same corruption as the 9 AM field report; they map
+        // to their PM twin, which is what the parent originally chose.
+        else -> hour % 12
+    }
+}
+
+/** Chip + the profile's preserved minute -> stored minutes-after-midnight. */
+internal fun bedtimeMinutesFor(chip: Int, minute: Int): Int = when (chip) {
+    BEDTIME_CHIP_OFF -> 0
+    // 24h, not 0: 0 is the Off value and cannot also mean midnight.
+    BEDTIME_CHIP_MIDNIGHT -> 24 * 60 + minute.coerceIn(0, 59)
+    else -> (chip + 12) * 60 + minute.coerceIn(0, 59)
+}
+
+/** The row's labels, in the same domain [bedtimeChipFor] returns. */
+internal fun bedtimeChipLabel(chip: Int): String = when (chip) {
+    BEDTIME_CHIP_OFF -> "Off"
+    BEDTIME_CHIP_MIDNIGHT -> "12 AM"
+    else -> "$chip PM"
+}
+
 /**
  * Create/edit profiles: name field, custom uploaded avatar, 8 generic
  * avatar colors, delete. TV-first: D-pad through controls, on-screen
@@ -139,10 +185,14 @@ fun ProfileEditScreen(
         mutableStateOf((editing?.kidsDailyLimitMinutes ?: 0) / 60)
     }
     var kidsBedtime by remember(effectiveEditId) {
-        // Stored as minutes-after-midnight; edited as (hour, minute) on a
-        // 12h clock. 0 = no bedtime.
+        // Chip domain (see bedtimeChipFor): 0 = Off, 1..11 = 1 PM..11 PM,
+        // 12 = 12 AM. "Off" still needs an hour to fall back on when the row is
+        // turned on, so it starts at the 9 PM default.
         val mins = editing?.kidsBedtimeMinutes ?: 0
-        mutableStateOf(if (mins == 0) 21 else mins / 60)   // default 9 PM
+        mutableStateOf(
+            bedtimeChipFor(mins).takeIf { it != BEDTIME_CHIP_OFF }
+                ?: BEDTIME_CHIP_DEFAULT
+        )
     }
     var kidsBedtimeMinute by remember(effectiveEditId) {
         val mins = editing?.kidsBedtimeMinutes ?: 0
@@ -450,17 +500,12 @@ fun ProfileEditScreen(
                 title = "Bedtime lock",
                 hint = "Locks this profile from bedtime until 4:00 AM. " +
                     "A PIN unlocks it early.",
-                options = (0..11).map { h ->
-                    val label = when (h) {
-                        0 -> "Off"
-                        9 -> "9 PM"
-                        else -> "$h PM"
-                    }
-                    label to h
+                options = (BEDTIME_CHIP_OFF..BEDTIME_CHIP_MIDNIGHT).map { h ->
+                    bedtimeChipLabel(h) to h
                 },
-                selected = if (kidsBedtimeOn) kidsBedtime else -1,
+                selected = if (kidsBedtimeOn) kidsBedtime else BEDTIME_CHIP_OFF,
                 onSelect = { picked ->
-                    if (picked < 0) {
+                    if (picked == BEDTIME_CHIP_OFF) {
                         kidsBedtimeOn = false
                     } else {
                         kidsBedtimeOn = true
@@ -720,8 +765,7 @@ fun ProfileEditScreen(
                         requirePinToExit = kidsRequirePinToExit,
                         dailyLimitMinutes = kidsDailyLimitHours * 60,
                         bedtimeMinutes = if (kidsBedtimeOn) {
-                            val h = if (kidsBedtime == 0) 12 else kidsBedtime
-                            ((h + 12) % 24) * 60 + kidsBedtimeMinute
+                            bedtimeMinutesFor(kidsBedtime, kidsBedtimeMinute)
                         } else 0
                     )
                 }

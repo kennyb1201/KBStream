@@ -93,6 +93,22 @@ class P5VideoGlesView(
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        // Tell the shader which context its textures will live in: the 8-bit
+        // plane upload is GL_R8/GL_RED in an ES 3 context and GL_LUMINANCE in
+        // an ES 2 one, and asking for GL_LUMINANCE here was an INVALID_ENUM
+        // that left the 8-bit path's textures incomplete (black picture).
+        val version = runCatching {
+            GLES20.glGetString(GLES20.GL_VERSION)
+        }.getOrNull().orEmpty()
+        P5ColorShader.setGles3Context(
+            when {
+                version.contains("OpenGL ES 3") -> true
+                version.contains("OpenGL ES 2") -> false
+                // No usable answer: the context was created as 3 whenever the
+                // API exists (see the init block), so assume it is.
+                else -> P5ColorShader.hasGles3()
+            }
+        )
         // The EGL context is fresh here — drop stale program/texture handles
         // so they are rebuilt in this context (ids from a dead context render
         // garbage with no GL error).

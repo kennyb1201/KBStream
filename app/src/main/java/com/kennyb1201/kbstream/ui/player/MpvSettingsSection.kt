@@ -132,11 +132,20 @@ internal class MpvSettingsSection(
         // The main player's Network buffer row. mpv's cache is a per-file
         // option, so a change made here is taken by the next title rather than
         // by the one playing - which is what the note under the row says.
+        //
+        // The SAME three choices the main panel offers, Auto included. The
+        // value is one global preference (AppPreferences.getDefaultBufferMode,
+        // which the Settings screen and the main player write), and it can be 2
+        // (Auto) - so a two-pill row left the row with NO pill selected and the
+        // note reading "Best for most streams" while the stored setting said
+        // something else. Auto is genuinely meaningful here: mpv has no live
+        // path, so it settles on Balanced (see MpvPlayerView.applyCacheOptions),
+        // which is what the note now says instead of hiding the state.
         column.addView(ui.label("Network buffer", topMarginDp = 10))
         ui.addPillRow(
             column,
             4,
-            listOf("Balanced" to 0, "Low latency" to 1),
+            listOf("Auto" to 2, "Balanced" to 0, "Low latency" to 1),
             bufferPills
         ) { mode ->
             activity.chooseBufferMode(mode)
@@ -144,8 +153,11 @@ internal class MpvSettingsSection(
         }
         column.addView(
             ui.label(
-                if (activity.bufferMode() == 1) "Lower buffer for live content"
-                else "Best for most streams",
+                when (activity.bufferMode()) {
+                    1 -> "Lower buffer for live content"
+                    2 -> "Auto - Balanced on this engine (mpv has no live path)"
+                    else -> "Best for most streams"
+                },
                 topMarginDp = 4
             )
         )
