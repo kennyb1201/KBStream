@@ -81,19 +81,20 @@ class DolbyVisionFirstFormatStaticInfoContractTest {
     @Test
     fun `every stripping emit site can withhold the format`() {
         // The 8.1 rewrite, both relabel sites (Auto non-DV display and the
-        // DV-hardware reroute), the general strip, and the declared-DV strip:
-        // every path whose samples are stripped and whose format reached the
-        // decoder as `delegate.format(...)`. One of them not going through the
-        // guard is one path still configuring the decoder from a metadata-less
-        // format.
+        // DV-hardware reroute), the general strip, the declared-DV strip, and the
+        // keep-DV strip (`Hdr10BaseHandling.STRIP_RPU_KEEP_DV`, which leaves the
+        // track declared as Dolby Vision but still drops the RPU): every path
+        // whose samples are stripped and whose format reached the decoder as
+        // `delegate.format(...)`. One of them not going through the guard is one
+        // path still configuring the decoder from a metadata-less format.
         assertEquals(
             "the stripping emit sites that withhold the format; a new strip path " +
                 "that emits bare would keep the 2026-10-15 stall",
-            5,
+            6,
             count(source, "if (!deferHdr10StaticFormat(")
         )
         // And they are in format(), which the extractor calls before any sample.
-        assertEquals(5, count(formatBody(), "if (!deferHdr10StaticFormat("))
+        assertEquals(6, count(formatBody(), "if (!deferHdr10StaticFormat("))
     }
 
     @Test
@@ -132,9 +133,9 @@ class DolbyVisionFirstFormatStaticInfoContractTest {
         assertTrue(
             "the samples must be stripped: a passthrough track's samples never reach the " +
                 "code that emits the withheld format, so withholding one would strand it",
-            source.contains(
-                "if (mode != Mode.STRIPPING && mode != Mode.STRIP_NALS_ONLY) return false"
-            )
+            source.contains("if (mode != Mode.STRIPPING &&") &&
+                source.contains("mode != Mode.STRIP_NALS_ONLY &&") &&
+                source.contains("mode != Mode.STRIP_RPU_KEEP_DV")
         )
         assertTrue(
             "a format that already carries the container's static metadata has nothing to gain",

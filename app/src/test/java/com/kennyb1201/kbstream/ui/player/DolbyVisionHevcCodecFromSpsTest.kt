@@ -219,8 +219,12 @@ class DolbyVisionHevcCodecFromSpsTest {
             count(factory, "relabelDvFormat(relabel.format, relabelCodec)")
         )
         assertEquals(
-            "and both re-advertising logs must name codecSrc=sps|fallback",
-            2,
+            "and every re-advertising log must name codecSrc=sps|fallback — the two relabel " +
+                "sites plus the keep-DV strip, whose own log reports that the SPS-derived string " +
+                "it decided NOT to advertise came from the track (the keep-DV arm keeps the " +
+                "declared dvhe string, so the field log has to say both that it did not relabel " +
+                "and what the relabel would have said)",
+            3,
             count(factory, " codecSrc=\$codecSrc")
         )
     }

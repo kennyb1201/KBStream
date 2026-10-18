@@ -79,11 +79,11 @@ import java.io.EOFException
  * (P4 / P8) is handled once the mode has decided to rewrite it.
  *
  * Extracted as a pure value so the whole matrix is pinned by a unit test
- * without a player: the three paths are materially different, and the wrong
- * one black-screens a non-DV TV (native passthrough), stalls an MTK-class
- * decoder (strip), or fixes playback (relabel-only).
+ * without a player: the four paths are materially different, and the wrong one
+ * black-screens a non-DV TV (native passthrough), stalls an MTK-class decoder
+ * (strip), or fixes playback (relabel-only, and the keep-DV strip).
  */
-internal enum class Hdr10BaseHandling { PASSTHROUGH, RELABEL_ONLY, STRIP }
+internal enum class Hdr10BaseHandling { PASSTHROUGH, RELABEL_ONLY, STRIP_RPU_KEEP_DV, STRIP }
 
 /**
  * The P4/P8 handling for one stream.
@@ -98,6 +98,11 @@ internal enum class Hdr10BaseHandling { PASSTHROUGH, RELABEL_ONLY, STRIP }
  *    clean single-layer set, and the DV RPU/EL and the HDR10+ SEI are removed
  *    in place — no SPS/PPS and no in-sample parameter set is touched (see
  *    `Mode.STRIP_NALS_ONLY`).
+ *  - [Hdr10BaseHandling.STRIP_RPU_KEEP_DV]: the explicit "Strip All" override
+ *    on a box with a DV decoder driving a display that does NOT support Dolby
+ *    Vision — the Nuvio-style strip, which keeps the track declared as Dolby
+ *    Vision (so the box's DV decoder takes it, and emits HDR10 once the RPU is
+ *    gone) and removes only the RPU/EL NALs. See [Hdr10BaseHandling].
  *  - [Hdr10BaseHandling.STRIP]: no DV decoder on the box, or the explicit
  *    "Strip All" override — strip the RPU/EL/HDR10+ NALs to HDR10 as before.
  */
@@ -105,9 +110,33 @@ internal fun selectHdr10BaseHandling(
     nativeDvSupported: Boolean,
     nonDvDisplayOnDvDevice: Boolean,
     convertAllProfiles: Boolean,
+    /**
+     * The display's own Dolby Vision capability, as the CALL SITE resolved it —
+     * distinct from [nonDvDisplayOnDvDevice], which is an AUTO-mode fact (a DV
+     * decoder on a non-DV display in AUTO, and false in every explicit mode,
+     * "Strip All" included).
+     *
+     * Null means "the caller did not supply it", and then the mode-3 keep-DV
+     * arm is never taken: the box is not allowed to infer a non-DV display from
+     * the absence of an AUTO-mode flag it deliberately withholds in mode 3.
+     * [displaySupportsDv] has to be `false` to arm it — an unknown display is
+     * not a non-DV display, because the failure this arm risks on a DV display
+     * (Dolby Vision stripped and handed to a DV sink) is worse than the stall
+     * it fixes on a non-DV one.
+     */
+    displaySupportsDv: Boolean? = null,
 ): Hdr10BaseHandling = when {
     nativeDvSupported && !convertAllProfiles -> Hdr10BaseHandling.PASSTHROUGH
     nonDvDisplayOnDvDevice && !convertAllProfiles -> Hdr10BaseHandling.RELABEL_ONLY
+    // Mode 3 ("Strip All") on a DV decoder driving a NON-DV display: the
+    // reference player's "Always Strip DV" shape, which plays this box where
+    // every relabel-and-rewrite variant is field-dead (configure OK, zero
+    // output on OMX.MTK.VIDEO.DECODER.HEVC). Only mode 3 takes it - Auto's
+    // non-DV-display combination stays on the relabel, and a DV-capable display
+    // keeps the relabel too, because "Strip All" there is a user asking for
+    // HDR10 rather than a sink that cannot show Dolby Vision.
+    convertAllProfiles && nativeDvSupported && displaySupportsDv == false ->
+        Hdr10BaseHandling.STRIP_RPU_KEEP_DV
     else -> Hdr10BaseHandling.STRIP
 }
 
@@ -125,7 +154,17 @@ internal class DolbyVisionCompatExtractorsFactory(
      * MTK-class decoders, so P4/P8 take the relabel-only path instead (see
      * [selectHdr10BaseHandling]).
      */
-    private val nonDvDisplayOnDvDevice: Boolean = false
+    private val nonDvDisplayOnDvDevice: Boolean = false,
+    /**
+     * Whether the attached display itself supports Dolby Vision, as the call
+     * site resolved it — a plain capability read, true or false in EVERY mode
+     * (unlike [nonDvDisplayOnDvDevice], which is an AUTO-only combination).
+     *
+     * Null is "not supplied": the caller did not tell the factory, so the
+     * mode-3 keep-DV arm can never be taken on an assumption — see
+     * [selectHdr10BaseHandling].
+     */
+    private val displaySupportsDv: Boolean? = null
 ) : ExtractorsFactory {
 
     override fun createExtractors(): Array<Extractor> {
@@ -162,11 +201,13 @@ internal class DolbyVisionCompatExtractorsFactory(
             "Wrapping extractor=$simpleName framing=$framing " +
                 "allProfiles=$convertAllProfiles rewriteEnabled=$dvRewriteEnabled " +
                 "stripHdr10Plus=$stripHdr10Plus convertP7To81=$convertP7To81 convertP5To81=$convertP5To81 " +
-                "nativeDv=$nativeDvSupported nonDvDisplay=$nonDvDisplayOnDvDevice"
+                "nativeDv=$nativeDvSupported nonDvDisplay=$nonDvDisplayOnDvDevice " +
+                "displaySupportsDv=$displaySupportsDv"
         )
         return VideoCompatExtractor(
             extractor, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
+            convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
+            displaySupportsDv
         )
     }
 }
@@ -184,7 +225,8 @@ private class VideoCompatExtractor(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean,
+    private val displaySupportsDv: Boolean?
 ) : Extractor {
 
     override fun init(output: ExtractorOutput) {
@@ -192,7 +234,8 @@ private class VideoCompatExtractor(
         delegate.init(
             VideoCompatExtractorOutput(
                 output, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
+                displaySupportsDv
             )
         )
     }
@@ -218,7 +261,8 @@ private class VideoCompatExtractorOutput(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean,
+    private val displaySupportsDv: Boolean?
 ) : ExtractorOutput {
 
     override fun track(id: Int, type: Int): TrackOutput {
@@ -226,7 +270,8 @@ private class VideoCompatExtractorOutput(
         return if (type == C.TRACK_TYPE_VIDEO) {
             VideoCompatTrackOutput(
                 track, framing, stripHdr10Plus, convertAllProfiles, dvRewriteEnabled,
-                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice
+                convertP7To81, convertP5To81, nativeDvSupported, nonDvDisplayOnDvDevice,
+                displaySupportsDv
             )
         } else {
             track
@@ -252,13 +297,14 @@ private class VideoCompatTrackOutput(
     private val convertP7To81: Boolean,
     private val convertP5To81: Boolean,
     private val nativeDvSupported: Boolean,
-    private val nonDvDisplayOnDvDevice: Boolean
+    private val nonDvDisplayOnDvDevice: Boolean,
+    private val displaySupportsDv: Boolean?
 ) : TrackOutput {
 
     /** True when either per-profile 8.1 conversion (P5/P7) is active. */
     private val convertTo81 = convertP7To81 || convertP5To81
 
-    private enum class Mode { NORMAL, SNIFFING, STRIPPING, STRIP_NALS_ONLY }
+    private enum class Mode { NORMAL, SNIFFING, STRIPPING, STRIP_NALS_ONLY, STRIP_RPU_KEEP_DV }
 
     private var mode = Mode.NORMAL
     private var sniffRemaining = 0
@@ -501,7 +547,12 @@ private class VideoCompatTrackOutput(
      */
     private fun deferHdr10StaticFormat(format: Format): Boolean {
         if (!DoviBridge.available) return false
-        if (mode != Mode.STRIPPING && mode != Mode.STRIP_NALS_ONLY) return false
+        if (mode != Mode.STRIPPING &&
+            mode != Mode.STRIP_NALS_ONLY &&
+            mode != Mode.STRIP_RPU_KEEP_DV
+        ) {
+            return false
+        }
         if (format.colorInfo?.hdrStaticInfo != null) return false
         if (format.sampleMimeType != MimeTypes.VIDEO_H265 &&
             format.sampleMimeType != MimeTypes.VIDEO_DOLBY_VISION
@@ -671,7 +722,14 @@ private class VideoCompatTrackOutput(
             val handling = selectHdr10BaseHandling(
                 nativeDvSupported = nativeDvSupported,
                 nonDvDisplayOnDvDevice = nonDvDisplayOnDvDevice,
-                convertAllProfiles = convertAllProfiles
+                convertAllProfiles = convertAllProfiles,
+                // The display's own capability, which "Strip All" is the mode
+                // that cannot be answered without: `nonDvDisplayOnDvDevice` is
+                // false there by construction (it is the Auto combination), so
+                // a factory that only looked at IT could never take the keep-DV
+                // arm — and one that guessed from its absence would take it on a
+                // DV display.
+                displaySupportsDv = displaySupportsDv
             )
             if (handling == Hdr10BaseHandling.PASSTHROUGH) {
                 Log.i(
@@ -820,6 +878,74 @@ private class VideoCompatTrackOutput(
                     logDecoderFormat(format)
                     delegate.format(format)
                 }
+                return
+            }
+            if (handling == Hdr10BaseHandling.STRIP_RPU_KEEP_DV) {
+                // The reference player's "Always Strip DV", and the one arm that
+                // is NOT this file's relabel: on a DV decoder driving a NON-DV
+                // display, every relabel-and-rewrite variant is field-dead on
+                // this chipset (declared P8 dvhe.08.06, Fire TV Stick 4K Plus,
+                // OMX.MTK.VIDEO.DECODER.HEVC: relabel-only, relabel + config VPS
+                // rewrite, in-sample VPS/SPS rewrite with the NAL-40 drop, and
+                // the config SPS rewrite all configure OK and emit nothing).
+                //
+                // What differs here is what is LEFT ALONE, not what is removed:
+                //
+                //  - the track stays declared as Dolby Vision (`video/dolby-
+                //    vision` + the container's own `dvhe.08.06`), so the box's
+                //    own DV hardware decoder — ExoPlayer's own choice for that
+                //    mime, no custom MediaCodecSelector involved — takes it
+                //    instead of the HEVC decoder that produces zero frames;
+                //  - the codec config (VPS/SPS/PPS) is forwarded byte-identical,
+                //    so the decoder is configured from exactly the bytes the
+                //    muxer wrote;
+                //  - every SEI NAL is kept, the DV vendor SEI (39/40) included,
+                //    which is the half `Mode.STRIP_NALS_ONLY` deliberately drops
+                //    there (it arms the declared-DV suffix-SEI rule) — the
+                //    reference player never strips those NALs;
+                //  - and the samples lose only the RPU (62) and the enhancement
+                //    layer (63, plus `layerId > 0`), the
+                //    `DolbyVisionCompat.stripAnnexB` rule the reference's
+                //    `HevcDvRpuStripper` is named for. With the RPU gone the DV
+                //    decoder has no dynamic metadata left and falls back to
+                //    HDR10 output, which is what the sink can show.
+                //
+                // The 2026-10-14 no-relabel trial is NOT this arm, and the
+                // difference is the reason it gets another field run rather
+                // than inheriting that night's verdict: the trial stripped the
+                // HDR10+ SEI and the declared-DV suffix SEI along with the RPU —
+                // it reached the strip with the HDR10+ rule forced on and the
+                // declared-DV suffix rule armed — i.e. it removed Dolby Vision
+                // signalling from a track it still declared as Dolby Vision. Nothing is
+                // removed here but the RPU/EL, and the HDR10+ SEI follows the
+                // existing user toggle exactly as on every other path.
+                //
+                // The one thing added is additive and already accepted on this
+                // path: the RPU's Level 6 HDR10 static metadata, read before
+                // the strip and attached to the format (see
+                // [deferHdr10StaticFormat] / [provideHdr10StaticMetadata]).
+                val hdrStatic =
+                    if (format.colorInfo?.hdrStaticInfo != null) "preserved" else "absent"
+                Log.i(
+                    "PLAYER_DV",
+                    "Declared Dolby Vision (codecs=${format.codecs ?: "?"}) — DV-decoder " +
+                        "hardware, non-DV display (Strip All): stripRpuKeepDv=applied " +
+                        "RPU/EL NALs dropped, every SEI NAL kept, codec config forwarded " +
+                        "byte-identical, still declared as Dolby Vision so this box's DV " +
+                        "decoder takes it — relabel=skipped(keepDv) " +
+                        "vpsRewrite=skipped(keepDv) spsRewrite=skipped(keepDv) " +
+                        "(nativeDv=$nativeDvSupported stripAll=$convertAllProfiles " +
+                        "displaySupportsDv=$displaySupportsDv) codecSrc=$codecSrc " +
+                        "hdrStaticInfo=$hdrStatic"
+                )
+                // The mode goes first: [deferHdr10StaticFormat] reads it to
+                // decide whether this format may be withheld for the first
+                // sample's metadata, and this path emits the container's format
+                // itself — no relabel, so no relabel failure to log either.
+                mode = Mode.STRIP_RPU_KEEP_DV
+                lastFormat = format
+                logDecoderFormat(format)
+                if (!deferHdr10StaticFormat(format)) delegate.format(format)
                 return
             }
             if (hdr10BaseLayerProfile && nativeDvSupported) {
@@ -1287,6 +1413,78 @@ private class VideoCompatTrackOutput(
                 pendingLen = carrySize
                 return
             }
+        }
+
+        if (mode == Mode.STRIP_RPU_KEEP_DV) {
+            // The keep-DV strip: the RPU (62) / EL (63) go, everything else
+            // stays — every SEI NAL included, which is the difference from
+            // [Mode.STRIP_NALS_ONLY] on the same stripper. Read as, in order:
+            //
+            //  - [stripDv] is the RPU/EL removal, the rule the reference
+            //    player's `HevcDvRpuStripper` is named for (`layerId > 0`
+            //    included).
+            //  - [stripHdr10Plus] is the USER'S toggle, untouched: this arm does
+            //    not decide HDR10+ policy, and the stream is still presented as
+            //    Dolby Vision rather than as a static-HDR10 rewrite (which is
+            //    why Strip All's two relabel arms force it on).
+            //  - [declaredDv] stays false on purpose. That flag drops the
+            //    declared-DV suffix SEI (40) outright, and this arm must keep
+            //    it: the container still declares Dolby Vision, the decoder is
+            //    the DV one, and the NAL is part of the signalling the
+            //    reference player leaves alone. It is exactly the half of the
+            //    2026-10-14 no-relabel trial that failed.
+            //  - [rewriteParamSets] stays false: the codec config the decoder
+            //    was handed is byte-identical, so the in-sample VPS/SPS must be
+            //    too — rewriting them here is the mutating strip's contract, not
+            //    this one's.
+            //  - `kotlinOnly` is the app's own NAL surgery rather than libdovi's
+            //    (Nuvio parity, and the only stripper whose SEI handling is
+            //    per-message rather than per-NAL).
+            //
+            // The audits/log lines the other two paths emit are deliberately
+            // NOT called here: they report parameter-set rewrites and suffix-SEI
+            // drops that this path does not perform, and their own first-sample
+            // line below says what actually happened to this sample.
+            //
+            // Read BEFORE the strip, while the RPU is still in the sample.
+            provideHdr10StaticMetadata(sampleEnd)
+            val firstSample = !stripReported
+            val inventory =
+                if (firstSample) DolbyVisionCompat.describeNals(pendingBuf, sampleEnd) else ""
+            val accounting =
+                if (firstSample) DolbyVisionCompat.SeiStripAccounting() else null
+            val stripped = when (framing) {
+                NalFraming.ANNEX_B ->
+                    DolbyVisionCompat.stripAnnexB(
+                        pendingBuf, sampleEnd,
+                        stripDv = true, // RPU/EL only, like the reference
+                        stripHdr10Plus = stripHdr10Plus,
+                        kotlinOnly = true,
+                        accounting = accounting
+                    )
+                NalFraming.LENGTH_DELIMITED ->
+                    DolbyVisionCompat.stripLengthDelimited(
+                        pendingBuf, sampleEnd, nalLengthFieldLength,
+                        stripDv = true, // RPU/EL only, like the reference
+                        stripHdr10Plus = stripHdr10Plus,
+                        kotlinOnly = true,
+                        accounting = accounting
+                    )
+            }
+            if (firstSample) {
+                stripReported = true
+                Log.i(
+                    "PLAYER_DV",
+                    "stripRpuKeepDv: first sample (codecs=${currentCodecs ?: "?"}) " +
+                        "modified=${stripped >= 0} nals=$inventory " +
+                        "sei=${accounting?.summary()?.ifEmpty { "none" } ?: "none"} " +
+                        "(DV SEI NALs kept, config untouched)"
+                )
+            }
+            emit(if (stripped >= 0) stripped else sampleEnd)
+            if (carrySize > 0) System.arraycopy(pendingBuf, sampleEnd, pendingBuf, 0, carrySize)
+            pendingLen = carrySize
+            return
         }
 
         if (mode == Mode.STRIP_NALS_ONLY) {

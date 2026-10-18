@@ -5439,7 +5439,14 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     convertP7To81 = convertP7To81,
                     convertP5To81 = convertP5To81,
                     nativeDvSupported = nativeDvSupported,
-                    nonDvDisplayOnDvDevice = dvDisplayMismatch
+                    nonDvDisplayOnDvDevice = dvDisplayMismatch,
+                    // The display's own capability, in EVERY mode — not the
+                    // AUTO-only `dvDisplayMismatch` combination above, which is
+                    // false in "Strip All" by construction. Mode 3 needs the
+                    // fact itself: a DV decoder on a non-DV display is the
+                    // combination the keep-DV strip exists for, and the factory
+                    // is not allowed to infer it from an AUTO-mode flag.
+                    displaySupportsDv = displaySupportsDv
                 )
             }
         val mediaSourceFactory = DefaultMediaSourceFactory(cachedFactory, extractorsFactory)
