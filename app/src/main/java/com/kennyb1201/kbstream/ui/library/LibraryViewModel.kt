@@ -14,6 +14,7 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.simkl.SimklRepository
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -611,6 +612,22 @@ class LibraryViewModel(
                     }
                 }
 
+                // The second flavor this row can be watched under: its own
+                // raw `tmdb:<n>` id, which is what the batch preload above
+                // already warmed and what a row with no IMDB id (or one whose
+                // resolution came back null) is keyed under. Strictly
+                // additive - a row the IMDB check already matched keeps that
+                // key (see [WatchedStatusKeys]).
+                val tmdbWatchedId = item.tmdbId
+                    ?.takeIf { it > 0 }
+                    ?.let { WatchedStatusKeys.tmdbKeyId(it) }
+
+                if (watched == null && tmdbWatchedId != null &&
+                    watchedRepository.isWatchedCached(tmdbWatchedId, normalizedType)
+                ) {
+                    watched = "$normalizedType::$tmdbWatchedId"
+                }
+
                 // The eye: started but not finished. Skipped when the title is
                 // already fully watched, because the checkmark owns the
                 // corner and a row must never draw both.
@@ -620,6 +637,13 @@ class LibraryViewModel(
                     watchedRepository.isPartiallyWatchedCached(imdbId, normalizedType)
                 ) {
                     partiallyWatched = "$normalizedType::$imdbId"
+                }
+
+                if (partiallyWatched == null && watched == null &&
+                    tmdbWatchedId != null &&
+                    watchedRepository.isPartiallyWatchedCached(tmdbWatchedId, normalizedType)
+                ) {
+                    partiallyWatched = "$normalizedType::$tmdbWatchedId"
                 }
 
                 // Ratings come from the shared TMDB detail cache
@@ -978,7 +1002,8 @@ internal fun applyUnwatched(
 ): List<LibraryItem> {
     if (!hide || watchedKeys.isEmpty()) return items
     return items.filter { item ->
-        val key = item.watchedKey()
-        key == null || !watchedKeys.contains(key)
+        // A row with no key at all can never be hidden; one that matches
+        // under EITHER flavor is watched and drops.
+        item.watchedKeyCandidates().none { it in watchedKeys }
     }
 }

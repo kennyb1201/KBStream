@@ -50,6 +50,7 @@ import com.kennyb1201.kbstream.data.kb.KBFolder
 import com.kennyb1201.kbstream.data.kb.KBRail
 import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.HeroArtwork
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
 import com.kennyb1201.kbstream.ui.components.KBCard
 import com.kennyb1201.kbstream.ui.components.KBSkeletonGrid
@@ -392,7 +393,9 @@ private fun FolderItemCard(
 }
 
 /** Watched lookup: addon items key on their imdb id directly; TMDB items
- *  on the imdb id resolved by the ViewModel. */
+ *  on the imdb id resolved by the ViewModel, or - when that resolution never
+ *  ran or answered nothing - on the item's own `tmdb:<n>` id, which needs no
+ *  network (see [WatchedStatusKeys]). */
 private fun itemWatched(
     item: KBContentItem,
     watchedKeys: Set<String>,
@@ -403,9 +406,13 @@ private fun itemWatched(
         else -> "movie"
     }
     val imdbId = item.id.takeIf { it.startsWith("tt") }
-        ?: item.tmdbId?.let { resolvedIds["$normalized::$it"] }
-        ?: return false
-    return "$normalized::$imdbId" in watchedKeys
+    if (imdbId != null) return "$normalized::$imdbId" in watchedKeys
+
+    val tmdbId = item.tmdbId ?: return false
+    resolvedIds["$normalized::$tmdbId"]?.let { resolved ->
+        if ("$normalized::$resolved" in watchedKeys) return true
+    }
+    return "$normalized::${WatchedStatusKeys.tmdbKeyId(tmdbId)}" in watchedKeys
 }
 
 /** Eye-badge twin of [itemWatched]: same id resolution against the
@@ -420,9 +427,13 @@ private fun itemWatchedPartially(
         else -> "movie"
     }
     val imdbId = item.id.takeIf { it.startsWith("tt") }
-        ?: item.tmdbId?.let { resolvedIds["$normalized::$it"] }
-        ?: return false
-    return "$normalized::$imdbId" in partialWatchedKeys
+    if (imdbId != null) return "$normalized::$imdbId" in partialWatchedKeys
+
+    val tmdbId = item.tmdbId ?: return false
+    resolvedIds["$normalized::$tmdbId"]?.let { resolved ->
+        if ("$normalized::$resolved" in partialWatchedKeys) return true
+    }
+    return "$normalized::${WatchedStatusKeys.tmdbKeyId(tmdbId)}" in partialWatchedKeys
 }
 
 /**

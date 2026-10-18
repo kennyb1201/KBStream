@@ -8,6 +8,7 @@ import com.kennyb1201.kbstream.data.runCatchingCancellable
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonDetail
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,18 +54,27 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
         _resolvedCreditIds,
         watchedStatusRepository.observeWatchUpdates()
     ) { personDetail: TmdbPersonDetail?, resolvedMap: Map<String, String>, _ ->
-        if (personDetail == null || resolvedMap.isEmpty()) {
+        // The `resolvedMap.isEmpty()` guard is GONE on purpose: a credit whose
+        // TMDB->IMDB resolution never ran (the batch is capped at 60), answered
+        // nothing, or failed still badges off its own raw `tmdb:<n>` id, which
+        // needs no network. An empty map used to mean a credit list with no
+        // badges at all, which is the field report this rule exists for - the
+        // actor screen's "some shows badged, some bare, while the episodes are
+        // correctly marked watched".
+        if (personDetail == null) {
             emptySet()
         } else {
             sortedCredits(personDetail)
-                .mapNotNull { credit ->
-                    val mediaType = normalizeMediaType(credit.mediaType) ?: return@mapNotNull null
-                    val imdbId = resolvedMap[creditLookupKey(credit.id, mediaType)] ?: return@mapNotNull null
-                    if (watchedStatusRepository.isWatchedCached(imdbId, mediaType)) {
-                        watchedKey(imdbId, mediaType)
-                    } else {
-                        null
-                    }
+                .flatMap { credit ->
+                    val mediaType = normalizeMediaType(credit.mediaType) ?: return@flatMap emptyList()
+                    // The IMDB flavor first, this credit's own `tmdb:<n>` second,
+                    // both when both match - the rule lives in [WatchedStatusKeys].
+                    WatchedStatusKeys.watchedKeysOf(
+                        tmdbId = credit.id,
+                        mediaType = mediaType,
+                        resolvedImdbId = resolvedMap[creditLookupKey(credit.id, mediaType)],
+                        matches = watchedStatusRepository::isWatchedCached
+                    )
                 }
                 .toSet()
         }
@@ -82,18 +92,20 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
         _resolvedCreditIds,
         watchedStatusRepository.observeWatchUpdates()
     ) { personDetail: TmdbPersonDetail?, resolvedMap: Map<String, String>, _ ->
-        if (personDetail == null || resolvedMap.isEmpty()) {
+        // Same two candidates and the same dropped `resolvedMap.isEmpty()` guard
+        // as watchedKeys above, against the partially-watched state.
+        if (personDetail == null) {
             emptySet()
         } else {
             sortedCredits(personDetail)
-                .mapNotNull { credit ->
-                    val mediaType = normalizeMediaType(credit.mediaType) ?: return@mapNotNull null
-                    val imdbId = resolvedMap[creditLookupKey(credit.id, mediaType)] ?: return@mapNotNull null
-                    if (watchedStatusRepository.isPartiallyWatchedCached(imdbId, mediaType)) {
-                        watchedKey(imdbId, mediaType)
-                    } else {
-                        null
-                    }
+                .flatMap { credit ->
+                    val mediaType = normalizeMediaType(credit.mediaType) ?: return@flatMap emptyList()
+                    WatchedStatusKeys.watchedKeysOf(
+                        tmdbId = credit.id,
+                        mediaType = mediaType,
+                        resolvedImdbId = resolvedMap[creditLookupKey(credit.id, mediaType)],
+                        matches = watchedStatusRepository::isPartiallyWatchedCached
+                    )
                 }
                 .toSet() - watchedKeys.value
         }
@@ -103,7 +115,12 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
         initialValue = emptySet()
     )
 
-    fun watchedKey(id: String, type: String): String = "${type.lowercase()}::$id"
+    /**
+     * The key a credit tile is compared under. Delegates to
+     * [WatchedStatusKeys.key], so the keys the screen tests and the keys the
+     * sets above are built from cannot describe the same title differently.
+     */
+    fun watchedKey(id: String, type: String): String = WatchedStatusKeys.key(id, type)
 
     fun creditLookupKey(tmdbId: Int, mediaType: String): String =
         "${mediaType.lowercase()}::$tmdbId"
@@ -235,6 +252,20 @@ class ActorViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun resolveAndPreloadWatched(person: TmdbPersonDetail) {
         try {
+            // The badge preload first, and UNCAPPED: every credit's own
+            // `tmdb:<n>` flavor, over the whole list rather than the `.take(60)`
+            // resolution batch below. It costs local DB plus the already-cached
+            // Simkl snapshot - no network - and it is what lets a credit past
+            // the cap, or one whose resolution comes back null, badge at all.
+            // (Same rule, and same order, as Tag/Studio/Decade/Collection.)
+            val tmdbPairs = sortedCredits(person)
+                .mapNotNull { credit ->
+                    val mediaType = normalizeMediaType(credit.mediaType) ?: return@mapNotNull null
+                    if (credit.id <= 0) null else WatchedStatusKeys.tmdbKeyId(credit.id) to mediaType
+                }
+                .distinct()
+            watchedStatusRepository.preload(tmdbPairs)
+
             val cast = sortedCredits(person)
                 .mapNotNull { credit ->
                     val mediaType = normalizeMediaType(credit.mediaType) ?: return@mapNotNull null

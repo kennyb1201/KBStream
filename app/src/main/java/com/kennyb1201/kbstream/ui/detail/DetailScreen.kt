@@ -112,6 +112,7 @@ import com.kennyb1201.kbstream.data.tmdb.bestReleaseDate
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.tmdb.movieStatusTag
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.displaySeasonName
 import com.kennyb1201.kbstream.data.tmdb.list
@@ -4942,7 +4943,17 @@ fun DetailScreen(
                                                         imdbId,
                                                         "movie"
                                                     ) in watchedKeys
-                                                } == true,
+                                                } == true ||
+                                                // The poster's own `tmdb:<n>`
+                                                // id: the only key a part TMDB
+                                                // has no `imdb_id` for ever
+                                                // has (see
+                                                // [WatchedStatusKeys]).
+                                                viewModel.watchedKey(
+                                                    WatchedStatusKeys
+                                                        .tmdbKeyId(part.id),
+                                                    "movie"
+                                                ) in watchedKeys,
                                             isPartiallyWatched =
                                                 resolvedPosterIds[
                                                     viewModel
@@ -4956,7 +4967,12 @@ fun DetailScreen(
                                                         imdbId,
                                                         "movie"
                                                     ) in partialWatchedKeys
-                                                } == true,
+                                                } == true ||
+                                                viewModel.watchedKey(
+                                                    WatchedStatusKeys
+                                                        .tmdbKeyId(part.id),
+                                                    "movie"
+                                                ) in partialWatchedKeys,
                                             onClick = {
                                                 scope.launch {
                                                     val imdbId =
@@ -5099,7 +5115,14 @@ fun DetailScreen(
                                                         imdbId,
                                                         type.lowercase()
                                                     ) in watchedKeys
-                                                } == true,
+                                                } == true ||
+                                                // Same fallback as the
+                                                // collection rail above.
+                                                viewModel.watchedKey(
+                                                    WatchedStatusKeys
+                                                        .tmdbKeyId(rec.id),
+                                                    type.lowercase()
+                                                ) in watchedKeys,
                                             isPartiallyWatched =
                                                 resolvedPosterIds[
                                                     viewModel
@@ -5113,7 +5136,12 @@ fun DetailScreen(
                                                         imdbId,
                                                         type.lowercase()
                                                     ) in partialWatchedKeys
-                                                } == true,
+                                                } == true ||
+                                                viewModel.watchedKey(
+                                                    WatchedStatusKeys
+                                                        .tmdbKeyId(rec.id),
+                                                    type.lowercase()
+                                                ) in partialWatchedKeys,
                                             onClick = {
                                                 scope.launch {
                                                     val imdbId =
@@ -5491,6 +5519,9 @@ fun DetailScreen(
                     val menuMediaType =
                         target.mediaType.lowercase()
 
+                    // The IMDB flavor first, then the poster's own
+                    // `tmdb:<n>` one, so the mark/unmark toggle matches a
+                    // poster that badges off the unresolved flavor.
                     val isWatched =
                         resolvedPosterIds[
                             viewModel.posterLookupKey(
@@ -5502,7 +5533,11 @@ fun DetailScreen(
                                 imdbId,
                                 menuMediaType
                             ) in watchedKeys
-                        } == true
+                        } == true ||
+                            viewModel.watchedKey(
+                                WatchedStatusKeys.tmdbKeyId(target.tmdbId),
+                                menuMediaType
+                            ) in watchedKeys
 
                     PosterContextMenu(
                         title = target.name.ifBlank { "Untitled" },

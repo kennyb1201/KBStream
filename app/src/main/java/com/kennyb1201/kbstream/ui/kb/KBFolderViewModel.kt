@@ -23,6 +23,7 @@ import com.kennyb1201.kbstream.data.tmdb.displayRating
 import com.kennyb1201.kbstream.data.tmdb.displayRuntime
 import com.kennyb1201.kbstream.data.tmdb.director
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import com.kennyb1201.kbstream.ui.components.LandscapeArtRequest
 import com.kennyb1201.kbstream.ui.components.landscapeArtFor
@@ -99,13 +100,26 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
             for (rail in state.rails) {
                 for (item in rail.items) {
                     val normalized = normalizeType(item.type) ?: continue
-                    val imdbId = item.tmdbId?.let { tmdbId ->
-                        resolved[lookupKey(tmdbId, normalized)]
-                    } ?: item.id.takeIf { it.startsWith("tt") }
-                    if (imdbId != null &&
-                        watchedStatusRepository.isWatchedCached(imdbId, normalized)
-                    ) {
-                        keys += watchedKey(imdbId, normalized)
+                    // Add-on items already carry the IMDB id they are watched
+                    // under. A TMDB item has TWO keys: the resolved IMDB
+                    // flavor when the capped resolution pass reached it, and
+                    // its own `tmdb:<n>` one always - the only key it has when
+                    // that pass never ran or answered nothing (see
+                    // [WatchedStatusKeys]).
+                    val imdbId = item.id.takeIf { it.startsWith("tt") }
+                    if (imdbId != null) {
+                        if (watchedStatusRepository.isWatchedCached(imdbId, normalized)) {
+                            keys += watchedKey(imdbId, normalized)
+                        }
+                    } else {
+                        item.tmdbId?.let { tmdbId ->
+                            keys += WatchedStatusKeys.watchedKeysOf(
+                                tmdbId = tmdbId,
+                                mediaType = normalized,
+                                resolvedImdbId = resolved[lookupKey(tmdbId, normalized)],
+                                matches = watchedStatusRepository::isWatchedCached
+                            )
+                        }
                     }
                 }
             }
@@ -132,13 +146,22 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
             for (rail in state.rails) {
                 for (item in rail.items) {
                     val normalized = normalizeType(item.type) ?: continue
-                    val imdbId = item.tmdbId?.let { tmdbId ->
-                        resolved[lookupKey(tmdbId, normalized)]
-                    } ?: item.id.takeIf { it.startsWith("tt") }
-                    if (imdbId != null &&
-                        watchedStatusRepository.isPartiallyWatchedCached(imdbId, normalized)
-                    ) {
-                        keys += watchedKey(imdbId, normalized)
+                    // Same two candidates as watchedKeys, against the
+                    // partially-watched state.
+                    val imdbId = item.id.takeIf { it.startsWith("tt") }
+                    if (imdbId != null) {
+                        if (watchedStatusRepository.isPartiallyWatchedCached(imdbId, normalized)) {
+                            keys += watchedKey(imdbId, normalized)
+                        }
+                    } else {
+                        item.tmdbId?.let { tmdbId ->
+                            keys += WatchedStatusKeys.watchedKeysOf(
+                                tmdbId = tmdbId,
+                                mediaType = normalized,
+                                resolvedImdbId = resolved[lookupKey(tmdbId, normalized)],
+                                matches = watchedStatusRepository::isPartiallyWatchedCached
+                            )
+                        }
                     }
                 }
             }
@@ -701,6 +724,21 @@ class KBFolderViewModel(application: Application) : AndroidViewModel(application
     }
 
     private suspend fun resolveAndPreload(rails: List<KBRail>) {
+        // The badge preload first, and UNCAPPED: every TMDB item's own
+        // `tmdb:<n>` flavor, over the whole rail list rather than the `.take(300)`
+        // resolution batch below. It costs local DB plus the already-cached
+        // Simkl snapshot - no network - and it is what lets an item past the
+        // cap, or one whose resolution comes back null, badge at all. (Same
+        // rule, and same order, as Tag/Studio/Decade/Collection.)
+        watchedStatusRepository.preload(
+            rails.flatMap { it.items }
+                .mapNotNull { item ->
+                    val normalized = normalizeType(item.type) ?: return@mapNotNull null
+                    item.tmdbId?.let { WatchedStatusKeys.tmdbKeyId(it) to normalized }
+                }
+                .distinct()
+        )
+
         val targets = rails
             .flatMap { it.items }
             .mapNotNull { item ->

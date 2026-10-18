@@ -157,8 +157,11 @@ class LibraryP2ContractTest {
 
         val screen = source(LIBRARY_SCREEN)
         assertTrue(
-            "the grid must hand the eye flag to the shared poster card",
-            screen.contains("isPartiallyWatched = item.watchedKey() in partiallyWatchedKeys")
+            "the grid must hand the eye flag to the shared poster card, under either id " +
+                "flavor the enrichment can file the row under",
+            screen.contains(
+                "isPartiallyWatched = item.watchedKeyCandidates().any { it in partiallyWatchedKeys }"
+            )
         )
         assertTrue(
             "and each pane must pass the resolved set through",

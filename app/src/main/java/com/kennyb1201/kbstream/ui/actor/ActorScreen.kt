@@ -60,6 +60,7 @@ import com.kennyb1201.kbstream.data.library.HiddenTitles
 import com.kennyb1201.kbstream.data.tmdb.TmdbPersonCredit
 import com.kennyb1201.kbstream.data.tmdb.TmdbRepository
 import com.kennyb1201.kbstream.data.tmdb.metaLine
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.components.KBSkeletonRailStack
 import com.kennyb1201.kbstream.ui.components.posterEdgeShape
 import com.kennyb1201.kbstream.ui.components.KBStatusMessage
@@ -751,6 +752,17 @@ fun ActorScreen(
                                 else -> null
                             }
 
+                        // The IMDB key first, then this credit's own
+                        // `tmdb:<n>` one: a credit past the resolution cap, or
+                        // one TMDB returned no `imdb_id` for, is watched under
+                        // the flavor that needs no network (see
+                        // [WatchedStatusKeys]).
+                        val menuTmdbKey = menuMediaType?.let {
+                            viewModel.watchedKey(
+                                WatchedStatusKeys.tmdbKeyId(credit.id),
+                                it
+                            )
+                        }
                         val isWatched =
                             if (menuMediaType != null) {
                                 resolvedCreditIds[
@@ -763,7 +775,7 @@ fun ActorScreen(
                                         imdbId,
                                         menuMediaType
                                     ) in watchedKeys
-                                } == true
+                                } == true || menuTmdbKey in watchedKeys
                             } else {
                                 false
                             }
@@ -958,12 +970,27 @@ private fun ActorCreditRail(
             val isReturnItem = index == returnIndex
             val isFirstItem = isFirstRail && index == 0
 
+            // Both id flavors this credit can be watched under: the resolved
+            // IMDB one, then its own raw `tmdb:<n>` id, which is the one a
+            // credit past the `.take(60)` resolution cap still has (see
+            // [WatchedStatusKeys]). The checkmark wins over the eye.
+            val creditImdbId =
+                resolvedCreditIds[viewModel.creditLookupKey(credit.id, normalizedMediaType)]
+            val creditTmdbWatchedKey =
+                viewModel.watchedKey(WatchedStatusKeys.tmdbKeyId(credit.id), normalizedMediaType)
+            val creditWatched =
+                creditImdbId?.let {
+                    viewModel.watchedKey(it, normalizedMediaType) in watchedKeys
+                } == true || creditTmdbWatchedKey in watchedKeys
+
             ActorCreditCard(
                 credit = credit,
-                isWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, normalizedMediaType)]
-                    ?.let { imdbId -> viewModel.watchedKey(imdbId, normalizedMediaType) in watchedKeys } == true,
-                isPartiallyWatched = resolvedCreditIds[viewModel.creditLookupKey(credit.id, normalizedMediaType)]
-                    ?.let { imdbId -> viewModel.watchedKey(imdbId, normalizedMediaType) in partialWatchedKeys } == true,
+                isWatched = creditWatched,
+                isPartiallyWatched = !creditWatched && (
+                    creditImdbId?.let {
+                        viewModel.watchedKey(it, normalizedMediaType) in partialWatchedKeys
+                    } == true || creditTmdbWatchedKey in partialWatchedKeys
+                    ),
                 onClick = {
                     // Remember this card, so backing out of its Detail page
                     // reopens this rail ON it (see [BrowseReturnFocus]).

@@ -44,6 +44,7 @@ import androidx.tv.material3.Text
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchCollectionResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchPersonResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import kotlinx.coroutines.android.awaitFrame
 import com.kennyb1201.kbstream.ui.components.KBSectionHeader
 import com.kennyb1201.kbstream.ui.components.PosterCaptions
@@ -128,6 +129,10 @@ internal fun searchRailTitle(
  * result typed `"TV"` looked up `"tv::123"` against a map keyed `"series::123"`
  * and then built `"TV::tt123"` against a set holding `"series::tt123"`. It
  * missed on both, which is a badge that simply never appears.
+ *
+ * A TMDB result whose IMDB id never resolved - the resolution batch is capped,
+ * and TMDB has no `imdb_id` for some titles at all - still badges off its own
+ * `tmdb:<n>` key, which needs no network (see [WatchedStatusKeys]).
  */
 internal fun watchedTile(
     result: SearchTitleResult,
@@ -137,14 +142,19 @@ internal fun watchedTile(
 ): Boolean {
     val normalizedType = viewModel.normalizedType(result.type) ?: return false
     val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
-    val keyId = if (tmdbId != null) {
-        resolvedIds[viewModel.lookupKey(tmdbId, normalizedType)]
-    } else {
-        result.id
-    } ?: return false
+    if (tmdbId != null) {
+        resolvedIds[viewModel.lookupKey(tmdbId, normalizedType)]?.let { imdbId ->
+            if (viewModel.watchedKey(imdbId, normalizedType) in watchedKeys) return true
+        }
+        return watchedKeyOf(tmdbId, normalizedType) in watchedKeys
+    }
 
-    return viewModel.watchedKey(keyId, normalizedType) in watchedKeys
+    return viewModel.watchedKey(result.id, normalizedType) in watchedKeys
 }
+
+/** `"series::tmdb:123"` - the key a TMDB result has without any resolution. */
+private fun watchedKeyOf(tmdbId: Int, normalizedType: String): String =
+    "$normalizedType::${WatchedStatusKeys.tmdbKeyId(tmdbId)}"
 
 /**
  * Eye-badge twin of [watchedTile]: same id resolution and the same type
@@ -159,13 +169,14 @@ internal fun partialWatchedTile(
 ): Boolean {
     val normalizedType = viewModel.normalizedType(result.type) ?: return false
     val tmdbId = result.id.removePrefix("tmdb:").toIntOrNull()
-    val keyId = if (tmdbId != null) {
-        resolvedIds[viewModel.lookupKey(tmdbId, normalizedType)]
-    } else {
-        result.id
-    } ?: return false
+    if (tmdbId != null) {
+        resolvedIds[viewModel.lookupKey(tmdbId, normalizedType)]?.let { imdbId ->
+            if (viewModel.watchedKey(imdbId, normalizedType) in partialWatchedKeys) return true
+        }
+        return watchedKeyOf(tmdbId, normalizedType) in partialWatchedKeys
+    }
 
-    return viewModel.watchedKey(keyId, normalizedType) in partialWatchedKeys
+    return viewModel.watchedKey(result.id, normalizedType) in partialWatchedKeys
 }
 
 @Composable

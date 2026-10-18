@@ -80,6 +80,33 @@ class LibraryModelsTest {
         )
     }
 
+    @Test
+    fun `watchedKeyCandidates offers the imdb flavor first, the tmdb one second`() {
+        val both = LibraryItem(
+            source = LibrarySource.LOCAL, mediaType = "tv",
+            title = "T", imdbId = "tt0944947", tmdbId = 1399
+        )
+        assertEquals(
+            listOf("series::tt0944947", "series::tmdb:1399"),
+            both.watchedKeyCandidates()
+        )
+
+        // The row the badge sets key under `tmdb:<n>`: a tracker that sent
+        // only a TMDB id, or one whose TMDB→IMDB resolution never answered.
+        val tmdbOnly = LibraryItem(
+            source = LibrarySource.SIMKL_WATCHLIST, mediaType = "Movie",
+            title = "T", imdbId = null, tmdbId = 42
+        )
+        assertEquals(listOf("movie::tmdb:42"), tmdbOnly.watchedKeyCandidates())
+
+        // Blank ids are absent, never a key of their own.
+        val blank = LibraryItem(
+            source = LibrarySource.LOCAL, mediaType = "movie",
+            title = "T", imdbId = "   ", tmdbId = 0
+        )
+        assertTrue(blank.watchedKeyCandidates().isEmpty())
+    }
+
     // ── dedupeKey: the merge + membership contract ───────────────────
 
     @Test

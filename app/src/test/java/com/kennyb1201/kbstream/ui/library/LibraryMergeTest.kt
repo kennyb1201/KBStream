@@ -129,6 +129,22 @@ class LibraryMergeTest {
     }
 
     @Test
+    fun `a row watched under its tmdb flavor hides too`() {
+        // The enrichment keys a row with no IMDB id (or none that resolved)
+        // under its own `tmdb:<n>` id, so the filter has to consult that
+        // flavor as well - otherwise the UNWATCHED chip keeps a title the
+        // poster is already showing a checkmark on.
+        val tmdbOnly = item("TmdbOnly", LibrarySource.SIMKL_WATCHLIST, imdb = null, tmdb = 42)
+        val fresh = item("Fresh", LibrarySource.LOCAL, imdb = "tt1")
+        val out = applyUnwatched(
+            listOf(tmdbOnly, fresh),
+            watchedKeys = setOf("movie::tmdb:42"),
+            hide = true
+        )
+        assertEquals(listOf(fresh), out)
+    }
+
+    @Test
     fun `empty watched set is a no-op even when hiding`() {
         val items = listOf(item("A", LibrarySource.LOCAL, imdb = "tt1"))
         assertEquals(

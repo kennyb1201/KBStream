@@ -918,8 +918,12 @@ private fun ItemGrid(
                 item = item,
                 sourceLabel = sourceLabel(item),
                 rating = ratings[LocalLibraryStore.dedupeKey(item)],
-                isWatched = item.watchedKey() in watchedKeys,
-                isPartiallyWatched = item.watchedKey() in partiallyWatchedKeys,
+                // Both id flavors the enrichment can file a row under: the
+                // IMDB one, then the raw `tmdb:<n>` one a row with no IMDB id
+                // (or no resolution) is watched under (see
+                // [LibraryItem.watchedKeyCandidates]).
+                isWatched = item.watchedKeyCandidates().any { it in watchedKeys },
+                isPartiallyWatched = item.watchedKeyCandidates().any { it in partiallyWatchedKeys },
                 onClick = {
                     val navigationId = item.navigationId
                     if (navigationId != null) {

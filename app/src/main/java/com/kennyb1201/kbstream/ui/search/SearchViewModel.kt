@@ -20,6 +20,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSearchStudioResult
 import com.kennyb1201.kbstream.data.tmdb.TmdbSearchTitleResult
 import com.kennyb1201.kbstream.data.tmdb.releaseYear
 import com.kennyb1201.kbstream.data.watched.WatchStateBus
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
@@ -295,6 +296,20 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
     private fun resolveTmdbIds(items: List<Pair<Int, String>>) {
         if (items.isEmpty()) return
 
+        // The RAW flavor first, UNCAPPED - every visible TMDB result's own
+        // `tmdb:<n>` key, not just the ones the resolution batch below will
+        // reach. It reads local DB plus the already-cached Simkl snapshot, so
+        // it costs no network, and it is the only key a tile past the cap, or
+        // one TMDB has no `imdb_id` for, will ever have (see
+        // [WatchedStatusKeys]).
+        preloadWatchedKeysFor(
+            items
+                .map { (tmdbId, mediaType) ->
+                    WatchedStatusKeys.tmdbKeyId(tmdbId) to mediaType
+                }
+                .distinct()
+        )
+
         val uniqueItems = items
             .filterNot { (tmdbId, mediaType) ->
                 _resolvedIds.value.containsKey(lookupKey(tmdbId, mediaType))
@@ -327,9 +342,8 @@ class SearchViewModel(private val app: Application) : AndroidViewModel(app) {
                 imdbId?.let { lookupKey(tmdbId, mediaType) to it }
             }.toMap()
 
-            // Fill the watched checkmark + eye badge for the freshly
-            // resolved tiles from the same cached Simkl state every other
-            // screen preloads.
+            // Fill the IMDB flavor too, for the freshly resolved tiles, from
+            // the same cached state every other screen preloads.
             preloadWatchedKeysFor(
                 resolved
                     .mapNotNull { (_, mediaType, imdbId) ->

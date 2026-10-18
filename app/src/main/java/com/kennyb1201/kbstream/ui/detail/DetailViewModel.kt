@@ -37,6 +37,7 @@ import com.kennyb1201.kbstream.data.tmdb.TmdbSeasonSummary
 import com.kennyb1201.kbstream.data.tmdb.certification
 import com.kennyb1201.kbstream.data.watched.ContinueWatchingRefreshBus
 import com.kennyb1201.kbstream.data.watched.WatchedEpisodeState
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.data.watched.WatchedStatusRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -538,45 +539,65 @@ class DetailViewModel(private val app: Application) : AndroidViewModel(app) {
                     }
                 }.distinct()
 
-                if (resolvedItems.isEmpty()) {
-                    _watchedKeys.value = emptySet()
-                    _resolvedPosterIds.value = emptyMap()
-                    Log.i("KBStream", "poster watched refresh: no resolvable imdb ids")
-                    return@launch
-                }
-
+                // Only the RESOLVED posters can navigate (a detail press needs
+                // the IMDB id), so the lookup map stays filtered on it.
                 _resolvedPosterIds.value = resolvedItems.associate { (tmdbId, mediaType, imdbId) ->
                     posterLookupKey(tmdbId, mediaType) to imdbId
                 }
 
-                val preloadItems = resolvedItems
-                    .map { (_, mediaType, imdbId) -> imdbId to mediaType }
-                    .distinct()
+                val resolvedMap = _resolvedPosterIds.value
+
+                // The badges, though, come from EVERY poster, through both id
+                // flavors: the IMDB one when resolution produced it, and the
+                // poster's own raw `tmdb:<n>` one always. That flavor needs no
+                // network, and it is the only key a poster TMDB has no
+                // `imdb_id` for will ever have - which is why those posters
+                // used to stay bare (see [WatchedStatusKeys]). The tmdb preload
+                // below is uncapped for the same reason: local DB plus the
+                // already-cached Simkl snapshot, not a request.
+                val preloadItems = buildList {
+                    addAll(
+                        rawItems.map { (tmdbId, mediaType) ->
+                            WatchedStatusKeys.tmdbKeyId(tmdbId) to mediaType
+                        }
+                    )
+                    addAll(
+                        resolvedItems.map { (_, mediaType, imdbId) ->
+                            imdbId to mediaType
+                        }
+                    )
+                }.distinct()
 
                 watchedStatusRepository.preload(preloadItems)
 
-                _watchedKeys.value = resolvedItems
-                    .filter { (_, mediaType, imdbId) ->
-                        watchedStatusRepository.isWatchedCached(imdbId, mediaType)
-                    }
-                    .map { (_, mediaType, imdbId) ->
-                        watchedKey(imdbId, mediaType)
+                val watchedKeys = rawItems
+                    .flatMap { (tmdbId, mediaType) ->
+                        WatchedStatusKeys.watchedKeysOf(
+                            tmdbId = tmdbId,
+                            mediaType = mediaType,
+                            resolvedImdbId = resolvedMap[posterLookupKey(tmdbId, mediaType)],
+                            matches = watchedStatusRepository::isWatchedCached
+                        )
                     }
                     .toSet()
 
-                _partialWatchedKeys.value = resolvedItems
-                    .filter { (_, mediaType, imdbId) ->
-                        watchedStatusRepository.isPartiallyWatchedCached(imdbId, mediaType)
+                _watchedKeys.value = watchedKeys
+
+                _partialWatchedKeys.value = rawItems
+                    .flatMap { (tmdbId, mediaType) ->
+                        WatchedStatusKeys.watchedKeysOf(
+                            tmdbId = tmdbId,
+                            mediaType = mediaType,
+                            resolvedImdbId = resolvedMap[posterLookupKey(tmdbId, mediaType)],
+                            matches = watchedStatusRepository::isPartiallyWatchedCached
+                        )
                     }
-                    .map { (_, mediaType, imdbId) ->
-                        watchedKey(imdbId, mediaType)
-                    }
-                    .toSet() -
-                    _watchedKeys.value
+                    .toSet() - watchedKeys
 
                 Log.i(
                     "KBStream",
-                    "poster watched refresh resolved=${resolvedItems.size} watched=${_watchedKeys.value.size}"
+                    "poster watched refresh items=${rawItems.size} " +
+                        "resolved=${resolvedItems.size} watched=${_watchedKeys.value.size}"
                 )
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // Cancellation is not a failure: rethrow so the scope that was

@@ -18,6 +18,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kennyb1201.kbstream.data.kb.KBContentItem
 import com.kennyb1201.kbstream.data.library.LibraryIds
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnDecision
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnFocus
 import com.kennyb1201.kbstream.ui.browse.BrowseReturnTarget
@@ -266,11 +267,19 @@ fun KBFolderScreen(
             else -> "movie"
         }
         val menuIds = LibraryIds.split(item.id)
+        // Add-on items key on their own imdb id; a TMDB item checks the
+        // resolved imdb flavor first, then its own `tmdb:<n>` one - the key it
+        // has when the capped resolution pass never reached it (see
+        // [WatchedStatusKeys]) - so the toggle matches the poster's badge.
         val menuWatched = item.id.takeIf { it.startsWith("tt") }?.let { imdbId ->
             viewModel.watchedKey(imdbId, normalizedType) in watchedKeys
         } ?: item.tmdbId?.let { tmdbId ->
             val imdbId = resolvedIds["$normalizedType::$tmdbId"]
-            imdbId != null && viewModel.watchedKey(imdbId, normalizedType) in watchedKeys
+            (imdbId != null && viewModel.watchedKey(imdbId, normalizedType) in watchedKeys) ||
+                viewModel.watchedKey(
+                    WatchedStatusKeys.tmdbKeyId(tmdbId),
+                    normalizedType
+                ) in watchedKeys
         } ?: false
         // The card the menu was raised on, by the key it is registered under
         // (see [kbFolderCardKey]).

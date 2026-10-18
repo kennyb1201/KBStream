@@ -2,6 +2,7 @@ package com.kennyb1201.kbstream.data.library
 
 import android.content.Context
 import com.kennyb1201.kbstream.data.sync.ProfileStorage
+import com.kennyb1201.kbstream.data.watched.WatchedStatusKeys
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -55,6 +56,28 @@ data class LibraryItem(
             else -> "movie"
         }
         return imdbId?.takeIf { it.isNotBlank() }?.let { "$type::$it" }
+    }
+
+    /**
+     * Every key this row can be watched under, in badge order: the IMDB
+     * flavor first, then the raw `tmdb:<n>` one.
+     *
+     * A row a tracker sent with only a TMDB id — or whose TMDB→IMDB
+     * resolution never answered — is watched under the second form, and the
+     * Library's enrichment adds exactly that key to the badge sets. The grid
+     * and the UNWATCHED filter therefore have to test the row against BOTH, or
+     * a title watched under the flavor that needs no resolution stays bare
+     * here while it badges on every other screen (see [WatchedStatusKeys]).
+     */
+    fun watchedKeyCandidates(): List<String> {
+        val type = when (mediaType.lowercase()) {
+            "tv", "series" -> "series"
+            else -> "movie"
+        }
+        return listOfNotNull(
+            imdbId?.takeIf { it.isNotBlank() }?.let { "$type::$it" },
+            tmdbId?.takeIf { it > 0 }?.let { "$type::${WatchedStatusKeys.tmdbKeyId(it)}" }
+        )
     }
 }
 
