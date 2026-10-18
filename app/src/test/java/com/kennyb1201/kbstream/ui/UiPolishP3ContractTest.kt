@@ -232,6 +232,21 @@ class UiPolishP3ContractTest {
         )
     }
 
+    /**
+     * The About pane ends on the author credit, in the same read-only style as
+     * the lines above it: it is wording about the app's author, so it is pinned
+     * here rather than left to a layout pass that could quietly drop it.
+     */
+    @Test
+    fun `the about pane credits its author`() {
+        val settings = source(SETTINGS)
+        assertTrue(
+            "About ends on the centered author credit",
+            settings.contains("text = \"Made with ❤️ by Kenny B\",") &&
+                settings.contains("textAlign = TextAlign.Center,")
+        )
+    }
+
     // ── Simkl, Guide, Sports, MPV ───────────────────────────────────────
 
     @Test

@@ -3402,6 +3402,19 @@ private fun AboutSection(modifier: Modifier = Modifier) {
             style = MaterialTheme.typography.labelSmall,
             modifier = Modifier.padding(horizontal = 4.dp)
         )
+        // The credit the pane ends on. Centred because it is the one line here
+        // that is about the app's author rather than the install, and read-only
+        // like every other line in this pane - nothing in About is a D-pad stop.
+        Spacer(modifier = Modifier.height(14.dp))
+        Text(
+            text = "Made with ❤️ by Kenny B",
+            color = KBTextLo.copy(alpha = 0.7f),
+            style = MaterialTheme.typography.labelSmall,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp)
+        )
     }
 }
 
