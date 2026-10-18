@@ -301,6 +301,14 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
 
     private var pickerOpen = false
 
+    /**
+     * The row that last held the D-pad inside the picker, so a focus that
+     * escapes the panel is handed back to where the viewer was rather than to
+     * the top (see [reassertPickerFocus]). Cleared on dismiss: a recycled row
+     * must not be focused after the panel is gone.
+     */
+    private var pickerLastFocus: View? = null
+
     /** The ranked source list this session was launched with. */
     private var sources: List<Stream> = emptyList()
 
@@ -1590,6 +1598,26 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
                 override fun onChildViewDetachedFromWindow(view: View) = Unit
             }
         )
+        // The picker owns the remote while it is up (see showPicker), so a focus
+        // that leaves it - the framework's own hand-off when a row is recycled,
+        // or a press whose focus search walked out of the panel onto the bar
+        // still drawn behind it - is put back on the row the viewer was on. The
+        // same guard the main player's settings panel has always had, and the
+        // one the picker there carries too (see NativePlayerActivity).
+        window.decorView.viewTreeObserver.addOnGlobalFocusChangeListener { _, newFocus ->
+            if (!pickerOpen || newFocus == null) return@addOnGlobalFocusChangeListener
+            val container = pickerContainer ?: return@addOnGlobalFocusChangeListener
+            if (isDescendantOf(newFocus, container)) {
+                // The row only: the list and the container are not rows, and
+                // remembering either would send the D-pad back to a holder with
+                // nothing highlighted in it.
+                if (newFocus !== container && newFocus !== pickerList) {
+                    pickerLastFocus = newFocus
+                }
+            } else {
+                reassertPickerFocus()
+            }
+        }
         nextUpPanel = findViewById(R.id.mpv_next_up_panel)
         nextUpThumb = findViewById(R.id.mpv_next_up_thumb)
         nextUpShowTitle = findViewById(R.id.mpv_next_up_show_title)
@@ -2151,15 +2179,81 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         removeAutoHide()
         pickerContainer?.visibility = View.VISIBLE
         pickerList?.adapter = PickerAdapter(items)
+        pickerLastFocus = null
         pickerList?.post {
             // The panel can be gone again by the time this runs (a fast Back
             // runs dismissPicker, which GONEs the container): a request against
             // a hidden list re-parks the D-pad where nothing is drawn, so the
             // press that follows goes nowhere.
             if (!pickerOpen) return@post
-            val list = pickerList ?: return@post
-            if (list.childCount > 0) list.getChildAt(0).requestFocus() else list.requestFocus()
+            parkPickerFocus()
         }
+    }
+
+    /**
+     * Hands the D-pad to the picker's first row, once that row exists.
+     *
+     * The rows are created in the adapter's first layout pass, which runs AFTER
+     * this call (a post() lands before the next traversal), and this list is not
+     * focusable itself - so the `list.requestFocus()` this replaced found an
+     * empty list, failed, and left focus where it was: on the SOURCES / AUDIO /
+     * SUBTITLES button of the bar behind the panel. The panel was then open with
+     * the D-pad still on the chrome, which is the "the picker loses focus to the
+     * overlay" report. So: focus the row when it is there, otherwise wait for
+     * the layout that places one.
+     */
+    private fun parkPickerFocus() {
+        val container = pickerContainer ?: return
+        if (!pickerOpen) return
+        if (focusFirstPill(container)) return
+        container.viewTreeObserver.addOnGlobalLayoutListener(
+            object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    // No row in this pass. Stop waiting if the panel closed
+                    // underneath us; otherwise the next layout tries again.
+                    if (!pickerOpen) {
+                        container.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        return
+                    }
+                    // The D-pad is already inside the panel (the viewer moved
+                    // before the first row was placed): leave it alone.
+                    if (container.findFocus() != null) {
+                        container.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        return
+                    }
+                    if (focusFirstPill(container)) {
+                        container.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                    }
+                }
+            }
+        )
+    }
+
+    /**
+     * Gives the D-pad back to the picker after it has escaped the panel.
+     *
+     * Called from the window's global focus-change listener (see bindViews), so
+     * it runs synchronously inside the focus change and wins the race against a
+     * posted requestFocus() from the chrome. The row the viewer was on is the
+     * target; with nothing remembered yet - the first frames after the panel
+     * opened, before a row has held focus - it is the first row, and when no row
+     * has been placed yet the park that showPicker left attached still does it.
+     */
+    private fun reassertPickerFocus() {
+        if (!pickerOpen) return
+        val remembered = pickerLastFocus
+        if (remembered != null && remembered.isShown && remembered.requestFocus()) return
+        pickerContainer?.let { focusFirstPill(it) }
+    }
+
+    /** True when [view] is [parent] itself or sits inside it. */
+    private fun isDescendantOf(view: View, parent: View): Boolean {
+        var current: View? = view
+        while (current != null) {
+            if (current === parent) return true
+            current = current.parent as? View
+        }
+        return false
     }
 
     /**
@@ -2174,6 +2268,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         pickerOpen = false
         currentPickerMode = null
         settingsOpen = false
+        pickerLastFocus = null
         pickerContainer?.visibility = View.GONE
         if (controlsVisible) {
             playPauseButton?.requestFocus()
@@ -2790,6 +2885,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
         // draw.
         hideInfoPanel()
         pickerOpen = false
+        pickerLastFocus = null
         pickerContainer?.visibility = View.GONE
         settingsOpen = true
         removeAutoHide()
@@ -2808,6 +2904,7 @@ class MpvPlayerActivity : ComponentActivity(), PlayerChromeHost, PlayerChromeCas
     private fun hideSettingsPanel() {
         settingsOpen = false
         pickerOpen = false
+        pickerLastFocus = null
         settingsContainer?.visibility = View.GONE
         pickerContainer?.visibility = View.GONE
         setControlsVisible(View.VISIBLE)

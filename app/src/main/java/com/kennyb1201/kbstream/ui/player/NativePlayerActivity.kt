@@ -1102,6 +1102,16 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
     private var settingsPanelSection: PlayerPanelSection? = null
     private var isPickerShowing = false
     private var pickerMode = PickerMode.SOURCE
+
+    /**
+     * The row that last held the D-pad inside the picker.
+     *
+     * Kept so a focus that escapes the panel is handed back to the row the
+     * viewer was ON rather than to the top - see [reassertPickerFocus]. Cleared
+     * on dismiss, since a recycled row must not be focused after the panel is
+     * gone.
+     */
+    private var pickerLastFocus: android.view.View? = null
     private enum class PickerMode { SOURCE, AUDIO, SUBTITLE, SPEED }
 
     // Playback state
@@ -3965,6 +3975,23 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
                     // requestFocus() from showControls()/auto-hide, and
                     // restore the user's actual position inside the panel.
                     (settingsLastFocus ?: settingsBufferAuto).requestFocus()
+                }
+            } else if (isPickerShowing) {
+                // The picker gets the same treatment as the settings panel, and
+                // for the same report: a focus that leaves the panel lands on
+                // the scrim or on a control of the bar still drawn behind it,
+                // where the next OK presses something the viewer cannot see
+                // selected - "the picker loses focus to the overlay". The row
+                // the viewer was on is the one it comes back to.
+                if (newFocus != null && isDescendantOf(newFocus, pickerContainer)) {
+                    // The row only: the list and the container are focusable
+                    // themselves, and remembering one of them would send the
+                    // D-pad back to a holder with no highlighted row.
+                    if (newFocus !== pickerList && newFocus !== pickerContainer) {
+                        pickerLastFocus = newFocus
+                    }
+                } else if (newFocus != null) {
+                    reassertPickerFocus()
                 }
             }
         }
@@ -9612,14 +9639,69 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
         pickerContainer.visibility = View.VISIBLE
         scrim.visibility = View.VISIBLE
         pickerList.adapter = PickerAdapter(items)
+        pickerLastFocus = null
         pickerList.post {
             // A fast Back between the picker coming up and this runnable firing
             // (dismissPicker sets isPickerShowing false and GONEs the container)
             // used to re-park the D-pad on a container that is no longer drawn:
             // the press was swallowed with it.
-            if (!isPickerShowing) return@post
-            pickerList.requestFocus()
+            parkPickerFocus()
         }
+    }
+
+    /**
+     * Hands the D-pad to the picker's first row, once that row exists.
+     *
+     * A bare `pickerList.requestFocus()` is not enough, and that is the rest of
+     * the "the picker sometimes loses focus to the overlay" report: the rows are
+     * created in the adapter's first layout pass, which runs AFTER this call
+     * (a post() lands before the next traversal), and a focusable list with no
+     * children answers the request ITSELF. The panel then has no highlighted row
+     * at all, so the first D-pad press walks out of it onto the scrim or the
+     * chrome behind it. Hence the two steps: focus the row when it is there, and
+     * otherwise wait for the layout that places one.
+     */
+    private fun parkPickerFocus() {
+        if (!isPickerShowing) return
+        if (pickerList.getChildAt(0)?.requestFocus() == true) return
+        pickerList.viewTreeObserver.addOnGlobalLayoutListener(
+            object : android.view.ViewTreeObserver.OnGlobalLayoutListener {
+                override fun onGlobalLayout() {
+                    val firstRow = pickerList.getChildAt(0)
+                    if (firstRow == null) {
+                        // No row in this pass. Stop waiting if the panel closed
+                        // underneath us; otherwise the next layout tries again.
+                        if (!isPickerShowing) {
+                            pickerList.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                        }
+                        return
+                    }
+                    pickerList.viewTreeObserver.removeOnGlobalLayoutListener(this)
+                    // The panel closed, or the D-pad is already inside it (the
+                    // viewer moved before the first row was placed): the press
+                    // that follows must not be taken off them either way.
+                    if (!isPickerShowing || pickerList.findFocus() != null) return
+                    firstRow.requestFocus()
+                }
+            }
+        )
+    }
+
+    /**
+     * Gives the D-pad back to the picker after it has escaped the panel.
+     *
+     * Called from the window's global focus-change listener (see bindViews), so
+     * it runs synchronously inside the focus change and wins the race against a
+     * posted requestFocus() from the chrome. The row the viewer was on is the
+     * target; with nothing remembered inside the panel yet (the first pass after
+     * it opened) it is the first row - and when neither exists yet, the park
+     * that showPicker left attached still places it.
+     */
+    private fun reassertPickerFocus() {
+        if (!isPickerShowing) return
+        val remembered = pickerLastFocus
+        if (remembered != null && remembered.isShown && remembered.requestFocus()) return
+        pickerList.getChildAt(0)?.requestFocus()
     }
 
     // --- Settings Panel ---
@@ -9670,6 +9752,7 @@ class NativePlayerActivity : ComponentActivity(), PlayerChromeHost {
      */
     private fun dismissPicker() {
         isPickerShowing = false
+        pickerLastFocus = null
         pickerContainer.visibility = View.GONE
         if (!showSettingsPanel) scrim.visibility = View.GONE
         restoreControlsFocus()

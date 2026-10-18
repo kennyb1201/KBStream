@@ -263,7 +263,13 @@
          this sat after the picker and settings panels it was drawn over them
          and washed both out by 40% of black, which is the "dull / hazy"
          settings panel. From here it dims the video and the controls behind the
-         panels, which is what it is for. -->
+         panels, which is what it is for.
+
+         focusable on purpose: a press that walks out of a panel's edge row is
+         parked here rather than on the bar behind it, and OK on this view does
+         nothing but dismiss. A panel that owns the remote while it is up takes
+         such a press back instead (the picker does - see the window's
+         focus-change listener in NativePlayerActivity). -->
     <View
         android:id="@+id/scrim"
         android:layout_width="match_parent"
