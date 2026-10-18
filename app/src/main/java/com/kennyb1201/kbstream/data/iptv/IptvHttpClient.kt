@@ -6,7 +6,12 @@ import java.io.InputStream
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -143,46 +148,82 @@ object IptvHttpClient {
         val request = Request.Builder().url(url).get().apply {
             cacheRequestHeaders(validators).forEach { (name, value) -> header(name, value) }
         }.build()
-        client.newCall(request).execute().use { response ->
-            // Before anything reads a body: a 304 has none, and treating it as
-            // one would fail on the empty stream rather than skipping the
-            // import.
-            if (response.code == HTTP_NOT_MODIFIED) {
-                return@use XmltvFetch.NotModified
+        val call = client.newCall(request)
+        withCancellableCall(call) {
+            call.execute().use { response ->
+                // Before anything reads a body: a 304 has none, and treating it
+                // as one would fail on the empty stream rather than skipping
+                // the import.
+                if (response.code == HTTP_NOT_MODIFIED) {
+                    return@use XmltvFetch.NotModified
+                }
+                val body = response.body ?: error("Empty response body")
+                if (!response.isSuccessful) {
+                    val preview = response.peekBody(4096).string().take(300)
+                    error("HTTP ${response.code} ${response.message}: $preview")
+                }
+
+                val contentType = response.header("Content-Type").orEmpty()
+                val contentEncoding = response.header("Content-Encoding").orEmpty()
+                val isGzipByUrl = url.substringAfterLast('/', missingDelimiterValue = "")
+                    .contains(".gz", ignoreCase = true)
+                val isGzipByHeader = contentType.contains("gzip", ignoreCase = true) ||
+                    contentEncoding.contains("gzip", ignoreCase = true)
+
+                val buffered = BufferedInputStream(body.byteStream(), 64 * 1024)
+                buffered.mark(2)
+                val magic1 = buffered.read()
+                val magic2 = buffered.read()
+                buffered.reset()
+                val isGzipByMagic = magic1 == 0x1f && magic2 == 0x8b
+                val isGzip = isGzipByUrl || isGzipByHeader || isGzipByMagic
+
+                val stream: InputStream =
+                    if (isGzip) GZIPInputStream(buffered, 64 * 1024) else buffered
+
+                val value = stream.use { input -> block(input) }
+                XmltvFetch.Streamed(
+                    value = value,
+                    etag = response.header("ETag"),
+                    lastModified = response.header("Last-Modified")
+                )
             }
-            val body = response.body ?: error("Empty response body")
-            if (!response.isSuccessful) {
-                val preview = response.peekBody(4096).string().take(300)
-                error("HTTP ${response.code} ${response.message}: $preview")
-            }
-
-            val contentType = response.header("Content-Type").orEmpty()
-            val contentEncoding = response.header("Content-Encoding").orEmpty()
-            val isGzipByUrl = url.substringAfterLast('/', missingDelimiterValue = "")
-                .contains(".gz", ignoreCase = true)
-            val isGzipByHeader = contentType.contains("gzip", ignoreCase = true) ||
-                contentEncoding.contains("gzip", ignoreCase = true)
-
-            val buffered = BufferedInputStream(body.byteStream(), 64 * 1024)
-            buffered.mark(2)
-            val magic1 = buffered.read()
-            val magic2 = buffered.read()
-            buffered.reset()
-            val isGzipByMagic = magic1 == 0x1f && magic2 == 0x8b
-            val isGzip = isGzipByUrl || isGzipByHeader || isGzipByMagic
-
-            val stream: InputStream =
-                if (isGzip) GZIPInputStream(buffered, 64 * 1024) else buffered
-
-            val value = stream.use { input -> block(input) }
-            XmltvFetch.Streamed(
-                value = value,
-                etag = response.header("ETag"),
-                lastModified = response.header("Last-Modified")
-            )
         }
     }
 }
+
+    /**
+     * Runs [block] with [call] open, and closes the connection the moment this
+     * coroutine is cancelled.
+     *
+     * A blocking socket read is not interrupted by coroutine cancellation. A
+     * cancelled guide fetch therefore kept its connection - and
+     * [XmltvImporter]'s import mutex, which it holds for the whole parse -
+     * until the read window gave up, so the retry that follows a stall would
+     * have queued behind the attempt it was meant to replace. `Call.cancel()`
+     * closes the socket under the blocked read, which is what makes the abort
+     * real rather than nominal.
+     *
+     * The guard is a child coroutine parked on [awaitCancellation], so its
+     * `finally` runs when the parent is cancelled, not when the work finishes.
+     */
+    private suspend fun <T> withCancellableCall(
+        call: Call,
+        block: suspend () -> T
+    ): T = coroutineScope {
+        val guard = launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                call.cancel()
+            }
+        }
+        try {
+            block()
+        } finally {
+            guard.cancel()
+        }
+    }
 
     private suspend fun <T> retryWithBackoff(
         maxAttempts: Int,

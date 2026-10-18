@@ -15,8 +15,11 @@ import com.kennyb1201.kbstream.data.iptv.db.EpgProgramRow
 import com.kennyb1201.kbstream.data.iptv.IptvChannel
 import com.kennyb1201.kbstream.data.iptv.IptvChannelWithEpg
 import com.kennyb1201.kbstream.data.iptv.IptvPlaylist
+import com.kennyb1201.kbstream.data.iptv.EpgImportWatchdog
+import com.kennyb1201.kbstream.data.iptv.EpgStalledException
 import com.kennyb1201.kbstream.data.iptv.EpgWindow
 import com.kennyb1201.kbstream.data.iptv.GuideImportProgress
+import com.kennyb1201.kbstream.data.iptv.epgEntryImportCoolingDown
 import com.kennyb1201.kbstream.data.iptv.GuideImportState
 import com.kennyb1201.kbstream.data.iptv.IptvRepository
 import com.kennyb1201.kbstream.data.iptv.guideWindowFingerprint
@@ -281,8 +284,28 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      */
     private var loadedGuideFingerprint: String? = null
     private var loadJob: Job? = null
-    private var importJob: Job? = null
+
+    /**
+     * The ONE guide import, whichever path started it.
+     *
+     * Both launch sites - the IMPORT EPG button and the entry auto-refresh -
+     * go through [launchGuideImport], which is what makes "IMPORT EPG always
+     * stops the running import" true for an auto-refresh import too. It used to
+     * be two handles: the button cancelled its own private one while the entry
+     * import ran on `refreshJob`, so a stuck auto-import could not be cancelled
+     * from the button at all - the manual import merely joined it through
+     * [IptvRepository]'s coalescing and sat at the same 0 programs.
+     */
+    private var guideImportJob: Job? = null
+
     private var refreshJob: Job? = null
+
+    /**
+     * Aborts a source that stops sending data, so a wedged download is a visible
+     * error in three minutes rather than twenty minutes at "0 programs" (see
+     * [EpgImportWatchdog]).
+     */
+    private val epgImportWatchdog = EpgImportWatchdog()
 
     private val playlistOnlyLineup: StateFlow<List<IptvChannelWithEpg>> = _playlist
         .map { currentPlaylist ->
@@ -487,7 +510,7 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                         return@collect
                     }
                     loadJob?.cancel()
-                    importJob?.cancel()
+                    guideImportJob?.cancel()
                     refreshJob?.cancel()
 
                     // Re-read the incoming profile's scoped config.
@@ -899,8 +922,29 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             _guideError.value = "Playlist loading is in progress. Please wait before importing EPG."
             return
         }
-        importJob?.cancel()
-        importJob = viewModelScope.launch { importGuideInternal(allEpgUrls().firstOrNull().orEmpty()) }
+        // Always forces the attempt: this is the button the viewer presses
+        // BECAUSE the last one wedged, so it ignores the stall cooldown and
+        // cancels whatever pass is running, whichever path started it.
+        launchGuideImport()
+    }
+
+    /**
+     * Starts the one guide import, after stopping any pass already running.
+     *
+     * The cancelled pass is JOINED before the replacement starts rather than
+     * left to unwind underneath it: its `finally` closes the shared
+     * [GuideImportProgress] pass (which would blank the new pass's status line)
+     * and its repository entry is only dropped once its fetch has actually let
+     * go, so a replacement that started first would join an import that is
+     * already dead and inherit its cancellation.
+     */
+    private fun launchGuideImport() {
+        val previous = guideImportJob
+        previous?.cancel()
+        guideImportJob = viewModelScope.launch {
+            previous?.join()
+            importGuideInternal(allEpgUrls().firstOrNull().orEmpty())
+        }
     }
 
     /**
@@ -923,7 +967,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
      * number of times — a real failure (network, malformed guide) still fails
      * loudly on its first attempt.
      */
-    private suspend fun importGuideSource(url: String) {
+    private suspend fun importGuideSource(
+        url: String,
+        freshConnection: Boolean = false
+    ) {
         withDatabaseSwapRetry(
             attempts = DB_SWAP_RETRY_LONG_ATTEMPTS,
             onRetry = { attempt, error ->
@@ -935,7 +982,10 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                 )
             }
         ) {
-            repository.importGuide(url)
+            // A first attempt shares whatever import is already running for
+            // this URL (the worker's); the watchdog's retry must not, because
+            // the attempt it replaces is the one it just aborted.
+            repository.importGuide(url, joinActiveImport = !freshConnection)
         }
     }
 
@@ -1000,7 +1050,20 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         val playlistNeedsRefresh = isStale(KEY_PLAYLIST_UPDATED_AT, PLAYLIST_REFRESH_MS)
         val guideNeedsRefresh = allEpgUrls().isNotEmpty() &&
             (isStale(KEY_EPG_UPDATED_AT, EPG_REFRESH_MS) || guideFileMoved())
-        if (!playlistNeedsRefresh && !guideNeedsRefresh) return
+        // A source the watchdog just failed stays quiet on ENTRY: the failed
+        // run could not write KEY_EPG_UPDATED_AT, so every later entry saw a
+        // stale guide and started another import, which wedged again. The
+        // banner from that failure is what the viewer keeps seeing; the manual
+        // button is how they ask for another attempt, and it skips this.
+        val guideCoolingDown = guideNeedsRefresh && guideStalledRecently()
+        // An import already in flight is not restarted by a staleness tick: the
+        // guide is stale precisely BECAUSE that import has not finished, and
+        // replacing it would restart a multi-minute download every half hour.
+        // (This used to be implicit - the import shared the refresh job's
+        // lifetime - and stays explicit now that it has a handle of its own.)
+        val guideBusy = guideImportJob?.isActive == true
+        val canImportGuide = guideNeedsRefresh && !guideCoolingDown && !guideBusy
+        if (!playlistNeedsRefresh && !canImportGuide) return
         refreshJob = viewModelScope.launch {
             if (playlistNeedsRefresh) {
                 runCatchingCancellable { refreshPlaylistInBackground() }.onFailure { error ->
@@ -1009,9 +1072,17 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
                     Log.e(TAG, "BACKGROUND PLAYLIST REFRESH FAILED", error)
                 }
             }
-            if (guideNeedsRefresh) importGuideInternal(allEpgUrls().firstOrNull().orEmpty())
+            // On the shared guide handle, so the button can stop it - the
+            // playlist half above keeps running on this job either way.
+            if (canImportGuide) launchGuideImport()
         }
     }
+
+    private fun guideStalledRecently(): Boolean =
+        epgEntryImportCoolingDown(
+            prefs.getLong(KEY_EPG_LAST_STALL_AT, 0L),
+            System.currentTimeMillis()
+        )
 
     private suspend fun refreshPlaylistInBackground() {
         val url = _playlistUrl.value.trim()
@@ -1040,10 +1111,21 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
             for (url in urls) {
                 GuideImportProgress.startSource(imported + 1)
                 try {
-                    importGuideSource(url)
+                    // Watched: a source that stops sending data is aborted and
+                    // re-opened once on a fresh connection, and a second stall
+                    // is thrown as EpgStalledException - a banner the viewer
+                    // can act on instead of a silent twenty minutes at zero.
+                    epgImportWatchdog.runWithStallRetry { attempt ->
+                        importGuideSource(url, freshConnection = attempt > 0)
+                    }
                     imported++
                 } catch (t: Throwable) {
                     if (t is CancellationException) throw t
+                    if (t is EpgStalledException) {
+                        // Read by refreshIfNeeded(): the entry stops
+                        // re-attempting this provider for the cooldown window.
+                        markUpdated(KEY_EPG_LAST_STALL_AT)
+                    }
                     lastError = t
                     Log.e(TAG, "GUIDE IMPORT FAILED source=${Redaction.url(url)}", Redaction.throwable(t))
                 }
@@ -1342,6 +1424,14 @@ class IptvViewModel(private val app: Application) : AndroidViewModel(app) {
         const val KEY_HIDDEN_CHANNEL_IDS = "hidden_channel_ids"
         const val KEY_PLAYLIST_UPDATED_AT = "playlist_updated_at"
         const val KEY_EPG_UPDATED_AT = "epg_updated_at"
+
+        /**
+         * When the stall watchdog last gave up on a guide source. Written only
+         * on a loud stall failure (see [EpgStalledException]) and read only by
+         * [guideStalledRecently] - profile-scoped, in the same store as the
+         * freshness marker it stands in for while the provider is broken.
+         */
+        const val KEY_EPG_LAST_STALL_AT = "epg_last_stall_at"
 
         /**
          * The guide FILE [KEY_EPG_UPDATED_AT] was written about. Read only

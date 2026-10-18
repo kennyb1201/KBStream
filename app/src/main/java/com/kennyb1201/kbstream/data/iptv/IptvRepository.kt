@@ -262,7 +262,21 @@ class IptvRepository(
         playlist
     }
 
-    suspend fun importGuide(epgUrl: String) = withContext(Dispatchers.IO) {
+    /**
+     * Imports one EPG source.
+     *
+     * [joinActiveImport] is the normal case and stays the invariant: callers
+     * that ask for the same URL at the same time (the background worker and the
+     * guide screen) share one download rather than racing two of them. It is
+     * turned off by exactly one caller - the stall watchdog's retry, which must
+     * open a connection of its own instead of awaiting the attempt it has just
+     * aborted, since that attempt is still unwinding and would fail the retry
+     * with its own cancellation.
+     */
+    suspend fun importGuide(
+        epgUrl: String,
+        joinActiveImport: Boolean = true
+    ) = withContext(Dispatchers.IO) {
         val normalizedUrl = epgUrl.trim()
         require(normalizedUrl.isNotBlank()) { "EPG URL is required" }
 
@@ -270,9 +284,14 @@ class IptvRepository(
         val waiter = CompletableDeferred<Result<Unit>>()
 
         val activeImport = importRequestMutex.withLock {
-            activeGuideImports[requestKey]?.also {
-                Log.w(TAG, "GUIDE IMPORT JOIN source=${Redaction.url(normalizedUrl)}")
-            } ?: waiter.also {
+            val running = if (joinActiveImport) {
+                activeGuideImports[requestKey]?.also {
+                    Log.w(TAG, "GUIDE IMPORT JOIN source=${Redaction.url(normalizedUrl)}")
+                }
+            } else {
+                null
+            }
+            running ?: waiter.also {
                 activeGuideImports[requestKey] = it
                 Log.d(TAG, "GUIDE IMPORT START source=${Redaction.url(normalizedUrl)}")
             }
