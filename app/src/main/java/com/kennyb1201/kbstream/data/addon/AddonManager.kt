@@ -1123,43 +1123,179 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
 }
 
     /**
-     * Launch-time auto-update entry point. No-ops unless at least
-     * [LAUNCH_REFRESH_MIN_INTERVAL_MS] has passed since the last attempt —
-     * the app process is frequently recreated (Fire TV aggressively kills
-     * backgrounded activities), and re-fetching every manifest on each
-     * recreation would be wasteful. The timestamp lives in the (scoped)
-     * addon prefs, so it naturally tracks the active profile's addon set.
+     * The auto-update entry point: runs one manifest pass when
+     * [AUTO_REFRESH_MIN_INTERVAL_MS] has passed, and reports what it did (null
+     * when it was not due).
+     *
+     * Every automatic trigger goes through here - the app's launch/foreground
+     * hook and the periodic worker - so they share one interval and one stamp
+     * instead of each keeping a cadence of its own. The timestamp lives in the
+     * (scoped) addon prefs, so it naturally tracks the active profile's addons.
+     *
+     * The due check and the pass it authorizes are one critical section, checked
+     * INSIDE the lock. Without that, two triggers arriving together - which is
+     * the ordinary case, since a cold launch fires both the Application hook and
+     * the Activity's foreground hook - would each read the old timestamp before
+     * either had written the new one, and every manifest would be fetched twice.
+     * A second caller therefore waits for the pass in flight and then finds the
+     * window it just consumed.
      */
-    fun maybeRefreshOnLaunch(context: Context) {
+    suspend fun refreshInstalledAddonsIfDue(
+        minIntervalMs: Long = AUTO_REFRESH_MIN_INTERVAL_MS
+    ): AddonRefreshReport? = autoRefreshMutex.withLock {
         val now = System.currentTimeMillis()
         val last = prefs.getLong(LAST_AUTO_REFRESH_KEY, 0L)
-        if (now - last < LAUNCH_REFRESH_MIN_INTERVAL_MS) return
+        if (now - last < minIntervalMs) return@withLock null
 
-        prefs.edit().putLong(LAST_AUTO_REFRESH_KEY, now).apply()
-        refreshInstalledAddons()
+        refreshInstalledAddonsAwait()
     }
 
     /**
-     * Auto-update: re-fetch every installed add-on's manifest and apply it.
+     * Fire-and-forget [refreshInstalledAddonsIfDue], for the callers that are
+     * not themselves coroutines (application startup, a foreground transition).
+     *
+     * Never on the main thread's critical path: the pass fetches every installed
+     * add-on's manifest, and the throttle is the only thing gating it.
+     */
+    fun refreshInstalledAddonsSoon() {
+        addonScope.launch {
+            runCatchingCancellable { refreshInstalledAddonsIfDue() }.onFailure { error ->
+                Log.w(TAG_AUTO_UPDATE, "auto refresh pass failed: ${error.message}")
+                com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                    error,
+                    mapOf("source" to "addon_auto_refresh")
+                )
+            }
+        }
+    }
+
+    /**
+     * Auto-update: re-fetch every installed add-on's manifest and apply it,
+     * AWAITED.
      *
      * Addon developers evolve their manifests (new catalogs, fixed stream
      * config, renamed entries). Without this the installed snapshot stays
      * frozen at install time until the user manually re-adds the addon.
      *
+     * The AWAIT is the point, and it is why this is not the fire-and-forget
+     * launch it used to be: the periodic worker's whole job is this pass, and a
+     * worker that returns before its work is done is a worker the system may
+     * freeze or reclaim the moment it returns (see [AddonManifestRefreshWorker],
+     * which also needs the report below to decide between done and retry).
+     *
      * Behavior:
-     *  - Fetches run in PARALLEL on [addonScope]; one failing manifest never
-     *    blocks or damages the others (offline-safe: failures are skipped).
+     *  - Fetches run in PARALLEL; one failing manifest never blocks or damages
+     *    the others (offline-safe: failures are skipped and counted).
      *  - Applies run SEQUENTIALLY through [applyMutex]: each apply is a
      *    read-modify-write of the addon list, so parallel applies would race
      *    and the last writer would clobber the other addons' updates.
      *  - [updateAddonFromManifest] preserves global catalog order, the user's
      *    show/hide + custom-name settings and the addon's enabled toggle.
-     *  - Unchanged manifests are detected BEFORE saving (version + catalog
-     *    set + resource set), so a no-op refresh does not dirty prefs, bump
-     *    [catalogOrderVersion], or enqueue a pointless sync upload.
-     *
-     * Fire-and-forget: call from application startup or the periodic worker.
+     *  - Unchanged manifests are detected BEFORE saving, so a no-op refresh
+     *    does not dirty prefs, bump [catalogOrderVersion], or enqueue a
+     *    pointless sync upload (see [manifestChangesInstalledAddon]).
      */
+    suspend fun refreshInstalledAddonsAwait(): AddonRefreshReport {
+        // Pin the profile this pass is for: the fetches below outlive a
+        // profile switch, and applying one profile's manifest onto another
+        // profile's list is how addons used to appear in profiles that never
+        // installed them.
+        val profileId = activeStoreProfileId()
+        val addons = getInstalledAddons()
+        if (addons.isEmpty()) return AddonRefreshReport()
+
+        val repository = AddonRepository.getInstance()
+
+        val outcomes =
+            coroutineScope {
+                addons
+                    .map { addon ->
+                        async { refreshOneAddon(repository, profileId, addon) }
+                    }
+                    .awaitAll()
+            }
+
+        val report =
+            AddonRefreshReport(
+                fetched = outcomes.count { it != PassOutcome.FAILED },
+                applied = outcomes.count { it == PassOutcome.APPLIED },
+                failed = outcomes.count { it == PassOutcome.FAILED }
+            )
+
+        // The throttle records a pass that REACHED the add-on hosts. It used to
+        // be stamped before the attempt, so a launch with no connectivity - the
+        // ordinary state on a TV box seconds after it wakes - bought six hours
+        // of nothing, and the next auto attempt was hours away. A pass that got
+        // no answer at all leaves the stamp alone, so the next trigger retries.
+        //
+        // Written to the store this pass was FOR, not the ambient one: the
+        // stamp is what suppresses the next auto attempt for that profile's
+        // addons, and a profile switch mid-pass would otherwise silence a
+        // sibling's next refresh instead.
+        if (report.fetched > 0) {
+            addonPrefs(profileId)
+                .edit()
+                .putLong(LAST_AUTO_REFRESH_KEY, System.currentTimeMillis())
+                .apply()
+        }
+
+        return report
+    }
+
+    /**
+     * One addon's half of an auto-update pass: fetch its manifest, decide, and
+     * apply it when it changed.
+     *
+     * Split out of [refreshInstalledAddonsAwait] so the per-addon answer can be
+     * counted there (fetched / applied / failed), which is what the periodic
+     * worker's retry decision needs.
+     */
+    private suspend fun refreshOneAddon(
+        repository: AddonRepository,
+        profileId: String?,
+        addon: InstalledAddon
+    ): PassOutcome {
+        // The profile moved while this fetch was in flight: its answer belongs
+        // to a list that is no longer the one on screen, and applying it is the
+        // cross-profile leak this guard exists for.
+        if (activeStoreProfileId() != profileId) return PassOutcome.SKIPPED
+
+        val manifest =
+            runCatchingCancellable {
+                repository.fetchManifest(addon.manifestUrl)
+            }.getOrElse { error ->
+                Log.w(TAG_AUTO_UPDATE, "refresh failed for ${addon.id}: ${error.message}")
+                return PassOutcome.FAILED
+            }
+
+        // Change detection: skip saving when nothing the apply would write
+        // actually changed. The comparison has to cover EVERY field the apply
+        // writes and nothing the user owns, or a real manifest update is
+        // silently dropped here while the manual "Refresh addons" (which
+        // applies unconditionally) picks it up - see
+        // [manifestChangesInstalledAddon].
+        if (!manifestChangesInstalledAddon(addon, manifest)) {
+            Log.d(TAG_AUTO_UPDATE, "unchanged: ${addon.id}")
+            return PassOutcome.UNCHANGED
+        }
+
+        var applied = false
+        applyMutex.withLock {
+            if (activeStoreProfileId() == profileId) {
+                updateAddonFromManifest(addon.manifestUrl, manifest)
+                applied = true
+            }
+        }
+        if (!applied) return PassOutcome.SKIPPED
+
+        Log.i(
+            TAG_AUTO_UPDATE,
+            "updated: ${addon.id} " +
+                "(catalogs=${manifest.catalogs.size}, " +
+                "version=${manifest.version ?: "?"})"
+        )
+        return PassOutcome.APPLIED
+    }
     // Guards every read-modify-write of the addon list (UI mutators on the
     // main thread AND background writers like auto-update / cloud-sync
     // apply). Without it, a UI mutation that read the list before a
@@ -1172,6 +1308,15 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
     private val stateLock = Any()
 
     private val applyMutex = Mutex()
+
+    /**
+     * Serializes the automatic triggers against EACH OTHER (not against the
+     * manual refresh or the cloud apply, which go through [applyMutex]): the
+     * due check and the pass it authorizes must be atomic, or two triggers
+     * arriving together both start a full pass over every installed manifest.
+     * See [refreshInstalledAddonsIfDue].
+     */
+    private val autoRefreshMutex = Mutex()
 
     /**
      * Apply a cloud-synced addon set. Serialized through the same
@@ -1236,55 +1381,6 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
             if (profileId == activeStoreProfileId()) {
                 synchronized(stateLock) {
                     loadForLocked(profileId)
-                }
-            }
-        }
-    }
-
-    fun refreshInstalledAddons() {
-        // Pin the profile this pass is for: the fetches below outlive a
-        // profile switch, and applying one profile's manifest onto another
-        // profile's list is how addons used to appear in profiles that never
-        // installed them.
-        val profileId = activeStoreProfileId()
-        val addons = getInstalledAddons()
-        if (addons.isEmpty()) return
-
-        val repository = com.kennyb1201.kbstream.data.addon.AddonRepository.getInstance()
-
-        addons.forEach { addon ->
-            addonScope.launch {
-                runCatchingCancellable {
-                    if (activeStoreProfileId() != profileId) return@runCatchingCancellable
-
-                    val manifest = repository.fetchManifest(addon.manifestUrl)
-
-                    // Change detection: skip saving when nothing the apply
-                    // would write actually changed. The comparison has to
-                    // cover EVERY field the apply writes and nothing the user
-                    // owns, or a real manifest update is silently dropped here
-                    // while the manual "Refresh addons" (which applies
-                    // unconditionally) picks it up — see
-                    // [manifestChangesInstalledAddon].
-                    val changed = manifestChangesInstalledAddon(addon, manifest)
-
-                    if (!changed) {
-                        Log.d(TAG_AUTO_UPDATE, "unchanged: ${addon.id}")
-                    } else {
-                        applyMutex.withLock {
-                            if (activeStoreProfileId() == profileId) {
-                                updateAddonFromManifest(addon.manifestUrl, manifest)
-                            }
-                        }
-                        Log.i(
-                            TAG_AUTO_UPDATE,
-                            "updated: ${addon.id} " +
-                                "(catalogs=${manifest.catalogs.size}, " +
-                                "version=${manifest.version ?: "?"})"
-                        )
-                    }
-                }.onFailure {
-                    Log.w(TAG_AUTO_UPDATE, "refresh failed for ${addon.id}: ${it.message}")
                 }
             }
         }
@@ -1580,8 +1676,15 @@ val catalogOrderVersion: StateFlow<Int> = _catalogOrderVersion.asStateFlow()
         private const val LAST_AUTO_REFRESH_KEY =
             "last_addon_auto_refresh_ms"
 
-        /** Minimum gap between launch-time manifest refresh attempts. */
-        private const val LAUNCH_REFRESH_MIN_INTERVAL_MS =
+        /**
+         * Minimum gap between automatic manifest refresh passes, shared by the
+         * launch/foreground hook and the periodic worker (which is why neither
+         * names a "launch" any more). Six hours is the launch side's own rule:
+         * the app process is frequently recreated - Fire TV aggressively kills
+         * backgrounded activities - and re-fetching every manifest on each
+         * recreation would be wasteful.
+         */
+        private const val AUTO_REFRESH_MIN_INTERVAL_MS =
             6L * 60L * 60L * 1000L
 
         @Volatile
@@ -1637,3 +1740,21 @@ data class CatalogConfiguration(
     val addonManifestUrl: String,
     val catalog: ManifestCatalog
 )
+
+/**
+ * What one automatic manifest pass did.
+ *
+ * [fetched] counts the add-ons the hosts ANSWERED for - not the ones that
+ * changed - because that is the evidence the device was online and the add-ons
+ * are reachable. It is what the refresh throttle is stamped on and what the
+ * periodic worker's done/retry decision turns on (see
+ * [AddonManager.refreshInstalledAddonsAwait] and [AddonManifestRefreshWorker]).
+ */
+data class AddonRefreshReport(
+    val fetched: Int = 0,
+    val applied: Int = 0,
+    val failed: Int = 0
+)
+
+/** One add-on's contribution to a pass; see [AddonManager.refreshInstalledAddonsAwait]. */
+private enum class PassOutcome { APPLIED, UNCHANGED, FAILED, SKIPPED }

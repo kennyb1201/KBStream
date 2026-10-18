@@ -794,6 +794,40 @@ private suspend fun recoveredEpisodeAlreadyWatched(
     }
 
     /**
+     * Foreground trigger for the add-on manifest auto-update.
+     *
+     * The automatic path used to have exactly two drivers: the launch hook in
+     * Application.onCreate and a daily WorkManager job. On a TV box neither is
+     * dependable on its own - the process is NOT recreated between sessions
+     * (the launcher can sit in front of a warm process for weeks, so the launch
+     * hook never fires again), and periodic work is subject to Doze / App
+     * Standby, which on Fire OS can stretch a 24 h request into days. The
+     * result was the report this fixes: "my addons never update automatically,
+     * but pressing Refresh addons finds the new catalogs straight away".
+     *
+     * Returning to the app is the reliable cadence, because it is the one event
+     * that happens exactly when a user is about to look at those catalogs. The
+     * pass is throttled inside the manager (6 h, shared with the launch hook and
+     * the worker), so a viewer flipping in and out of the app pays one prefs
+     * read rather than a manifest fetch.
+     */
+    override fun onStart() {
+        super.onStart()
+        runCatching {
+            com.kennyb1201.kbstream.data.addon.AddonManager
+                .getInstance(applicationContext)
+                .refreshInstalledAddonsSoon()
+        }.onFailure { error ->
+            // Never let a refresh trigger take the Activity down: this runs on
+            // every return from the launcher.
+            com.kennyb1201.kbstream.data.reporting.CrashReporter.recordNonFatal(
+                error,
+                mapOf("source" to "activity_start_addon_refresh")
+            )
+        }
+    }
+
+    /**
      * The first frame is when the launch is over for the user — and it is the
      * one number the frame-timing warnings in logcat ("Skipped 39 frames!",
      * "Davey! duration=923ms") cannot attribute to anything. Recorded once,

@@ -137,13 +137,21 @@ class MainApplication : Application(), SingletonImageLoader.Factory {
                     .schedule(applicationContext)
             }
             // Launch-time auto-update: picks up addon manifest changes on the
-            // first launch after any restart. Throttled internally so frequent
-            // app relaunches don't spam every manifest URL. The daily worker
-            // covers long-running installs that stay alive for days.
+            // first launch after any restart. Throttled internally (shared with
+            // the periodic worker) so frequent app relaunches don't spam every
+            // manifest URL.
+            //
+            // This is only HALF the automatic path. It fires on PROCESS
+            // creation, and a TV box keeps the process alive for weeks once it
+            // is warm, so a long-lived install would rely on WorkManager alone
+            // - which is exactly what does not run on time on Fire OS. The
+            // other half is the same call from the foreground transition (see
+            // MainActivity.onStart), which costs one throttled prefs read on
+            // every return to the app.
             startupStep("startup.addonRefresh", "app_create_addon_launch_refresh") {
                 com.kennyb1201.kbstream.data.addon.AddonManager
                     .getInstance(this@MainApplication)
-                    .maybeRefreshOnLaunch(this@MainApplication)
+                    .refreshInstalledAddonsSoon()
             }
             // Home catalog warm: start the Home catalogs' first pages fetching
             // while the launcher is still putting Home together, so the rail

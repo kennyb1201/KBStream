@@ -160,14 +160,20 @@ class AddonProfileLeakHardeningContractTest {
             save.contains("val profileId = activeStoreProfileId()")
         )
 
-        val refresh = body(addon, "fun refreshInstalledAddons() {")
+        val refresh = body(addon, "suspend fun refreshInstalledAddonsAwait():")
         assertTrue(
             "a manifest refresh pins the profile it started for",
             refresh.contains("val profileId = activeStoreProfileId()")
         )
         assertTrue(
+            "and records the throttle against that same profile's store, so a " +
+                "mid-pass switch cannot silence a sibling's next refresh",
+            refresh.contains("addonPrefs(profileId)")
+        )
+        assertTrue(
             "and re-checks it before writing, so a mid-fetch switch cannot land",
-            refresh.contains("if (activeStoreProfileId() == profileId)")
+            body(addon, "private suspend fun refreshOneAddon(")
+                .contains("if (activeStoreProfileId() == profileId)")
         )
 
         val apply = body(addon, "suspend fun applySyncedAddons(")
